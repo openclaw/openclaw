@@ -4,28 +4,64 @@ import path from "node:path";
 import {
   getAgentWorkspaceAccess,
   WorkspaceAccessUnavailableError,
+  type AgentWorkspaceAccess,
 } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../../infra/brew.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
+import {
+  evaluateSkillInstallPolicy,
+  type SkillInstallSpecMetadata,
+} from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
+import { prepareSkillBundle } from "../library/bundle.js";
 import { hasBinary, resolveSkillsInstallPreferences } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
+import type { Skill } from "../loading/skill-contract.js";
 import { resolveSkillSource } from "../loading/source.js";
 import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { materializeSkillResources } from "../runtime/resources.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type { SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
-import {
-  findInstallSpec,
-  normalizeSkillInstallSpec,
-  withSkillInstallPolicySource,
-} from "./install-policy-source.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
 import type { WorkspaceSkillLifecycle } from "./workspace-types.js";
+
+/** Gateway hooks inspect a local source tree, never a path supplied by the workspace host. */
+async function withSkillInstallPolicySource<T>(
+  skill: Skill,
+  access: AgentWorkspaceAccess | undefined,
+  inspect: (sourceDir: string) => Promise<T>,
+): Promise<T> {
+  if (!access || resolveSkillFileHost(skill) === "gateway") {
+    return await inspect(path.resolve(skill.baseDir));
+  }
+  if (!access.skillResources) {
+    throw new WorkspaceAccessUnavailableError("Remote skill policy source is unavailable");
+  }
+  const files = await access.skillResources.readSkillFiles(skill, { allowMissingRoot: false });
+  if (!files) {
+    throw new WorkspaceAccessUnavailableError("Remote skill policy source disappeared");
+  }
+  const bundle = prepareSkillBundle(files);
+  const source = await materializeSkillResources(
+    {
+      version: 1,
+      skills: [
+        { name: skill.name, description: skill.description, revision: bundle.revision, files },
+      ],
+    },
+    () => {},
+  );
+  try {
+    return await inspect(source.snapshot.resolvedSkills![0]!.baseDir);
+  } finally {
+    await source.cleanup();
+  }
+}
 
 type SkillInstallRequest = {
   workspaceDir: string;
@@ -47,18 +83,12 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
   };
 }
 
-function buildNodeInstallCommand(prefs: SkillsInstallPreferences): string[] {
-  switch (prefs.nodeManager) {
-    case "pnpm":
-      return ["pnpm", "add", "-g", "--ignore-scripts"];
-    case "yarn":
-      return ["yarn", "global", "add", "--ignore-scripts"];
-    case "bun":
-      return ["bun", "add", "-g", "--ignore-scripts"];
-    default:
-      return ["npm", "install", "-g", "--ignore-scripts"];
-  }
-}
+const DEFAULT_NODE_INSTALL_COMMAND = ["npm", "install", "-g", "--ignore-scripts"];
+const NODE_INSTALL_COMMANDS = new Map([
+  ["pnpm", ["pnpm", "add", "-g", "--ignore-scripts"]],
+  ["yarn", ["yarn", "global", "add", "--ignore-scripts"]],
+  ["bun", ["bun", "add", "-g", "--ignore-scripts"]],
+]);
 
 // Strict allowlist patterns to prevent option injection and malicious package names.
 const SAFE_BREW_FORMULA = /^[a-z0-9][a-z0-9+._@-]*(\/[a-z0-9][a-z0-9+._@-]*){0,2}$/;
@@ -103,7 +133,7 @@ function buildInstallCommand(
         spec.package,
         "node package",
         SAFE_NODE_PACKAGE,
-        buildNodeInstallCommand(prefs),
+        NODE_INSTALL_COMMANDS.get(prefs.nodeManager) ?? DEFAULT_NODE_INSTALL_COMMAND,
       );
     case "go":
       return buildValidatedInstallCommand(spec.module, "go module", SAFE_GO_MODULE, [
@@ -121,9 +151,10 @@ function buildInstallCommand(
   }
 }
 
-async function resolveBrewPrefixBinDir(
+async function resolveBrewBinDir(
   timeoutMs: number,
   brewExe: string,
+  fallbackDirs: readonly string[] = ["/opt/homebrew/bin", "/usr/local/bin"],
 ): Promise<string | undefined> {
   const prefixResult = await runCommandSafely([brewExe, "--prefix"], {
     timeoutMs: Math.min(timeoutMs, 30_000),
@@ -134,16 +165,7 @@ async function resolveBrewPrefixBinDir(
       return path.join(prefix, "bin");
     }
   }
-  return undefined;
-}
-
-async function resolveBrewBinDir(timeoutMs: number, brewExe: string): Promise<string | undefined> {
-  const prefixBin = await resolveBrewPrefixBinDir(timeoutMs, brewExe);
-  if (prefixBin) {
-    return prefixBin;
-  }
-
-  for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
+  for (const candidate of fallbackDirs) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -185,26 +207,6 @@ async function runCommandSafely(
   }
 }
 
-function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
-  if (process.platform === "freebsd") {
-    return createInstallFailure({
-      message:
-        "brew not installed — Homebrew is not supported on FreeBSD. Install the required binaries on the Gateway host using pkg or Ports, then run `openclaw skills check` (use `--agent <id>` for a specific agent) to verify readiness.",
-    });
-  }
-  const formula = spec.formula ?? "this package";
-  if (process.platform === "linux" && isContainerEnvironment()) {
-    return createInstallFailure({
-      message: `brew not installed — Homebrew is not installed in this Linux container. Build a custom image with Homebrew or install "${formula}" manually using a supported system package before enabling this skill.`,
-    });
-  }
-  const hint =
-    process.platform === "linux"
-      ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
-      : "Homebrew is not installed. Install it from https://brew.sh";
-  return createInstallFailure({ message: `brew not installed — ${hint}` });
-}
-
 // Go 1.21 is the onboarding auto-install baseline. Module-specific toolchain
 // requirements stay with `go install`, which can honor local, path, or automatic
 // switching according to the user's GOTOOLCHAIN setting.
@@ -238,14 +240,6 @@ function isSupportedGoVersion(version: GoVersion): boolean {
     version.major > MIN_AUTO_GO_MAJOR ||
     (version.major === MIN_AUTO_GO_MAJOR && version.minor >= MIN_AUTO_GO_MINOR)
   );
-}
-
-function parseAptGoCandidate(output: string): GoVersion | undefined {
-  const match = /Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(output);
-  if (!match) {
-    return undefined;
-  }
-  return { major: Number(match[1]), minor: Number(match[2]) };
 }
 
 function appendPathDirectory(pathEnv: string | undefined, directory: string): string {
@@ -324,7 +318,7 @@ async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | 
   if (policy.code !== 0) {
     return createInstallFailure({ message: aptFailureMessage, ...policy });
   }
-  const candidate = parseAptGoCandidate(policy.stdout);
+  const candidate = parseGoVersion(/Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(policy.stdout));
   if (!candidate && update.code !== 0) {
     return createInstallFailure({ message: aptFailureMessage, ...update });
   }
@@ -352,8 +346,7 @@ export type SkillInstallReadiness =
   | { ready: true }
   | { ready: false; reason: SkillInstallSkipReason };
 
-function parseGoVersion(output: string): GoVersion | undefined {
-  const match = /\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(output);
+function parseGoVersion(match: RegExpExecArray | null): GoVersion | undefined {
   if (!match) {
     return undefined;
   }
@@ -368,7 +361,7 @@ async function isGoUsableForAutoInstall(): Promise<boolean> {
   if (versionResult.code !== 0) {
     return false;
   }
-  const version = parseGoVersion(versionResult.stdout);
+  const version = parseGoVersion(/\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(versionResult.stdout));
   return version !== undefined && isSupportedGoVersion(version);
 }
 
@@ -402,22 +395,17 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
       return brewOnPath ? { ready: true } : { ready: false, reason: "uv" };
     }
     case "go": {
+      let ready: boolean;
       if (hasBinary("go")) {
-        return (await isGoUsableForAutoInstall())
-          ? { ready: true }
-          : { ready: false, reason: "go" };
+        ready = await isGoUsableForAutoInstall();
+      } else if (brewOnPath) {
+        ready = true;
+      } else if (brewExe) {
+        ready = Boolean(await resolveBrewBinDir(10_000, brewExe, []));
+      } else {
+        ready = hasBinary("apt-get") && (await resolveAptCommandAccess()).available;
       }
-      if (brewOnPath) {
-        return { ready: true };
-      }
-      if (brewExe) {
-        return (await resolveBrewPrefixBinDir(10_000, brewExe))
-          ? { ready: true }
-          : { ready: false, reason: "go" };
-      }
-      return hasBinary("apt-get") && (await resolveAptCommandAccess()).available
-        ? { ready: true }
-        : { ready: false, reason: "go" };
+      return ready ? { ready: true } : { ready: false, reason: "go" };
     }
     default:
       return { ready: true };
@@ -438,10 +426,30 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     return createInstallFailure({ message: `Skill not found: ${params.skillName}` });
   }
 
-  const spec = findInstallSpec(entry, params.installId);
+  const installId = params.installId;
+  const spec = entry.metadata?.install?.find(
+    (candidate, index) => (candidate.id ?? `${candidate.kind}-${index}`).trim() === installId,
+  );
   const warnings: string[] = [];
   const skillSource = resolveSkillSource(entry.skill);
-  const normalizedSpec = spec ? normalizeSkillInstallSpec(spec) : undefined;
+  const normalizedSpec: SkillInstallSpecMetadata | undefined = spec
+    ? {
+        ...(spec.id ? { id: spec.id } : {}),
+        kind: spec.kind,
+        ...(spec.label ? { label: spec.label } : {}),
+        ...(spec.bins ? { bins: spec.bins.slice() } : {}),
+        ...(spec.os ? { os: spec.os.slice() } : {}),
+        ...(spec.formula ? { formula: spec.formula } : {}),
+        ...(spec.package ? { package: spec.package } : {}),
+        ...(spec.module ? { module: spec.module } : {}),
+        ...(spec.url ? { url: spec.url } : {}),
+        ...(spec.sha256 ? { sha256: spec.sha256 } : {}),
+        ...(spec.archive ? { archive: spec.archive } : {}),
+        ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
+        ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
+        ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
+      }
+    : undefined;
   const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
   if (access && !access.installSkillDependencies) {
@@ -491,7 +499,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     );
   }
   const request = {
-    skillKey: resolveSkillKey(entry.skill, entry),
+    skillKey: resolveSkillKey(entry),
     spec,
     preferences: resolveSkillsInstallPreferences(params.config),
     timeoutMs,
@@ -499,6 +507,16 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const result = access
     ? await access.installSkillDependencies!(request)
     : await installSkillDependencies(request);
+  if (result.ok) {
+    try {
+      const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+      await refreshSkillsDiscovery({ workspaceDir, config: params.config });
+    } catch (error) {
+      warnings.push(
+        `Dependencies installed, but discovery refresh failed: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
   return withWarnings(result, warnings);
 }
 
@@ -519,7 +537,23 @@ export async function installSkillDependencies(
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
-    return resolveBrewMissingFailure(spec);
+    if (process.platform === "freebsd") {
+      return createInstallFailure({
+        message:
+          "brew not installed — Homebrew is not supported on FreeBSD. Install the required binaries on the Gateway host using pkg or Ports, then run `openclaw skills check` (use `--agent <id>` for a specific agent) to verify readiness.",
+      });
+    }
+    const formula = spec.formula ?? "this package";
+    if (process.platform === "linux" && isContainerEnvironment()) {
+      return createInstallFailure({
+        message: `brew not installed — Homebrew is not installed in this Linux container. Build a custom image with Homebrew or install "${formula}" manually using a supported system package before enabling this skill.`,
+      });
+    }
+    const hint =
+      process.platform === "linux"
+        ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
+        : "Homebrew is not installed. Install it from https://brew.sh";
+    return createInstallFailure({ message: `brew not installed — ${hint}` });
   }
 
   const goWasAlreadyInstalled = spec.kind === "go" && hasBinary("go");

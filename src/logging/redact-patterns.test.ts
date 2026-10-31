@@ -1,10 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { parseRedactPatternSource } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
-import { redactSensitiveText, resolveRedactOptions } from "./redact.js";
+import { redactSensitiveFieldValue, redactSensitiveText, resolveRedactOptions } from "./redact.js";
 
 describe("default pattern table", () => {
+  it.each(["--token", "--password", "--api-key", "--security-code"])(
+    "masks a standalone spaced %s argument without another field delimiter",
+    (flag) => {
+      const input = `${flag} fixtureValue1234567890`;
+      const expected = `${flag} fixtur…7890`;
+      expect(redactSensitiveText(input, { mode: "tools" })).toBe(expected);
+      expect(redactSensitiveFieldValue("content", input, { mode: "tools" })).toBe(expected);
+    },
+  );
   // A default pattern the safe-regex guard rejects is dropped silently at runtime, which disables
   // that whole redaction family; fail here with the offending source instead.
   it("compiles every default string pattern under the safe-regex guard", () => {
@@ -216,6 +225,33 @@ describe("configured source language preservation", () => {
       const resolved = resolveRedactOptions({ mode: "tools", patterns: [configured] });
       const pattern = resolved.patterns[0] as RegExp;
       expect(pattern.test(input)).toBe(true);
+    }
+  });
+
+  it("keeps valid and default redaction with malformed patterns and warns only once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("diagnostic sink unavailable");
+    });
+    try {
+      for (const patterns of [
+        "[1]",
+        "[null]",
+        '[false, {}, {"exec": 1}, [], "[", "customer-[0-9]+"]',
+        '"customer-[0-9]+"',
+        '{"length": 1}',
+      ]) {
+        const options = JSON.parse(`{"mode":"tools","patterns":${patterns}}`);
+        expect(redactSensitiveText("ghp_abcdefghijklmnopqrstuvwxyz123456", options)).toBe(
+          "ghp_ab…3456",
+        );
+      }
+      const mixed = JSON.parse('{"patterns":[1,null,"customer-[0-9]+"]}');
+      expect(redactSensitiveText("customer-1234567890", mixed)).toBe("custom…7890");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("logging.redactPatterns"),
+      );
+    } finally {
+      warn.mockRestore();
     }
   });
 });

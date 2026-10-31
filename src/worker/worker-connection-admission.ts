@@ -4,17 +4,18 @@ import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coer
 import type { RawData } from "ws";
 import { GatewayWebSocketTlsPinError } from "../../packages/gateway-client/src/websocket-transport.js";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
-import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
-import {
-  WorkerAdmissionResponseFrameSchema,
-  type WorkerConnectParams,
-  type WorkerConnectRequestFrame,
-  type WorkerHelloOk,
-  type WorkerProtocolCloseReason,
-  WorkerProtocolCloseReasonSchema,
+import type {
+  WorkerConnectParams,
+  WorkerConnectRequestFrame,
+  WorkerHelloOk,
+  WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import {
+  validateWorkerAdmissionResponseFrame as validateAdmissionResponse,
+  validateWorkerProtocolCloseReason as validateCloseReason,
+} from "../../packages/gateway-protocol/src/worker-response-validators.js";
 import {
   WorkerAdmissionError,
   WorkerConnectionInterruptedError,
@@ -25,14 +26,6 @@ import {
   WorkerConnectionEndpointError,
 } from "./worker-connection-endpoint.js";
 import { closeInvalidWorkerFrame } from "./worker-connection-frames.js";
-
-const validateAdmissionResponse = lazyCompile(WorkerAdmissionResponseFrameSchema);
-const validateCloseReason = lazyCompile(WorkerProtocolCloseReasonSchema);
-
-const RETRYABLE_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
-  "gateway-shutdown",
-  "gateway-unavailable",
-]);
 
 type WorkerConnectionAttemptOptions = {
   attemptTimeoutMs: number;
@@ -73,7 +66,7 @@ function matchesAdmission(connectParams: WorkerConnectParams, hello: WorkerHello
 }
 
 export function isRetryableWorkerCloseReason(reason: WorkerProtocolCloseReason): boolean {
-  return RETRYABLE_CLOSE_REASONS.has(reason);
+  return reason === "gateway-shutdown" || reason === "gateway-unavailable";
 }
 
 export function connectWorkerConnectionAttempt(

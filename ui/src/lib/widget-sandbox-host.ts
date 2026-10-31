@@ -1,4 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { generateUUID } from "./uuid.ts";
 
 // A slow resource gets a notice without throwing away its in-flight work. The
@@ -52,6 +53,10 @@ export class WidgetSandboxHost {
 
   get loaded(): boolean {
     return this.documentLoaded;
+  }
+
+  get rendered(): boolean {
+    return this.loaded && this.renderId === null;
   }
 
   update(options: WidgetSandboxHostOptions): void {
@@ -141,13 +146,11 @@ export class WidgetSandboxHost {
   }
 
   private clearReadyTimeout(): void {
-    if (this.slowTimer !== null) {
-      window.clearTimeout(this.slowTimer);
-      this.slowTimer = null;
-    }
-    if (this.readyTimer !== null) {
-      window.clearTimeout(this.readyTimer);
-      this.readyTimer = null;
+    for (const key of ["slowTimer", "readyTimer"] as const) {
+      if (this[key] !== null) {
+        window.clearTimeout(this[key]);
+        this[key] = null;
+      }
     }
   }
 
@@ -244,16 +247,13 @@ export class WidgetSandboxHost {
       ),
     };
     this.activeLoad = load;
-    let rejectAborted!: () => void;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      rejectAborted = () => {
-        const reason: unknown = controller.signal.reason;
-        reject(reason instanceof Error ? reason : new DOMException("Aborted", "AbortError"));
-      };
-      controller.signal.addEventListener("abort", rejectAborted, { once: true });
-    });
     try {
-      const html = await Promise.race([loadDocument(controller.signal), aborted]);
+      const html = await racePromiseWithAbortSignal(
+        () => loadDocument(controller.signal),
+        controller.signal,
+        ({ reason }) =>
+          reason instanceof Error ? reason : new DOMException("Aborted", "AbortError"),
+      );
       if (!this.active || this.activeLoad !== load || !this.frame.isConnected) {
         return;
       }
@@ -270,7 +270,6 @@ export class WidgetSandboxHost {
     } finally {
       window.clearTimeout(load.timeout);
       window.clearTimeout(load.notice);
-      controller.signal.removeEventListener("abort", rejectAborted);
       if (this.activeLoad === load) {
         this.activeLoad = null;
       }

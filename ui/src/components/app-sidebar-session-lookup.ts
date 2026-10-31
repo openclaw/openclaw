@@ -11,23 +11,17 @@ import type {
   SidebarRecentSession,
   SidebarSessionHovercardRow,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import { sessionLineageIdentityHost } from "./session-lineage-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import { sessionLineageIdentityHost } from "./session-lineage.ts";
 
 type SidebarSessionLookupData = Pick<
-  SessionDataController,
+  SessionDataOwner,
   | "context"
   | "activeSessionLineageRoot"
   | "activeSessionLineageSelectedRow"
   | "childSessionRowsByParent"
   | "sessionResultsByAgent"
 >;
-
-type SidebarSessionLookupSource = {
-  readonly sessionData: SidebarSessionLookupData;
-  getSessionNavigationState(): SidebarSessionNavigationState;
-  visibleSessionCatalogs(): readonly SessionCatalog[];
-};
 
 export function findActiveSidebarLineageRow(
   sessionData: SidebarSessionLookupData,
@@ -50,7 +44,11 @@ export function findActiveSidebarLineageRow(
 }
 
 export function findSidebarHovercardRow(
-  source: SidebarSessionLookupSource,
+  source: {
+    readonly sessionData: SidebarSessionLookupData;
+    getSessionNavigationState(): SidebarSessionNavigationState;
+    visibleSessionCatalogs(): readonly SessionCatalog[];
+  },
   sessionKey: string,
   projectedRows: readonly SidebarRecentSession[],
 ): SidebarSessionHovercardRow | undefined {

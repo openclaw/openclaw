@@ -9,14 +9,17 @@ import type { NativeWorkerFailure } from "./worker-native-error.js";
 
 export type { NativeWorkerEvents, RetainedNativeWorker } from "@openclaw/worker-runtime/lifecycle";
 
+/** The host endpoint never crosses the supervisor transport. */
+export type NativeWorkerTaskPorts = { host: MessagePort; worker: MessagePort };
+
 /** Handle operations consume this owner contract without importing its controller. */
 export type NativeWorkerRuntime = {
   handles: { delete(id: number): boolean };
   failure?: Error;
   service(): void;
-  post(message: NativeWorkerRequest, transfers?: readonly Transferable[]): void;
+  post(message: NativeWorkerRequest, transfers?: Transferable[]): void;
   refreshReference(): void;
-  resourceBroker(): SpawnBrokerHost;
+  resourceBroker(): Pick<SpawnBrokerHost, "captureNativeResource" | "sealNativeResources">;
 };
 
 type NativeWorkerOptions = Omit<WorkerOptions, "env" | "transferList"> & {
@@ -78,11 +81,11 @@ export type NativeWorkerRequest =
       options: NativeWorkerOptions;
       transferList: Transferable[];
       resource?: NativeWorkerResourceRequest;
+      taskPort?: MessagePort;
     }
   | { type: "post"; id: number; value: unknown; transferList: Transferable[] }
   | { type: "resource-owner"; id: number; sequence: number; value: unknown }
   | { type: "stop" | "release"; id: number }
-  | { type: "ref"; id: number; referenced: boolean }
   | { type: "cpu"; id: number; requestId: number; previous?: NodeJS.CpuUsage }
   | { type: "heap"; id: number; requestId: number };
 

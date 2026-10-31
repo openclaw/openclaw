@@ -1,10 +1,11 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { invalidateCodexComputerFrame } from "./computer-context.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { restoreCodexThreadInstructionsAfterCompaction } from "./thread-policy.js";
 
 /** Restore host-owned context after native compaction rebuilds a live thread. */
 export async function restoreCodexAttemptCompactionContext(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
 ): Promise<void> {
   const { state, prompt } = resources;
   const { runtime, attemptTools } = prompt.context;
@@ -20,9 +21,7 @@ export async function restoreCodexAttemptCompactionContext(
       throw new Error("Codex compaction thread ownership changed");
     }
   };
-  computerContextEpoch.value += 1;
-  delete computerContextEpoch.frameToolCallId;
-  delete computerContextEpoch.frameImageIdentity;
+  invalidateCodexComputerFrame(computerContextEpoch);
   try {
     await compactionPlanState.restore({
       client,

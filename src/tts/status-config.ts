@@ -54,67 +54,42 @@ function sanitizeBaseUrlForStatus(value: unknown): string | undefined {
   return normalizeStatusDetail(sanitized, 120);
 }
 
-function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
-  return baseUrl ? baseUrl.replace(/\/+$/, "") !== DEFAULT_OPENAI_TTS_BASE_URL : false;
-}
-
-function firstStatusDetail(
-  record: Record<string, unknown> | undefined,
-  keys: readonly string[],
-): string | undefined {
-  if (!record) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const value = normalizeStatusDetail(record[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function resolveProviderConfigRecord(
-  raw: TtsConfig,
-  provider: TtsProvider,
-): Record<string, unknown> | undefined {
-  const rawRecord: Record<string, unknown> = isObjectRecord(raw)
-    ? (raw as Record<string, unknown>)
-    : {};
-  const providers: Record<string, unknown> = isObjectRecord(raw.providers) ? raw.providers : {};
-  if (provider === "microsoft") {
-    return {
-      ...(isObjectRecord(rawRecord.edge) ? rawRecord.edge : {}),
-      ...(isObjectRecord(rawRecord.microsoft) ? rawRecord.microsoft : {}),
-      ...(isObjectRecord(providers.edge) ? providers.edge : {}),
-      ...(isObjectRecord(providers.microsoft) ? providers.microsoft : {}),
-    };
-  }
-  const direct = rawRecord[provider];
-  const providerScoped = providers[provider];
-  if (isObjectRecord(providerScoped)) {
-    return providerScoped;
-  }
-  if (isObjectRecord(direct)) {
-    return direct;
-  }
-  return rawRecord;
-}
-
 function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
   if (provider === "auto") {
     return {};
   }
-  const record = resolveProviderConfigRecord(raw, provider);
-  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record?.baseUrl);
-  const customBaseUrl = provider === "openai" && isCustomOpenAiTtsBaseUrl(sanitizedBaseUrl);
+  const providers: Record<string, unknown> = isObjectRecord(raw.providers) ? raw.providers : {};
+  let record: Record<string, unknown> = {};
+  if (provider === "microsoft") {
+    record = {
+      ...(isObjectRecord(providers.edge) ? providers.edge : {}),
+      ...(isObjectRecord(providers.microsoft) ? providers.microsoft : {}),
+    };
+  } else {
+    const providerScoped = providers[provider];
+    if (isObjectRecord(providerScoped)) {
+      record = providerScoped;
+    }
+  }
+  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record.baseUrl);
+  const customBaseUrl =
+    provider === "openai" &&
+    (sanitizedBaseUrl
+      ? sanitizedBaseUrl.replace(/\/+$/, "") !== DEFAULT_OPENAI_TTS_BASE_URL
+      : false);
   const details: Partial<TtsStatusSnapshot> = {};
   for (const [field, keys] of [
     ["displayName", ["displayName"]],
     ["model", ["model", "modelId"]],
     ["voice", ["speakerVoice", "speakerVoiceId", "voice", "voiceId", "voiceName"]],
   ] as const) {
-    const value = firstStatusDetail(record, keys);
+    let value: string | undefined;
+    for (const key of keys) {
+      value = normalizeStatusDetail(record[key]);
+      if (value) {
+        break;
+      }
+    }
     if (value) {
       details[field] = value;
     }

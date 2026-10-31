@@ -1,29 +1,37 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { appendIncognitoSystemPrompt } from "./incognito-system-prompt.js";
-import { appendProgressCardSystemPrompt } from "./progress-card-system-prompt.js";
+import { prepareAttemptSystemPromptAdditions } from "./embedded-agent-runner/run/attempt-system-prompt-additions.js";
 
 const { hasPairedCardRenderer } = vi.hoisted(() => ({
   hasPairedCardRenderer: vi.fn<() => Promise<boolean>>(),
 }));
 
 vi.mock("../infra/device-pairing.js", () => ({ hasPairedCardRenderer }));
+vi.mock("./git-coauthor-prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./git-coauthor-prompt.js")>()),
+  resolveSessionGitCoauthorPrompt: async () => undefined,
+}));
 
-function append(params: {
-  config?: Parameters<typeof appendProgressCardSystemPrompt>[0]["config"];
+async function append(params: {
+  config?: Parameters<typeof prepareAttemptSystemPromptAdditions>[0]["config"];
   extraSystemPrompt?: string;
   sessionKey?: string;
   toolsAllow?: string[];
+  storePath?: string;
 }) {
-  return appendProgressCardSystemPrompt({
-    agentId: "main",
-    config: params.config,
-    extraSystemPrompt: params.extraSystemPrompt,
-    modelId: "gpt-5.6-sol",
-    provider: "openai",
-    sessionKey: params.sessionKey ?? "agent:main:work",
-    toolsAllow: params.toolsAllow,
-  });
+  return (
+    await prepareAttemptSystemPromptAdditions({
+      agentId: "main",
+      sessionId: "synthetic-session",
+      config: params.config,
+      extraSystemPrompt: params.extraSystemPrompt,
+      modelId: "gpt-5.6-sol",
+      provider: "openai",
+      sessionKey: params.sessionKey ?? "agent:main:work",
+      toolsAllow: params.toolsAllow,
+      storePath: params.storePath,
+    })
+  ).extraSystemPrompt;
 }
 
 describe("progress card system prompt", () => {
@@ -31,8 +39,9 @@ describe("progress card system prompt", () => {
     hasPairedCardRenderer.mockReset().mockResolvedValue(true);
   });
 
-  it("injects the instruction when every adoption gate passes", async () => {
-    await expect(append({})).resolves.toContain("progress_card");
+  it("preserves existing context bytes when every adoption gate passes", async () => {
+    const prompt = await append({ extraSystemPrompt: "Existing context.\n" });
+    expect(prompt).toMatch(/^Existing context\.\n\n\nCreate a card with progress_card/);
   });
 
   it.each([
@@ -79,16 +88,13 @@ describe("progress card system prompt", () => {
   });
 
   it("preserves incognito-first composition order", async () => {
-    const incognitoPrompt = appendIncognitoSystemPrompt({
-      agentId: "main",
-      extraSystemPrompt: "Existing context.",
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    });
-
-    expect(incognitoPrompt).not.toBe("Existing context.");
-    const instruction = await append({});
-    await expect(append({ extraSystemPrompt: incognitoPrompt })).resolves.toBe(
-      `${incognitoPrompt?.trim()}\n\n${instruction}`,
+    expect(
+      await append({
+        extraSystemPrompt: "Existing context.",
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+      }),
+    ).toBe(
+      "Existing context.\n\nThis chat is incognito; do not store its conversation content in memory files or long-term notes.\n\nCreate a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. For measurable work with a known total, prefer a leading progress bar labeled with what is measured and observed completed/total counts; never invent percentages. Update or clear existing cards as needed.",
     );
   });
 });

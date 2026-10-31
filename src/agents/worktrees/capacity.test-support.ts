@@ -1,3 +1,4 @@
+import type { StatsFs } from "node:fs";
 import { vi } from "vitest";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
@@ -9,6 +10,19 @@ import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-sta
 import { WORKTREE_CAPACITY_RESERVATION_SCOPE } from "./capacity-contract.js";
 import * as transport from "./capacity-store.js";
 import { reserveWorktreeCapacityInWorker } from "./capacity.worker.js";
+
+export function createWorktreeCapacityStatfs(stats: StatsFs, availableBytes: number): StatsFs {
+  return {
+    type: stats.type,
+    files: stats.files,
+    frsize: stats.frsize,
+    ffree: stats.ffree,
+    bsize: 4096,
+    blocks: 1024 ** 4 / 4096,
+    bavail: availableBytes / 4096,
+    bfree: availableBytes / 4096,
+  };
+}
 
 /** Synthetic filesystem quotas use the real admission kernel in the fixture's process. */
 export function useInProcessWorktreeCapacityTransport() {

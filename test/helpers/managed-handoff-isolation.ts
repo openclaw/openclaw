@@ -11,7 +11,7 @@ import {
   normalizeWindowsPathForComparison,
 } from "@openclaw/fs-safe/path";
 
-type SecureTempResolver = typeof import("@openclaw/fs-safe/temp").resolveSecureTempRoot;
+type SecureTempResolver = typeof import("@openclaw/fs-safe/secure-temp-root").resolveSecureTempRoot;
 type Binding = Readonly<{
   directory: string;
   databasePath: string;
@@ -166,7 +166,7 @@ export function installManagedHandoffTestBinding(binding: Binding) {
       name: "openclaw-managed-handoff-test-binding",
       setup(builder) {
         builder.onResolve(
-          { filter: /^@openclaw\/fs-safe\/temp$/u, namespace: "file" },
+          { filter: /^@openclaw\/fs-safe\/(?:temp|secure-temp-root)$/u, namespace: "file" },
           ({ path: specifier, importer, kind }) => {
             // The original dependency lookup must bypass this same resolver hook.
             if (resolving) {
@@ -193,7 +193,10 @@ export function installManagedHandoffTestBinding(binding: Binding) {
     Module.registerHooks({
       resolve(specifier, context, nextResolve) {
         const original = nextResolve(specifier, context);
-        if (specifier !== "@openclaw/fs-safe/temp") {
+        if (
+          specifier !== "@openclaw/fs-safe/temp" &&
+          specifier !== "@openclaw/fs-safe/secure-temp-root"
+        ) {
           return original;
         }
         return {
@@ -206,8 +209,8 @@ export function installManagedHandoffTestBinding(binding: Binding) {
   // Refuse the invocation before its entrypoint if the actual dependency cannot
   // honor this binding. Consumer copies are separately resolved by the hook above.
   const temp = createRequire(import.meta.url)(
-    "@openclaw/fs-safe/temp",
-  ) as typeof import("@openclaw/fs-safe/temp");
+    "@openclaw/fs-safe/secure-temp-root",
+  ) as typeof import("@openclaw/fs-safe/secure-temp-root");
   assert.equal(
     temp.resolveSecureTempRoot({
       preferredDir: "/tmp/openclaw",
@@ -224,12 +227,18 @@ export function resolveManagedHandoffTestTempRoot(
   options: Parameters<SecureTempResolver>[0],
   witness: { id: string; phase: string; consumer: string },
 ) {
-  // Explicit application caches keep their selected path. Only the default OpenClaw
-  // scratch resolver is rebound; the normal product default and resolver stay unchanged.
+  // Explicit application caches keep their selected path. Rebind both the shared
+  // scratch default and the private per-user lease default, including the macOS
+  // lease root under the service TMPDIR, to this fixture.
+  const perUserLeaseRoot = path.join(
+    (options.tmpdir ?? tmpdir)(),
+    process.getuid ? `openclaw-${process.getuid()}` : "openclaw",
+  );
   if (
     options.preferredDir === undefined
       ? options.fallbackPrefix !== "openclaw"
-      : !sharedRoots.has(options.preferredDir)
+      : !forbiddenBindingRoots.has(comparisonPath(options.preferredDir)) &&
+        comparisonPath(options.preferredDir) !== comparisonPath(perUserLeaseRoot)
   ) {
     return original(options);
   }

@@ -18,7 +18,7 @@ import {
   resolveProviderRuntimePluginHandle,
 } from "./provider-hook-runtime.js";
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
-import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { resolvePluginProvidersCore, withPluginProviders } from "./providers.runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -120,6 +120,138 @@ afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("provider selection registration coverage", () => {
+  it.each(["active", "request", "unowned request", "disabled", "replaced"] as const)(
+    "uses a %s runtime alias owner only as an independent inspection hint",
+    async (state) => {
+      const proof = fixture("cli");
+      writeFileSync(
+        proof.otherSource,
+        'let calls=0; module.exports={id:"other-owner",register(api){api.registerProvider({id:"other-provider",label:"Other",auth:[],hookAliases:["runtime-alias"],normalizeModelId:()=>String(++calls)});}};',
+      );
+      const loaded = proof.load("full", ["other-owner"]);
+      const callback = loaded.providers[0]!.provider.normalizeModelId!;
+      expect(callback({ provider: "runtime-alias", modelId: "before" })).toBe("1");
+      setActivePluginRegistry(
+        state.includes("request") ? createEmptyPluginRegistry() : loaded,
+        "runtime-alias-owner",
+      );
+      const replacement = path.join(path.dirname(proof.otherSource), "replacement.cjs");
+      writeFileSync(replacement, 'throw new Error("replacement must not be selected");');
+      const inspect = () =>
+        withPluginProviders(
+          {
+            ...proof.query,
+            mode: "runtime",
+            applyAutoEnable: false,
+            providerRefs: ["runtime-alias"],
+            onlyPluginIds: undefined,
+            ...(state === "disabled"
+              ? {
+                  config: {
+                    plugins: {
+                      ...proof.query.config.plugins,
+                      entries: { "other-owner": { enabled: false } },
+                    },
+                  },
+                }
+              : {}),
+            ...(state === "replaced"
+              ? {
+                  pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+                    plugins: proof.snapshot.plugins.map((plugin) =>
+                      plugin.id === "other-owner" ? { ...plugin, source: replacement } : plugin,
+                    ),
+                  }),
+                }
+              : {}),
+          },
+          async (providers) =>
+            providers.map((provider) => ({
+              id: provider.id,
+              call: provider.normalizeModelId?.({ provider: "runtime-alias", modelId: "after" }),
+            })),
+        );
+      const selected = await (state.includes("request")
+        ? withPluginRuntimeRegistryScope(
+            state === "request"
+              ? loaded
+              : {
+                  ...createEmptyPluginRegistry(),
+                  plugins: loaded.plugins,
+                  providers: loaded.providers,
+                },
+            inspect,
+          )
+        : inspect());
+      expect(selected).toEqual(
+        state === "active" || state === "request" ? [{ id: "other-provider", call: "1" }] : [],
+      );
+      expect(callback({ provider: "runtime-alias", modelId: "after" })).toBe("2");
+      expect(proof.registrations()).toBe("");
+    },
+  );
+
+  it("activates the Bedrock API owner for a custom provider without loading other owners", () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        new URL("../../extensions/amazon-bedrock/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const root = makePluginLoaderTempDir();
+    const marker = path.join(root, "registrations.log");
+    const bedrock = writePlugin({
+      id: manifest.id,
+      dir: root,
+      filename: "index.cjs",
+      body: `module.exports={id:"amazon-bedrock",register(api){
+        require("node:fs").appendFileSync(${JSON.stringify(marker)},"bedrock");
+        api.registerProvider({id:"amazon-bedrock",label:"Bedrock",auth:[],hookAliases:["bedrock-converse-stream"]});
+      }};`,
+    });
+    const unrelated = writePlugin({
+      id: "unrelated-owner",
+      filename: "index.cjs",
+      body: 'module.exports={id:"unrelated-owner",register(){throw new Error("unrelated owner loaded");}};',
+    });
+    const plugins = [
+      { ...manifest, origin: "global" as const, rootDir: root, source: bedrock.file },
+      {
+        id: "unrelated-owner",
+        providers: ["unrelated"],
+        origin: "global" as const,
+        rootDir: unrelated.dir,
+        source: unrelated.file,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      },
+    ];
+    for (const plugin of plugins) {
+      writeFileSync(path.join(plugin.rootDir, "openclaw.plugin.json"), JSON.stringify(plugin));
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({ plugins });
+    const config: OpenClawConfig = {
+      plugins: { allow: ["amazon-bedrock", "unrelated-owner"] },
+      models: {
+        providers: {
+          "amazon-bedrock-east1": {
+            api: "bedrock-converse-stream",
+            auth: "aws-sdk",
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            models: [],
+          },
+        },
+      },
+    };
+    const handle = resolveProviderRuntimePluginHandle({
+      provider: "amazon-bedrock-east1",
+      config,
+      env: {},
+      pluginMetadataSnapshot: snapshot,
+    });
+    expect(handle.plugin?.id).toBe("amazon-bedrock");
+    expect(readFileSync(marker, "utf8")).toBe("bedrock");
+  });
+
   it("reselects retained API owners from current config without activating plugins", async () => {
     const ids = ["ollama", "github-copilot"];
     const metadataSnapshot = createPluginMetadataSnapshotFixture({

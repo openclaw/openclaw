@@ -1,7 +1,5 @@
-import type {
-  BranchSummaryResult as CoreBranchSummaryResult,
-  AgentMessage,
-} from "../runtime/index.js";
+import { collectTextContentBlocks } from "../content-blocks.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../runtime/index.js";
 
 export function unwrapCoreResult<T>(
@@ -13,48 +11,12 @@ export function unwrapCoreResult<T>(
   throw result.error;
 }
 
-export function normalizeBranchSummaryResult(
-  result:
-    | { ok: true; value: CoreBranchSummaryResult }
-    | { ok: false; error: { code: string; message: string } },
-): {
-  summary?: string;
-  readFiles?: string[];
-  modifiedFiles?: string[];
-  aborted?: boolean;
-  error?: string;
-} {
-  if (result.ok) {
-    return result.value;
-  }
-  if (result.error.code === "aborted") {
-    return { aborted: true, error: result.error.message };
-  }
-  return { error: result.error.message };
-}
-
 export function hasPersistedAssistantContent(content: unknown): boolean {
   return (typeof content === "string" || Array.isArray(content)) && content.length > 0;
 }
 
 export function extractTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  let text = "";
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const candidate = block as { type?: unknown; text?: unknown };
-    if (candidate.type === "text" && typeof candidate.text === "string") {
-      text += candidate.text;
-    }
-  }
-  return text;
+  return typeof content === "string" ? content : collectTextContentBlocks(content).join("");
 }
 
 export function replaceAgentMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {

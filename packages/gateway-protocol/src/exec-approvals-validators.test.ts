@@ -1,19 +1,40 @@
-// Gateway Protocol tests cover exec approvals validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateExecApprovalRequestParams,
   validateExecApprovalsNodeSnapshot,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsNativeRequest,
 } from "./index.js";
 
-/**
- * Exec approval validator regressions for gateway and node-scoped policy
- * writes. The fixtures pin runtime-owned allowlist metadata and command-span
- * bounds because those contracts are consumed by approval UI and replay logic.
- */
+const fileWithEntry = (entry: Record<string, unknown>) => ({
+  version: 1,
+  agents: { main: { allowlist: [{ pattern: "/usr/bin/python3", ...entry }] } },
+});
 
 describe("exec approvals protocol validators", () => {
+  it("accepts native authorization and refuses host-floor bypass", () => {
+    const request = {
+      operation: "commit",
+      agentId: "main",
+      command: "echo native",
+      uses: [],
+      grants: [],
+      authorization: {
+        source: "current-policy",
+        security: "full",
+        ask: "off",
+        allowlistSatisfied: false,
+      },
+    };
+    expect(validateExecApprovalsNativeRequest(request)).toBe(true);
+    expect(
+      validateExecApprovalsNativeRequest({
+        ...request,
+        authorization: { ...request.authorization, bypassHostApprovalFloors: true },
+      }),
+    ).toBe(false);
+  });
   it("accepts runtime-owned allowlist metadata on gateway and node set payloads", () => {
     const file = {
       version: 1 as const,
@@ -104,121 +125,52 @@ describe("exec approvals protocol validators", () => {
   });
 
   it("rejects ambiguous or unsafe host-native approval payloads", () => {
+    const file = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "sha256:file",
+      file: { version: 1 },
+    };
+    const native = { enabled: true, hash: "sha256:current", defaultAction: "deny", rules: [] };
+    const disabled = { enabled: false, message: "No exec policy configured" };
+    const resolvedDefaults = {
+      security: "deny",
+      ask: "on-miss",
+      askFallback: "deny",
+      autoAllowSkills: false,
+    };
     for (const snapshot of [
       {},
       { hash: "sha256:current" },
       { enabled: true, hash: "sha256:current", defaultAction: "deny" },
       { enabled: true, hash: "sha256:current", defaultAction: "full", rules: [] },
-      {
-        path: "/tmp/exec-approvals.json",
-        exists: true,
-        hash: "sha256:file",
-        file: { version: 1 },
-        defaultAction: "deny",
-      },
-      {
-        path: "/tmp/exec-approvals.json",
-        exists: true,
-        hash: "sha256:file",
-        file: { version: 1 },
-        resolvedDefaults: {
-          security: "full",
-          ask: "sometimes",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      },
-      {
-        enabled: true,
-        hash: "sha256:current",
-        defaultAction: "deny",
-        rules: [],
-        message: "mixed state",
-      },
-      {
-        enabled: true,
-        hash: "sha256:current",
-        defaultAction: "deny",
-        rules: [],
-        resolvedDefaults: {
-          security: "deny",
-          ask: "on-miss",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      },
-      {
-        enabled: false,
-        message: "No exec policy configured",
-        resolvedDefaults: {
-          security: "deny",
-          ask: "on-miss",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      },
+      { ...file, defaultAction: "deny" },
+      { ...file, resolvedDefaults: { ...resolvedDefaults, security: "full", ask: "sometimes" } },
+      { ...native, message: "mixed state" },
+      { ...native, resolvedDefaults },
+      { ...disabled, resolvedDefaults },
       { enabled: false, rules: [] },
     ]) {
       expect(validateExecApprovalsNodeSnapshot(snapshot)).toBe(false);
     }
 
     for (const params of [
-      { nodeId: "windows-node", native: {}, baseHash: "sha256:current" },
-      {
-        nodeId: "windows-node",
-        native: { defaultAction: "deny" },
-        baseHash: "sha256:current",
-      },
-      { nodeId: "windows-node", native: { defaultAction: "full" }, baseHash: "sha256:current" },
-      { nodeId: "windows-node", native: { rules: [] } },
-      {
-        nodeId: "windows-node",
-        native: { rules: [{ pattern: "", action: "allow" }] },
-        baseHash: "sha256:current",
-      },
+      { native: {}, baseHash: "sha256:current" },
+      { native: { defaultAction: "deny" }, baseHash: "sha256:current" },
+      { native: { defaultAction: "full" }, baseHash: "sha256:current" },
+      { native: { rules: [] } },
+      { native: { rules: [{ pattern: "", action: "allow" }] }, baseHash: "sha256:current" },
     ]) {
-      expect(validateExecApprovalsNodeSetParams(params)).toBe(false);
+      expect(validateExecApprovalsNodeSetParams({ nodeId: "windows-node", ...params })).toBe(false);
     }
   });
 
   it("rejects unknown allowlist metadata", () => {
-    expect(
-      validateExecApprovalsSetParams({
-        file: {
-          version: 1,
-          agents: {
-            main: {
-              allowlist: [
-                {
-                  pattern: "/usr/bin/python3",
-                  source: "unknown-source",
-                },
-              ],
-            },
-          },
-        },
-        baseHash: "abc123",
-      }),
-    ).toBe(false);
-
-    expect(
-      validateExecApprovalsSetParams({
-        file: {
-          version: 1,
-          agents: {
-            main: {
-              allowlist: [
-                {
-                  pattern: "/usr/bin/python3",
-                  randomMetadata: true,
-                },
-              ],
-            },
-          },
-        },
-        baseHash: "abc123",
-      }),
-    ).toBe(false);
+    for (const entry of [{ source: "unknown-source" }, { randomMetadata: true }]) {
+      expect(
+        validateExecApprovalsSetParams({ file: fileWithEntry(entry), baseHash: "abc123" }),
+      ).toBe(false);
+    }
   });
 
   it("requires command spans to have non-negative starts and positive exclusive ends", () => {

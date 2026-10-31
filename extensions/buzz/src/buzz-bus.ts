@@ -1,6 +1,13 @@
-import { finalizeEvent, verifyEvent, type Event } from "nostr-tools";
+import { compareEvents, finalizeEvent, verifyEvent, type Event } from "nostr-tools";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   queryBuzzDirectoryProfiles,
   queryBuzzDirectoryRooms,
@@ -16,7 +23,6 @@ import {
   parseBuzzMessageEvent,
   type BuzzInboundMessage,
 } from "./message-event.js";
-import { syncBuzzProfile } from "./profile.js";
 import {
   connectAuthenticatedBuzzRelay,
   connectAuthenticatedBuzzRelaySession,
@@ -41,6 +47,49 @@ const REPLAY_MAX_ENTRIES = 10_000;
 const REPLAY_STATE_MAX_ENTRIES = 50_000;
 const REPLAY_NAMESPACE_PREFIX = "buzz.inbound-dedupe";
 const THREAD_ROOT_CACHE_MAX_ENTRIES = 1_024;
+const PROFILE_KIND = 0;
+const AGENT_PROFILE_KIND = 10_100;
+const DEFAULT_CHANNEL_ADD_POLICY = "anyone";
+const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
+
+function parseProfileContent(event: Event | undefined): Record<string, unknown> {
+  return asNonArrayRecord(event ? safeParseJson<unknown>(event.content) : undefined);
+}
+
+function resolveProfileTags(event: Event | undefined, authTag: string[] | undefined): string[][] {
+  const existingTags = event?.tags ?? [];
+  if (!authTag) {
+    return existingTags;
+  }
+  return [...existingTags.filter((tag) => tag[0] !== "auth"), authTag];
+}
+
+function hasConfiguredAuthTag(event: Event | undefined, authTag: string[] | undefined): boolean {
+  if (!authTag) {
+    return true;
+  }
+  const authTags = event?.tags.filter((tag) => tag[0] === "auth") ?? [];
+  return authTags.length === 1 && JSON.stringify(authTags[0]) === JSON.stringify(authTag);
+}
+
+function buildProfileEvent(params: {
+  kind: number;
+  content: Record<string, unknown>;
+  current?: Event;
+  tags: string[][];
+  secretKey: Uint8Array;
+}): Event {
+  const now = Math.floor(Date.now() / 1000);
+  return finalizeEvent(
+    {
+      kind: params.kind,
+      content: JSON.stringify(params.content),
+      created_at: params.current ? Math.max(now, params.current.created_at + 1) : now,
+      tags: params.tags,
+    },
+    params.secretKey,
+  );
+}
 
 export interface BuzzBus {
   publicKey: string;
@@ -89,6 +138,7 @@ export async function sendBuzzTextOneShot(params: {
   threadId?: string;
   replyToId?: string;
 }): Promise<string> {
+  const effect = captureEffectAuthority();
   const secretKey = decodeBuzzPrivateKey(params.privateKey);
   const mentionSyntax = inspectBuzzMentionSyntax(params.text);
   const needsDirectory = mentionSyntax.hasAtMention || mentionSyntax.hasExplicitIdentity;
@@ -134,7 +184,10 @@ export async function sendBuzzTextOneShot(params: {
       });
     }
     const event = buildBuzzTextEvent({ ...params, secretKey, mentionedPubkeys });
-    await relay.publish(event);
+    await effect.initiate(() => {
+      signal?.throwIfAborted();
+      return relay.publish(event);
+    });
     return event.id;
   } finally {
     relay.close();
@@ -220,6 +273,105 @@ export async function startBuzzBus(options: {
   });
   let directoryRelay: ReturnType<typeof startBuzzDirectoryRelay> | undefined;
   let profileTask: Promise<void> | undefined;
+  async function syncProfile(): Promise<string | undefined> {
+    const displayName = options.profileName?.trim() ?? "";
+    if (!displayName) {
+      return undefined;
+    }
+
+    signal.throwIfAborted();
+    const currentProfiles = new Map<number, Event>();
+    await queryBuzzRelaySnapshot({
+      relay,
+      filters: [
+        { kinds: [PROFILE_KIND], authors: [publicKey], limit: 1 },
+        { kinds: [AGENT_PROFILE_KIND], authors: [publicKey], limit: 1 },
+      ],
+      signal,
+      timeoutMessage: "Timed out loading current Buzz profile",
+      abortMessage: "Buzz profile query aborted",
+      failureMessage: "Buzz profile query failed",
+      closeReason: "profile query complete",
+      closeMessage: (reason) => `Buzz profile query closed: ${reason}`,
+      onEvent: (event) => {
+        const current = currentProfiles.get(event.kind);
+        if (!current || compareEvents(event, current) < 0) {
+          currentProfiles.set(event.kind, event);
+        }
+      },
+      result: () => currentProfiles,
+      onTimeout: reportFatalError,
+    });
+    signal.throwIfAborted();
+    const currentMetadata = currentProfiles.get(PROFILE_KIND);
+    const currentAgentProfile = currentProfiles.get(AGENT_PROFILE_KIND);
+    const metadataContent = parseProfileContent(currentMetadata);
+    const agentContent = parseProfileContent(currentAgentProfile);
+    const resolvedDisplayName =
+      normalizeOptionalString(metadataContent.display_name) ??
+      normalizeOptionalString(agentContent.display_name) ??
+      normalizeOptionalString(agentContent.name) ??
+      displayName;
+    const events: Event[] = [];
+
+    if (
+      metadataContent.display_name !== resolvedDisplayName ||
+      !hasConfiguredAuthTag(currentMetadata, authTag)
+    ) {
+      metadataContent.display_name = resolvedDisplayName;
+      events.push(
+        buildProfileEvent({
+          kind: PROFILE_KIND,
+          content: metadataContent,
+          current: currentMetadata,
+          tags: resolveProfileTags(currentMetadata, authTag),
+          secretKey,
+        }),
+      );
+    }
+
+    let agentProfileChanged = false;
+    if (!normalizeOptionalString(agentContent.name)) {
+      agentContent.name = resolvedDisplayName;
+      agentProfileChanged = true;
+    }
+    if (!normalizeOptionalString(agentContent.display_name)) {
+      agentContent.display_name = resolvedDisplayName;
+      agentProfileChanged = true;
+    }
+    if (
+      typeof agentContent.channel_add_policy !== "string" ||
+      !CHANNEL_ADD_POLICIES.has(agentContent.channel_add_policy)
+    ) {
+      // OpenClaw accepts messages only from configured Bot-role rooms, so allowing
+      // room admins to add this public identity does not expand Gateway ingress.
+      agentContent.channel_add_policy = DEFAULT_CHANNEL_ADD_POLICY;
+      agentProfileChanged = true;
+    }
+    if (agentProfileChanged) {
+      events.push(
+        buildProfileEvent({
+          kind: AGENT_PROFILE_KIND,
+          content: agentContent,
+          current: currentAgentProfile,
+          tags: currentAgentProfile?.tags ?? [],
+          secretKey,
+        }),
+      );
+    }
+
+    const lastEvent = events.at(-1);
+    if (!lastEvent) {
+      return undefined;
+    }
+    for (const event of events) {
+      // A previous publish acknowledgement can arrive after this account stopped.
+      signal.throwIfAborted();
+      await relay.publish(event);
+    }
+    signal.throwIfAborted();
+    return lastEvent.id;
+  }
   let membershipTracker: Awaited<ReturnType<typeof createBuzzRoomMembershipTracker>> | undefined;
   const threadRoots = new Map<string, { channelId: string; isBotOwned: boolean }>();
   const rememberThreadRoot = (event: Event) => {
@@ -231,12 +383,7 @@ export async function startBuzzBus(options: {
       channelId: root.channelId.toLowerCase(),
       isBotOwned: event.pubkey === publicKey,
     });
-    if (threadRoots.size > THREAD_ROOT_CACHE_MAX_ENTRIES) {
-      const oldest = threadRoots.keys().next().value;
-      if (oldest) {
-        threadRoots.delete(oldest);
-      }
-    }
+    pruneMapToMaxSize(threadRoots, THREAD_ROOT_CACHE_MAX_ENTRIES);
   };
   const bus: BuzzBus = {
     publicKey,
@@ -262,7 +409,6 @@ export async function startBuzzBus(options: {
             },
             result: () => {},
             onTimeout: reportFatalError,
-            checkAbortAfterSubscribe: true,
           });
         } catch (error) {
           signal.throwIfAborted();
@@ -279,6 +425,7 @@ export async function startBuzzBus(options: {
       return root?.channelId === channelId && root.isBotOwned;
     },
     sendText: async ({ channelId, text, threadId, replyToId }) => {
+      const effect = captureEffectAuthority();
       signal.throwIfAborted();
       const mentionSyntax = inspectBuzzMentionSyntax(text);
       const mentionedPubkeys =
@@ -297,7 +444,10 @@ export async function startBuzzBus(options: {
         replyToId,
         mentionedPubkeys,
       });
-      await relay.publish(event);
+      await effect.initiate(() => {
+        signal.throwIfAborted();
+        return relay.publish(event);
+      });
       rememberThreadRoot(event);
       return event.id;
     },
@@ -314,7 +464,10 @@ export async function startBuzzBus(options: {
         },
         secretKey,
       );
-      await relay.send(JSON.stringify(["EVENT", event]));
+      await captureEffectAuthority().initiate(() => {
+        signal.throwIfAborted();
+        return relay.send(JSON.stringify(["EVENT", event]));
+      });
     },
     close: async () => {
       lifecycleAbort.abort(new Error("Buzz bus closed"));
@@ -481,18 +634,10 @@ export async function startBuzzBus(options: {
       },
     });
     if (options.profileName?.trim()) {
-      profileTask = syncBuzzProfile({
-        relay,
-        secretKey,
-        publicKey,
-        displayName: options.profileName,
-        authTag,
-        onFatalError: reportFatalError,
-        signal,
-      })
-        .then((result) => {
-          if (!signal.aborted && result.status === "published") {
-            options.onProfilePublished?.(result.eventId);
+      profileTask = syncProfile()
+        .then((eventId) => {
+          if (!signal.aborted && eventId !== undefined) {
+            options.onProfilePublished?.(eventId);
           }
         })
         .catch((error: unknown) => {

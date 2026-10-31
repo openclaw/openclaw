@@ -1,6 +1,4 @@
 /**
- * Tool binary manager for agent-side helper commands.
- *
  * Locates or downloads pinned helper binaries such as fd and ripgrep.
  */
 import { spawnSync } from "node:child_process";
@@ -8,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
@@ -178,30 +175,6 @@ async function downloadFile(url: string, destination: Root, assetName: string): 
   }
 }
 
-async function extractArchiveSafe(
-  archivePath: string,
-  extractDir: string,
-  assetName: string,
-): Promise<void> {
-  try {
-    await extractArchive({
-      archivePath,
-      destDir: extractDir,
-      timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
-      limits: {
-        maxArchiveBytes: MAX_ARCHIVE_BYTES,
-        maxExtractedBytes: MAX_EXTRACTED_BYTES,
-        maxEntries: MAX_ARCHIVE_ENTRIES,
-      },
-    });
-  } catch (err) {
-    throw new Error(
-      `Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
-  }
-}
-
 async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
   const config = TOOLS[tool];
 
@@ -225,8 +198,6 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
   }
   const assetName = `${config.name}-${config.tagPrefix}${version}-${archStr}-${target}`;
 
-  mkdirSync(toolsDir, { recursive: true });
-
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
   const binaryExt = plat === "win32" ? ".exe" : "";
   const binaryPath = join(toolsDir, config.binaryName + binaryExt);
@@ -244,7 +215,16 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     const stagingRoot = await fsRoot(stagingDir);
     await downloadFile(downloadUrl, stagingRoot, assetName);
 
-    await extractArchiveSafe(archivePath, extractDir, assetName);
+    await extractArchive({
+      archivePath,
+      destDir: extractDir,
+      timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+      limits: {
+        maxArchiveBytes: MAX_ARCHIVE_BYTES,
+        maxExtractedBytes: MAX_EXTRACTED_BYTES,
+        maxEntries: MAX_ARCHIVE_ENTRIES,
+      },
+    });
 
     // Find the binary in extracted files. Some archives contain files directly
     // at root, others nest under a versioned subdirectory.
@@ -276,7 +256,6 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
       );
     }
 
-    // Make executable (Unix only)
     if (plat !== "win32") {
       chmodSync(binaryPath, 0o755);
     }
@@ -305,64 +284,22 @@ function installTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
 }
 
 /** Returns the existing or installed binary path, or undefined when unavailable. */
-export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
+export async function ensureTool(tool: "fd" | "rg"): Promise<string | undefined> {
   const toolsDir = getBinDir();
   const existingPath = getToolPath(tool, toolsDir);
   if (existingPath) {
     return existingPath;
   }
 
-  const config = TOOLS[tool];
-
-  if (!toolsDir) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `${config.name} not found. Install it on PATH or select an agent owner before downloading.`,
-        ),
-      );
-    }
-    return undefined;
-  }
-
-  if (isTruthyEnvValue(process.env.OPENCLAW_OFFLINE)) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`),
-      );
-    }
-    return undefined;
-  }
-
   // On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
   // Users must install via pkg.
-  if (platform() === "android") {
-    if (!silent) {
-      console.log(
-        chalk.yellow(`${config.name} not found. Install with: pkg install ${config.name}`),
-      );
-    }
+  if (!toolsDir || isTruthyEnvValue(process.env.OPENCLAW_OFFLINE) || platform() === "android") {
     return undefined;
-  }
-
-  if (!silent) {
-    console.log(chalk.dim(`${config.name} not found. Downloading...`));
   }
 
   try {
-    const path = await installTool(tool, toolsDir);
-    if (!silent) {
-      console.log(chalk.dim(`${config.name} installed to ${path}`));
-    }
-    return path;
-  } catch (e) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-    }
+    return await installTool(tool, toolsDir);
+  } catch {
     return undefined;
   }
 }

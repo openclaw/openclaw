@@ -1,9 +1,16 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
+import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./config-contracts.js";
+
+const loadConfigRuntime = createLazyRuntimeModule(() => import("./config-runtime.js"));
+const loadConfigParsing = createLazyRuntimeModule(() => import("./config-parsing.js"));
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
+const loadRuntimeEnv = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/runtime-env"));
+const loadClient = createLazyRuntimeModule(() => import("./client.js"));
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -19,14 +26,15 @@ export function createCodexAppServerConnectionHealthService(
   let abortController: AbortController | undefined;
   let monitor: Promise<void> | undefined;
   const run = async (ctx: OpenClawPluginServiceContext, signal: AbortSignal) => {
-    const { resolveCodexAppServerRuntimeOptions } = await import("./config-runtime.js");
+    const { resolveCodexAppServerRuntimeOptions } = await loadConfigRuntime();
+    const { readCodexPluginConfig } = await loadConfigParsing();
     let consecutiveFailures = 0;
 
     while (!signal.aborted) {
-      let pluginConfig: unknown;
+      let pluginConfig: CodexPluginConfig;
       let runtime: CodexAppServerRuntimeOptions;
       try {
-        pluginConfig = options.getPluginConfig();
+        pluginConfig = readCodexPluginConfig(options.getPluginConfig());
         runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       } catch (error) {
         if (!signal.aborted) {
@@ -42,9 +50,9 @@ export function createCodexAppServerConnectionHealthService(
       }
 
       const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
-        await import("./shared-client.js");
-      const { sleepWithAbort } = await import("openclaw/plugin-sdk/runtime-env");
-      const { isUnsupportedCodexAppServerVersionError } = await import("./client.js");
+        await loadSharedClient();
+      const { sleepWithAbort } = await loadRuntimeEnv();
+      const { isUnsupportedCodexAppServerVersionError } = await loadClient();
       if (signal.aborted) {
         return;
       }

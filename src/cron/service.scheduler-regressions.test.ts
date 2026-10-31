@@ -164,13 +164,12 @@ describe("Cron issue regressions", () => {
     for (const { id, state } of terminalStates) {
       const job: CronJob = { id, ...baseJob, state };
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-      const enqueueSystemEvent = vi.fn();
+      const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
       const cron = await startCronForStore({
         storePath: store.storePath,
-        enqueueSystemEvent,
-        runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
+        runSessionEvent,
       });
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(runSessionEvent).not.toHaveBeenCalled();
       cron.stop();
     }
   });

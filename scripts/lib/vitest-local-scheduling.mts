@@ -18,7 +18,8 @@ const MAX_LOCAL_FULL_SUITE_PARALLELISM = 10;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
-function parsePositiveInt(value: string | undefined, label: string) {
+// Unset overrides defer to scheduling; malformed explicit values must fail visibly.
+export function parseOptionalPositiveInt(value: string | undefined, label: string) {
   const text = value?.trim();
   if (!text) {
     return null;
@@ -44,6 +45,13 @@ export function isCiLikeEnv(env: Record<string, string | undefined> = process.en
     parsePermissiveBooleanToken(env.CI) === true ||
     parsePermissiveBooleanToken(env.GITHUB_ACTIONS) === true
   );
+}
+
+/** @internal Shared repository-script contract. */
+export function shouldContinueVitestFailures(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return isCiLikeEnv(env) || env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1";
 }
 
 /** @internal Shared repository-script contract. */
@@ -128,7 +136,7 @@ export function resolveLocalVitestScheduling(
   system: VitestHostInfo = schedulingHostInfo(),
   pool: "forks" | "threads" = "threads",
 ): LocalVitestScheduling {
-  const override = parsePositiveInt(
+  const override = parseOptionalPositiveInt(
     env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
     env.OPENCLAW_VITEST_MAX_WORKERS === undefined
       ? "OPENCLAW_TEST_WORKERS"

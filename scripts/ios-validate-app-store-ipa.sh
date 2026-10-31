@@ -118,12 +118,6 @@ plist_value() {
   "${PLIST_BUDDY_BIN}" -c "Print:${key_path}" "${plist}" 2>/dev/null || true
 }
 
-plist_has_key() {
-  local plist="$1"
-  local key_path="$2"
-  "${PLIST_BUDDY_BIN}" -c "Print:${key_path}" "${plist}" >/dev/null 2>&1
-}
-
 assert_plist_string() {
   local plist="$1"
   local key_path="$2"
@@ -153,7 +147,7 @@ assert_plist_key_absent() {
   local plist="$1"
   local key_path="$2"
   local label="$3"
-  if plist_has_key "${plist}" "${key_path}"; then
+  if "${PLIST_BUDDY_BIN}" -c "Print:${key_path}" "${plist}" >/dev/null 2>&1; then
     echo "Invalid IPA: ${label} must not be present in App Store builds." >&2
     exit 1
   fi

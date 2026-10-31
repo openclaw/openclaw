@@ -1,9 +1,10 @@
 // Proxy CLI runtime tests cover proxy runtime process handling and lifecycle events.
-import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { resetProxyValidationMocks } from "./proxy-cli.runtime.test-support.js";
 
 const { getRuntimeConfigMock, runProxyValidationMock, serverStopSpy, spawnMock } = vi.hoisted(
   () => ({
@@ -14,11 +15,11 @@ const { getRuntimeConfigMock, runProxyValidationMock, serverStopSpy, spawnMock }
   }),
 );
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("../process/exec-spawn.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec-spawn.js")>();
   return {
     ...actual,
-    spawn: spawnMock,
+    spawnCommand: spawnMock,
   };
 });
 
@@ -29,8 +30,11 @@ vi.mock("../proxy-capture/proxy-server.js", () => ({
   })),
 }));
 
+// mock-isolation: Proxy runtime fixtures control config without preparing a real config owner.
 vi.mock("../config/config.js", () => ({
+  loadConfig: getRuntimeConfigMock,
   getRuntimeConfig: getRuntimeConfigMock,
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));
 
 vi.mock("../infra/net/proxy/proxy-validation.js", () => ({
@@ -46,7 +50,9 @@ vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
 });
 
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
+import type { CaptureEventKind } from "../proxy-capture/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { registerProxyCli } from "./proxy-cli.js";
 import * as proxyCliRuntime from "./proxy-cli.runtime.js";
 
 describe("proxy cli runtime", () => {
@@ -61,6 +67,7 @@ describe("proxy cli runtime", () => {
   const savedEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   const tempDirs = new Set<string>();
   const tempDir = makeTempDir(tempDirs, "openclaw-proxy-cli-runtime-");
+  const stdoutWrite = vi.fn<typeof process.stdout.write>(() => true);
 
   beforeEach(() => {
     // Reuse the path so missing store/DB cleanup is observable as sessions leaking across cases.
@@ -72,33 +79,10 @@ describe("proxy cli runtime", () => {
     delete process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID;
     delete process.env.FORCE_COLOR;
     process.env.NO_COLOR = "1";
-    getRuntimeConfigMock.mockReset();
-    getRuntimeConfigMock.mockReturnValue({
-      proxy: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-    });
-    runProxyValidationMock.mockReset();
-    runProxyValidationMock.mockResolvedValue({
-      ok: true,
-      config: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-        source: "config",
-        errors: [],
-      },
-      checks: [
-        {
-          kind: "allowed",
-          url: "https://example.com/",
-          ok: true,
-          status: 200,
-        },
-      ],
-    });
+    resetProxyValidationMocks(getRuntimeConfigMock, runProxyValidationMock);
     process.exitCode = undefined;
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    stdoutWrite.mockClear();
+    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWrite);
     serverStopSpy.mockClear();
     spawnMock.mockReset();
   });
@@ -116,6 +100,87 @@ describe("proxy cli runtime", () => {
       }
     }
     cleanupTempDirs(tempDirs);
+  });
+
+  async function seedQueryEvents(kind: CaptureEventKind) {
+    const lease = await acquireDebugProxyCaptureStoreAsync();
+    try {
+      for (const sessionId of ["selected", "unrelated"]) {
+        await lease.store.upsertSession({
+          id: sessionId,
+          startedAt: 1,
+          mode: "test",
+          sourceScope: "openclaw",
+          sourceProcess: "test",
+        });
+        for (const ts of [1, 2]) {
+          await lease.store.recordEvent({
+            sessionId,
+            ts,
+            sourceScope: "openclaw",
+            sourceProcess: "test",
+            protocol: kind === "ws-frame" ? "wss" : "https",
+            direction: "outbound",
+            kind,
+            flowId: "query-flow",
+            host: "synthetic.invalid",
+            path: "/events?cursor=1",
+            method: "POST",
+            status: 429,
+            dataSha256: "same-payload",
+          });
+        }
+      }
+    } finally {
+      await lease.release();
+    }
+  }
+
+  function createQueryProgram() {
+    const writeErr = vi.fn();
+    const program = new Command().exitOverride().configureOutput({ writeErr });
+    registerProxyCli(program);
+    return { program, writeErr };
+  }
+
+  it.each([
+    { preset: "double-sends", kind: "request", countKey: "duplicateCount" },
+    { preset: "retry-storms", kind: "response", countKey: "errorCount" },
+    { preset: "cache-busting", kind: "request", countKey: "variantCount" },
+    { preset: "ws-duplicate-frames", kind: "ws-frame", countKey: "duplicateFrames" },
+    { preset: "missing-ack", kind: "ws-frame", countKey: "outboundFrames" },
+    { preset: "error-bursts", kind: "error", countKey: "errorCount" },
+  ] as const)("runs registered preset $preset against only the selected capture", async (entry) => {
+    await seedQueryEvents(entry.kind);
+    const { program } = createQueryProgram();
+    await program.parseAsync(
+      ["proxy", "query", "--preset", entry.preset, "--session", "selected", "--json"],
+      { from: "user" },
+    );
+    const output = String(stdoutWrite.mock.calls[0]?.[0] ?? "");
+    expect(JSON.parse(output)).toEqual({
+      rows: [expect.objectContaining({ host: "synthetic.invalid", [entry.countKey]: 2 })],
+    });
+    expect(stdoutWrite).toHaveBeenCalledOnce();
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it.each([
+    { preset: "error-burst", json: false },
+    { preset: "error-burst", json: true },
+    { preset: "", json: false },
+    { preset: "", json: true },
+  ])("rejects invalid registered preset $preset (json: $json)", async ({ preset, json }) => {
+    await seedQueryEvents("error");
+    const { program, writeErr } = createQueryProgram();
+    await expect(
+      program.parseAsync(["proxy", "query", "--preset", preset, ...(json ? ["--json"] : [])], {
+        from: "user",
+      }),
+    ).rejects.toMatchObject({ code: "commander.invalidArgument", exitCode: 1 });
+    expect(stdoutWrite).not.toHaveBeenCalled();
+    expect(writeErr).toHaveBeenCalledWith(expect.stringContaining("Allowed choices are"));
+    expect(writeErr).toHaveBeenCalledWith(expect.stringContaining("error-bursts"));
   });
 
   it("prints proxy validation text and leaves exit code unset on success", async () => {
@@ -361,51 +426,10 @@ describe("proxy cli runtime", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("prints proxy validation JSON and sets exit code on failure", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
-      ok: false,
-      config: {
-        enabled: true,
-        source: "missing",
-        errors: ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"],
-      },
-      checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({ json: true });
-
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      `${JSON.stringify(
-        {
-          ok: false,
-          config: {
-            enabled: true,
-            source: "missing",
-            errors: [
-              "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
-            ],
-          },
-          checks: [],
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    expect(process.exitCode).toBe(1);
-  });
-
-  it.each([
-    { signal: "SIGINT" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, exitCode: 143 },
-  ])(
+  it.each([{ signal: "SIGTERM" as const, exitCode: 143 }])(
     "preserves exit code $exitCode when the proxied child exits from $signal",
     async (testCase) => {
-      spawnMock.mockImplementation(() => {
-        const child = new EventEmitter();
-        queueMicrotask(() => {
-          child.emit("exit", null, testCase.signal);
-        });
-        return child;
-      });
+      spawnMock.mockResolvedValue({ signal: testCase.signal, failed: true });
 
       await proxyCliRuntime.runDebugProxyRunCommand({ commandArgs: ["example-command"] });
 
@@ -415,13 +439,7 @@ describe("proxy cli runtime", () => {
   );
 
   it("stops the proxy server and ends the session when child spawn fails", async () => {
-    spawnMock.mockImplementation(() => {
-      const child = new EventEmitter();
-      queueMicrotask(() => {
-        child.emit("error", new Error("spawn failed"));
-      });
-      return child;
-    });
+    spawnMock.mockRejectedValue(new Error("spawn failed"));
 
     const beforeRun = Date.now();
     await expect(

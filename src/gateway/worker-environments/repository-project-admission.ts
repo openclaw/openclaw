@@ -5,7 +5,9 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
 } from "../../agents/agent-lifecycle-registry.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -15,12 +17,18 @@ import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.run
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi } from "../github-public-api.js";
+import { assertRepositoryDispatchAdmission } from "../repository-dispatch.js";
+import {
+  resolveEnvironmentRecipe,
+  type EnvironmentRecipe,
+  type EnvironmentRecipeEntry,
+} from "./environment-recipe.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const GitObject = /^[a-f0-9]{40}$/u;
 // Commit lookup requests one changed file; trees are nonrecursive and inspect
-// only the root and .openclaw directory. Oversized/truncated metadata is not absence.
+// only the root and recipe directories. Oversized/truncated metadata is not absence.
 const METADATA_MAX_BYTES = 1024 * 1024;
 // Bind object resolution to the immutable repository, never its reusable name.
 const PINNED_REPOSITORY_QUERY = `query PinnedRepository($repositoryId: ID!, $commit: GitObjectID!) {
@@ -42,9 +50,11 @@ type AdmissionRequest = {
   getConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal?: AbortSignal;
+  readNativeCredential?: GitHubCredentialReader;
+  retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   knownRecipe?: (
     project: RepositoryWorkerProjectSnapshot,
-  ) => { project: RepositoryWorkerProjectSnapshot; setupRecipe?: string } | undefined;
+  ) => { setupRecipe?: string; recipe?: EnvironmentRecipe } | undefined;
 } & (
   | {
       repository: { agentId: string; url: string; ref?: string; baseCommit?: string };
@@ -86,42 +96,65 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   }
   const agent =
     expected?.source.owner.agent ??
-    captureAgentLifecycleBinding(params.getConfig(), request.agentId);
+    (await captureAgentLifecycleBinding(params.getConfig, request.agentId));
   if (!agent) {
     throw new Error("Repository preparation requires an existing agent that is not being deleted");
   }
   const getConfig = params.getConfig;
   const assertAgent = () => {
-    if (!matchesAgentLifecycleBinding(getConfig(), agent)) {
+    const currentConfig = getConfig();
+    assertRepositoryDispatchAdmission(params.readNativeCredential, currentConfig);
+    if (!matchesAgentLifecycleBinding(currentConfig, agent)) {
       sourceChanged();
     }
   };
-  const assertAdmission = () => {
+  const assertAgentPrepared = async () => {
+    if (!(await matchesAgentLifecycleBindingAsync(getConfig, agent))) {
+      sourceChanged();
+    }
+  };
+  const assertCaller = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
+  };
+  const assertAdmission = () => {
+    assertCaller();
     assertAgent();
   };
-  const prepareIdentity = async () => {
-    assertAgent();
+  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
+  const prepareIdentity = async (assertPreparationCurrent: () => void) => {
+    await assertAgentPrepared();
+    assertPreparationCurrent();
     const config = getConfig();
     const identity = await prepareGitHubReadIdentity({
       config,
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: agent.agentId,
       getCurrentConfig: getConfig,
-      assertActive: assertAgent,
+      assertActive:
+        params.readNativeCredential || params.retainCredentialCleanup
+          ? assertAdmission
+          : assertAgent,
+      readNativeCredential: params.readNativeCredential,
+      allowAppInstallation: params.retainCredentialCleanup !== undefined,
+      requestedRepository: repositoryPath.slice(1),
       refresh: () => requestCurrentGitHubOAuthRefresh(agent.agentId),
       allowAnonymous: true,
-    }).catch((error: unknown) => {
-      assertAgent();
+    }).catch(async (error: unknown) => {
+      await assertAgentPrepared();
       // Native credential subprocess diagnostics must never enter provider errors.
       throw error instanceof GitHubIdentityError ? error : new GitHubIdentityError("unverified");
     });
+    if (identity.revoke) {
+      params.retainCredentialCleanup?.(identity.revoke);
+    }
+    assertPreparationCurrent();
     assertAgent();
     return identity;
   };
+  await assertAgentPrepared();
   assertAdmission();
-  let identity = await prepareIdentity();
+  let identity = await prepareIdentity(assertCaller);
   assertAdmission();
   const owner = { agent, identity: identity.selection };
   if (expected && !isDeepStrictEqual(owner, expected.source.owner)) {
@@ -131,7 +164,6 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertAgent();
     identity.assertSelected();
   };
-  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
   const endpoint = `${gitHubPublicApi.GITHUB_API_BASE_URL}/repos${repositoryPath}`;
   const read = async (
     suffix: string,
@@ -304,7 +336,17 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
         ? commit.commit.tree
         : undefined,
   );
-  const treeEntry = async (sha: string, name: string) => {
+  const trees = new Map<string, Promise<Record<string, unknown>[]>>();
+  const treeEntries = (sha: string) => {
+    let pending = trees.get(sha);
+    if (pending) {
+      return pending;
+    }
+    pending = readTree(sha);
+    trees.set(sha, pending);
+    return pending;
+  };
+  const readTree = async (sha: string) => {
     const value = await read(`/git/trees/${sha}`, identity, assertAdmission, params.signal);
     if (
       !isRecord(value) ||
@@ -316,35 +358,81 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
         "GitHub tree metadata is incomplete; retry preparation with a complete source.",
       );
     }
-    const entries = value.tree.filter((entry) => isRecord(entry) && entry.path === name);
+    return value.tree.filter(isRecord);
+  };
+  const treeEntry = async (sha: string, name: string) => {
+    const entries = (await treeEntries(sha)).filter((entry) => entry.path === name);
     if (entries.length > 1) {
       sourceChanged();
     }
     return entries[0];
   };
-  const knownRecipe = params.knownRecipe?.(structuredClone(project));
+  const knownRecipe = params.knownRecipe?.(project);
   assertAdmission();
-  let setupRecipe: string | undefined;
-  if (knownRecipe !== undefined) {
-    if (
-      !isRecord(knownRecipe) ||
-      !isDeepStrictEqual(knownRecipe.project, project) ||
-      (knownRecipe.setupRecipe !== undefined &&
-        (typeof knownRecipe.setupRecipe !== "string" || !GitObject.test(knownRecipe.setupRecipe)))
-    ) {
-      sourceChanged();
-    }
-    // Recipe identity, including absence, is immutable for this exact admitted
-    // project. Its reuse never substitutes for the surrounding access checks.
-    setupRecipe = knownRecipe.setupRecipe;
-  } else {
-    const directory = await treeEntry(tree, ".openclaw");
-    if (isRecord(directory) && directory.type === "tree" && directory.mode === "040000") {
-      const recipe = await treeEntry(objectSha(directory), "worktree-setup.sh");
-      if (isRecord(recipe) && recipe.type === "blob" && recipe.mode === "100755") {
-        setupRecipe = objectSha(recipe);
-      }
-    }
+  if (knownRecipe?.recipe && knownRecipe.recipe.identity !== knownRecipe.setupRecipe) {
+    sourceChanged();
+  }
+  // Reusing admitted recipe facts never substitutes for current source access.
+  let setupRecipe = knownRecipe?.setupRecipe;
+  let recipe = knownRecipe?.recipe;
+  // Older devcontainer parsing did not record secret requests, including an empty selection.
+  if (
+    knownRecipe === undefined ||
+    (recipe?.source === "devcontainer" && recipe.secretNames === undefined)
+  ) {
+    recipe = await resolveEnvironmentRecipe(
+      async (file): Promise<EnvironmentRecipeEntry | undefined> => {
+        const segments = file.split("/");
+        let directory = tree;
+        for (const segment of segments.slice(0, -1)) {
+          const entry = await treeEntry(directory, segment);
+          if (!entry || entry.type !== "tree" || entry.mode !== "040000") {
+            return undefined;
+          }
+          directory = objectSha(entry);
+        }
+        const name = segments.at(-1);
+        if (!name) {
+          return undefined;
+        }
+        const entry = await treeEntry(directory, name);
+        if (!entry || entry.type !== "blob" || !["100644", "100755"].includes(String(entry.mode))) {
+          return undefined;
+        }
+        const blob = objectSha(entry);
+        const needsContent = file.endsWith("devcontainer.json") || file === "package.json";
+        let content: string | undefined;
+        if (needsContent) {
+          const value = await read(`/git/blobs/${blob}`, identity, assertAdmission, params.signal);
+          if (
+            !isRecord(value) ||
+            objectSha(value) !== blob ||
+            value.encoding !== "base64" ||
+            typeof value.content !== "string" ||
+            typeof value.size !== "number" ||
+            value.size < 0 ||
+            value.size > METADATA_MAX_BYTES
+          ) {
+            throw new Error(
+              "GitHub returned invalid environment recipe content; retry preparation.",
+            );
+          }
+          const decoded = Buffer.from(value.content, "base64");
+          if (decoded.length !== value.size || decoded.length > METADATA_MAX_BYTES) {
+            throw new Error(
+              "GitHub returned incomplete environment recipe content; retry preparation.",
+            );
+          }
+          content = decoded.toString("utf8");
+        }
+        return {
+          blob,
+          executable: entry.mode === "100755",
+          ...(content === undefined ? {} : { content }),
+        };
+      },
+    );
+    setupRecipe = recipe.identity;
   }
   // A name can be deleted and recreated while immutable objects are being read.
   // Confirm the repository instance again before advertising reusable capacity.
@@ -359,7 +447,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       assertCurrent();
     };
     assertSource();
-    const current = await prepareIdentity();
+    const current = await prepareIdentity(() => signal?.throwIfAborted());
     assertSource();
     if (!isDeepStrictEqual(current.selection, owner.identity)) {
       sourceChanged();
@@ -395,6 +483,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   return {
     project,
     setupRecipe,
+    recipe,
     assertCurrent,
     revalidate,
     ...(requiresGitPack

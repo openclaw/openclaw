@@ -126,12 +126,12 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
   `plugins.entries.<id>.hooks.allowConversationAccess: true` for
   `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`,
   `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-  `agent_end`, and `before_agent_run`. Bundled plugins are allowed unless this
+  `agent_end`, `before_agent_run`, and `before_channel_ingress`. Bundled plugins are allowed unless this
   option is explicitly `false`.
 - `session_end` remains available as a metadata-only lifecycle hook without
   that grant. Its bounded `ctx.endedTranscript` reader is available only when
   the effective conversation-access policy allows it; see the
-  [session lifecycle contract](/plugins/hooks/reference#sessions-and-compaction).
+  [session lifecycle contract](/plugins/hooks/reference#hook-catalog).
 - `allowPromptInjection: false` blocks `agent_turn_prepare`,
   `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
   injections. It defaults to allowed, but does not grant conversation access.
@@ -163,6 +163,7 @@ plugin instance and reruns registration with the new settings.
 | Task                                               | Hook                                                                        |
 | -------------------------------------------------- | --------------------------------------------------------------------------- |
 | Reply without a model call                         | `before_agent_reply` → `{ handled: true, reply }`; omit `reply` for silence |
+| Sanitize a channel event before durable ingress    | `before_channel_ingress` → `{ event }`                                      |
 | Add context or narrow tools for a turn             | `before_prompt_build`                                                       |
 | Gate model input on a supported runner             | `before_agent_run` → `{ outcome: "block", reason, message? }`               |
 | Block a tool or request approval                   | `before_tool_call`                                                          |
@@ -173,15 +174,59 @@ plugin instance and reruns registration with the new settings.
 
 The catalog is the registration API, not a promise that every runtime emits
 every hook. For example, `before_agent_run` is implemented by the embedded and
-CLI runners and by Gateway admission for OpenClaw node worker turns. Node admission
-supplies the Gateway's triggering prompt and loaded history before persisting the
-user message or launching the worker. Blocks and hook failures persist only the
-redacted block message. Node admission omits `systemPrompt`: the node assembles its
-bootstrap and skill context afterward. Policies that require that final context
-must use a supported local runner. Do not rely on this hook as a Codex or Copilot input gate. Native tool,
+CLI runners and by Gateway admission for OpenClaw worker turns. Workers with the
+`worker-turn-admission-v1` capability report their final system prompt after
+completing host runtime facts and skill references. The Gateway supplies its
+authoritative prepared triggering prompt, history, channel, account, sender, and
+run identity to the plugin gate; worker-provided prompt and history are ignored.
+Approval is bound to the active turn claim and is required for persistence,
+Gateway-proxied inference, Gateway tools, and content-bearing live events. The
+worker also waits for approval before worker-local inference. Blocks and hook
+failures persist only the redacted block message; terminal cleanup receipts omit
+worker-provided content before approval.
+
+The Gateway cannot verify host-local system prompt bytes: a buggy or compromised
+worker can misreport `systemPrompt`. Plugins must not treat that field as a trust
+boundary or use it as proof of worker behavior.
+
+Older workers retain Gateway admission before the user message is persisted or
+the worker launches. That path omits `systemPrompt` because the worker completes
+it afterward. Policies that require final system context must reject an absent
+`systemPrompt` or use an updated worker or a supported local runner.
+Do not rely on this hook as a Codex or Copilot input gate. Native tool,
 transcript, and compaction boundaries also differ. See
 [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) and
 [Agent harness plugins](/plugins/sdk-agent-harness).
+
+### Before durable channel ingress
+
+Check `api.runtime.capabilities?.includes("channel-ingress-transform-v1")`
+before registering `before_channel_ingress`. A plugin that requires pre-storage
+privacy must refuse unsupported hosts and verify that its handler is registered;
+an absent or permission-blocked handler does not protect intake. Existing
+`openclaw plugins inspect <id> --runtime --json` reports registered `typedHooks`.
+
+The handler receives `{ event }` and `{ channelId, accountId, signal }`. `event`
+is the provider's raw transport value, not a normalized chat message. Validate
+its shape in the policy plugin, read current settings through
+`api.runtime.config.current()`, and return `{ event: replacement }`; `void` or an
+omitted `event` keeps the preceding value. Higher-priority handlers run first,
+and each handler receives an isolated copy of the latest replacement. Do not
+mutate retained values after returning them.
+
+Discord emits this hook inside ordered admission before serializing or writing
+its durable queue. Other channel plugins can opt in through the
+[ingress monitor preparation contract](/plugins/sdk-channel-outbound#durable-ingress-monitors).
+The channel revalidates provider identity and lane after transformation. Errors,
+timeouts (15 seconds by default), cancellation, and retired plugin authority
+refuse intake; they never fall back to storing the original event. Error
+diagnostics omit policy exception contents because they may contain private
+payloads. Pass `signal` into policy I/O and bound plugin-owned work.
+
+The hook does not rewrite existing queue rows or run again when an already
+sanitized row is claimed. Direct queue callers retain their own preparation
+contract. It runs before `inbound_claim`, `message_received`, and transcript
+hooks, which cannot protect the raw durable ingress payload.
 
 ## Troubleshooting
 
@@ -231,7 +276,7 @@ resolve here.
 
 - <a id="registration-and-execution"></a>[Registration and execution](/plugins/hooks/reference#registration-and-execution)
 - <a id="hook-catalog"></a>[Hook catalog](/plugins/hooks/reference#hook-catalog)
-- <a id="skill-lifecycle-and-evaluation"></a>[Skill lifecycle and evaluation](/plugins/hooks/reference#skill-lifecycle-and-evaluation)
+- <a id="skill-lifecycle-and-evaluation"></a>[Skill lifecycle](/plugins/hooks/reference#skill-lifecycle)
 - <a id="channel-pairing-requests"></a>[Channel pairing requests](/plugins/hooks/reference#channel-pairing-requests)
 
 ### Tool call policy hooks

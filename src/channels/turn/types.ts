@@ -1,4 +1,3 @@
-import type { SessionConversationLink } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type {
   GetReplyOptions,
@@ -80,8 +79,6 @@ export type ConversationFacts = {
   threadId?: string;
   nativeChannelId?: string;
   avatar?: string;
-  /** Canonical external destination, resolved by the channel after thread creation. */
-  link?: SessionConversationLink;
   routePeer?: {
     kind: ChatType;
     id: string;
@@ -167,8 +164,17 @@ export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-o
 
 export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+  | "deps"
+  | "formatting"
+  | "identity"
+  | "mediaAccess"
+  | "replyToMode"
+  | "retryAmbiguousFinalText"
+  | "silent"
+  | "threadId"
 > & {
+  /** Validate the admitted sender or restore its account view from current Gateway config. */
+  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
@@ -271,20 +277,6 @@ export type ChannelTurnDroppedHistoryOptions = {
   shouldRecord?: () => boolean;
 };
 
-type ChannelTurnDispatcherOptions = Omit<
-  ReplyDispatcherWithTypingOptions,
-  "deliver" | "deliverPrepared" | "onError"
->;
-
-/** Reply options plus the opaque native command ownership decision carried by channel turns. */
-type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &
-  PluginCommandReplyOptions;
-
-type ChannelTurnReplyPipelineOptions = Omit<
-  CreateChannelReplyPipelineParams,
-  "cfg" | "agentId" | "channel" | "accountId"
->;
-
 type ChannelTurnContext = {
   channel: string;
   accountId?: string;
@@ -292,6 +284,8 @@ type ChannelTurnContext = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  /** Current channel authority at record and dispatch initiation, after awaited preparation. */
+  assertAuthority?: () => void;
   afterRecord?: () => void | Promise<void>;
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
@@ -308,10 +302,18 @@ export type AssembledChannelTurn = ChannelTurnContext & {
   agentId: string;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelEventDeliveryAdapter;
-  replyPipeline?: ChannelTurnReplyPipelineOptions;
-  dispatcherOptions?: ChannelTurnDispatcherOptions;
+  replyPipeline?: Omit<
+    CreateChannelReplyPipelineParams,
+    "cfg" | "agentId" | "channel" | "accountId"
+  >;
+  dispatcherOptions?: Omit<
+    ReplyDispatcherWithTypingOptions,
+    "deliver" | "deliverPrepared" | "onError"
+  >;
   toolsAllow?: string[];
-  replyOptions?: ChannelTurnReplyOptions;
+  /** Reply options plus the opaque native command ownership decision carried by channel turns. */
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &
+    PluginCommandReplyOptions;
   replyResolver?: GetReplyFromConfig;
   /** Instance-bound reply dispatcher supplied by the owning plugin runtime. */
   dispatchReplyFromConfig?: DispatchReplyFromConfig;
@@ -324,13 +326,13 @@ export type AssembledChannelTurn = ChannelTurnContext & {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };
 
-type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly" | "outboundEcho";
-
 type PreparedChannelTurnDispatchLifecycle = {
   /** Exact adoption lifecycle captured by runDispatch, or undefined for non-durable turns. */
   turnAdoptionLifecycle: TurnAdoptionLifecycle | undefined;
   /** Releases resources that runDispatch would otherwise settle when dispatch is skipped. */
-  onDispatchSkipped: (reason: PreparedChannelTurnDispatchSkipReason) => void | Promise<void>;
+  onDispatchSkipped: (
+    reason: "botLoopProtection" | "observeOnly" | "outboundEcho",
+  ) => void | Promise<void>;
 };
 
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = ChannelTurnContext & {
@@ -341,14 +343,12 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = Ch
   observeOnlyDispatchResult?: TDispatchResult;
 };
 
-type ChannelTurnRoute = {
-  agentId: string;
-  dmScope?: DmScope;
-  sessionKey: string;
-};
-
 type RoutedChannelTurn<T> = Omit<T, "routeSessionKey" | "storePath" | "recordInboundSession"> & {
-  route: ChannelTurnRoute;
+  route: {
+    agentId: string;
+    dmScope?: DmScope;
+    sessionKey: string;
+  };
 };
 
 type InboundPreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> =
@@ -367,34 +367,28 @@ export type ChannelTurnPlan<
   }
 >;
 
-type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
-  InboundPreparedChannelTurn<TDispatchResult>
-> & {
-  cfg: OpenClawConfig;
-};
-
 export type ChannelTurnResolved<
   TDispatchResult = DispatchFromConfigResult,
   TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
 > =
   | ChannelTurnPlan<TDelivery>
-  | PreparedChannelTurnPlan<TDispatchResult>
+  | (RoutedChannelTurn<InboundPreparedChannelTurn<TDispatchResult>> & {
+      cfg: OpenClawConfig;
+    })
   | AssembledChannelTurn
   | InboundPreparedChannelTurn<TDispatchResult>;
 
-type ChannelTurnStage =
-  | "ingest"
-  | "classify"
-  | "preflight"
-  | "resolve"
-  | "authorize"
-  | "assemble"
-  | "record"
-  | "dispatch"
-  | "finalize";
-
 export type ChannelTurnLogEvent = {
-  stage: ChannelTurnStage;
+  stage:
+    | "ingest"
+    | "classify"
+    | "preflight"
+    | "resolve"
+    | "authorize"
+    | "assemble"
+    | "record"
+    | "dispatch"
+    | "finalize";
   event: "start" | "done" | "drop" | "handled" | "error" | "warning";
   channel: string;
   accountId?: string;
@@ -422,25 +416,6 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
   dispatchResult: TDispatchResult;
 };
 
-type ChannelTurnAdapter<
-  TRaw,
-  TDispatchResult = DispatchFromConfigResult,
-  TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
-> = {
-  ingest: (raw: TRaw) => MaybePromise<NormalizedTurnInput | null>;
-  classify?: (input: NormalizedTurnInput) => MaybePromise<ChannelEventClass>;
-  preflight?: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-  ) => MaybePromise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
-  resolveTurn: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-    preflight: PreflightFacts,
-  ) => MaybePromise<ChannelTurnResolved<TDispatchResult, TDelivery>>;
-  onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
-};
-
 export type RunChannelTurnParams<
   TRaw,
   TDispatchResult = DispatchFromConfigResult,
@@ -449,7 +424,20 @@ export type RunChannelTurnParams<
   channel: string;
   accountId?: string;
   raw: TRaw;
-  adapter: ChannelTurnAdapter<TRaw, TDispatchResult, TDelivery>;
+  adapter: {
+    ingest: (raw: TRaw) => MaybePromise<NormalizedTurnInput | null>;
+    classify?: (input: NormalizedTurnInput) => MaybePromise<ChannelEventClass>;
+    preflight?: (
+      input: NormalizedTurnInput,
+      eventClass: ChannelEventClass,
+    ) => MaybePromise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
+    resolveTurn: (
+      input: NormalizedTurnInput,
+      eventClass: ChannelEventClass,
+      preflight: PreflightFacts,
+    ) => MaybePromise<ChannelTurnResolved<TDispatchResult, TDelivery>>;
+    onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
+  };
   log?: (event: ChannelTurnLogEvent) => void;
   /** Canonical adoption lifecycle for this turn. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;

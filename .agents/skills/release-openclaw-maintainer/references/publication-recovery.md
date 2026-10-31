@@ -39,9 +39,15 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Tooling, source mismatch, credential, infrastructure, wrapper, approval, or selector
-  failure: keep the candidate and recover the smallest failed surface. Change
-  Tooling SHA only when needed and record the invalidated evidence.
+- Qualification harness/contract defect: repair the frozen candidate closure,
+  freeze a new C/Q, and rebind evidence. Missing contracts require deliberate
+  backports, not a newer-main harness.
+- P-only admission/verifier/publisher, credential, infrastructure, monitor,
+  approval, or selector failure: keep C/Q and recover the smallest failed surface.
+  Change independent P only when needed; preserve original producer identities.
+- Uncertain qualification dispatch: reconcile the retained request read-only.
+  Explicit resume is allowed only before any Q ref mutation or FRV POST; never
+  retry an uncertain mutation or relabel historical requests as candidate-owned.
 
 After one diagnosis, fix when needed, and narrow retry, reassess. Do not rerun
 all phases or scan moving main automatically. Operator-authorized beta-attempt
@@ -52,6 +58,17 @@ limits count admitted product attempts, not infrastructure retries.
 Registry propagation may briefly return E404 after a successful npm child.
 Use bounded `--prefer-online` reads and preserve the verified tarball/integrity
 metadata. For an already-published version, run:
+
+If `npm publish` returns E409 with `Cannot publish over previously staged
+version`, treat that exact package and version as staged or completed, not
+absent. The publish wrapper reads the publish target's package metadata,
+performs a read-only exact-package `npm view`, and preserves the failed exit.
+For `openclaw`, it prints the verifier command below. For a companion tarball,
+wait for that exact companion version to become publicly readable, then resume
+the original release workflow so its exact-version check reuses it; the root
+postpublish verifier does not recover a companion publication. Do not rerun
+`npm publish`, even when the registry read is still 404; wait for propagation
+and reconcile the original publisher before following the printed guidance.
 
 ```bash
 OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \

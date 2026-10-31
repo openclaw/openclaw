@@ -1,69 +1,148 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { afterEach, describe, expect, it } from "vitest";
+import { text } from "node:stream/consumers";
+import { Worker } from "node:worker_threads";
+import { afterEach, expect, it, vi, type TestContext } from "vitest";
 import {
   fixtureReceiptClientSource,
+  fixtureReceiptWorkerClientSource,
   openFixtureReceiptChannel,
   openFixtureReleaseFifo,
 } from "./fixture-receipts.js";
-import { withinTest } from "./promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "./promise.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
+
+const channels = vi.hoisted(() => ({ created: 0, fail: false }));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    BroadcastChannel: vi.fn(function (name: string) {
+      if (channels.fail) {
+        throw new Error("worker transport unavailable");
+      }
+      const channel = new actual.BroadcastChannel(name);
+      channels.created++;
+      return channel;
+    }),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function nodeChild(endpoint: string, source: string) {
-  const child = spawn(
-    process.execPath,
-    ["--input-type=module", "-e", fixtureReceiptClientSource(endpoint) + "\n" + source],
-    { stdio: "ignore" },
+it.for([false, true])(
+  "acquires worker transport only when requested (%s)",
+  async (requested, context) => {
+    const before = channels.created;
+    const receipts = await openFixtureReceiptChannel();
+    context.onTestFinished(() => receipts.close());
+    expect(channels.created - before).toBe(0);
+    if (requested) {
+      const name = receipts.broadcastName;
+      expect(receipts.broadcastName).toBe(name);
+    }
+    expect(channels.created - before).toBe(requested ? 1 : 0);
+    await receipts.close();
+    expect(receipts.broadcastName).toEqual(expect.any(String));
+    expect(channels.created - before).toBe(requested ? 1 : 0);
+  },
+);
+
+it("keeps the socket owner closable when worker transport acquisition fails", async (context) => {
+  const receipts = await openFixtureReceiptChannel();
+  context.onTestFinished(() => receipts.close());
+  try {
+    channels.fail = true;
+    expect(() => receipts.broadcastName).toThrow("worker transport unavailable");
+  } finally {
+    channels.fail = false;
+  }
+  await receipts.close();
+});
+
+it("receives a worker receipt while its event loop waits for the host", async (context) => {
+  const receipts = await openFixtureReceiptChannel();
+  context.onTestFinished(() => receipts.close());
+  const release = new Int32Array(new SharedArrayBuffer(4));
+  const source = `${fixtureReceiptWorkerClientSource(receipts.broadcastName)}
+import { workerData } from "node:worker_threads";
+sendReceipt("worker", "ready");
+Atomics.wait(new Int32Array(workerData), 0, 0);`;
+  const worker = new Worker(new URL("data:text/javascript," + encodeURIComponent(source)), {
+    workerData: release.buffer,
+  });
+  const exited = once(worker, "exit");
+  context.onTestFinished(async () => {
+    try {
+      await worker.terminate();
+    } finally {
+      await receipts.close();
+    }
+  });
+  await withinTest(
+    awaitGateBeforeSettlement(
+      receipts.waitFor("worker", "ready"),
+      exited,
+      "Worker exited before sending its receipt",
+    ),
+    context.signal,
   );
-  const closed = once(child, "close");
+  Atomics.store(release, 0, 1);
+  Atomics.notify(release, 0);
+  expect(await withinTest(exited, context.signal)).toEqual([0]);
+});
+
+async function setup(context: TestContext) {
+  const wait = <T>(promise: Promise<T>) => withinTest(promise, context.signal);
+  const receipts = await wait(openFixtureReceiptChannel());
+  const cleanups: Array<() => Promise<void>> = [];
+  context.onTestFinished(async () => {
+    await receipts.close();
+    for (const cleanup of cleanups) {
+      await cleanup();
+    }
+  });
   return {
-    child,
-    closed,
-    async close() {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-      await closed;
+    ...receipts,
+    wait,
+    start(source: string) {
+      const script = fixtureReceiptClientSource(receipts.endpoint) + "\n" + source;
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+        stdio: "ignore",
+      });
+      const closed = once(child, "close");
+      cleanups.push(async () => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        await closed;
+      });
+      return { child, closed };
     },
   };
 }
 
-describe("fixture receipts", () => {
-  it.for(["normal", "SIGKILL"])("observes %s exit and retains it", async (mode, { signal }) => {
-    const receipts = await withinTest(openFixtureReceiptChannel(), signal);
-    const fixture = nodeChild(
-      receipts.endpoint,
-      mode === "normal"
-        ? 'announce("child");'
-        : 'sendReceipt("child", "ready"); await awaitRelease("child", "hold");',
-    );
-    try {
-      const exited = receipts.waitForExit("child");
-      if (mode === "SIGKILL") {
-        await withinTest(receipts.waitFor("child", "ready"), signal);
-        expect(fixture.child.kill("SIGKILL")).toBe(true);
-      }
-      await withinTest(exited, signal);
-      const [code, exitSignal] = await withinTest(fixture.closed, signal);
-      expect([code, exitSignal]).toEqual(mode === "normal" ? [0, null] : [null, "SIGKILL"]);
-      await withinTest(receipts.waitForExit("child"), signal);
-    } finally {
-      await receipts.close();
-      await fixture.close();
-    }
-  });
+it("observes killed child exit and retains it", async (context) => {
+  const { wait, ...receipts } = await setup(context);
+  const fixture = receipts.start(
+    'sendReceipt("child", "ready"); await awaitRelease("child", "hold");',
+  );
+  const exited = receipts.waitForExit("child");
+  await wait(receipts.waitFor("child", "ready"));
+  expect(fixture.child.kill("SIGKILL")).toBe(true);
+  await wait(exited);
+  expect(await wait(fixture.closed)).toEqual([null, "SIGKILL"]);
+  await wait(receipts.waitForExit("child"));
+});
 
-  it.for(["before", "after"])("delivers release %s a child waits", async (ordering, { signal }) => {
-    const receipts = await withinTest(openFixtureReceiptChannel(), signal);
-    if (ordering === "before") {
-      receipts.release("child", "first");
-      receipts.release("child", "second");
-    }
-    const fixture = nodeChild(
-      receipts.endpoint,
-      `
+it.for(["before", "after"])("delivers release %s a child waits", async (ordering, context) => {
+  const { wait, ...receipts } = await setup(context);
+  if (ordering === "before") {
+    receipts.release("child", "first");
+    receipts.release("child", "second");
+  }
+  const fixture = receipts.start(
+    `
       sendReceipt("child", "ready");
       ${
         ordering === "before"
@@ -79,116 +158,84 @@ describe("fixture receipts", () => {
       }
       sendReceipt("child", "released");
     `,
-    );
-    try {
-      await withinTest(receipts.waitFor("child", "ready"), signal);
-      if (ordering === "after") {
-        expect(fixture.child.exitCode).toBeNull();
-        expect(fixture.child.signalCode).toBeNull();
-        receipts.release("child", "first");
-        await withinTest(receipts.waitFor("child", "first released"), signal);
-        expect(fixture.child.exitCode).toBeNull();
-        receipts.release("child", "second");
-      }
-      await withinTest(receipts.waitFor("child", "released"), signal);
-      await withinTest(receipts.waitForExit("child"), signal);
-      const [code, exitSignal] = await withinTest(fixture.closed, signal);
-      expect([code, exitSignal]).toEqual([0, null]);
-    } finally {
-      await receipts.close();
-      await fixture.close();
-    }
-  });
-
-  it("waits for every associated connection and releases later associations", async ({
-    signal,
-  }) => {
-    const receipts = await withinTest(openFixtureReceiptChannel(), signal);
-    const first = nodeChild(receipts.endpoint, 'await awaitRelease("shared", "first");');
-    const second = nodeChild(
-      receipts.endpoint,
-      'sendReceipt("shared", "ready"); await awaitRelease("shared", "checkpoint"); sendReceipt("shared", "held"); await awaitRelease("shared", "second");',
-    );
-    try {
-      receipts.release("shared", "first");
-      await withinTest(receipts.waitFor("shared", "ready"), signal);
-      await withinTest(first.closed, signal);
-      let exited = false;
-      const allExited = receipts.waitForExit("shared").then(() => {
-        exited = true;
-      });
-      // A receipt round trip lets an erroneous early exit resolution become observable.
-      receipts.release("shared", "checkpoint");
-      await withinTest(receipts.waitFor("shared", "held"), signal);
-      expect(exited).toBe(false);
-      receipts.release("shared", "second");
-      await withinTest(allExited, signal);
-      await withinTest(second.closed, signal);
-    } finally {
-      await receipts.close();
-      await first.close();
-      await second.close();
-    }
-  });
-
-  it.for(["closed", "malformed"])(
-    "rejects pending waiters when %s",
-    async (failure, { signal }) => {
-      const receipts = await withinTest(openFixtureReceiptChannel(), signal);
-      const malformed = failure === "malformed";
-      const receiptRejected = malformed
-        ? expect(receipts.waitFor("child", "ready")).rejects.toThrow("Malformed fixture receipt")
-        : undefined;
-      const exitRejected = expect(
-        receipts.waitForExit(malformed ? "child" : "missing"),
-      ).rejects.toThrow(
-        malformed ? "Malformed fixture receipt" : "closed while waiting for exit in missing",
-      );
-      const fixture = malformed
-        ? nodeChild(
-            receipts.endpoint,
-            'connectReceipts().write(JSON.stringify({ announce: 42 }) + "\\n");',
-          )
-        : undefined;
-      try {
-        if (!malformed) {
-          await withinTest(receipts.close(), signal);
-        }
-        await withinTest(Promise.all([receiptRejected, exitRejected]), signal);
-      } finally {
-        await receipts.close();
-        await fixture?.close();
-      }
-    },
   );
-
-  it.skipIf(process.platform === "win32")(
-    "releases a shell reader from a FIFO",
-    async ({ signal }) => {
-      const fifo = await withinTest(
-        openFixtureReleaseFifo(tempDirs.make("fixture-release-"), "release"),
-        signal,
-      );
-      // Buffered release must survive until a later reader opens the FIFO.
-      await withinTest(fifo.release(), signal);
-      const child = spawn("sh", ["-c", 'read -r _ < "$FIFO"; echo released'], {
-        env: { ...process.env, FIFO: fifo.path },
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const closed = once(child, "close");
-      let stdout = "";
-      child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-        stdout += chunk;
-      });
-      try {
-        const [code] = await withinTest(closed, signal);
-        expect(code).toBe(0);
-        expect(stdout).toBe("released\n");
-      } finally {
-        child.kill("SIGKILL");
-        await closed;
-        await fifo.close();
-      }
-    },
-  );
+  await wait(receipts.waitFor("child", "ready"));
+  if (ordering === "after") {
+    receipts.release("child", "first");
+    await wait(receipts.waitFor("child", "first released"));
+    expect(fixture.child.exitCode).toBeNull();
+    receipts.release("child", "second");
+  }
+  await wait(receipts.waitFor("child", "released"));
+  await wait(receipts.waitForExit("child"));
+  expect(await wait(fixture.closed)).toEqual([0, null]);
+  await wait(receipts.waitForExit("child"));
 });
+
+it("waits for every associated connection and releases later associations", async (context) => {
+  const { wait, ...receipts } = await setup(context);
+  const first = receipts.start('await awaitRelease("shared", "first");');
+  const second = receipts.start(
+    'sendReceipt("shared", "ready"); await awaitRelease("shared", "checkpoint"); sendReceipt("shared", "held"); await awaitRelease("shared", "second");',
+  );
+  receipts.release("shared", "first");
+  await wait(receipts.waitFor("shared", "ready"));
+  await wait(first.closed);
+  let exited = false;
+  const allExited = receipts.waitForExit("shared").then(() => {
+    exited = true;
+  });
+  // A receipt round trip lets an erroneous early exit resolution become observable.
+  receipts.release("shared", "checkpoint");
+  await wait(receipts.waitFor("shared", "held"));
+  expect(exited).toBe(false);
+  receipts.release("shared", "second");
+  await wait(allExited);
+  await wait(second.closed);
+});
+
+it.for(["closed", "malformed"])("rejects pending waiters when %s", async (failure, context) => {
+  const { wait, ...receipts } = await setup(context);
+  const malformed = failure === "malformed";
+  const receiptRejected = malformed
+    ? expect(receipts.waitFor("child", "ready")).rejects.toThrow("Malformed fixture receipt")
+    : undefined;
+  const exitRejected = expect(
+    receipts.waitForExit(malformed ? "child" : "missing"),
+  ).rejects.toThrow(
+    malformed ? "Malformed fixture receipt" : "closed while waiting for exit in missing",
+  );
+  if (malformed) {
+    receipts.start('connectReceipts().write(JSON.stringify({ announce: 42 }) + "\\n");');
+  }
+  if (!malformed) {
+    await wait(receipts.close());
+  }
+  await wait(Promise.all([receiptRejected, exitRejected]));
+});
+
+it.skipIf(process.platform === "win32")(
+  "releases a shell reader from a FIFO",
+  async ({ signal }) => {
+    const fifo = await withinTest(
+      openFixtureReleaseFifo(tempDirs.make("fixture-release-"), "release"),
+      signal,
+    );
+    // Buffered release must survive until a later reader opens the FIFO.
+    await withinTest(fifo.release(), signal);
+    const child = spawn("sh", ["-c", 'read -r _ < "$FIFO"; echo released'], {
+      env: { ...process.env, FIFO: fifo.path },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const closed = once(child, "close");
+    const output = text(child.stdout);
+    try {
+      const [[code], stdout] = await withinTest(Promise.all([closed, output]), signal);
+      expect({ code, stdout }).toEqual({ code: 0, stdout: "released\n" });
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
+      await fifo.close();
+    }
+  },
+);

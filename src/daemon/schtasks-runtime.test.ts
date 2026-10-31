@@ -7,6 +7,7 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
+  waitForFallbackTakeoverRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
@@ -24,6 +25,11 @@ vi.mock("./gateway-service-probe-hosts.js", () => ({
   resolveGatewayServiceProbeHosts: async () => ["127.0.0.1"],
 }));
 
+vi.mock("./schtasks-process-snapshot.js", async (original) => ({
+  ...(await original<typeof import("./schtasks-process-snapshot.js")>()),
+  readWindowsProcessSnapshot: () => [{ ProcessId: 111, CommandLine: "powershell.exe" }],
+}));
+
 beforeEach(() => {
   spawnSync.mockReset();
 });
@@ -39,7 +45,7 @@ describe("scheduled task runtime derivation", () => {
   it.each([
     [1, 267009, "stopped", "Disabled"],
     [3, 267009, "stopped", "Ready"],
-    [4, -2147024891, "running", "Running"],
+    [4, -2147024891, "unknown", "Running"],
     [2, 0, "unknown", "Queued"],
     [0, 267009, "unknown", "Unknown"],
     [3, "unavailable", "stopped", "Ready"],
@@ -50,7 +56,20 @@ describe("scheduled task runtime derivation", () => {
     async (state, result, status, name) => {
       spawnSync.mockReturnValue({
         status: 0,
-        stdout: JSON.stringify({ state, lastRunResult: result, lastRunTime: false }),
+        stdout: JSON.stringify({
+          state,
+          lastRunResult: result,
+          lastRunTime: false,
+          taskPath: "OpenClaw Gateway",
+          actions: [
+            {
+              type: 0,
+              path: "C:\\node.exe",
+              arguments: "C:\\openclaw\\entry.js gateway --port 18789",
+              workingDirectory: "",
+            },
+          ],
+        }),
       });
       await expect(readRuntime()).resolves.toMatchObject({
         status,
@@ -126,14 +145,49 @@ describe("scheduled task runtime derivation", () => {
   });
 
   it.each([
+    { name: "Scheduler evidence", budgetMs: 15_000 },
+    { name: "Startup reprobe", budgetMs: 5_000 },
+  ])("bounds $name after the wall clock rewinds", async ({ name, budgetMs }) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const wallStart = Date.now();
+    spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify({ state: 3 }) });
+    const settled = vi.fn();
+    const wait = (
+      name === "Scheduler evidence"
+        ? waitForScheduledTaskRunningEvidence({})
+        : waitForFallbackTakeoverRuntime(
+            { OPENCLAW_SERVICE_KIND: "node", OPENCLAW_GATEWAY_PORT: "19011" },
+            null,
+            { status: "unknown" },
+            { status: "stopped" },
+          )
+    ).then(settled);
+    try {
+      await vi.advanceTimersByTimeAsync(250);
+      vi.setSystemTime(Date.now() - 600_000);
+      await vi.advanceTimersByTimeAsync(budgetMs - 251);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledWith(
+        name === "Scheduler evidence" ? false : expect.objectContaining({ status: "stopped" }),
+      );
+    } finally {
+      vi.setSystemTime(wallStart + 20_000);
+      await vi.advanceTimersByTimeAsync(250);
+      await wait;
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
     { name: "hung probe", elapsedMs: undefined, expected: false },
     { name: "running before deadline", elapsedMs: 14_999, expected: true },
     { name: "running at deadline", elapsedMs: 15_000, expected: false },
   ])("bounds Scheduler takeover evidence for $name", async (task) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     spawnSync.mockImplementation((_command, _args, options) => {
-      vi.setSystemTime(Date.now() + (task.elapsedMs ?? options.timeout));
+      now += task.elapsedMs ?? options.timeout;
       return task.elapsedMs === undefined
         ? {
             status: null,
@@ -145,10 +199,10 @@ describe("scheduled task runtime derivation", () => {
     });
     try {
       await expect(waitForScheduledTaskRunningEvidence({})).resolves.toBe(task.expected);
-      expect(Date.now()).toBe(task.elapsedMs ?? 15_000);
+      expect(now).toBe(task.elapsedMs ?? 15_000);
       expect(spawnSync).toHaveBeenCalledOnce();
     } finally {
-      vi.useRealTimers();
+      clock.mockRestore();
     }
   });
 });

@@ -134,6 +134,11 @@ export const GENERATED_BUNDLED_CHANNEL_IDS: readonly BundledChannelIdMetadata[] 
     label: "WhatsApp",
   },
   {
+    channelId: "x",
+    order: 85,
+    label: "X (Twitter)",
+  },
+  {
     channelId: "zalo",
     aliases: ["zl"],
     order: 80,

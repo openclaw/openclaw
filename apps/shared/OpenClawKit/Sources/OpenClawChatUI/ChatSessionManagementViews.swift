@@ -50,12 +50,10 @@ enum ChatSessionBatchMutationRunner {
         var succeeded: [(Int, String)] = []
         var failures: [String: String] = [:]
         await withTaskGroup(of: (Int, String, String?).self) { group in
-            var nextIndex = 0
-            while nextIndex < limit {
-                let index = nextIndex
+            for index in 0..<limit {
                 group.addTask { await run(index) }
-                nextIndex += 1
             }
+            var nextIndex = limit
             while let (index, key, error) = await group.next() {
                 if let error {
                     failures[key] = error
@@ -691,6 +689,7 @@ public struct ChatNewSessionOptionsPopover: View {
                     Text("Create Thread").font(OpenClawChatTypography.formControl.weight(.medium))
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgentID.isEmpty || self

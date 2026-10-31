@@ -3,6 +3,12 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import {
+  composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
@@ -27,13 +33,25 @@ export function prepareGatewayOperatorSessionRun(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  assertSourceCurrent: () => void;
+  currentSource: () => {
+    abortSignal?: AbortSignal;
+    assertSourceCurrent?: SessionSourceAssertion;
+  };
 }) {
   assertAdmittedRunOperatorAuthority(params.authority);
-  const assertCurrent = () => {
-    params.assertSourceCurrent();
-    params.authority.assertCurrent();
-  };
+  const source = createDynamicSessionSourceAssertion(
+    () => params.currentSource().assertSourceCurrent,
+    () => {
+      throw createSessionWorkStartChangedError(params.sessionKey);
+    },
+  );
+  const assertCurrent = composeSessionSourceAssertion(
+    [source, params.authority.assertCurrent],
+    (assertSources) => {
+      params.currentSource().abortSignal?.throwIfAborted();
+      assertSources();
+    },
+  );
   assertCurrent();
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: { kind: "operator", profileId: params.authority.profileId },

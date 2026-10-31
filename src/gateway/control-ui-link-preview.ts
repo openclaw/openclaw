@@ -1,9 +1,11 @@
 import { isIP } from "node:net";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { fileTypeFromBuffer } from "file-type";
-import { DOMParser } from "linkedom";
+import { Parser } from "htmlparser2";
 import pLimit from "p-limit";
-import { readResponseTextPrefix, readResponseWithLimit } from "../infra/http-body.js";
+import { sniffCharset } from "../agents/tools/web-shared.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { withResponseBodyTimeout } from "../infra/http-response-body-timeout.js";
+import { readResponseWithLimit } from "../infra/http-response-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
@@ -11,7 +13,11 @@ import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { createImageProcessor, readImageMetadataFromHeader } from "../media/image-ops.js";
 import type { ControlUiLinkPreview } from "./control-ui-contract.js";
 
-const HTML_MAX_BYTES = 512 * 1024;
+const HTML_MAX_BYTES = 64 * 1024;
+// How many leading bytes to scan for a charset declaration (BOM, <meta
+// charset>, XML encoding, or Content-Type). Mirrors web-shared's scan width so
+// a decoder is chosen from a bounded, cross-chunk prefix while streaming.
+const CHARSET_SNIFF_SCAN_BYTES = 4096;
 const IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 const ICON_MAX_BYTES = 64 * 1024;
 const IMAGE_OUTPUT_MAX_BYTES = 256 * 1024;
@@ -22,7 +28,11 @@ const SUCCESS_TTL_MS = 60 * 60_000;
 const FAILURE_TTL_MS = 5 * 60_000;
 const loads = pLimit(4);
 const processor = createImageProcessor();
-const cache = new Map<string, { expiresAt: number; promise: Promise<ControlUiLinkPreview> }>();
+type PreviewScope = { principal: object; revision: string | number };
+type CacheEntry = { expiresAt: number; promise: Promise<ControlUiLinkPreview> };
+const principals = new WeakMap<object, number>();
+let nextPrincipal = 0;
+const cache = new Map<string, CacheEntry>();
 
 /** Public presentation only: never reuse browser credentials or private-network policy. */
 export function parseControlUiLinkPreviewUrl(value: unknown, base?: string): URL | null {
@@ -44,30 +54,155 @@ export function parseControlUiLinkPreviewUrl(value: unknown, base?: string): URL
   return url;
 }
 
-function parsePageMetadata(html: string, finalUrl: string) {
-  // Linkedom parses inert markup; no scripts, stylesheets, images, or custom elements run.
-  const document = new DOMParser().parseFromString(html, "text/html");
-  const head = document.querySelector("head") ?? document;
-  // The first base element owns relative asset resolution; each resulting URL
-  // still passes the public-destination guard before any request.
-  const baseHref = head.querySelector("base[href]")?.getAttribute("href");
-  const baseUrl = URL.parse(baseHref ?? "", finalUrl)?.href ?? finalUrl;
-  const metadata = new Map<string, string>();
-  for (const element of head.querySelectorAll("meta")) {
-    const key = (element.getAttribute("property") ?? element.getAttribute("name"))?.toLowerCase();
-    const value = element.getAttribute("content")?.trim();
-    if (key && value && !metadata.has(key)) {
-      metadata.set(key, value);
+// A partial BOM must not let a contradictory HTTP charset pin the decoder.
+function isPartialBomPrefix(bytes: Uint8Array): boolean {
+  if (bytes.byteLength === 1) {
+    return bytes[0] === 0xef || bytes[0] === 0xff || bytes[0] === 0xfe;
+  }
+  return bytes.byteLength === 2 && bytes[0] === 0xef && bytes[1] === 0xbb;
+}
+
+function concatBytes(parts: Uint8Array[], length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
+}
+
+interface PreviewExtractionState {
+  metadata: Map<string, string>;
+  links: Record<string, string>[];
+  baseHref: string | undefined;
+  titleText: string | undefined;
+  inTitle: boolean;
+  finished: boolean;
+  parser: Parser;
+}
+
+// Recreate extraction when a declared charset requires replaying the sniff prefix.
+function createPreviewExtraction(): PreviewExtractionState {
+  // Parser callbacks run only after construction, once state is initialized.
+  const state: PreviewExtractionState = {
+    metadata: new Map<string, string>(),
+    links: [],
+    baseHref: undefined,
+    titleText: undefined,
+    inTitle: false,
+    finished: false,
+    parser: new Parser({
+      onopentag(name, attrs) {
+        if (name === "body") {
+          state.finished = true;
+          state.parser.pause();
+        } else if (name === "base") {
+          state.baseHref ??= attrs.href;
+        } else if (name === "title" && state.titleText === undefined) {
+          state.titleText = "";
+          state.inTitle = true;
+        } else if (name === "meta") {
+          const key = (attrs.property ?? attrs.name)?.toLowerCase();
+          const value = attrs.content?.trim();
+          if (key && value && !state.metadata.has(key)) {
+            state.metadata.set(key, value);
+          }
+        } else if (name === "link") {
+          state.links.push(attrs);
+        }
+      },
+      ontext(text) {
+        if (state.inTitle) {
+          state.titleText += text;
+        }
+      },
+      onclosetag(name) {
+        if (name === "title") {
+          state.inTitle = false;
+        } else if (name === "head") {
+          state.finished = true;
+          state.parser.pause();
+        }
+      },
+    }),
+  };
+  return state;
+}
+
+async function readPageMetadata(response: Response, finalUrl: string, signal: AbortSignal) {
+  let state = createPreviewExtraction();
+  const reader = response.body?.getReader();
+  if (reader) {
+    try {
+      await withResponseBodyTimeout({
+        signal,
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        onTimeout: undefined,
+        cancel: (error) => reader.cancel(error),
+        read: async (refreshTimeout) => {
+          // Parse immediately for early head completion, retaining a bounded prefix
+          // to replay if a charset declaration arrives after non-ASCII content.
+          // Keep fallback decoder state across chunks for split UTF-8 sequences.
+          const sniffParts: Uint8Array[] = [];
+          let sniffLen = 0;
+          let decoder: TextDecoder | undefined;
+          const utf8 = new TextDecoder("utf-8");
+          let remaining = HTML_MAX_BYTES;
+          while (remaining > 0) {
+            refreshTimeout?.();
+            const { done, value } = await reader.read();
+            if (done) {
+              state.parser.end((decoder ?? utf8).decode());
+              return;
+            }
+            if (!value || value.byteLength === 0) {
+              continue;
+            }
+            const bounded = value.subarray(0, remaining);
+            remaining -= bounded.byteLength;
+            let feed = bounded;
+            if (decoder === undefined && sniffLen < CHARSET_SNIFF_SCAN_BYTES) {
+              const take = Math.min(bounded.byteLength, CHARSET_SNIFF_SCAN_BYTES - sniffLen);
+              sniffParts.push(bounded.subarray(0, take));
+              sniffLen += take;
+              const prefix = concatBytes(sniffParts, sniffLen);
+              const charset = sniffCharset(response.headers.get("content-type"), prefix);
+              // A split BOM takes precedence over a contradictory HTTP header.
+              if (charset && !isPartialBomPrefix(prefix)) {
+                try {
+                  decoder = new TextDecoder(charset);
+                } catch {
+                  decoder = new TextDecoder("utf-8");
+                }
+                // Discard metadata decoded under the earlier UTF-8 guess.
+                state = createPreviewExtraction();
+                state.parser.write(decoder.decode(prefix, { stream: true }));
+                feed = bounded.subarray(take, bounded.byteLength);
+              }
+            }
+            state.parser.write((decoder ?? utf8).decode(feed, { stream: true }));
+            if (state.finished) {
+              return;
+            }
+          }
+          state.parser.end((decoder ?? utf8).decode());
+        },
+      });
+    } finally {
+      // Do not await cancellation: a response-capture tee may still own its other branch.
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
   }
+  // Resolve after parsing: the first base can follow the metadata it governs.
+  const baseUrl = URL.parse(state.baseHref ?? "", finalUrl)?.href ?? finalUrl;
   const title =
-    metadata.get("og:title") ??
-    metadata.get("twitter:title") ??
-    head.querySelector("title")?.textContent;
+    state.metadata.get("og:title") ?? state.metadata.get("twitter:title") ?? state.titleText;
   const description =
-    metadata.get("og:description") ??
-    metadata.get("twitter:description") ??
-    metadata.get("description");
+    state.metadata.get("og:description") ??
+    state.metadata.get("twitter:description") ??
+    state.metadata.get("description");
   const image = [
     "og:image:secure_url",
     "og:image",
@@ -75,17 +210,17 @@ function parsePageMetadata(html: string, finalUrl: string) {
     "twitter:image",
     "twitter:image:src",
   ]
-    .map((key) => parseControlUiLinkPreviewUrl(metadata.get(key), baseUrl)?.href)
+    .map((key) => parseControlUiLinkPreviewUrl(state.metadata.get(key), baseUrl)?.href)
     .find(Boolean);
   const icons: string[] = [];
-  for (const element of head.querySelectorAll("link")) {
-    const rel = element.getAttribute("rel")?.toLowerCase().split(/\s+/u) ?? [];
+  for (const attrs of state.links) {
+    const rel = attrs.rel?.toLowerCase().split(/\s+/u) ?? [];
     if (!rel.includes("icon") && !rel.includes("apple-touch-icon")) {
       continue;
     }
-    const url = parseControlUiLinkPreviewUrl(element.getAttribute("href"), baseUrl)?.href;
+    const url = parseControlUiLinkPreviewUrl(attrs.href, baseUrl)?.href;
     // The presentation contract carries raster/ICO only; unsupported vectors fall back to /favicon.ico.
-    if (url && element.getAttribute("type") !== "image/svg+xml" && !icons.includes(url)) {
+    if (url && attrs.type !== "image/svg+xml" && !icons.includes(url)) {
       icons.push(url);
       if (icons.length === 2) {
         break;
@@ -144,17 +279,12 @@ async function fetchPreviewResource<T>(
   }
 }
 
-async function loadImage(
-  url: string,
-  icon: boolean,
-  signal: AbortSignal,
-  isEnabled: () => boolean,
-) {
-  return await fetchPreviewResource(url, "image/*", signal, isEnabled, async (response) => {
-    const bytes = await readResponseWithLimit(response, icon ? ICON_MAX_BYTES : IMAGE_MAX_BYTES, {
-      signal,
-      chunkTimeoutMs: REQUEST_TIMEOUT_MS,
-    });
+async function loadImage(bytes: Buffer | undefined, icon: boolean, signal: AbortSignal) {
+  try {
+    if (!bytes || bytes.length > (icon ? ICON_MAX_BYTES : IMAGE_MAX_BYTES)) {
+      return undefined;
+    }
+    const { fileTypeFromBuffer } = await import("file-type");
     const detected = await fileTypeFromBuffer(bytes);
     if (icon && detected?.mime === "image/x-icon") {
       return `data:image/x-icon;base64,${bytes.toString("base64")}`;
@@ -179,11 +309,19 @@ async function loadImage(
     return result.data.length <= (icon ? ICON_MAX_BYTES : IMAGE_OUTPUT_MAX_BYTES)
       ? `data:image/png;base64,${result.data.toString("base64")}`
       : undefined;
-  });
+  } catch {
+    return undefined;
+  }
 }
 
-async function loadPreview(url: URL, isEnabled: () => boolean): Promise<ControlUiLinkPreview> {
-  const signal = AbortSignal.timeout(PREVIEW_TIMEOUT_MS);
+async function loadPreview(
+  url: URL,
+  isEnabled: () => boolean,
+  signal: AbortSignal,
+): Promise<ControlUiLinkPreview> {
+  if (signal.aborted || !isEnabled()) {
+    return {};
+  }
   const page = await fetchPreviewResource(
     url.href,
     "text/html,application/xhtml+xml",
@@ -194,22 +332,35 @@ async function loadPreview(url: URL, isEnabled: () => boolean): Promise<ControlU
       if (type !== "text/html" && type !== "application/xhtml+xml") {
         return undefined;
       }
-      const { text } = await readResponseTextPrefix(response, HTML_MAX_BYTES, {
-        signal,
-        chunkTimeoutMs: REQUEST_TIMEOUT_MS,
-      });
-      return { ...parsePageMetadata(text, finalUrl), finalUrl };
+      return { ...(await readPageMetadata(response, finalUrl, signal)), finalUrl };
     },
   );
   const iconUrls = new Set([
     ...(page?.icons ?? []),
     new URL("/favicon.ico", page?.finalUrl ?? url.href).href,
   ]);
+  // A page may advertise the same resource as its social image and favicon.
+  const images = new Map<string, Promise<Buffer | undefined>>();
+  const imageBytes = (target: string) => {
+    let pending = images.get(target);
+    if (!pending) {
+      pending = fetchPreviewResource(target, "image/*", signal, isEnabled, (response) =>
+        readResponseWithLimit(response, target === page?.image ? IMAGE_MAX_BYTES : ICON_MAX_BYTES, {
+          signal,
+          chunkTimeoutMs: REQUEST_TIMEOUT_MS,
+        }),
+      );
+      images.set(target, pending);
+    }
+    return pending;
+  };
   const [imageDataUrl, faviconDataUrl] = await Promise.all([
-    page?.image ? loadImage(page.image, false, signal, isEnabled) : undefined,
+    page?.image
+      ? imageBytes(page.image).then((bytes) => loadImage(bytes, false, signal))
+      : undefined,
     (async () => {
       for (const iconUrl of iconUrls) {
-        const icon = await loadImage(iconUrl, true, signal, isEnabled);
+        const icon = await loadImage(await imageBytes(iconUrl), true, signal);
         if (icon) {
           return icon;
         }
@@ -227,17 +378,23 @@ async function loadPreview(url: URL, isEnabled: () => boolean): Promise<ControlU
     : {};
 }
 
-/** Anonymous bounded cache: no user, browser-profile, cookie, or authentication state enters it. */
+/** Anonymous requests, isolated to the requesting principal and owner revision. */
 export async function loadControlUiLinkPreview(
   url: URL,
   isEnabled: () => boolean,
+  scope: PreviewScope,
 ): Promise<ControlUiLinkPreview> {
-  const target = parseControlUiLinkPreviewUrl(url.href);
-  if (!isEnabled() || !target) {
+  if (!isEnabled()) {
     return {};
   }
+  let principal = principals.get(scope.principal);
+  if (principal === undefined) {
+    principal = ++nextPrincipal;
+    principals.set(scope.principal, principal);
+  }
+  const key = JSON.stringify([principal, scope.revision, url.href]);
   const now = Date.now();
-  const existing = cache.get(target.href);
+  const existing = cache.get(key);
   if (existing && existing.expiresAt > now) {
     const result = await existing.promise;
     return isEnabled() ? result : {};
@@ -245,12 +402,17 @@ export async function loadControlUiLinkPreview(
   if (loads.activeCount + loads.pendingCount >= 32) {
     return {};
   }
+  // Queue time belongs to the same deadline as network and image work.
+  const signal = AbortSignal.timeout(PREVIEW_TIMEOUT_MS);
   const entry = {
     expiresAt: Number.POSITIVE_INFINITY,
-    promise: loads(() => loadPreview(target, isEnabled)).catch(() => ({})),
+    promise: racePromiseWithAbortSignal(
+      loads(() => loadPreview(url, isEnabled, signal)),
+      signal,
+    ).catch(() => ({})),
   };
-  cache.delete(target.href);
-  cache.set(target.href, entry);
+  cache.delete(key);
+  cache.set(key, entry);
   pruneMapToMaxSize(cache, CACHE_MAX_ENTRIES);
   const result = await entry.promise;
   entry.expiresAt = Date.now() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);

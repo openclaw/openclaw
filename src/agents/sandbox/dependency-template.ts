@@ -1,4 +1,6 @@
 import path from "node:path";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
@@ -78,8 +80,18 @@ export async function retireSandboxDependencyTemplate(
   directory: string,
   rollbackGuard: () => void,
 ): Promise<void> {
-  const { entries } = await readRegistry();
-  rollbackGuard();
+  const context = captureOpenClawStateWorkerContext();
+  const assertOwner = () => {
+    context.admission.assertCurrent();
+    rollbackGuard();
+  };
+  const database = {
+    path: context.admission.databasePath,
+    env: context.environment,
+    assertCurrent: assertOwner,
+  };
+  const { entries } = await readRegistry(database);
+  assertOwner();
   for (const entry of entries) {
     if (entry.workspaceDir !== directory || !entry.sessionKey.startsWith(SCOPE_PREFIX)) {
       continue;
@@ -114,11 +126,15 @@ export async function retireSandboxDependencyTemplate(
     }
     const { removeSandboxRuntimeGeneration } = await import("./manage.js");
     await removeSandboxRuntimeGeneration({
-      runtime: { kind: "container", entry, assertCurrent },
+      runtime: { kind: "container", entry },
+      database,
       engine,
       id,
       bridges: [],
-      assertCurrent: rollbackGuard,
+      assertCurrent: () => {
+        assertOwner();
+        assertCurrent();
+      },
     });
   }
 }
@@ -149,43 +165,48 @@ export async function prepareSandboxDependencyTemplate(params: {
   try {
     const { ensureSandboxContainer } = await import("./docker.js");
     assertCurrent();
-    const { containerId } = await ensureSandboxContainer({
-      engine: identity.engine,
-      podmanTarget: identity.podmanTarget,
-      scopeKey: `${SCOPE_PREFIX}${params.scopeKey}`,
-      workspaceDir: directory,
-      agentWorkspaceDir: directory,
-      workspaceSource: "managed-worktree",
-      readOnlyResourceMounts: [
-        {
-          hostPath: path.join(directory, ".git"),
-          containerPath: path.posix.join(docker.workdir, ".git"),
-        },
-      ],
-      cfg: { ...params.cfg, scope: "session", workspaceAccess: "rw", docker },
-      assertCurrent,
-    });
+    const { containerId } = await timeWorktreePreparationPhase("containerStart", () =>
+      ensureSandboxContainer({
+        engine: identity.engine,
+        podmanTarget: identity.podmanTarget,
+        scopeKey: `${SCOPE_PREFIX}${params.scopeKey}`,
+        workspaceDir: directory,
+        agentWorkspaceDir: directory,
+        workspaceSource: "managed-worktree",
+        readOnlyResourceMounts: [
+          {
+            hostPath: path.join(directory, ".git"),
+            containerPath: path.posix.join(docker.workdir, ".git"),
+          },
+        ],
+        cfg: { ...params.cfg, scope: "session", workspaceAccess: "rw", docker },
+        assertCurrent,
+      }),
+    );
     assertCurrent();
     await validateSandboxContainerEngineTarget(identity.engine, identity.podmanTarget);
     assertCurrent();
-    timeout = AbortSignal.timeout(15 * 60_000);
-    const installed = await execContainer(
-      identity.engine,
-      [
-        "exec",
-        "--workdir",
-        docker.workdir,
-        containerId,
-        "/bin/sh",
-        "-c",
-        docker.network === "none"
-          ? "exec pnpm install --offline --frozen-lockfile"
-          : "exec pnpm install --frozen-lockfile",
-      ],
-      {
-        allowFailure: true,
-        signal: params.signal ? AbortSignal.any([params.signal, timeout]) : timeout,
-      },
+    const installTimeout = AbortSignal.timeout(15 * 60_000);
+    timeout = installTimeout;
+    const installed = await timeWorktreePreparationPhase("setup", () =>
+      execContainer(
+        identity.engine,
+        [
+          "exec",
+          "--workdir",
+          docker.workdir,
+          containerId,
+          "/bin/sh",
+          "-c",
+          docker.network === "none"
+            ? "exec pnpm install --offline --frozen-lockfile"
+            : "exec pnpm install --frozen-lockfile",
+        ],
+        {
+          allowFailure: true,
+          signal: params.signal ? AbortSignal.any([params.signal, installTimeout]) : installTimeout,
+        },
+      ),
     );
     assertCurrent();
     return installed.code === 0

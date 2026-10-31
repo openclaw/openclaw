@@ -7,9 +7,7 @@ import { getMatrixRuntime } from "../../runtime.js";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
-export function noop(): void {
-  // no-op
-}
+export function noop(): void {}
 
 let forceConsoleLogging = false;
 let serviceQuiet = false;
@@ -37,7 +35,7 @@ function formatMessage(module: string, messageOrObject: unknown[]): string {
   if (messageOrObject.length === 0) {
     return `[${module}]`;
   }
-  return redactSensitiveText(`[${module}] ${format(...messageOrObject)}`);
+  return `[${module}] ${format(...messageOrObject)}`;
 }
 
 export function emitMatrixLog(level: LogLevel, module: string, messageOrObject: unknown[]): void {
@@ -50,7 +48,7 @@ export function emitMatrixLog(level: LogLevel, module: string, messageOrObject: 
       runtimeLogger[level](message);
     }
   } else {
-    console[level](message);
+    console[level](redactSensitiveText(message));
   }
 }
 

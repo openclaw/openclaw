@@ -15,10 +15,7 @@ function normalizeNetworkInterfaceFamily(
   if (family === "IPv4" || family === 4) {
     return "IPv4";
   }
-  if (family === "IPv6" || family === 6) {
-    return "IPv6";
-  }
-  return undefined;
+  return family === "IPv6" || family === 6 ? "IPv6" : undefined;
 }
 
 /** Best-effort interface read that returns undefined when OS inspection fails. */
@@ -37,15 +34,8 @@ export function listExternalInterfaceAddresses(
   family?: NetworkInterfaceFamily,
 ): ExternalNetworkInterfaceAddress[] {
   const addresses: ExternalNetworkInterfaceAddress[] = [];
-  if (!snapshot) {
-    return addresses;
-  }
-
-  for (const [name, entries] of Object.entries(snapshot)) {
-    if (!entries) {
-      continue;
-    }
-    for (const entry of entries) {
+  for (const [name, entries] of Object.entries(snapshot ?? {})) {
+    for (const entry of entries ?? []) {
       if (!entry || entry.internal) {
         continue;
       }

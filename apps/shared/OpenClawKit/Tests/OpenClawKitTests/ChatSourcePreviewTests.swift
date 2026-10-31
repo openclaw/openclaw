@@ -306,6 +306,39 @@ struct ChatSourcePreviewTests {
         #expect(result.map(\.url.absoluteString) == [self.second, self.first])
     }
 
+    @Test @MainActor func `Markdown citations across work preserve the intact envelope`() {
+        let source = OpenClawChatMessage(role: "assistant", content: [
+            .init(type: "text", text: "[First](\(self.first))"),
+            .init(type: "toolCall", id: "call", name: "read"),
+            .init(type: "tool_result", text: "Recorded", id: "call"),
+            .init(type: "text", text: "[Second](\(self.second))"),
+        ], timestamp: 3, transcriptRunID: self.runID, phase: "final_answer")
+        let state = ChatSourcePreviewState()
+        state.update([self.search([self.row(self.first), self.row(self.second)]), source])
+        #expect(state.previews(for: source).count == 2)
+        let cards = source.workPresentationParts.map { state.previews(for: $0).map(\.url.absoluteString) }
+        #expect(cards == [[self.first, self.second]])
+        #expect(source.workPresentationParts.map(\.content) == [source.content])
+    }
+
+    @Test @MainActor func `split presentation scopes cards to its own citations`() {
+        let source = OpenClawChatMessage(role: "assistant", content: [
+            .init(type: "toolCall", id: "first-call", name: "read"),
+            .init(type: "tool_result", text: "Recorded first", id: "first-call"),
+            .init(type: "text", text: "Read \(self.first) and \(self.second)."),
+            .init(type: "toolCall", id: "second-call", name: "read"),
+            .init(type: "tool_result", text: "Recorded second", id: "second-call"),
+        ], timestamp: 3, transcriptRunID: self.runID, phase: "final_answer")
+        let state = ChatSourcePreviewState()
+        state.update([self.search([self.row(self.first), self.row(self.second)]), source])
+        #expect(state.previews(for: source).count == 2)
+        let parts = source.workPresentationParts
+        #expect(parts.count == 3)
+        #expect(parts.map(\.presentationBlockIndex) == [0, 2, 3])
+        let cards = parts.map { state.previews(for: $0).map(\.url.absoluteString) }
+        #expect(cards == [[], [self.first, self.second], []])
+    }
+
     private func answer(_ text: String) -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: "assistant", content: [.init(type: "text", text: text, mimeType: nil, fileName: nil, content: nil)],

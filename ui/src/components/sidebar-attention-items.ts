@@ -8,8 +8,6 @@ import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 
 registerSidebarAttentionEnglish();
 
-// A cron job counts as overdue when its next planned run is this far in the
-// past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
 const ALERT_QUESTION_MAX_LENGTH = 1_000;
 
@@ -32,11 +30,6 @@ export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean |
     : Infinity;
 }
 
-type SidebarAttentionContent = Omit<
-  SidebarAttentionItem,
-  "category" | "dismissal" | "requiresAction" | "type"
->;
-
 export function buildSidebarAttentionEntries(params: {
   cronJobs: readonly CronAttentionJob[];
   cronSchedulerEnabled: boolean | null;
@@ -47,7 +40,7 @@ export function buildSidebarAttentionEntries(params: {
 }): SidebarAttentionItem[] {
   const entries: SidebarAttentionItem[] = [];
   const attentionEntry = (
-    item: SidebarAttentionContent,
+    item: Omit<SidebarAttentionItem, "category" | "dismissal" | "requiresAction" | "type">,
     category: SidebarAttentionItem["category"],
   ): SidebarAttentionItem => ({
     ...item,

@@ -20,6 +20,25 @@ export function normalizeWindowsNamespaceAlias(sourcePath: string): string {
   return sourcePath.includes("\\") ? portable.replaceAll("/", "\\") : portable;
 }
 
+/** Encode an absolute or relative source path into a traversal-safe archive payload path. */
+function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
+  const normalized = normalizeWindowsNamespaceAlias(sourcePath).replaceAll("\\", "/");
+  const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  if (windowsMatch) {
+    const drive = windowsMatch[1]?.toUpperCase() ?? "UNKNOWN";
+    const rest = windowsMatch[2] ?? "";
+    return path.posix.join("windows", drive, rest);
+  }
+  if (normalized.startsWith("/")) {
+    return path.posix.join("posix", normalized.slice(1));
+  }
+  return path.posix.join("relative", normalized);
+}
+
+export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
+  return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
+}
+
 // Creation and verification must agree on which archive paths can be restored.
 function assertPortableRelativePathSyntax(
   value: string,
@@ -34,12 +53,8 @@ function assertPortableRelativePathSyntax(
   }
 }
 
-function stripTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/u, "");
-}
-
 export function normalizeArchivePath(entryPath: string, label: string): string {
-  const filename = stripTrailingSlashes(entryPath);
+  const filename = entryPath.replace(/\/+$/u, "");
   if (!filename) {
     throw new Error(`${label} is empty.`);
   }
@@ -48,11 +63,7 @@ export function normalizeArchivePath(entryPath: string, label: string): string {
     throw new Error(`${label} contains path traversal segments: ${entryPath}`);
   }
 
-  const normalized = stripTrailingSlashes(path.posix.normalize(filename));
-  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`${label} resolves outside the archive root: ${entryPath}`);
-  }
-  return normalized;
+  return path.posix.normalize(filename);
 }
 
 export function normalizeArchiveRoot(rootName: string): string {
@@ -66,6 +77,25 @@ export function normalizeArchiveRoot(rootName: string): string {
 export function isArchivePathWithin(child: string, parent: string): boolean {
   const relative = path.posix.relative(parent, child);
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
+}
+
+export function resolvePortableArchivePathKey(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
+export function findPortableArchiveEntryPathCollision(
+  entries: Array<{ normalized: string }>,
+): { first: string; second: string } | undefined {
+  const seen = new Map<string, string>();
+  for (const entry of entries) {
+    const key = resolvePortableArchivePathKey(entry.normalized);
+    const first = seen.get(key);
+    if (first && first !== entry.normalized) {
+      return { first, second: entry.normalized };
+    }
+    seen.set(key, entry.normalized);
+  }
+  return undefined;
 }
 
 export type BackupSymbolicLink = { entryPath: string; linkpath: string };

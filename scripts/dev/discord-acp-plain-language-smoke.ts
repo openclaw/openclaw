@@ -25,10 +25,6 @@ function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
 }
 
-function writeStdoutJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
 }
@@ -265,10 +261,6 @@ function resolveArg(flag: string, argv: string[]): string | undefined {
   return value;
 }
 
-function hasFlag(flag: string, argv = process.argv.slice(2)): boolean {
-  return argv.includes(flag);
-}
-
 function validateCliArgs(argv: string[]): void {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -367,7 +359,7 @@ function parseArgs(argv = process.argv.slice(2)): Args {
     pollMs: parseNumber(option("--poll-ms", "POLL_MS"), 1_500, "--poll-ms"),
     stateDir: path.resolve(resolveArg("--state-dir", argv) || resolveStateDir()),
     openclawBin: option("--openclaw-bin", "OPENCLAW_BIN", "openclaw"),
-    json: hasFlag("--json", argv),
+    json: argv.includes("--json"),
   };
   if (
     !args.channelId ||
@@ -647,7 +639,7 @@ async function cleanupWebhook(webhookForCleanup: WebhookForCleanup | undefined):
 
 function printOutput(params: { json: boolean; payload: SuccessResult | FailureResult }) {
   if (params.json) {
-    writeStdoutJson(params.payload);
+    process.stdout.write(`${JSON.stringify(params.payload, null, 2)}\n`);
     return;
   }
   if (params.payload.ok) {
@@ -956,7 +948,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     writeStderrLine(safeErrorMessage(err));
     return 1;
   }
-  if (hasFlag("--help", argv) || hasFlag("-h", argv)) {
+  if (argv.includes("--help") || argv.includes("-h")) {
     writeStdoutLine(usage());
     return 0;
   }
@@ -967,7 +959,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     error: safeErrorMessage(err),
   }));
   printOutput({
-    json: hasFlag("--json", argv),
+    json: argv.includes("--json"),
     payload: result,
   });
   return result.ok ? 0 : 1;

@@ -3,6 +3,20 @@ import Testing
 @testable import OpenClaw
 
 struct VoiceWakeRuntimeTests {
+    @Test(arguments: ["hey openclaw", "tell me about openclaw"])
+    func `diagnostic trigger only fallback rejects trailing mentions`(transcript: String) {
+        let match = VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
+            transcript: transcript,
+            triggers: ["openclaw"],
+            trimWake: WakeWordGate.stripWake)
+        if transcript == "hey openclaw" {
+            #expect(match?.command == "")
+            #expect(match?.trigger == "openclaw")
+        } else {
+            #expect(match == nil)
+        }
+    }
+
     @Test func `trims after trigger keeps post speech`() {
         let triggers = ["claude", "openclaw"]
         let text = "hey Claude how are you"

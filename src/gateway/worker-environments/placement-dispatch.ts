@@ -1,6 +1,14 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertRequiredWorkerDispatch,
+  RequiredWorkerProfileError,
+} from "../../config/required-worker-profile.js";
+import { getRepositoryIntegration } from "../../plugins/repository-integration-runtime.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { sessionLog } from "../session-log.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import {
   createPlacementFailureActions,
   type WorkerActivationBarrier,
@@ -12,7 +20,6 @@ import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js
 import {
   createWorkerPlacementDispatchStartup,
   type WorkerDevicePlacementRequirementResolver,
-  type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
 import {
@@ -46,7 +53,6 @@ import type {
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 type WorkerLocalDispatchBarrier = (params: {
@@ -55,6 +61,7 @@ type WorkerLocalDispatchBarrier = (params: {
   agentId: string;
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   authorize?: WorkerPlacementAuthorization;
+  requiredProfile?: string;
   signal?: AbortSignal;
   startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
@@ -68,17 +75,20 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     environments: WorkerDispatchEnvironmentService &
       Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> &
       Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
+    initialPlacements: readonly WorkerDispatchPlacement[];
     isShuttingDown?: () => boolean;
     runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
     runLocalBarrier: WorkerLocalDispatchBarrier;
-    runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
     runActivationBarrier: WorkerActivationBarrier;
     runMoveBarrier: WorkerPlacementMoveBarrier;
     resolveMoveDestination: (
       identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
       target: WorkerPlacementMoveRequest["target"],
     ) => Promise<WorkerPlacementMoveDestination | undefined>;
-    onActivated?: (request: WorkerPlacementDispatchRequest) => void;
+    onActivated?: (
+      request: WorkerPlacementDispatchRequest,
+      placement: WorkerActiveDispatchPlacement,
+    ) => void;
     resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
     resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
     isCurrentNodePlacement?: WorkerNodePlacementAuthority;
@@ -88,33 +98,51 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
 
-  const startup = createWorkerPlacementDispatchStartup({
-    ...options,
-    failure,
-  });
+  const startup = createWorkerPlacementDispatchStartup(options);
 
   // Background recovery observes previously requested cleanup; explicit Stop and
   // Move retain their retry contract. Pending-result recovery must inherit this too.
   const recoveryEnvironments = { ...environments, destroy: environments.requestDestroy };
-  const recovery = createPlacementRecoveryActions({
-    ...options,
-    environments: recoveryEnvironments,
-    failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
-    recoverPlacementMoves: (projection, environmentId) =>
-      moveService.recoverSession(projection, environmentId),
-  });
+  const recovery = createPlacementRecoveryActions(
+    {
+      ...options,
+      environments: recoveryEnvironments,
+      failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
+      recoverPlacementMoves: (projection, environmentId) =>
+        moveService.recoverSession(projection, environmentId),
+    },
+    options.initialPlacements,
+  );
 
   const dispatch = async (
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
+    awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
-    const assertCurrent = () => {
+    using diagnostics = startSlowRequestDiagnostics<string>(
+      sessionLog,
+      "slow placement dispatch",
+      "sessions.dispatch",
+      "admission",
+    );
+    let dispatchActive = true;
+    const assertCurrent = composePlacementAuthorization(authorize, () => {
+      if (!dispatchActive) {
+        throw new Error("Repository dispatch was released");
+      }
       signal?.throwIfAborted();
-      authorize?.();
-    };
+      assertRequiredWorkerDispatch(getRuntimeConfig(), request);
+    });
+    assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
+    const credentialCleanups = new Set<() => Promise<void>>();
+    const retainCredentialCleanup = (revoke: () => Promise<void>) => {
+      credentialCleanups.add(revoke);
+    };
+    // Source owners compose dispatch liveness with the original reader's admission and policy guard.
+    const readNativeCredential = request.readNativeCredential;
     try {
       signal?.throwIfAborted();
       placement = await options.runLocalBarrier({
@@ -123,6 +151,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         agentId: request.agentId,
         executionMode: request.executionMode,
         authorize: assertCurrent,
+        requiredProfile: request.requiredProfile,
         signal,
         startDispatch: async () => {
           placement = await placements.startDispatch(
@@ -141,6 +170,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
+      await awaitRequestedHandoff?.(signal);
+      // The requested transition can acknowledge a detached caller while setup continues.
+      // Revalidate that retained caller before any node or provider-side preparation.
+      assertCurrent();
       if (
         !request.deviceId &&
         request.devicePlacement?.requiredNodeCommands.length &&
@@ -159,9 +192,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
       }
-      await startup.validateDevicePlacement(request);
-      signal?.throwIfAborted();
+      diagnostics?.mark("workspacePreparation");
       const workspace = await options.resolveWorkspace(request);
+      if (
+        workspace.kind === "device-folder" &&
+        (request.deviceId !== workspace.deviceId || request.executionMode !== "worker-turn")
+      ) {
+        throw new Error(
+          "Device folders require an explicit dispatch to their original paired device using the OpenClaw harness.",
+        );
+      }
       if (
         workspace.kind === "repository" &&
         !request.deviceId &&
@@ -174,35 +214,52 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           "Repository cloud sessions require a managed-node cloud provider or paired node. Choose one and retry dispatch.",
         );
       }
+      const repositoryIntegration =
+        workspace.kind === "repository" && !request.deviceId
+          ? getRepositoryIntegration()
+          : undefined;
+      if (repositoryIntegration && !readNativeCredential) {
+        throw new Error("Repository worker startup requires current GitHub dispatch admission");
+      }
+      const imageReserve = repositoryIntegration?.preparedCapacity === "image";
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
+      assertCurrent();
       const preparedIntent = !request.deviceId
         ? await environments.prepareProjectIntent(request.profileId, {
             machineClass: request.machineClass,
             executionMode: request.executionMode,
-            projectPath,
-            ...(workspace.kind === "repository"
-              ? {
-                  repository: {
-                    agentId: request.agentId,
-                    url: workspace.repository.url,
-                    ref: workspace.repository.requestedRef ?? undefined,
-                    baseCommit: workspace.repository.baseCommit ?? undefined,
-                  },
-                }
-              : {}),
+            assertCurrent,
             inherited: request.inheritedProfile,
             signal,
             os: request.os,
-            runSetupScript:
-              workspace.kind === "repository"
-                ? workspace.repository.runSetupScript && request.runSetupScript !== false
-                : request.runSetupScript,
-            setupAuthorized: request.runSetupScript !== undefined,
+            ...(imageReserve
+              ? { imageReserve: true }
+              : {
+                  projectPath,
+                  readNativeCredential,
+                  retainCredentialCleanup,
+                  ...(workspace.kind === "repository"
+                    ? {
+                        repository: {
+                          agentId: request.agentId,
+                          url: workspace.repository.url,
+                          ref: workspace.repository.requestedRef ?? undefined,
+                          baseCommit: workspace.repository.baseCommit ?? undefined,
+                        },
+                      }
+                    : {}),
+                  runSetupScript:
+                    workspace.kind === "repository"
+                      ? workspace.repository.runSetupScript && request.runSetupScript !== false
+                      : request.runSetupScript,
+                  setupAuthorized: request.runSetupScript !== undefined,
+                }),
           })
         : undefined;
       assertCurrent();
+      diagnostics?.mark("reserveClaim");
       const prepared = preparedIntent
         ? await startup.bindPreparedPlacement({
             request,
@@ -232,6 +289,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ));
       reportPlacementTransition(onTransition, placement);
       assertCurrent();
+      if (!prepared) {
+        diagnostics?.mark("provision");
+      }
       const environment = prepared
         ? prepared.environment
         : await environments.createWithRequest({
@@ -245,9 +305,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             runSetupScript: request.runSetupScript,
             admittedIntent: preparedIntent,
             inheritedProfile: request.inheritedProfile,
+            beforeProvision: assertCurrent,
           });
       return await startup.continueProvisionedDispatch({
-        request,
+        markPhase: diagnostics?.mark,
+        request: { ...request, readNativeCredential },
+        retainCredentialCleanup,
         placement,
         environment,
         expectedEnvironmentId,
@@ -258,14 +321,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ...(prepared ? { admittedNode: prepared.admittedNode } : {}),
       });
     } catch (error) {
+      diagnostics?.mark("cleanup");
       if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
         throw error;
       }
       try {
-        if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
-          throw error;
-        }
-        const current = placement ? placements.get(request.sessionId) : undefined;
+        const current = placement ? await placements.getAsync(request.sessionId) : undefined;
         if (current && current.state !== "local" && current.state !== "reclaimed") {
           if (current.state === "active") {
             await failure.failActive(current, error);
@@ -286,12 +347,20 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           }
         }
       } finally {
-        const finalPlacement = placements.get(request.sessionId);
+        const finalPlacement = await placements.getAsync(request.sessionId);
         if (finalPlacement) {
           reportPlacementTransition(onTransition, finalPlacement);
         }
       }
       throw error;
+    } finally {
+      dispatchActive = false;
+      const cleanup = await Promise.allSettled([...credentialCleanups].map((revoke) => revoke()));
+      if (cleanup.some((result) => result.status === "rejected")) {
+        sessionLog.warn(
+          "Repository dispatch credential cleanup failed; retry GitHub credential cleanup before reusing the worker.",
+        );
+      }
     }
   };
 
@@ -305,9 +374,32 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     completedOperation?: WorkerPlacementCancellationTarget,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
+    const { placement: current, move } = await placements.getWithMoveAsync(request.sessionId);
     authorize?.();
     beforeDrain?.();
-    const current = placements.get(request.sessionId);
+    if (current?.state === "draining" && move?.abandonSource) {
+      if (
+        move.target.kind !== "gateway" ||
+        move.sessionId !== current.sessionId ||
+        current.sessionKey !== request.sessionKey ||
+        current.agentId !== request.agentId ||
+        current.generation !== move.source.generation + 1 ||
+        current.environmentId !== move.source.environmentId ||
+        current.activeOwnerEpoch !== move.source.ownerEpoch
+      ) {
+        throw new Error("Abandoned cloud worker move changed before Stop cleanup");
+      }
+      // Stop owns live authority after the canceled Move settles; its committed disposition stays.
+      return await options.runFailedReclaimBarrier({
+        ...request,
+        authorize,
+        reclaim: async (reauthorize) => {
+          const local = await abandonment.abandonSource(request, move, reauthorize, current);
+          reportPlacementTransition(onTransition, local);
+          return local;
+        },
+      });
+    }
     if (current?.state === "reclaimed") {
       return current;
     }
@@ -316,96 +408,86 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (current?.state === "local" && matchesWorkerPlacementTarget(current, completedOperation)) {
       return current;
     }
-    try {
-      // The preparation/placement wait can span another completed failed cleanup.
-      // Its old generation classifies an idempotent result, never authorizes new teardown.
-      const owned = current?.state === "local" && initial?.state === "failed" ? initial : current;
-      if (owned?.state === "failed" || owned?.state === "provisioning") {
-        return await options.runFailedReclaimBarrier({
-          ...request,
-          authorize,
-          reclaim: async (reauthorize) => {
-            if (request.recoverToGateway) {
-              beforeDrain?.();
-            }
-            let failedPlacement = placements.get(request.sessionId);
-            if (owned.state === "provisioning") {
-              failedPlacement = await failure.cancelProvisioning(
-                failedPlacement,
-                initial,
-                reauthorize,
-              );
-              reportPlacementTransition(onTransition, failedPlacement);
-            }
-            // A preceding cleanup can finish while this request waits for the lifecycle fence.
-            if (
-              failedPlacement?.state === "local" &&
-              owned.state === "failed" &&
-              failedPlacement.generation === owned.generation + 1 &&
-              failedPlacement.sessionKey === request.sessionKey &&
-              failedPlacement.agentId === request.agentId
-            ) {
-              return failedPlacement;
-            }
-            if (failedPlacement?.state !== "failed") {
-              throw new Error("Failed cloud worker placement changed during reclaim");
-            }
-            const cleanupError = await failure.retryFailedTeardown(failedPlacement, reauthorize);
-            const failed = placements.get(request.sessionId);
-            if (failed?.state !== "failed") {
-              throw new Error("Failed cloud worker placement changed during reclaim");
-            }
-            if (
-              !isFailedWorkerPlacementEnvironmentGone({
-                environmentService: environments,
-                placement: failed,
-              })
-            ) {
-              throw new Error(
-                cleanupError ?? "Failed cloud worker environment cleanup is still pending",
-              );
-            }
-            if (request.recoverToGateway) {
-              const assertCurrent = () => {
-                reauthorize?.();
-                beforeDrain?.();
-              };
-              assertCurrent();
-              if (options.prepareGatewayMove) {
-                await options.prepareGatewayMove({ ...request, assertCurrent });
-              } else if ((await options.resolveWorkspace(request)).kind === "repository") {
-                throw new Error("Repository workspace Gateway materialization is unavailable");
-              }
-              // Keep local admission closed until the accepted checkpoint is bound locally.
-              assertCurrent();
-            }
-            const local = await placements.transition(
-              {
-                sessionId: request.sessionId,
-                from: "failed",
-                to: "local",
-                expectedGeneration: failed.generation,
-              },
-              request.recoverToGateway ? reauthorize : undefined,
+    // The preparation/placement wait can span another completed failed cleanup.
+    // Its old generation classifies an idempotent result, never authorizes new teardown.
+    const owned = current?.state === "local" && initial?.state === "failed" ? initial : current;
+    if (owned?.state === "failed" || owned?.state === "provisioning") {
+      return await options.runFailedReclaimBarrier({
+        ...request,
+        authorize,
+        reclaim: async (reauthorize) => {
+          let failedPlacement = await placements.getAsync(request.sessionId);
+          reauthorize?.();
+          if (request.recoverToGateway) {
+            beforeDrain?.();
+          }
+          if (owned.state === "provisioning") {
+            failedPlacement = await failure.cancelProvisioning(
+              failedPlacement,
+              initial,
+              reauthorize,
             );
-            if (local.state !== "local") {
-              throw new Error("Failed cloud worker reclaim did not produce a local placement");
+            reportPlacementTransition(onTransition, failedPlacement);
+          }
+          // A preceding cleanup can finish while this request waits for the lifecycle fence.
+          if (
+            failedPlacement?.state === "local" &&
+            owned.state === "failed" &&
+            failedPlacement.generation === owned.generation + 1 &&
+            failedPlacement.sessionKey === request.sessionKey &&
+            failedPlacement.agentId === request.agentId
+          ) {
+            return failedPlacement;
+          }
+          if (failedPlacement?.state !== "failed") {
+            throw new Error("Failed cloud worker placement changed during reclaim");
+          }
+          const cleanupError = await failure.retryFailedTeardown(failedPlacement, reauthorize);
+          const failed = await placements.getAsync(request.sessionId);
+          if (failed?.state !== "failed") {
+            throw new Error("Failed cloud worker placement changed during reclaim");
+          }
+          if (
+            !isFailedWorkerPlacementEnvironmentGone({
+              environmentService: environments,
+              placement: failed,
+            })
+          ) {
+            throw new Error(
+              cleanupError ?? "Failed cloud worker environment cleanup is still pending",
+            );
+          }
+          const assertCurrent = request.recoverToGateway
+            ? composePlacementAuthorization(reauthorize, () => beforeDrain?.())
+            : undefined;
+          if (assertCurrent) {
+            assertCurrent();
+            if (options.prepareGatewayMove) {
+              await options.prepareGatewayMove({ ...request, assertCurrent });
+            } else if ((await options.resolveWorkspace(request)).kind === "repository") {
+              throw new Error("Repository workspace Gateway materialization is unavailable");
             }
-            reportPlacementTransition(onTransition, local);
-            return local;
-          },
-        });
-      }
-      return await reclaimOnce(request, undefined, authorize, beforeDrain, onTransition);
-    } catch (error) {
-      // Another teardown path can win after this call has crossed its durable completion fence.
-      // Report the committed terminal state instead of leaking a stale tunnel error to callers.
-      const completed = placements.get(request.sessionId);
-      if (error instanceof WorkerTunnelOwnerDisconnectedError && completed?.state === "reclaimed") {
-        return completed;
-      }
-      throw error;
+            // Keep local admission closed until the accepted checkpoint is bound locally.
+            assertCurrent();
+          }
+          const local = await placements.transition(
+            {
+              sessionId: request.sessionId,
+              from: "failed",
+              to: "local",
+              expectedGeneration: failed.generation,
+            },
+            assertCurrent,
+          );
+          if (local.state !== "local") {
+            throw new Error("Failed cloud worker reclaim did not produce a local placement");
+          }
+          reportPlacementTransition(onTransition, local);
+          return local;
+        },
+      });
     }
+    return await reclaimOnce(request, undefined, authorize, beforeDrain, onTransition);
   };
 
   const reclaim = async (
@@ -418,11 +500,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     pendingOperations?: WorkerPlacementPendingOperations,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
-    const assertGatewayRecoverySource = () => {
+    const assertGatewayRecoverySource = (captured?: WorkerDispatchPlacement) => {
+      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+        throw new RequiredWorkerProfileError(
+          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+        );
+      }
       if (!request.recoverToGateway) {
         return;
       }
-      const source = placements.get(request.sessionId);
+      const source = captured ?? placements.get(request.sessionId);
       if (
         source?.state !== "failed" ||
         source.generation !== request.recoverToGateway.expectedGeneration ||
@@ -442,10 +529,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         );
       }
     };
+    const initial = await placements.getAsync(request.sessionId);
     authorize?.();
     beforeDrain?.();
-    assertGatewayRecoverySource();
-    const initial = placements.get(request.sessionId);
+    assertGatewayRecoverySource(initial);
     if (initial) {
       reportPlacementTransition(onTransition, initial);
     }
@@ -512,9 +599,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     },
     move: moveService.move,
     reclaim,
+    subscribeOrphanWorkspaceChanges: recovery.subscribeOrphanWorkspaceChanges,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
-    resumeProvisioning: startup.resumeProvisioning,
   };
 }
 

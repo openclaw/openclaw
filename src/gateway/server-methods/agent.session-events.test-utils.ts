@@ -1,5 +1,12 @@
 // Registered at their original suite positions to retain hook and shared-state ordering.
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  getRpcSource,
+  getRpcSourceIdentity,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import {
   buildExistingMainStoreEntry,
@@ -11,7 +18,11 @@ import {
   mockMainSessionEntry,
   waitForAssertion,
 } from "./agent.test-harness.js";
-import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
+import {
+  completedSubagentFollowupRun,
+  expectSubagentFollowupReactivation,
+} from "./subagent-followup.test-helpers.js";
 
 const mocks = getAgentTestMocks();
 
@@ -19,26 +30,11 @@ export function registerAgentSendEventTests(): void {
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const updatedAt = Date.now() - 1_000;
-    const completedRun = {
-      runId: "run-old",
-      childSessionKey,
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "initial task",
-      cleanup: "keep" as const,
-      createdAt: 1,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 2,
-        endedAt: 3,
-        outcome: { status: "ok" as const },
-      },
-    };
+    const completedRun = completedSubagentFollowupRun(childSessionKey);
 
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "sess-followup",
         updatedAt,
@@ -198,6 +194,7 @@ export function registerAgentSendEventTests(): void {
       agentId: "main",
       dropIfSlow: true,
       sessionKeys: ["agent:main:main"],
+      sessionEventSubscriptionKeys: ["agent:main:main"],
       prepareSessionProjection: expect.any(Function),
     });
   });
@@ -205,22 +202,15 @@ export function registerAgentSendEventTests(): void {
 
 export function registerAgentGlobalGoalEventTest(): void {
   it("keeps selected-global goals on agent session change events", async () => {
-    const goal = {
-      schemaVersion: 1,
-      id: "goal-work-global",
-      objective: "Finish work global task",
-      status: "active",
-      createdAt: 1,
+    const goal = createSessionGoalFixture("goal-work-global", "Finish work global task", {
       updatedAt: 2,
-      tokenStart: 0,
       tokensUsed: 5,
-      continuationTurns: 0,
-    } satisfies NonNullable<GatewaySessionRow["goal"]>;
+    }) satisfies NonNullable<GatewaySessionRow["goal"]>;
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
     mocks.loadSessionEntry.mockReturnValue({
       cfg: { agents: { entries: { main: {}, work: {} } }, session: { scope: "global" } },
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-session-id",
         updatedAt: Date.now(),
@@ -235,42 +225,62 @@ export function registerAgentGlobalGoalEventTest(): void {
       goal,
     } satisfies GatewaySessionRow;
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
+    const finishRun = createDeferred();
+    const runId = "idem-agent-global-goal-event";
+    let acceptedSource: RpcSourceRef | undefined;
+    let ownerSettlement: Promise<void> | undefined;
+    mocks.agentCommand.mockImplementation(async () => {
+      acceptedSource = getRpcSource(runId);
+      ownerSettlement = acceptedSource?.input.claim?.operation?.ownerSettlement;
+      await finishRun.promise;
+      return { payloads: [{ text: "ok" }], meta: { durationMs: 1 } };
+    });
 
     const context = makeContext({ agentId: "work", row: sessionRow });
     context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
-    const runId = "idem-agent-global-goal-event";
-    await invokeAgent(
-      {
-        message: "hi",
-        agentId: "work",
-        idempotencyKey: runId,
-      },
-      { context, reqId: runId },
-    );
-
-    await waitForAssertion(() => {
-      expect(context.addChatRun).toHaveBeenCalledWith(
-        runId,
-        expect.objectContaining({ sessionKey: "global", agentId: "work" }),
-      );
-      expect(context.chatAbortControllers.get(runId)?.agentId).toBe("work");
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          sessionKey: "global",
-          agentId: "work",
-          goal: expect.objectContaining({ id: "goal-work-global" }),
-          session: expect.objectContaining({ key: "global", sessionId: "global-session-id", goal }),
-        }),
-        new Set(["conn-1"]),
+    try {
+      await invokeAgent(
         {
+          message: "hi",
           agentId: "work",
-          dropIfSlow: true,
-          sessionKeys: ["global"],
-          prepareSessionProjection: expect.any(Function),
+          idempotencyKey: runId,
         },
+        { context, reqId: runId },
       );
-    });
+
+      await waitForAssertion(() => {
+        expect(mocks.agentCommand).toHaveBeenCalledOnce();
+        expect(context.addChatRun).toHaveBeenCalledWith(
+          runId,
+          expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+        );
+        const source = getRpcSource(runId);
+        expect(source && getRpcSourceIdentity(source).agentId).toBe("work");
+        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            sessionKey: "global",
+            agentId: "work",
+            goal: expect.objectContaining({ id: "goal-work-global" }),
+            session: expect.objectContaining({
+              key: "global",
+              sessionId: "global-session-id",
+              goal,
+            }),
+          }),
+          new Set(["conn-1"]),
+          {
+            agentId: "work",
+            dropIfSlow: true,
+            sessionKeys: ["global"],
+            sessionEventSubscriptionKeys: ["agent:work:global"],
+            prepareSessionProjection: expect.any(Function),
+          },
+        );
+      });
+    } finally {
+      finishRun.resolve();
+      await Promise.all([acceptedSource?.input.settlement.promise, ownerSettlement]);
+    }
   });
 }

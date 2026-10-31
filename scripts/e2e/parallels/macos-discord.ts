@@ -116,7 +116,6 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
     say(`Stop ${this.input.vmName} after successful Discord smoke`);
     const result = run("prlctl", ["stop", this.input.vmName], {
       check: false,
-      quiet: true,
       timeoutMs: 120_000,
     });
     if (result.status !== 0) {
@@ -154,7 +153,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
       `https://discord.com/api/v10${apiPath}`,
     ];
     // Keep smoke phase deadlines enforceable even if curl itself fails to terminate promptly.
-    return run("curl", args, { quiet: true, timeoutMs: 45_000 }).stdout;
+    return run("curl", args, { timeoutMs: 45_000 }).stdout;
   }
 
   private async waitForHostVisibility(nonce: string, messageId: string): Promise<void> {
@@ -174,7 +173,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
       if (recent.includes(nonce)) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     throw new Error("Discord host visibility timed out");
   }
@@ -216,7 +215,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
       if (result.status === 0 && result.stdout.includes(nonce)) {
         return;
       }
-      run("sleep", ["3"], { quiet: true });
+      run("sleep", ["3"]);
     }
     throw new Error("Discord guest readback timed out");
   }

@@ -3,6 +3,11 @@ import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
 
+export const WorkspaceFileModeSchema = z.enum(["0600", "0620", "0640", "0660"], {
+  error:
+    "Expected an octal string: 0600, 0620, 0640, or 0660 (owner read/write; group access optional)",
+});
+
 export const AgentRuntimePolicySchema = z
   .strictObject({
     id: z.string().optional(),
@@ -39,23 +44,16 @@ export const AgentModelMapSchema = z
   .record(z.string(), AgentModelRuntimeEntrySchema)
   .superRefine((models, ctx) => {
     for (const [ref, entry] of Object.entries(models)) {
-      if (
-        entry.pickerRuntimes !== undefined &&
-        (ref.includes("*") || !parseProviderModelRef(ref))
-      ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [ref, "pickerRuntimes"],
-          message: "Picker runtimes require an exact provider/model entry.",
-        });
-      }
-      if (entry.codeMode !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [ref, "codeMode"],
-          message:
-            "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
-        });
+      for (const [key, message] of [
+        ["pickerRuntimes", "Picker runtimes require an exact provider/model entry."],
+        [
+          "codeMode",
+          "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
+        ],
+      ] as const) {
+        if (entry[key] !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: [ref, key], message });
+        }
       }
     }
   });
@@ -85,21 +83,16 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-const AgentEntryEmbeddedAgentConfigSchema = z
-  .strictObject({
-    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-  })
-  .optional();
-
 export const AgentEntryBaseSchema = z.strictObject({
   id: z.string(),
   name: z.string().optional(),
   description: z.string().optional(),
   workspace: z.string().optional(),
+  workspaceFileMode: WorkspaceFileModeSchema.optional(),
   cwd: z.string().optional(),
   agentDir: z.string().optional(),
   model: AgentModelSchema.optional(),
-  utilityModel: z.string().optional(),
+  utilityModel: AgentModelSchema.optional(),
   decisionModel: DecisionModelSchema.optional(),
   models: AgentModelMapSchema.optional(),
   modelPolicy: AgentModelPolicySchema.optional(),
@@ -123,12 +116,17 @@ export const AgentEntryBaseSchema = z.strictObject({
     .strictObject({
       delegationMode: z.enum(["suggest", "prefer"]).optional(),
       allowAgents: z.array(z.string()).optional(),
+      delegateToolsTo: z.array(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/)).optional(),
       model: AgentModelSchema.optional(),
       thinking: z.string().optional(),
       requireAgentId: z.boolean().optional(),
     })
     .optional(),
-  embeddedAgent: AgentEntryEmbeddedAgentConfigSchema,
+  embeddedAgent: z
+    .strictObject({
+      executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+    })
+    .optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   runtime: AgentRuntimeSchema,
 });

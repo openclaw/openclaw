@@ -4,11 +4,12 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { resolveCanonicalPath } from "../../infra/package-update-manager-preflight.js";
+import { pathEntryExists } from "../../infra/path-existence.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   UPDATE_DESTINATION_RECOVERY,
   type UpdateDestinationFailure,
-} from "../../infra/update-destination-failure.js";
+} from "../../infra/update-failure-facts-format.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import {
@@ -46,7 +47,6 @@ export async function inspectNpmGlobalDestination(
   const unknown = (prefix: string | null, cause: "permission" | "unreadable-layout") => ({
     kind: "unknown" as const,
     cause,
-    prefix,
     ...destinationRefusal(
       `Selected npm destination ${prefix ?? "(unresolved installation layout)"} could not be inspected (${cause}); ownership is unknown. No installation was attempted. Fix inspection permissions on this prefix for the service account, or restore the selected package layout, then run \`${retry}\`. Alternatively, ask the deployment owner to verify the layout and explicitly select the intended installation using its existing deployment procedure.`,
       { ...destination, ownership: "unknown", cause },
@@ -68,27 +68,16 @@ export async function inspectNpmGlobalDestination(
     const { launcher, launcherTarget } = await inspectNpmLauncher(destinationLayout);
     destination.launcher = launcher;
     destination.launcherTarget = launcherTarget;
-    const present = (target: string) =>
-      fs.lstat(target).then(
-        () => true,
-        (error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
-      );
-    const packagePresent = await present(packageRoot);
-    const launcherPresent = await present(launcher);
+    const packagePresent = await pathEntryExists(packageRoot);
+    const launcherPresent = await pathEntryExists(launcher);
     if (!packagePresent && !launcherPresent) {
-      return { kind: "empty" as const, prefix };
+      return { kind: "empty" as const };
     }
     const packageRootReal = packagePresent ? await fs.realpath(packageRoot) : null;
     if (launcherPresent && !launcherTarget) {
       return unknown(prefix, "unreadable-layout");
     }
-    const manageable = isGatewayServiceManagementAllowedForUpdate(process.env);
-    const serviceInspection = manageable
+    const serviceInspection = isGatewayServiceManagementAllowedForUpdate(process.env)
       ? await readManagedGatewayServiceForUpdate(process.env)
       : null;
     const command = serviceInspection?.command ?? null;
@@ -102,7 +91,7 @@ export async function inspectNpmGlobalDestination(
         launcherTarget !== null &&
         isPathStrictlyInside(packageRootReal, launcherTarget));
     if (ownsPackage && ownsLauncher) {
-      return { kind: "owned" as const, prefix };
+      return { kind: "owned" as const };
     }
     const layout = await summarizeGatewayServiceLayout(command);
     const wrapper = [
@@ -128,7 +117,6 @@ export async function inspectNpmGlobalDestination(
     ].join(" ");
     return {
       kind: "foreign" as const,
-      prefix,
       ...destinationRefusal(message, {
         ...destination,
         ownership: "foreign",

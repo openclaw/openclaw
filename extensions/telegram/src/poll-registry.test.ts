@@ -1,59 +1,39 @@
-// Telegram tests cover poll registry plugin behavior.
 import {
   createPluginStateKeyedStoreForTests,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  openOpenClawStateDatabase,
-  resetPluginStateStoreForTests,
-  type OpenClawStateKyselyDatabaseForTests,
+  createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { useTelegramKeyedState } from "./keyed-state.test-support.js";
 import {
   findTelegramPollRegistryEntry,
-  findTelegramPollRegistryEntrySync,
   recordTelegramPollRegistryEntry,
   retireTelegramPollRegistryEntry,
   type TelegramPollRegistryEntry,
 } from "./poll-registry.js";
-import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
-import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 
-const TELEGRAM_POLL_REGISTRY_NAMESPACE = "telegram.poll-registry";
-const TELEGRAM_POLL_REGISTRY_MAX_ENTRIES = 10_000;
+const storeOptions = {
+  namespace: "telegram.poll-registry",
+  maxEntries: 10_000,
+  overflowPolicy: "reject-new",
+} as const;
+const privateChat = { id: 123, type: "private", first_name: "Ada" };
+const group = { id: -123, type: "group", title: "Reviewers" };
+const supergroup = { id: -123, type: "supergroup", title: "Forum" };
+const poll = { messageId: 44, question: "Ready?", options: ["Yes", "No"] };
 
 describe("telegram poll registry", () => {
-  beforeEach(async () => {
-    const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
-      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
-      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    await store.clear();
-    setTelegramPluginStateRuntimeForTests();
-  });
-
-  afterEach(() => {
-    clearTelegramRuntimeForTest();
-    resetPluginStateStoreForTests();
-  });
+  const fixture = useTelegramKeyedState<TelegramPollRegistryEntry>(storeOptions, 2);
 
   it("reclaims a closed poll after the durable replay grace", async () => {
     await recordTelegramPollRegistryEntry({
+      ...poll,
       pollId: "poll-closed",
       chat: { id: -124, type: "supergroup", title: "Reviewers" },
-      messageId: 44,
       threadSpec: { scope: "forum", id: 88 },
-      question: "Ready?",
-      options: ["Yes", "No"],
     });
 
     await retireTelegramPollRegistryEntry({ pollId: "poll-closed" });
-    const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
-      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
-      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    const entries = await store.entries();
+    const entries = await fixture.store.entries();
     expect(entries).toHaveLength(1);
     const entry = entries[0];
     if (!entry || entry.expiresAt === undefined) {
@@ -63,91 +43,49 @@ describe("telegram poll registry", () => {
     await expect(findTelegramPollRegistryEntry({ pollId: "poll-closed" })).resolves.toMatchObject({
       threadSpec: { scope: "forum", id: 88 },
     });
-    expect(findTelegramPollRegistryEntrySync({ pollId: "poll-closed" })).toMatchObject({
-      threadSpec: { scope: "forum", id: 88 },
-    });
 
-    // The database worker owns expiry; changing the parent clock cannot expire its rows.
-    const { db } = openOpenClawStateDatabase();
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabaseForTests, "plugin_state_entries">>(db)
-        .updateTable("plugin_state_entries")
-        .set({ expires_at: 1 })
-        .where("plugin_id", "=", "telegram")
-        .where("namespace", "=", TELEGRAM_POLL_REGISTRY_NAMESPACE)
-        .where("entry_key", "=", entry.key),
-    );
+    // Publish expiry through the native owner so cached reads see the same deadline.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1);
+    try {
+      createPluginStateSyncKeyedStoreForTests<TelegramPollRegistryEntry>(
+        "telegram",
+        storeOptions,
+      ).register(entry.key, entry.value, { ttlMs: 1 });
+    } finally {
+      clock.mockRestore();
+    }
     await expect(findTelegramPollRegistryEntry({ pollId: "poll-closed" })).resolves.toBeNull();
   });
 
   it.each([
-    {
-      name: "invalid chat id",
-      chat: { id: "not-a-chat", type: "private", first_name: "Ada" },
-      threadSpec: { scope: "dm" },
-    },
-    {
-      name: "old numeric-only shape",
-      chat: { id: 123, type: "private", first_name: "Ada" },
-      threadSpec: undefined,
-      messageThreadId: 77,
-    },
-    {
-      name: "direct messages scope",
-      chat: { id: -123, type: "supergroup", title: "Channel replies" },
-      threadSpec: { scope: "direct-messages", id: 77 },
-    },
-    {
-      name: "direct messages chat",
-      chat: {
-        id: -123,
-        type: "supergroup",
-        title: "Channel replies",
-        is_direct_messages: true,
-      },
-      threadSpec: { scope: "forum", id: 77 },
-    },
-    {
-      name: "forum without id",
-      chat: { id: -123, type: "supergroup", title: "Forum" },
-      threadSpec: { scope: "forum" },
-    },
-    {
-      name: "none with id",
-      chat: { id: -123, type: "group", title: "Reviewers" },
-      threadSpec: { scope: "none", id: 77 },
-    },
-    {
-      name: "dm scope on a group",
-      chat: { id: -123, type: "group", title: "Reviewers" },
-      threadSpec: { scope: "dm", id: 77 },
-    },
-    {
-      name: "forum scope on a private chat",
-      chat: { id: 123, type: "private", first_name: "Ada" },
-      threadSpec: { scope: "forum", id: 77 },
-    },
-  ])("rejects malformed stored origin data: $name", async (invalid) => {
-    const store = createPluginStateKeyedStoreForTests("telegram", {
-      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
-      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    await store.register("default:poll-invalid-chat", {
-      pollId: "poll-invalid-chat",
-      chat: invalid.chat,
-      messageId: 44,
-      ...(invalid.threadSpec === undefined ? {} : { threadSpec: invalid.threadSpec }),
-      ...(invalid.messageThreadId === undefined
-        ? {}
-        : { messageThreadId: invalid.messageThreadId }),
-      question: "Ready?",
-      options: ["Yes", "No"],
-    });
+    ["invalid chat id", { ...privateChat, id: "not-a-chat" }, { scope: "dm" }, undefined],
+    ["old numeric-only shape", privateChat, undefined, 77],
+    ["direct messages scope", supergroup, { scope: "direct-messages", id: 77 }, undefined],
+    [
+      "direct messages chat",
+      { ...supergroup, is_direct_messages: true },
+      { scope: "forum", id: 77 },
+      undefined,
+    ],
+    ["forum without id", supergroup, { scope: "forum" }, undefined],
+    ["none with id", group, { scope: "none", id: 77 }, undefined],
+    ["dm scope on a group", group, { scope: "dm", id: 77 }, undefined],
+    ["forum scope on a private chat", privateChat, { scope: "forum", id: 77 }, undefined],
+  ] as const)(
+    "rejects malformed stored origin data: %s",
+    async (_name, chat, threadSpec, messageThreadId) => {
+      const store = createPluginStateKeyedStoreForTests("telegram", storeOptions);
+      await store.register("default:poll-invalid-chat", {
+        ...poll,
+        pollId: "poll-invalid-chat",
+        chat,
+        ...(threadSpec === undefined ? {} : { threadSpec }),
+        ...(messageThreadId === undefined ? {} : { messageThreadId }),
+      });
 
-    await expect(
-      findTelegramPollRegistryEntry({ pollId: "poll-invalid-chat" }),
-    ).resolves.toBeNull();
-  });
+      await expect(
+        findTelegramPollRegistryEntry({ pollId: "poll-invalid-chat" }),
+      ).resolves.toBeNull();
+    },
+  );
 });

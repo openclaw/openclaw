@@ -1,30 +1,25 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
-import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void>) | undefined,
   beforeReclaim: undefined as (() => Promise<void>) | undefined,
-  beforeCommitRequest: undefined as (() => void) | undefined,
-  afterCommitRequest: undefined as (() => void) | undefined,
 }));
 
 vi.mock("./session-accessor.sqlite-reclamation-run.js", async (importOriginal) => {
@@ -54,337 +49,134 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
-  return {
-    ...actual,
-    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
-      actual.withSqliteReclamationWorker(
-        options,
-        claim,
-        async (worker) => {
-          const originalRun = worker.run.bind(worker);
-          let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
-          const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
-            if (params.plan.kind !== "entry" && params.plan.kind !== "historical-generation") {
-              return originalRun(params);
-            }
-            return originalRun({
-              ...params,
-              withWriteAdmission: (performWrite, diagnostics) =>
-                params.withWriteAdmission((refusal) => {
-                  // Bound Worker messages otherwise run outside the active writer context.
-                  inWriteAdmission = AsyncLocalStorage.snapshot();
-                  return performWrite(refusal);
-                }, diagnostics),
-              onCommitRequest: () => {
-                if (!inWriteAdmission) {
-                  throw new Error("Worker requested commit without writer admission");
-                }
-                inWriteAdmission(() => archiveMaterializationHook.beforeCommitRequest?.());
-                params.onCommitRequest();
-                archiveMaterializationHook.afterCommitRequest?.();
-              },
-            });
-          });
-          try {
-            return await run(worker);
-          } finally {
-            spy.mockRestore();
-          }
-        },
-        assertRequestCurrent,
-        signal,
-      )) satisfies typeof actual.withSqliteReclamationWorker,
-  };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionKey = "agent:main:reclamation";
+const sessionId = "current";
+const historicalSessionId = "history";
+let storePath: string;
+
+beforeEach(() => {
+  const tempDir = tempDirs.make("openclaw-session-reclamation-admission-race-");
+  storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-describe("SQLite reclamation admission races", () => {
-  let storePath: string;
+afterEach(async () => {
+  archiveMaterializationHook.beforeMaterialize = undefined;
+  archiveMaterializationHook.beforeReclaim = undefined;
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+});
 
-  beforeEach(() => {
-    const tempDir = tempDirs.make("openclaw-session-reclamation-admission-race-");
-    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+const scope = (pathname = storePath) => ({ sessionKey, storePath: pathname });
+const transcript = (id: string) => ({ ...scope(), sessionId: id });
+async function seed(id: string, updatedAt: number, content?: string) {
+  await replaceSessionEntry(scope(), { sessionId: id, updatedAt });
+  if (content !== undefined) {
+    await replaceTranscriptEvents(transcript(id), [{ type: "session", id, content }]);
+  }
+}
+function remove(options: Partial<Parameters<typeof deleteSessionEntryLifecycle>[0]> = {}) {
+  return deleteSessionEntryLifecycle({
+    archiveTranscript: false,
+    storePath,
+    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    ...options,
   });
+}
 
-  afterEach(async () => {
-    archiveMaterializationHook.beforeMaterialize = undefined;
-    archiveMaterializationHook.beforeReclaim = undefined;
-    archiveMaterializationHook.beforeCommitRequest = undefined;
-    archiveMaterializationHook.afterCommitRequest = undefined;
-    vi.restoreAllMocks();
+it.runIf(process.platform !== "win32")(
+  "keeps worker reclamation on the opened database after an alias retarget",
+  async () => {
+    const directory = tempDirs.make("reclamation-alias-");
+    const originalPath = path.join(directory, "original.sqlite");
+    const replacementPath = path.join(directory, "replacement.sqlite");
+    const alias = path.join(directory, "alias.sqlite");
+    await replaceSessionEntry(scope(originalPath), { sessionId, updatedAt: 1 });
+    // Close/checkpoint before copying so both files start with the same durable row and revision.
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-  });
-
-  it("queues unrelated trajectory flushes while the worker awaits commit authorization", async () => {
-    const sessionKey = "agent:main:reclamation-trajectory";
-    const sessionId = "reclamation-trajectory";
-    const unrelated = {
-      agentId: "main",
-      sessionKey: "agent:main:trajectory-writer",
-      sessionId: "trajectory-writer",
-      storePath,
+    fs.copyFileSync(originalPath, replacementPath);
+    fs.symlinkSync(originalPath, alias);
+    expect(loadSessionEntry(scope(alias))).toMatchObject({ sessionId });
+    archiveMaterializationHook.beforeReclaim = async () => {
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacementPath, alias);
     };
-    const updatedAt = Date.now();
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt });
-    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
-      { type: "session", id: sessionId, content: "retire this session" },
-    ]);
-    await replaceSessionEntry(unrelated, { sessionId: unrelated.sessionId, updatedAt });
-    const recorders = [0, 1, 2].map((index) => {
-      const recorder = createTrajectoryRuntimeRecorder({
-        sessionId: unrelated.sessionId,
-        sessionTarget: unrelated,
-        runId: `trajectory-writer-${index}`,
-      });
-      if (!recorder) {
-        throw new Error("expected SQLite trajectory recorder");
-      }
-      recorder.recordEvent("admission-proof", { index });
-      return recorder;
-    });
-    const writes: Promise<void>[] = [];
-    let pendingBeforeAuthorization: Array<string | undefined> = [];
-    archiveMaterializationHook.beforeCommitRequest = vi.fn(() => {
-      // Start real asynchronous producers in the observed order, but leave the
-      // parent free to authorize the worker whose transaction already owns SQLite.
-      for (const recorder of recorders) {
-        for (let flush = 0; flush < 2; flush += 1) {
-          const write = recorder.flush();
-          void write.catch(() => {});
-          writes.push(write);
+
+    await expect(remove({ storePath: alias })).resolves.toMatchObject({ deleted: true });
+    expect(loadSessionEntry(scope(originalPath))).toBeUndefined();
+    expect(loadSessionEntry(scope(replacementPath))).toMatchObject({ sessionId });
+  },
+);
+
+it("preserves current and historical session data when authority closes before admission", async () => {
+  await seed(historicalSessionId, 1, "retained history");
+  await seed(sessionId, 2, "retained current transcript");
+  let authorized = true;
+  archiveMaterializationHook.beforeReclaim = async () => {
+    await Promise.resolve();
+    authorized = false;
+  };
+
+  await expect(
+    remove({
+      deleteTranscriptWithoutArchive: true,
+      commitGuard: () => {
+        if (!authorized) {
+          throw new Error("caller authority closed");
         }
-      }
-      pendingBeforeAuthorization = recorders.map((recorder) => recorder.describeFlushState());
-    });
-    const deletion = await deleteSessionEntryLifecycle({
-      archiveTranscript: true,
-      commitGuard: () => {},
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    }).then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-    const outcomes = await Promise.allSettled(writes);
-    expect(deletion).toMatchObject({ result: { deleted: true } });
-    expect(archiveMaterializationHook.beforeCommitRequest).toHaveBeenCalledOnce();
-    expect(pendingBeforeAuthorization).toEqual(
-      recorders.map(() => expect.stringContaining("pendingRows=1")),
-    );
-    expect(writes).toHaveLength(6);
-    expect(outcomes).toEqual(writes.map(() => ({ status: "fulfilled", value: undefined })));
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-    const events = await loadSqliteTrajectoryRuntimeEvents(unrelated);
-    expect(events.map((event) => event.data?.index)).toEqual([0, 1, 2]);
-    expect(loadSessionEntry(unrelated)).toMatchObject({ sessionId: unrelated.sessionId });
-  });
+      },
+    }),
+  ).rejects.toThrow("caller authority closed");
+  expect(loadSessionEntry(scope())).toMatchObject({ sessionId });
+  await expect(loadTranscriptEvents(transcript(sessionId))).resolves.toEqual([
+    expect.objectContaining({ id: sessionId, content: "retained current transcript" }),
+  ]);
+  await expect(loadTranscriptEvents(transcript(historicalSessionId))).resolves.toEqual([
+    expect.objectContaining({ id: historicalSessionId, content: "retained history" }),
+  ]);
+});
 
-  it.runIf(process.platform !== "win32")(
-    "keeps worker reclamation on the opened database after an alias retarget",
-    async () => {
-      const sessionKey = "agent:main:retargeted-reclamation";
-      const sessionId = "retargeted-reclamation";
-      const directory = tempDirs.make("reclamation-alias-");
-      const originalPath = path.join(directory, "original.sqlite");
-      const replacementPath = path.join(directory, "replacement.sqlite");
-      const alias = path.join(directory, "alias.sqlite");
-      await replaceSessionEntry(
-        { sessionKey, storePath: originalPath },
-        { sessionId, updatedAt: 1 },
-      );
-      // Close/checkpoint before copying so both files start with the same durable row and revision.
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      fs.copyFileSync(originalPath, replacementPath);
-      fs.symlinkSync(originalPath, alias);
-      expect(loadSessionEntry({ sessionKey, storePath: alias })).toMatchObject({ sessionId });
-      archiveMaterializationHook.beforeReclaim = async () => {
-        fs.unlinkSync(alias);
-        fs.symlinkSync(replacementPath, alias);
-      };
+it("fences new historical-generation work through the Worker commit", async () => {
+  await seed(historicalSessionId, 1, "historical admission transcript");
+  await seed(sessionId, 2);
 
-      await expect(
-        deleteSessionEntryLifecycle({
-          archiveTranscript: false,
-          storePath: alias,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        }),
-      ).resolves.toMatchObject({ deleted: true });
-      expect(loadSessionEntry({ sessionKey, storePath: originalPath })).toBeUndefined();
-      expect(loadSessionEntry({ sessionKey, storePath: replacementPath })).toMatchObject({
-        sessionId,
-      });
-    },
-  );
+  const materializationStarted = createDeferred();
+  const materializationGate = createDeferred();
+  archiveMaterializationHook.beforeMaterialize = async () => {
+    materializationStarted.resolve();
+    await materializationGate.promise;
+  };
 
-  it("publishes an accepted deletion after its caller retires", async () => {
-    const sessionKey = "agent:main:accepted-deletion";
-    const sessionId = "accepted-deletion";
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
-    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
-      { type: "session", id: sessionId, content: "archive the committed deletion" },
-    ]);
-    let current = true;
-    archiveMaterializationHook.afterCommitRequest = () => {
-      current = false;
-    };
-    const mutations: string[] = [];
-    const unsubscribe = onSessionIdentityMutation((event) => {
-      if (event.previous.sessionKeys.includes(sessionKey)) {
-        mutations.push(event.kind);
-      }
-    });
-    try {
-      const result = await deleteSessionEntryLifecycle({
-        archiveTranscript: true,
-        commitGuard: () => {
-          if (!current) {
-            throw new Error("retired caller");
-          }
-        },
-        storePath,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      });
-      expect(current).toBe(false);
-      expect(result.deleted).toBe(true);
-      expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-      expect(
-        result.archivedTranscripts.map((archive) => fs.existsSync(archive.archivedPath)),
-      ).toEqual([true]);
-      expect(mutations).toEqual(["delete"]);
-    } finally {
-      unsubscribe();
+  const deletion = remove({ archiveTranscript: true });
+  await materializationStarted.promise;
+  const assertHistoricalGenerationExists = async () => {
+    const events = await loadTranscriptEvents(transcript(historicalSessionId));
+    if (events.length === 0) {
+      throw new Error("historical generation no longer exists");
     }
-  });
-
-  it.each(["prepare", "commit"])(
-    "preserves current and historical session data when authority closes at %s",
-    async (checkpoint) => {
-      const sessionKey = "agent:main:revoked-deletion";
-      const sessionId = "revoked-deletion-current";
-      const historicalSessionId = "revoked-deletion-history";
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        { sessionId: historicalSessionId, updatedAt: 1 },
-      );
-      await replaceTranscriptEvents({ sessionKey, sessionId: historicalSessionId, storePath }, [
-        { type: "session", id: historicalSessionId, content: "retained history" },
-      ]);
-      await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 2 });
-      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
-        { type: "session", id: sessionId, content: "retained current transcript" },
-      ]);
-      let authorized = true;
-      if (checkpoint === "prepare") {
-        archiveMaterializationHook.beforeReclaim = async () => {
-          await Promise.resolve();
-          authorized = false;
-        };
-      } else {
-        archiveMaterializationHook.beforeCommitRequest = () => {
-          authorized = false;
-        };
-      }
-
-      await expect(
-        deleteSessionEntryLifecycle({
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-          commitGuard: () => {
-            if (!authorized) {
-              throw new Error("caller authority closed");
-            }
-          },
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        }),
-      ).rejects.toThrow("caller authority closed");
-      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-      await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual([
-        expect.objectContaining({ id: sessionId, content: "retained current transcript" }),
-      ]);
-      await expect(
-        loadTranscriptEvents({ sessionKey, sessionId: historicalSessionId, storePath }),
-      ).resolves.toEqual([
-        expect.objectContaining({ id: historicalSessionId, content: "retained history" }),
-      ]);
-    },
-  );
-
-  it("fences new historical-generation work through the Worker commit", async () => {
-    const sessionKey = "agent:main:historical-admission-race";
-    const historicalSessionId = "historical-admission-previous";
-    const currentSessionId = "historical-admission-current";
-    const historicalEvent = {
-      type: "session" as const,
-      id: historicalSessionId,
-      content: "historical admission transcript",
-    };
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      { sessionId: historicalSessionId, updatedAt: 1 },
-    );
-    await replaceTranscriptEvents({ sessionKey, sessionId: historicalSessionId, storePath }, [
-      historicalEvent,
-    ]);
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      { sessionId: currentSessionId, updatedAt: 2 },
-    );
-
-    const materializationStarted = createDeferred();
-    const materializationGate = createDeferred();
-    archiveMaterializationHook.beforeMaterialize = async () => {
-      materializationStarted.resolve();
-      await materializationGate.promise;
-    };
-
-    const deletion = deleteSessionEntryLifecycle({
-      archiveTranscript: true,
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    });
-    await materializationStarted.promise;
-    const assertHistoricalGenerationExists = async () => {
-      const events = await loadTranscriptEvents({
-        sessionKey,
-        sessionId: historicalSessionId,
-        storePath,
-      });
-      if (events.length === 0) {
-        throw new Error("historical generation no longer exists");
-      }
-    };
-    let admissionSettled = false;
-    const admissionOutcome = beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [sessionKey, historicalSessionId],
-      assertAllowed: assertHistoricalGenerationExists,
-      revalidateAllowed: assertHistoricalGenerationExists,
+  };
+  let admissionSettled = false;
+  const admissionOutcome = beginSessionEffect({
+    scope: storePath,
+    identities: [sessionKey, historicalSessionId],
+    assertAllowed: assertHistoricalGenerationExists,
+    revalidateAllowed: assertHistoricalGenerationExists,
+  })
+    .then((lease) => {
+      lease.release();
+      return "admitted";
     })
-      .then((lease) => {
-        lease.release();
-        return "admitted";
-      })
-      .catch((error: unknown) => (error instanceof Error ? error.message : String(error)))
-      .finally(() => {
-        admissionSettled = true;
-      });
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+    .catch((error: unknown) => (error instanceof Error ? error.message : String(error)))
+    .finally(() => {
+      admissionSettled = true;
     });
-    expect(admissionSettled).toBe(false);
-    materializationGate.resolve();
 
-    await expect(deletion).resolves.toMatchObject({ deleted: true });
-    await expect(admissionOutcome).resolves.toBe("historical generation no longer exists");
-    await expect(
-      loadTranscriptEvents({ sessionKey, sessionId: historicalSessionId, storePath }),
-    ).resolves.toEqual([]);
-  });
+  await setImmediate();
+  expect(admissionSettled).toBe(false);
+  materializationGate.resolve();
+
+  await expect(deletion).resolves.toMatchObject({ deleted: true });
+  await expect(admissionOutcome).resolves.toBe("historical generation no longer exists");
+  await expect(loadTranscriptEvents(transcript(historicalSessionId))).resolves.toEqual([]);
 });

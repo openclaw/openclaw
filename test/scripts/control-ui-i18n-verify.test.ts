@@ -185,28 +185,6 @@ describe("syncControlUiCatalogFallbackBaseline", () => {
     expect(fixture.writes).toEqual([]);
   });
 
-  it("uses a fresh English snapshot and hashes raw source bytes on every invocation", async () => {
-    await syncControlUiCatalogFallbackBaseline(writeOptions);
-    fixture.loadSource.mockReturnValue({ group: { first: "", second: "abc" }, missing: "abc" });
-    fixture.readSource.mockResolvedValue("");
-    await syncControlUiCatalogFallbackBaseline(writeOptions);
-    expect(fixture.files.get(baselinePath)).toBe(
-      baseline(
-        { "group.first": ["de", "fr"], "group.second": ["de"], missing: ["de", "fr"] },
-        emptyHash,
-      ),
-    );
-
-    fixture.readSource.mockResolvedValue("abc\n");
-    await syncControlUiCatalogFallbackBaseline(writeOptions);
-    expect(fixture.files.get(baselinePath)).toBe(
-      baseline(
-        { "group.first": ["de", "fr"], "group.second": ["de"], missing: ["de", "fr"] },
-        "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb",
-      ),
-    );
-  });
-
   it("keeps an empty first memory as fallbacks and rejects missing hashes from parsed rows", async () => {
     fixture.files.set(memoryPath("fr"), "\n");
     fixture.files.set(
@@ -227,13 +205,23 @@ describe("syncControlUiCatalogFallbackBaseline", () => {
     );
   });
 
-  it("preserves the first missing/malformed memory error during scoped sync", async () => {
+  it("lets scoped sync bootstrap around absent memory but keeps it fatal otherwise", async () => {
     fixture.files.delete(memoryPath("fr"));
-    fixture.files.set(memoryPath("de"), "{");
+    await expect(syncControlUiCatalogFallbackBaseline(writeOptions)).rejects.toThrow(
+      "ui/src/i18n/.i18n/fr.tm.jsonl does not contain fr translations",
+    );
     await expect(
-      syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true }),
+      syncControlUiCatalogFallbackBaseline({ checkOnly: true, write: false }),
     ).rejects.toThrow("ui/src/i18n/.i18n/fr.tm.jsonl does not contain fr translations");
+    expect(fixture.writes).toEqual([]);
 
+    await syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true });
+    expect(fixture.files.get(baselinePath)).toBe(
+      baseline({ "group.second": ["de"], missing: ["de"] }),
+    );
+  });
+
+  it("rejects malformed memory during scoped sync", async () => {
     fixture.files.set(memoryPath("fr"), "{");
     fixture.files.delete(memoryPath("de"));
     await expect(

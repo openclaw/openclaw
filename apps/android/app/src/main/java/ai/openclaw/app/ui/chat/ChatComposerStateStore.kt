@@ -77,7 +77,7 @@ internal class ChatComposerStateStore(
   ) {
     synchronized(lock) {
       val resolvedOwner = textDrafts.resolveAdmission(commandId, admitted)?.owner ?: fallbackOwner
-      finishActiveSendLocked(setOf(fallbackOwner, resolvedOwner), resolvedOwner, commandId)
+      finishActiveSendLocked(fallbackOwner, resolvedOwner, commandId)
     }
   }
 
@@ -140,15 +140,15 @@ internal class ChatComposerStateStore(
     accepted: Boolean?,
   ) {
     synchronized(lock) {
-      if (accepted == null) {
-        val currentOwner = textDrafts.pendingAdmission(request.commandId)?.owner ?: request.owner
-        finishActiveSendLocked(setOf(request.owner, currentOwner), currentOwner, request.commandId)
-        return
-      }
-      val pending = textDrafts.resolveAdmission(request.commandId, accepted)
+      val pending =
+        if (accepted == null) {
+          textDrafts.pendingAdmission(request.commandId)
+        } else {
+          textDrafts.resolveAdmission(request.commandId, accepted)
+        }
       val resolvedOwner = pending?.owner ?: request.owner
-      if (pending == null) {
-        finishActiveSendLocked(setOf(request.owner), request.owner, request.commandId)
+      if (accepted == null || pending == null) {
+        finishActiveSendLocked(request.owner, resolvedOwner, request.commandId)
         return
       }
       if (accepted) {
@@ -158,7 +158,7 @@ internal class ChatComposerStateStore(
         )
       }
       finishActiveSendLocked(
-        owners = setOf(request.owner, resolvedOwner),
+        owner = request.owner,
         resolvedOwner = resolvedOwner,
         activeOperationId = request.commandId,
         pendingAdmissionId = request.commandId,
@@ -277,9 +277,7 @@ internal class ChatComposerStateStore(
           shouldMigrateComposerDraft(source, to, mainSessionKey)
         }
       if (mediaSources.isNotEmpty()) {
-        for ((id, owner) in mediaOwners.toMap()) {
-          if (owner in mediaSources) mediaOwners[id] = to
-        }
+        mediaOwners.replaceAll { _, owner -> if (owner in mediaSources) to else owner }
       }
 
       val textSources = textDrafts.migrateMatching(to = to, mainSessionKey = mainSessionKey)
@@ -344,12 +342,12 @@ internal class ChatComposerStateStore(
   }
 
   private fun finishActiveSendLocked(
-    owners: Set<ChatComposerOwner>,
+    owner: ChatComposerOwner,
     resolvedOwner: ChatComposerOwner,
     activeOperationId: String,
     pendingAdmissionId: String? = null,
   ) {
-    val sources = owners + resolvedOwner
+    val sources = setOf(owner, resolvedOwner)
     val merged = mergeSendStatesLocked(sources)
     val pendingAdmissionIds =
       pendingAdmissionId?.let { merged.pendingAdmissionIds + it } ?: merged.pendingAdmissionIds

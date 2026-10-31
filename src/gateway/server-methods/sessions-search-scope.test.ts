@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
@@ -9,6 +10,7 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -127,6 +129,7 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
         defaults: { sessionStore: { agentId: "main" } },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     // These nonmatching roster rows exercise search scope, not asynchronous mutation admission.
     for (let index = 0; index < 205; index++) {
       const agentId = expectDefined(agents[index % agents.length], "fixture agent");
@@ -145,6 +148,11 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
     const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
       updatedAt: 1,
     });
+    await Promise.all(
+      agents.map((agentId) =>
+        expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
+      ),
+    );
     const result = await search(requestContext(cfg), identifiedClient(owner), {
       query: "uniqueneedle",
       limit: 1,
@@ -162,6 +170,8 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
 test("scope authorizes and applies membership before the hit limit, and empty scope never widens", async () => {
   await withSearchState(async () => {
     const owner = ensureProfileForEmail("search-viewer@example.test").id;
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const groupedSpawn = {
       spawnedBy: "agent:main:parent",
       category: "Research",
@@ -195,7 +205,6 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
         createdActor: { type: "agent", id: "main" },
       },
     );
-    const context = requestContext({ agents: { entries: { main: {} } } });
     const client = identifiedClient(owner);
     const metadata = await listSessions({
       context,
@@ -267,6 +276,7 @@ test("scope search preserves physical shared-store ownership, agent filters, and
       },
       session: { store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     await seed("main", "physical-owner", owner, undefined, {}, storePath);
     for (let index = 0; index < 27; index++) {
       await seed("work_team", `match-${index}`, owner, "needle", {}, storePath);
@@ -304,6 +314,14 @@ test("scope reports only authorized cold transcripts without restoring them", as
   await withSearchState(async () => {
     const owner = ensureProfileForEmail("archive-search@example.test").id;
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      session: {
+        store: storePath,
+        maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     for (const [name, creator] of [
       ["visible", owner],
       ["hidden", "foreign"],
@@ -339,13 +357,6 @@ test("scope reports only authorized cold transcripts without restoring them", as
       },
       { agentId: "main" },
     );
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      session: {
-        store: storePath,
-        maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-      },
-    };
     await expect(runSessionColdStorageMaintenance({ config: cfg })).resolves.toMatchObject({
       archivedTranscripts: 2,
     });
@@ -372,8 +383,9 @@ test("scope reports only authorized cold transcripts without restoring them", as
 test("scope rechecks sharing after readiness and reports FTS failure instead of empty results", async () => {
   await withSearchState(async () => {
     const viewer = ensureProfileForEmail("readiness-search@example.test").id;
-    const key = await seed("main", "revoked", "foreign", "needle");
     const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
+    const key = await seed("main", "revoked", "foreign", "needle");
     const client = identifiedClient(viewer);
     await initializeSessionReadContext(context);
     const projection = expectDefined(getSessionRowProjection(context), "search projection");
@@ -423,6 +435,7 @@ test("search discards hits and page metadata when sharing is revoked during its 
         },
       },
     });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const client = identifiedClient(viewer);
     const read = transcriptSearch.searchSessionTranscripts;
     for (const scoped of [true, false]) {
@@ -455,9 +468,10 @@ test("search discards hits and page metadata when sharing is revoked during its 
 test("search prepares the full scope and rechecks visibility while materializing archived hits", async () => {
   await withSearchState(async () => {
     const viewer = ensureProfileForEmail("archived-search@example.test").id;
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const key = await seed("main", "archived-hit", "foreign", "needle", { archivedAt: 1 });
     const sibling = await seed("main", "non-hit", viewer, "different text", { archivedAt: 1 });
-    const context = requestContext({ agents: { entries: { main: {} } } });
     const client = identifiedClient(viewer);
     const params = { query: "needle", scope: { archived: "all" } };
     expect(await search(context, client, params)).toMatchObject({

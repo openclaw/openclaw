@@ -11,12 +11,12 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import {
   resolveSqliteStoreScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readCodexSessionContext } from "../../plugin-sdk/codex-session-transcript-runtime.js";
@@ -31,6 +31,27 @@ import {
 } from "./session-fork.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-fork-boundary-");
+
+function replaceParentTranscript(
+  root: string,
+  storePath: string,
+  sessionId: string,
+  events: Parameters<typeof replaceTranscriptEvents>[1],
+) {
+  return replaceTranscriptEvents(
+    { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath },
+    [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-06-27T00:00:00.000Z",
+        cwd: root,
+      },
+      ...events,
+    ],
+  );
+}
 
 describe("forkSessionEntryFromParent", () => {
   it("rejects model-selection-locked parent context", async () => {
@@ -124,51 +145,36 @@ describe("forkSessionEntryFromParent", () => {
         updatedAt: 10,
       },
     );
-    await replaceTranscriptEvents(
+    await replaceParentTranscript(root, storePath, "parent-session", [
       {
-        agentId: "main",
-        sessionId: "parent-session",
-        sessionKey: parentSessionKey,
-        storePath,
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: "2026-06-27T00:00:01.000Z",
+        message: { role: "user", content: "root prompt" },
       },
-      [
-        {
-          type: "session",
-          version: 3,
-          id: "parent-session",
-          timestamp: "2026-06-27T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "root",
-          parentId: null,
-          timestamp: "2026-06-27T00:00:01.000Z",
-          message: { role: "user", content: "root prompt" },
-        },
-        {
-          type: "message",
-          id: "inactive-answer",
-          parentId: "root",
-          timestamp: "2026-06-27T00:00:02.000Z",
-          message: { role: "assistant", content: "stale answer" },
-        },
-        {
-          type: "message",
-          id: "active-answer",
-          parentId: "root",
-          timestamp: "2026-06-27T00:00:03.000Z",
-          message: { role: "assistant", content: "active answer" },
-        },
-        {
-          type: "leaf",
-          id: "active-leaf",
-          parentId: "inactive-answer",
-          timestamp: "2026-06-27T00:00:04.000Z",
-          targetId: "active-answer",
-        },
-      ],
-    );
+      {
+        type: "message",
+        id: "inactive-answer",
+        parentId: "root",
+        timestamp: "2026-06-27T00:00:02.000Z",
+        message: { role: "assistant", content: "stale answer" },
+      },
+      {
+        type: "message",
+        id: "active-answer",
+        parentId: "root",
+        timestamp: "2026-06-27T00:00:03.000Z",
+        message: { role: "assistant", content: "active answer" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-answer",
+        timestamp: "2026-06-27T00:00:04.000Z",
+        targetId: "active-answer",
+      },
+    ]);
     // Maintenance owns archive publication; elapsed worker startup time is not completion.
     await maintained;
     expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
@@ -294,33 +300,18 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceTranscriptEvents(
+    await replaceParentTranscript(root, storePath, parentEntry.sessionId, [
       {
-        agentId: "main",
-        sessionId: parentEntry.sessionId,
-        sessionKey: "agent:main:main",
-        storePath,
+        type: "message",
+        id: "large-answer",
+        parentId: null,
+        timestamp: "2026-06-27T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: "x".repeat(420_000),
+        },
       },
-      [
-        {
-          type: "session",
-          version: 3,
-          id: parentEntry.sessionId,
-          timestamp: "2026-06-27T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "large-answer",
-          parentId: null,
-          timestamp: "2026-06-27T00:00:01.000Z",
-          message: {
-            role: "assistant",
-            content: "x".repeat(420_000),
-          },
-        },
-      ],
-    );
+    ]);
 
     await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
       status: "skip",
@@ -338,41 +329,26 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceTranscriptEvents(
+    await replaceParentTranscript(root, storePath, parentEntry.sessionId, [
       {
-        agentId: "main",
-        sessionId: parentEntry.sessionId,
-        sessionKey: "agent:main:main",
-        storePath,
-      },
-      [
-        {
-          type: "session",
-          version: 3,
-          id: parentEntry.sessionId,
-          timestamp: "2026-06-27T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "usage",
-          parentId: null,
-          timestamp: "2026-06-27T00:00:01.000Z",
-          message: {
-            role: "assistant",
-            content: "latest",
-            usage: {
-              input: 12,
-              output: 15_104,
-              cacheRead: 819_661,
-              cacheWrite: 93_130,
-              contextUsage: { state: "unavailable" },
-              total: 927_907,
-            },
+        type: "message",
+        id: "usage",
+        parentId: null,
+        timestamp: "2026-06-27T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 12,
+            output: 15_104,
+            cacheRead: 819_661,
+            cacheWrite: 93_130,
+            contextUsage: { state: "unavailable" },
+            total: 927_907,
           },
         },
-      ],
-    );
+      },
+    ]);
 
     const decision = await resolveParentForkDecision({ parentEntry, storePath });
     expect(decision).toMatchObject({ status: "fork", parentTokens: expect.any(Number) });
@@ -391,71 +367,56 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceTranscriptEvents(
+    await replaceParentTranscript(root, storePath, parentEntry.sessionId, [
       {
-        agentId: "main",
-        sessionId: parentEntry.sessionId,
-        sessionKey: "agent:main:main",
-        storePath,
+        type: "message",
+        id: "usage",
+        parentId: null,
+        timestamp: "2026-06-27T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 12,
+            output: 15_104,
+            cacheRead: 819_661,
+            cacheWrite: 93_130,
+            contextUsage: {
+              state: "available",
+              promptTokens: 148_874,
+              totalTokens: 163_978,
+            },
+            total: 927_907,
+          },
+        },
       },
-      [
-        {
-          type: "session",
-          version: 3,
-          id: parentEntry.sessionId,
-          timestamp: "2026-06-27T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "usage",
-          parentId: null,
-          timestamp: "2026-06-27T00:00:01.000Z",
-          message: {
-            role: "assistant",
-            content: "latest",
-            usage: {
-              input: 12,
-              output: 15_104,
-              cacheRead: 819_661,
-              cacheWrite: 93_130,
-              contextUsage: {
-                state: "available",
-                promptTokens: 148_874,
-                totalTokens: 163_978,
-              },
-              total: 927_907,
+      {
+        type: "message",
+        id: "side-branch",
+        parentId: "usage",
+        timestamp: "2026-06-27T00:00:02.000Z",
+        message: {
+          role: "assistant",
+          content: `side branch ${"x".repeat(1_100_000)}`,
+          usage: {
+            input: 9_000,
+            output: 1_000,
+            contextUsage: {
+              state: "available",
+              promptTokens: 9_000,
+              totalTokens: 10_000,
             },
           },
         },
-        {
-          type: "message",
-          id: "side-branch",
-          parentId: "usage",
-          timestamp: "2026-06-27T00:00:02.000Z",
-          message: {
-            role: "assistant",
-            content: `side branch ${"x".repeat(1_100_000)}`,
-            usage: {
-              input: 9_000,
-              output: 1_000,
-              contextUsage: {
-                state: "available",
-                promptTokens: 9_000,
-                totalTokens: 10_000,
-              },
-            },
-          },
-        },
-        {
-          type: "leaf",
-          id: "active-leaf",
-          parentId: "side-branch",
-          timestamp: "2026-06-27T00:00:03.000Z",
-          targetId: "usage",
-        },
-      ],
-    );
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "side-branch",
+        timestamp: "2026-06-27T00:00:03.000Z",
+        targetId: "usage",
+      },
+    ]);
 
     await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
       status: "skip",
@@ -478,55 +439,40 @@ describe("forkSessionEntryFromParent", () => {
         totalTokensVersion: 1 as const,
         updatedAt: 1,
       };
-      await replaceTranscriptEvents(
+      await replaceParentTranscript(root, storePath, parentEntry.sessionId, [
         {
-          agentId: "main",
-          sessionId: parentEntry.sessionId,
-          sessionKey: parentSessionKey,
-          storePath,
-        },
-        [
-          {
-            type: "session",
-            version: 3,
-            id: parentEntry.sessionId,
-            timestamp: "2026-06-27T00:00:00.000Z",
-            cwd: root,
-          },
-          {
-            type: "message",
-            id: "retained",
-            parentId: null,
-            timestamp: "2026-06-27T00:00:01.000Z",
-            message: {
-              role: "assistant",
-              content: "retained answer",
-              __openclaw: { upstreamUserText: "private replay ".repeat(35_000) },
-              providerReplay: {
-                v: 1,
-                type: "openai-responses-compaction",
-                data: "retired checkpoint ".repeat(25_000),
-                provider: "openai",
-                api: "openai-responses",
-                model: "gpt-5.6-luna",
-                baseUrlHash: "synthetic",
-              },
-              usage: { contextUsage: { state: "available", totalTokens: 150_000 } },
+          type: "message",
+          id: "retained",
+          parentId: null,
+          timestamp: "2026-06-27T00:00:01.000Z",
+          message: {
+            role: "assistant",
+            content: "retained answer",
+            __openclaw: { upstreamUserText: "private replay ".repeat(35_000) },
+            providerReplay: {
+              v: 1,
+              type: "openai-responses-compaction",
+              data: "retired checkpoint ".repeat(25_000),
+              provider: "openai",
+              api: "openai-responses",
+              model: "gpt-5.6-luna",
+              baseUrlHash: "synthetic",
             },
+            usage: { contextUsage: { state: "available", totalTokens: 150_000 } },
           },
-          { type: "opaque-synthetic", id: "opaque-keep", parentId: "retained" },
-          {
-            type: boundaryType,
-            id: "boundary",
-            parentId: "opaque-keep",
-            timestamp: "2026-06-27T00:00:02.000Z",
-            firstKeptEntryId: "opaque-keep",
-            ...(boundaryType === "compaction"
-              ? { summary: "compact context", tokensBefore: 150_000 }
-              : { reason: "reset" }),
-          },
-        ],
-      );
+        },
+        { type: "opaque-synthetic", id: "opaque-keep", parentId: "retained" },
+        {
+          type: boundaryType,
+          id: "boundary",
+          parentId: "opaque-keep",
+          timestamp: "2026-06-27T00:00:02.000Z",
+          firstKeptEntryId: "opaque-keep",
+          ...(boundaryType === "compaction"
+            ? { summary: "compact context", tokensBefore: 150_000 }
+            : { reason: "reset" }),
+        },
+      ]);
       await replaceSessionEntry(
         { agentId: "main", sessionKey: parentSessionKey, storePath },
         parentEntry,
@@ -590,14 +536,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionKey: parentSessionKey,
         storePath,
       };
-      await replaceTranscriptEvents(parentScope, [
-        {
-          type: "session",
-          version: 3,
-          id: parentEntry.sessionId,
-          timestamp: "2026-06-27T00:00:00.000Z",
-          cwd: root,
-        },
+      await replaceParentTranscript(root, storePath, parentEntry.sessionId, [
         {
           type: "message",
           id: "usage",

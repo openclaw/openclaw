@@ -1,11 +1,11 @@
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
-import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 export type BlockSubagentCompletionRequest = {
   subagent: SubagentRunRecord;
   reason: string;
+  operatorAuthorityUnavailable?: true;
   enqueuedAt?: number;
   suspendedReason?: "expiry" | "permanent_failure";
   storeReplaced?: true;
@@ -16,10 +16,6 @@ export type BlockSubagentCompletionRequest = {
 export type RequesterWakeMutation =
   | { kind: "transition"; state: RequesterSettleWakeBatchState }
   | { kind: "complete" };
-
-export type SubagentCompletionQueueReceipt =
-  | { id: string; status: "pending"; enqueuedAt: number; payloadJson: string }
-  | { id: string; status: "completed" | "failed" };
 
 export type RequesterWakeCommittedWrite = {
   entries: readonly { subagent: SubagentRunRecord }[];
@@ -44,10 +40,13 @@ export type SubagentCompletionMutation =
       now: number;
     };
 
+export type SubagentCompletionRecord = {
+  subagent: SubagentRunRecord;
+  cleanupHandled?: boolean;
+};
+
 export type SubagentCompletionMutationResult = {
   applied: boolean | null;
-  records: Array<{ row: SubagentRunSqliteRow; cleanupHandled?: boolean }>;
+  records: SubagentCompletionRecord[];
   retiredRunIds: string[];
-  queueIds: string[];
-  queueReceipts?: SubagentCompletionQueueReceipt[];
 };

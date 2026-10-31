@@ -1,10 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
+  copyWithPathPatch,
   isSensitiveLeafValue,
   REDACTED_SENTINEL,
-  removePathValue,
-  setPathValue,
 } from "../config-form-utils.ts";
 
 export function replayConfigDraftEdits(
@@ -15,7 +14,8 @@ export function replayConfigDraftEdits(
   if (!submitted || !current) {
     return null;
   }
-  const draft = structuredClone(acknowledgedConfig);
+  // Keep unchanged acknowledgement branches shared for subsequent form edits.
+  let draft = acknowledgedConfig;
   const replay = (
     before: Record<string, unknown>,
     after: Record<string, unknown>,
@@ -23,13 +23,29 @@ export function replayConfigDraftEdits(
     path: string[],
   ) => {
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      const present = Object.hasOwn(after, key);
+      if (present && before[key] === after[key]) {
+        continue;
+      }
       const nextPath = [...path, key];
-      if (!Object.hasOwn(after, key)) {
-        removePathValue(draft, nextPath);
-      } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
-        replay(before[key], after[key], canonical[key], nextPath);
-      } else if (stableStringify(before[key]) !== stableStringify(after[key])) {
-        setPathValue(draft, nextPath, structuredClone(after[key]));
+      if (
+        present &&
+        (isRecord(before[key]) || !Object.hasOwn(before, key)) &&
+        isRecord(after[key]) &&
+        isRecord(canonical[key])
+      ) {
+        // Separate fields can be added under the same previously absent object.
+        replay(isRecord(before[key]) ? before[key] : {}, after[key], canonical[key], nextPath);
+      } else if (!present || stableStringify(before[key]) !== stableStringify(after[key])) {
+        const patched = copyWithPathPatch(
+          draft,
+          nextPath,
+          present ? after[key] : undefined,
+          present ? "copy-set" : "copy",
+        );
+        if (patched.ok && isRecord(patched.value)) {
+          draft = patched.value;
+        }
       }
     }
   };
@@ -70,23 +86,12 @@ export function configContentConflicts(
   original: Record<string, unknown>,
   current: Record<string, unknown>,
   canonical: Record<string, unknown>,
+  mode: "content" | "form" = "content",
 ): boolean {
   const before = projectConfigContent(original, canonical);
   const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, canonical, draft)) !== stableStringify(draft)
-  );
-}
-
-export function configFormContentConflicts(
-  original: Record<string, unknown>,
-  current: Record<string, unknown>,
-  canonical: Record<string, unknown>,
-): boolean {
-  const before = projectConfigContent(original, canonical);
-  const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
-    stableStringify(replayConfigDraftEdits(before, canonical, draft))
-  );
+  return mode === "form"
+    ? stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
+        stableStringify(replayConfigDraftEdits(before, canonical, draft))
+    : stableStringify(replayConfigDraftEdits(before, canonical, draft)) !== stableStringify(draft);
 }

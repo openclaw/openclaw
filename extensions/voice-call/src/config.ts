@@ -5,17 +5,23 @@ import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
-  type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
 import {
   canonicalizeMainSessionAlias,
   type SessionScope,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { normalizePhoneNumber } from "./allowlist.js";
+import {
+  CallCallbacksConfigSchema,
+  CallLiveConfigSchema,
+  CallReportsConfigSchema,
+  CallVoicemailConfigSchema,
+} from "./errand-config.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
@@ -68,7 +74,6 @@ const VoiceCallNumberRouteConfigSchema = z
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
-type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 const VoiceCallServeConfigSchema = z
   .object({
@@ -76,8 +81,7 @@ const VoiceCallServeConfigSchema = z
     bind: z.string().default("127.0.0.1"),
     path: z.string().min(1).default("/voice/webhook"),
   })
-  .strict()
-  .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
+  .strict();
 
 const VoiceCallTunnelConfigSchema = z
   .object({
@@ -89,8 +93,7 @@ const VoiceCallTunnelConfigSchema = z
     /** Trust loopback forwarding for ngrok URL reconstruction; signatures remain mandatory. */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
-  .strict()
-  .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
+  .strict();
 
 const VoiceCallWebhookSecurityConfigSchema = z
   .object({
@@ -107,8 +110,7 @@ const VoiceCallWebhookSecurityConfigSchema = z
      */
     trustedProxyIPs: z.array(z.string().min(1)).default([]),
   })
-  .strict()
-  .default({ allowedHosts: [], trustForwardingHeaders: false, trustedProxyIPs: [] });
+  .strict();
 export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfigSchema>;
 
 const CallModeSchema = z.enum(["notify", "conversation"]);
@@ -122,8 +124,7 @@ const OutboundConfigSchema = z
     /** Seconds to wait after TTS before auto-hangup in notify mode */
     notifyHangupDelaySec: z.number().int().nonnegative().default(3),
   })
-  .strict()
-  .default({ defaultMode: "notify", notifyHangupDelaySec: 3 });
+  .strict();
 
 const RealtimeToolSchema = z
   .object({
@@ -137,7 +138,6 @@ const RealtimeToolSchema = z
     }),
   })
   .strict();
-type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
 
 const VoiceCallProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
@@ -164,14 +164,7 @@ const VoiceCallRealtimeFastContextConfigSchema = z
     /** Fall back to the full agent consult when fast context has no answer. */
     fallbackToConsult: z.boolean().default(false),
   })
-  .strict()
-  .default({
-    enabled: false,
-    timeoutMs: 800,
-    maxResults: 3,
-    sources: ["memory", "sessions"],
-    fallbackToConsult: false,
-  });
+  .strict();
 const VoiceCallRealtimeAgentContextConfigSchema = z
   .object({
     /** Include configured identity and selected profile files alongside the always-on agent context. */
@@ -184,14 +177,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     /** Workspace-relative files to include, bounded by maxChars. */
     files: z.array(z.string().min(1)).default(["SOUL.md", "IDENTITY.md", "USER.md"]),
   })
-  .strict()
-  .default({
-    enabled: false,
-    maxChars: 6000,
-    includeIdentity: true,
-    includeWorkspaceFiles: true,
-    files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-  });
+  .strict();
 
 const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
@@ -212,6 +198,8 @@ const VoiceCallRealtimeConfigSchema = z
     provider: z.string().min(1).optional(),
     /** Optional override for the local WebSocket route path. */
     streamPath: z.string().min(1).optional(),
+    /** End an active realtime call after this much speech inactivity. */
+    idleHangupMs: z.number().int().positive().optional(),
     /** System instructions passed to the realtime provider. */
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */
@@ -224,24 +212,31 @@ const VoiceCallRealtimeConfigSchema = z
     consultFastMode: z.boolean().optional(),
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
-    fastContext: VoiceCallRealtimeFastContextConfigSchema,
+    fastContext: VoiceCallRealtimeFastContextConfigSchema.default(
+      VoiceCallRealtimeFastContextConfigSchema.parse({}),
+    ),
     /** Bounded agent persona/context injection for the fast realtime voice path. */
-    agentContext: VoiceCallRealtimeAgentContextConfigSchema,
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema.default(
+      VoiceCallRealtimeAgentContextConfigSchema.parse({}),
+    ),
     /** Provider-owned raw config blobs keyed by provider id. */
-    providers: VoiceCallProvidersConfigSchema,
+    providers: z
+      .record(
+        z.string(),
+        z
+          .object({
+            inputTranscriptionModel: z
+              .string()
+              .optional()
+              .describe(
+                "Input transcription model or deployment name. Omit to keep the provider default.",
+              ),
+          })
+          .catchall(z.unknown()),
+      )
+      .default({}),
   })
-  .strict()
-  .default({
-    enabled: false,
-    instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
-    toolPolicy: "safe-read-only",
-    consultPolicy: "auto",
-    tools: [],
-    // Keep outer defaults' arrays independent of the inner object defaults.
-    fastContext: VoiceCallRealtimeFastContextConfigSchema.parse({}),
-    agentContext: VoiceCallRealtimeAgentContextConfigSchema.parse({}),
-    providers: {},
-  });
+  .strict();
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
 
 const VoiceCallStreamingConfigSchema = z
@@ -265,18 +260,9 @@ const VoiceCallStreamingConfigSchema = z
     /** Hard cap for all open media stream sockets (pending + active). */
     maxConnections: z.number().int().positive().default(128),
   })
-  .strict()
-  .default({
-    enabled: false,
-    streamPath: "/voice/stream",
-    providers: {},
-    preStartTimeoutMs: 5000,
-    maxPendingConnections: 32,
-    maxPendingConnectionsPerIp: 4,
-    maxConnections: 128,
-  });
+  .strict();
 
-export const VoiceCallConfigSchema = z
+const VoiceCallConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
 
@@ -302,7 +288,12 @@ export const VoiceCallConfigSchema = z
     /** Per-dialed-number overrides for inbound calls. Keys are E.164 numbers. */
     numbers: z.record(E164Schema, VoiceCallNumberRouteConfigSchema).default({}),
 
-    outbound: OutboundConfigSchema,
+    outbound: OutboundConfigSchema.default(OutboundConfigSchema.parse({})),
+
+    reports: CallReportsConfigSchema,
+    live: CallLiveConfigSchema,
+    callbacks: CallCallbacksConfigSchema,
+    voicemail: CallVoicemailConfigSchema,
 
     maxDurationSeconds: z.number().int().positive().default(300),
 
@@ -322,18 +313,20 @@ export const VoiceCallConfigSchema = z
 
     maxConcurrentCalls: z.number().int().positive().default(1),
 
-    serve: VoiceCallServeConfigSchema,
+    serve: VoiceCallServeConfigSchema.default(VoiceCallServeConfigSchema.parse({})),
 
     /** @deprecated Prefer tunnel config. */
     tailscale: VoiceCallTailscaleConfigSchema,
 
-    tunnel: VoiceCallTunnelConfigSchema,
+    tunnel: VoiceCallTunnelConfigSchema.default(VoiceCallTunnelConfigSchema.parse({})),
 
-    webhookSecurity: VoiceCallWebhookSecurityConfigSchema,
+    webhookSecurity: VoiceCallWebhookSecurityConfigSchema.default(
+      VoiceCallWebhookSecurityConfigSchema.parse({}),
+    ),
 
-    streaming: VoiceCallStreamingConfigSchema,
+    streaming: VoiceCallStreamingConfigSchema.default(VoiceCallStreamingConfigSchema.parse({})),
 
-    realtime: VoiceCallRealtimeConfigSchema,
+    realtime: VoiceCallRealtimeConfigSchema.default(VoiceCallRealtimeConfigSchema.parse({})),
 
     /** Session memory scope for voice conversations. */
     sessionScope: VoiceCallSessionScopeSchema.default("per-phone"),
@@ -365,21 +358,7 @@ export const VoiceCallConfigSchema = z
   });
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-type VoiceCallEffectiveConfigResult = {
-  config: VoiceCallConfig;
-  numberRouteKey?: string;
-};
-type DeepPartial<T> = T extends SecretInput
-  ? T
-  : T extends Array<infer U>
-    ? DeepPartial<U>[]
-    : T extends object
-      ? { [K in keyof T]?: DeepPartial<T[K]> }
-      : T;
-type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
-
-const DEFAULT_VOICE_CALL_CONFIG = VoiceCallConfigSchema.parse({});
 
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
   const normalized = normalizeWebhookPath(servePath);
@@ -434,25 +413,11 @@ export function resolveVoiceCallStreamExposurePaths(
   return exposurePaths;
 }
 
-function normalizeVoiceCallTtsConfig(
-  defaults: VoiceCallTtsConfig,
-  overrides: DeepPartial<NonNullable<VoiceCallTtsConfig>> | undefined,
-): VoiceCallTtsConfig {
-  if (!defaults && !overrides) {
-    return undefined;
-  }
-
-  return TtsConfigSchema.parse(mergeDeep(defaults ?? {}, overrides ?? {}));
-}
-
 function resolveVoiceCallNumberRouteKey(
   config: Pick<VoiceCallConfig, "numbers">,
   phone: string | undefined,
 ): string | undefined {
   const routes = config.numbers;
-  if (!routes) {
-    return undefined;
-  }
   if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
@@ -483,7 +448,7 @@ export function resolveVoiceCallNumberRouteKeyForCall(call: {
 export function resolveVoiceCallEffectiveConfig(
   config: VoiceCallConfig,
   phoneOrRouteKey: string | undefined,
-): VoiceCallEffectiveConfigResult {
+) {
   const numberRouteKey = resolveVoiceCallNumberRouteKey(config, phoneOrRouteKey);
   if (!numberRouteKey) {
     return { config };
@@ -494,41 +459,26 @@ export function resolveVoiceCallEffectiveConfig(
     return { config };
   }
 
+  const defaultTts = config.tts;
+  const routeTts = route.tts;
   return {
     numberRouteKey,
     config: {
       ...config,
       ...route,
-      tts: normalizeVoiceCallTtsConfig(config.tts, route.tts),
-      numbers: config.numbers,
+      tts:
+        !defaultTts && !routeTts
+          ? undefined
+          : TtsConfigSchema.parse(mergeDeep(defaultTts ?? {}, routeTts ?? {})),
     },
   };
 }
 
-function sanitizeVoiceCallProviderConfigs(
-  value: Record<string, Record<string, unknown> | undefined> | undefined,
-): Record<string, Record<string, unknown>> {
-  if (!value) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
-    ),
-  );
-}
-
-function sanitizeVoiceCallNumberRoutes(
-  value: Record<string, unknown> | undefined,
-): Record<string, VoiceCallNumberRouteConfig> {
-  if (!value) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter((entry): entry is [string, unknown] => entry[1] !== undefined)
-      .map(([key, route]) => [key, VoiceCallNumberRouteConfigSchema.parse(route)]),
-  );
+function definedConfigEntries(value: unknown): unknown {
+  const entries = asOptionalRecord(value);
+  return entries
+    ? Object.fromEntries(Object.entries(entries).filter(([, entry]) => entry !== undefined))
+    : value;
 }
 
 export function resolveTwilioAuthToken(
@@ -540,70 +490,33 @@ export function resolveTwilioAuthToken(
   });
 }
 
-export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
-  const defaults = structuredClone(DEFAULT_VOICE_CALL_CONFIG);
-  const serve = { ...defaults.serve, ...config.serve };
-  const streamingProvider = config.streaming?.provider;
-  const streamingProviders = sanitizeVoiceCallProviderConfigs(
-    config.streaming?.providers ?? defaults.streaming.providers,
-  );
-  const realtimeProvider = config.realtime?.provider ?? defaults.realtime.provider;
-  const realtimeProviders = sanitizeVoiceCallProviderConfigs(
-    config.realtime?.providers ?? defaults.realtime.providers,
-  );
-  const realtimeFastContext = {
-    ...defaults.realtime.fastContext,
-    ...config.realtime?.fastContext,
-    sources: config.realtime?.fastContext?.sources ?? defaults.realtime.fastContext.sources,
-  };
-  const realtimeAgentContext = {
-    ...defaults.realtime.agentContext,
-    ...config.realtime?.agentContext,
-    files: config.realtime?.agentContext?.files ?? defaults.realtime.agentContext.files,
-  };
-  return {
-    ...defaults,
+export function normalizeVoiceCallConfig(value: unknown): VoiceCallConfig {
+  const config = asOptionalRecord(value);
+  if (!config) {
+    return VoiceCallConfigSchema.parse(value);
+  }
+  const streaming = asOptionalRecord(config.streaming);
+  const realtime = asOptionalRecord(config.realtime);
+  const normalized = VoiceCallConfigSchema.parse({
     ...config,
-    allowFrom: config.allowFrom ?? defaults.allowFrom,
-    numbers: sanitizeVoiceCallNumberRoutes(
-      (config.numbers ?? defaults.numbers) as Record<string, unknown>,
-    ),
-    outbound: { ...defaults.outbound, ...config.outbound },
-    serve,
-    tailscale: { ...defaults.tailscale, ...config.tailscale },
-    tunnel: { ...defaults.tunnel, ...config.tunnel },
-    webhookSecurity: {
-      ...defaults.webhookSecurity,
-      ...config.webhookSecurity,
-      allowedHosts: config.webhookSecurity?.allowedHosts ?? defaults.webhookSecurity.allowedHosts,
-      trustedProxyIPs:
-        config.webhookSecurity?.trustedProxyIPs ?? defaults.webhookSecurity.trustedProxyIPs,
-    },
-    streaming: {
-      ...defaults.streaming,
-      ...config.streaming,
-      provider: streamingProvider,
-      providers: streamingProviders,
-    },
-    realtime: {
-      ...defaults.realtime,
-      ...config.realtime,
-      provider: realtimeProvider,
-      streamPath:
-        config.realtime?.streamPath ??
-        defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
-      tools:
-        (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
-      consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional().parse(
-        config.realtime?.consultThinkingLevel ?? defaults.realtime.consultThinkingLevel,
-      ),
-      consultFastMode: config.realtime?.consultFastMode ?? defaults.realtime.consultFastMode,
-      fastContext: realtimeFastContext,
-      agentContext: realtimeAgentContext,
-      providers: realtimeProviders,
-    },
-    tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
-  };
+    numbers: definedConfigEntries(config.numbers),
+    webhookSecurity: config.webhookSecurity === undefined ? {} : config.webhookSecurity,
+    streaming:
+      config.streaming === undefined || streaming
+        ? { ...streaming, providers: definedConfigEntries(streaming?.providers) }
+        : config.streaming,
+    realtime:
+      config.realtime === undefined || realtime
+        ? {
+            ...realtime,
+            fastContext: realtime?.fastContext === undefined ? {} : realtime.fastContext,
+            agentContext: realtime?.agentContext === undefined ? {} : realtime.agentContext,
+            providers: definedConfigEntries(realtime?.providers),
+          }
+        : config.realtime,
+  });
+  normalized.realtime.streamPath ??= defaultRealtimeStreamPathForServePath(normalized.serve.path);
+  return normalized;
 }
 
 export type VoiceCallCoreSessionConfig = { mainKey?: string; scope?: SessionScope };
@@ -616,18 +529,38 @@ export function resolveVoiceCallSessionKey(params: {
   coreSession?: VoiceCallCoreSessionConfig;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
-  if (explicit) {
-    return resolveVoiceCallAgentSessionKey({
-      config: params.config,
-      sessionKey: explicit,
-      coreSession: params.coreSession,
-    });
-  }
-  if (params.config.sessionScope === "main") {
-    return resolveVoiceCallAgentSessionKey({
-      config: params.config,
-      sessionKey: "main",
-      coreSession: params.coreSession,
+  if (explicit || params.config.sessionScope === "main") {
+    // Resolve persisted or integration-provided keys into the configured agent namespace.
+    const sessionKey = (explicit || "main").trim();
+    if (!sessionKey) {
+      throw new Error("Voice Call session key cannot be empty");
+    }
+    const lower = sessionKey.toLowerCase();
+    const agentId = normalizeAgentId(params.config.agentId);
+    if (lower === "global" || lower === "unknown") {
+      return lower;
+    }
+    const parsedInput = parseAgentSessionKey(sessionKey);
+    let normalizedScopedKey: string;
+    if (
+      parsedInput &&
+      normalizeAgentId(parsedInput.agentId) === parsedInput.agentId &&
+      parsedInput.agentId === agentId
+    ) {
+      normalizedScopedKey = `agent:${parsedInput.agentId}:${parsedInput.rest}`;
+    } else {
+      // Voice Call's configured agent owns both the store and runtime. Foreign or
+      // malformed agent-shaped input is an opaque integration key, not a route.
+      const wrappedInput = parseAgentSessionKey(`agent:${agentId}:${sessionKey}`);
+      if (!wrappedInput) {
+        throw new Error("Voice Call session key could not be normalized");
+      }
+      normalizedScopedKey = `agent:${agentId}:${wrappedInput.rest}`;
+    }
+    return canonicalizeMainSessionAlias({
+      cfg: { session: params.coreSession },
+      agentId,
+      sessionKey: normalizedScopedKey,
     });
   }
   // Startup migration promotes unambiguous shipped `voice:*` rows;
@@ -642,47 +575,11 @@ export function resolveVoiceCallSessionKey(params: {
   ).toLowerCase();
 }
 
-/** Resolve persisted or integration-provided keys into the configured agent namespace. */
-function resolveVoiceCallAgentSessionKey(params: {
-  config: Pick<VoiceCallConfig, "agentId">;
-  sessionKey: string;
-  coreSession?: VoiceCallCoreSessionConfig;
-}): string {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    throw new Error("Voice Call session key cannot be empty");
-  }
-  const lower = sessionKey.toLowerCase();
-  const agentId = normalizeAgentId(params.config.agentId);
-  if (lower === "global" || lower === "unknown") {
-    return lower;
-  }
-  const parsedInput = parseAgentSessionKey(sessionKey);
-  let normalizedScopedKey: string;
-  if (
-    parsedInput &&
-    normalizeAgentId(parsedInput.agentId) === parsedInput.agentId &&
-    parsedInput.agentId === agentId
-  ) {
-    normalizedScopedKey = `agent:${parsedInput.agentId}:${parsedInput.rest}`;
-  } else {
-    // Voice Call's configured agent owns both the store and runtime. Foreign or
-    // malformed agent-shaped input is an opaque integration key, not a route.
-    const wrappedInput = parseAgentSessionKey(`agent:${agentId}:${sessionKey}`);
-    if (!wrappedInput) {
-      throw new Error("Voice Call session key could not be normalized");
-    }
-    normalizedScopedKey = `agent:${agentId}:${wrappedInput.rest}`;
-  }
-  return canonicalizeMainSessionAlias({
-    cfg: { session: params.coreSession },
-    agentId,
-    sessionKey: normalizedScopedKey,
-  });
-}
-
-export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
-  const resolved = normalizeVoiceCallConfig(config);
+export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
+  const resolved = {
+    ...config,
+    tunnel: { ...config.tunnel },
+  };
 
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
@@ -712,23 +609,15 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
       resolved.plivo.authToken ?? resolveSpeechProviderApiKey(process.env.PLIVO_AUTH_TOKEN);
   }
 
-  resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
-    resolved.tunnel.allowNgrokFreeTierLoopbackBypass ?? false;
   resolved.tunnel.ngrokAuthToken =
     resolved.tunnel.ngrokAuthToken ?? resolveSpeechProviderApiKey(process.env.NGROK_AUTHTOKEN);
   resolved.tunnel.ngrokDomain =
     resolved.tunnel.ngrokDomain ?? resolveSpeechProviderApiKey(process.env.NGROK_DOMAIN);
 
-  resolved.webhookSecurity.trustForwardingHeaders =
-    resolved.webhookSecurity.trustForwardingHeaders ?? false;
-
-  return normalizeVoiceCallConfig(resolved);
+  return resolved;
 }
 
-export function validateProviderConfig(config: VoiceCallConfig): {
-  valid: boolean;
-  errors: string[];
-} {
+export function validateProviderConfig(config: VoiceCallConfig) {
   const errors: string[] = [];
 
   if (!config.enabled) {

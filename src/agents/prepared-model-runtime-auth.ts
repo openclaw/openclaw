@@ -89,6 +89,15 @@ export function hasSamePreparedModelCatalogAuth(
   );
 }
 
+export type ModelServiceTierObservation = {
+  modelId: string;
+  runtimeId: string;
+  api: string;
+  baseUrl: string;
+  requestedTier: string;
+  responseTier?: string;
+};
+
 /** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
 export type PreparedAccountCatalogAccess = {
   reconcileAuth: (
@@ -96,29 +105,35 @@ export type PreparedAccountCatalogAccess = {
     includesProvider: (provider: string) => boolean,
     profileIds?: readonly string[],
   ) => void;
-  readServiceTiers: (params: {
+  readServiceTierObservations: (params: {
     identityKey: string;
     modelId: string;
     runtimeId: string;
     api: string;
     baseUrl: string;
-  }) => readonly string[] | undefined;
+  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier">[];
   prepareServiceTierObserver: (params: {
     selectedCredential: SelectedModelCredential;
     credential?: AuthProfileCredential;
-  }) => (observation: NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number]) => boolean;
+  }) => (observation: ModelServiceTierObservation) => boolean;
   acquire: (params: {
     profileId: string;
     credential: AuthProfileCredential;
     allowDiscovery: boolean;
     refresh?: boolean;
     load: () => Promise<readonly ProviderCatalogOutcome[]>;
-  }) => Promise<{ outcomes: readonly ProviderCatalogOutcome[]; isCurrent: () => boolean }>;
+  }) => Promise<{
+    outcomes: readonly ProviderCatalogOutcome[];
+    /** Distinguishes an authoritative empty publication from a cold private catalog. */
+    hasPublishedCatalog: boolean;
+    isCurrent: () => boolean;
+  }>;
 };
 
 /** Private auth facts owned by an immutable prepared model generation. */
 type RuntimeAuthBinding = {
   store?: AuthProfileStore;
+  readUsage?: (store: AuthProfileStore) => AuthProfileStore;
   labels?: ModelCatalogAuthLabels;
   materializations?: readonly RuntimeAuthMaterialization[];
   load?: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
@@ -138,7 +153,8 @@ export function bindPreparedModelRuntimeAuth(snapshot: object, binding: RuntimeA
 }
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
-  return runtimeAuth.get(snapshot)?.store;
+  const binding = runtimeAuth.get(snapshot);
+  return binding?.store ? (binding.readUsage?.(binding.store) ?? binding.store) : undefined;
 }
 
 export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalogAuthLabels {
@@ -147,6 +163,14 @@ export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalo
     throw new Error("Prepared model runtime omitted auth display labels");
   }
   return labels;
+}
+
+// Auth bindings can outlive publication; do not retain the catalog access scope.
+export function createPreparedModelCatalogUsageReader(
+  isCurrent: () => boolean,
+  readUsage: (store: AuthProfileStore) => AuthProfileStore,
+) {
+  return (store: AuthProfileStore) => (isCurrent() ? readUsage(store) : store);
 }
 
 export function setPreparedModelFullCatalogAuth(
@@ -185,7 +209,7 @@ export async function loadPreparedModelRuntimeAuth(
   if (load) {
     return await load(scope);
   }
-  const authStore = binding?.store;
+  const authStore = getPreparedModelRuntimeAuthStore(snapshot);
   return authStore ? { authStore, authModes: snapshot.authModes ?? {} } : undefined;
 }
 

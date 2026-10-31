@@ -11,12 +11,10 @@ function normalizeUnhandledStopReasonMessage(message: unknown): string | undefin
   if (typeof message !== "string") {
     return undefined;
   }
-  const match = message.trim().match(UNHANDLED_STOP_REASON_RE);
-  const stopReason = match?.[1]?.trim();
-  if (!stopReason) {
-    return undefined;
-  }
-  return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
+  const stopReason = message.trim().match(UNHANDLED_STOP_REASON_RE)?.[1]?.trim();
+  return stopReason
+    ? `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`
+    : undefined;
 }
 
 function normalizeUnhandledStopReasonError(error: unknown): string {
@@ -80,45 +78,50 @@ function wrapStreamHandleUnhandledStopReason(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      let emittedSyntheticTerminal = false;
-      return createStreamIteratorWrapper({
-        iterator,
-        next: async (streamIterator) => {
-          if (emittedSyntheticTerminal) {
-            return { done: true as const, value: undefined };
-          }
-
-          try {
-            const result = await streamIterator.next();
-            if (!result.done && result.value && typeof result.value === "object") {
-              const event = result.value as { error?: unknown };
-              patchUnhandledStopReasonInAssistantMessage(event.error);
-            }
-            return result;
-          } catch (err) {
-            const normalizedMessage = normalizeUnhandledStopReasonError(err);
-            // The provider stream failed before yielding a terminal event. Emit a
-            // synthetic error event once so callers still receive a normal stream
-            // shape and iterator completion.
-            emittedSyntheticTerminal = true;
-            return {
-              done: false as const,
-              value: {
-                type: "error" as const,
-                reason: "error" as const,
-                error: buildStreamErrorAssistantMessage({
-                  model,
-                  errorMessage: normalizedMessage,
-                }),
-              },
-            };
-          }
-        },
-      });
+  stream[Symbol.asyncIterator] = function () {
+    const iterator = originalAsyncIterator();
+    let emittedSyntheticTerminal = false;
+    // Reuse continuations for the stream instead of suspending an async function per chunk.
+    const observe = (result: Awaited<ReturnType<typeof iterator.next>>) => {
+      try {
+        if (!result.done && result.value.type === "error") {
+          patchUnhandledStopReasonInAssistantMessage(result.value.error);
+        }
+        return result;
+      } catch (err) {
+        return recover(err);
+      }
     };
+    const recover = (err: unknown) => {
+      const normalizedMessage = normalizeUnhandledStopReasonError(err);
+      // Emit one synthetic terminal for a provider failure before its terminal event.
+      emittedSyntheticTerminal = true;
+      return {
+        done: false as const,
+        value: {
+          type: "error" as const,
+          reason: "error" as const,
+          error: buildStreamErrorAssistantMessage({ model, errorMessage: normalizedMessage }),
+        },
+      };
+    };
+    return createStreamIteratorWrapper({
+      iterator,
+      next: (streamIterator) => {
+        if (emittedSyntheticTerminal) {
+          return Promise.resolve({ done: true as const, value: undefined });
+        }
+        try {
+          return Promise.resolve(streamIterator.next()).then(observe, recover);
+        } catch (err) {
+          // Mark the terminal before a second read; reject if recovery itself throws.
+          return new Promise((resolve) => {
+            resolve(recover(err));
+          });
+        }
+      },
+    });
+  };
 
   return stream;
 }

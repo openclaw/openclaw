@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNullableRecord,
   normalizeStringEntries,
@@ -85,15 +86,12 @@ export function normalizeMemoryDay(value: unknown): string | undefined {
   return MEMORY_DAY_RE.test(day) ? day : undefined;
 }
 
-export async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  const entries = await readMemoryCoreWorkspaceEntries<unknown>({
-    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-    workspaceDir,
-  });
-  const files: Record<string, DailyIngestionFileState> = {};
-  for (const [key, value] of Object.entries(
-    Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
-  )) {
+function normalizeIngestionFiles<T extends object>(
+  entries: Array<{ key: string; value: unknown }>,
+  decode: (file: Record<string, unknown>) => T,
+): Record<string, { mtimeMs: number; size: number } & T> {
+  const files: Record<string, { mtimeMs: number; size: number } & T> = {};
+  for (const { key, value } of entries) {
     const file = asNullableRecord(value);
     if (!file || key.trim().length === 0) {
       continue;
@@ -103,13 +101,24 @@ export async function readDailyIngestionState(workspaceDir: string): Promise<Dai
     if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
       continue;
     }
-    const lastDreamingDayIngested = normalizeMemoryDay(file.lastDreamingDayIngested);
     files[key] = {
       mtimeMs: Math.floor(mtimeMs),
       size: Math.floor(size),
-      ...(lastDreamingDayIngested ? { lastDreamingDayIngested } : {}),
+      ...decode(file),
     };
   }
+  return files;
+}
+
+export async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
+  const entries = await readMemoryCoreWorkspaceEntries<unknown>({
+    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+    workspaceDir,
+  });
+  const files = normalizeIngestionFiles(entries, (file) => {
+    const lastDreamingDayIngested = normalizeMemoryDay(file.lastDreamingDayIngested);
+    return lastDreamingDayIngested ? { lastDreamingDayIngested } : {};
+  });
   return { version: 1, files };
 }
 
@@ -144,30 +153,11 @@ export async function readSessionIngestionState(
     }
     seenMessages[value.scope] = [...(seenMessages[value.scope] ?? []), ...value.hashes];
   }
-  const normalizedFiles: Record<string, SessionIngestionFileState> = {};
-  for (const [key, value] of Object.entries(
-    Object.fromEntries(files.map((entry) => [entry.key, entry.value])),
-  )) {
-    const file = asNullableRecord(value);
-    if (!file || key.trim().length === 0) {
-      continue;
-    }
-    const mtimeMs = Number(file.mtimeMs);
-    const size = Number(file.size);
-    if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
-      continue;
-    }
-    const lineCountRaw = Number(file.lineCount);
-    const lastContentLineRaw = Number(file.lastContentLine);
-    const lineCount =
-      Number.isFinite(lineCountRaw) && lineCountRaw >= 0 ? Math.floor(lineCountRaw) : 0;
+  const normalizedFiles = normalizeIngestionFiles(files, (file) => {
+    const lineCount = asNonNegativeFiniteNumber(Math.floor(Number(file.lineCount))) ?? 0;
     const lastContentLine =
-      Number.isFinite(lastContentLineRaw) && lastContentLineRaw >= 0
-        ? Math.floor(lastContentLineRaw)
-        : 0;
-    normalizedFiles[key] = {
-      mtimeMs: Math.floor(mtimeMs),
-      size: Math.floor(size),
+      asNonNegativeFiniteNumber(Math.floor(Number(file.lastContentLine))) ?? 0;
+    return {
       contentHash: typeof file.contentHash === "string" ? file.contentHash.trim() : "",
       lineCount,
       lastContentLine: Math.min(lineCount, lastContentLine),
@@ -175,7 +165,7 @@ export async function readSessionIngestionState(
         ? { excludedReason: file.excludedReason.trim() }
         : {}),
     };
-  }
+  });
   const normalizedSeenMessages: Record<string, string[]> = {};
   for (const [scope, value] of Object.entries(seenMessages)) {
     const unique = normalizeStringEntries([

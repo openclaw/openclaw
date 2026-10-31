@@ -1,4 +1,3 @@
-// Single agent-turn command registration; delegates execution to the Gateway-backed agent command.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
@@ -9,7 +8,6 @@ import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
-/** Register `openclaw agent` for one Gateway-backed agent turn. */
 export function registerAgentTurnCommand(
   program: Command,
   args: { agentChannelOptions: string },
@@ -18,7 +16,7 @@ export function registerAgentTurnCommand(
     .command("agent")
     .description("Run an agent turn via the Gateway (use --local for embedded)")
     .option("-m, --message <text>", "Message body for the agent")
-    .option("--message-file <path>", "Read the agent message body from a UTF-8 file (max 4 MiB)")
+    .option("--message-file <path>", "Read UTF-8 from a file, or - for stdin (max 4 MiB)")
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-key <key>", "Explicit session key (agent:<id>:<key>, or scoped to --agent)")
     .option("--session-id <id>", "Use an explicit session id")
@@ -111,6 +109,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option(
       "--config <path>",
       "Run against this config file instead of the ambient config (pins a reproducible run)",
+    )
+    .option(
+      "--config-override <json>",
+      "Overlay a JSON object on this run's config (repeatable; does not save changes)",
+      collectOption,
+      [],
     )
     .option("--isolated", "Ignore the ambient config and run against exec defaults only", false)
     .option("--model <provider/model>", "Use an explicit primary model for this run")

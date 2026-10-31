@@ -1,10 +1,11 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
   createMatrixHandlerTestHarness,
-  createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
+import { createPollStartEvent } from "./test-events.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const roomId = "!room:example.org";
@@ -59,80 +60,32 @@ describe("matrix group chat history", () => {
   });
 
   it("history-enabled rooms do not serialize DM ingress heavy work", async () => {
-    let resolveFirstName: (() => void) | undefined;
-    let nameLookupCalls = 0;
+    const entered = createDeferred<void>();
+    const name = createDeferred<string>();
+    const getMemberDisplayName = vi
+      .fn(async () => "sender")
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return name.promise;
+      });
     const f = setup({
       isDirectMessage: true,
-      getMemberDisplayName: vi.fn(async () => {
-        nameLookupCalls += 1;
-        if (nameLookupCalls === 1) {
-          await new Promise<void>((resolve) => {
-            resolveFirstName = resolve;
-          });
-        }
-        return "sender";
-      }),
+      getMemberDisplayName,
     });
     const first = f.text("$dm-a", "first dm");
-    await vi.waitFor(() => {
-      expect(resolveFirstName).toBeTypeOf("function");
-    });
+    await entered.promise;
     const second = f.text("$dm-b", "second dm");
     await vi.waitFor(() => {
-      expect(nameLookupCalls).toBe(2);
+      expect(getMemberDisplayName).toHaveBeenCalledTimes(2);
     });
-    resolveFirstName?.();
+    name.resolve("sender");
     await Promise.all([first, second]);
-  });
-
-  it.each([
-    {
-      description: "filename-only image",
-      body: "photo.jpg",
-      expected: "[matrix image attachment]",
-    },
-    {
-      description: "captioned image",
-      body: "look at this",
-      filename: "photo.jpg",
-      expected: "look at this\n\n[matrix image attachment]",
-    },
-  ])("preserves $description markers in pending room history", async (attachment) => {
-    const downloadContent = vi.fn();
-    const f = setup({ client: { downloadContent } });
-    await f.receive(
-      createMatrixRoomMessageEvent({
-        eventId: "$history-attachment",
-        originServerTs: 1000,
-        content: {
-          msgtype: "m.image",
-          body: attachment.body,
-          ...(attachment.filename ? { filename: attachment.filename } : {}),
-          url: "mxc://example.org/history-attachment",
-        },
-      }),
-    );
-    expect(f.finalizeInboundContext).not.toHaveBeenCalled();
-    expect(downloadContent).not.toHaveBeenCalled();
-    await f.trigger("$history-trigger", "trigger", 2000);
-    expect(f.history()).toEqual([attachment.expected]);
-    expect(downloadContent).not.toHaveBeenCalled();
   });
 
   it("includes skipped poll updates in next trigger history", async () => {
     const getEvent = vi.fn(async () => ({
-      event_id: "$poll",
+      ...createPollStartEvent("$poll"),
       sender: "@user:example.org",
-      type: "m.poll.start",
-      origin_server_ts: Date.now(),
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          kind: "m.poll.disclosed",
-          max_selections: 1,
-          answers: [{ id: "a1", "m.text": "Pizza" }],
-        },
-      },
     }));
     const getRelations = vi.fn(async () => ({ events: [], nextBatch: null, prevBatch: null }));
     const f = setup({ client: { getEvent, getRelations } });

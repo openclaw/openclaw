@@ -9,48 +9,35 @@ import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 describe("browser tool schema", () => {
-  const BrowserToolSchema = createBrowserToolSchema(resolveBrowserToolCapabilities());
+  const fullSchema = createBrowserToolSchema(resolveBrowserToolCapabilities({ canJudge: true }));
   it("advertises the viewport resize maximum on nested and flattened act params", () => {
-    for (const scope of ["properties", "properties.request.properties"]) {
-      for (const dimension of ["width", "height"]) {
-        expect(BrowserToolSchema).toHaveProperty(
-          `${scope}.${dimension}.maximum`,
-          ACT_MAX_VIEWPORT_DIMENSION,
-        );
-      }
-    }
+    const dimension = { maximum: ACT_MAX_VIEWPORT_DIMENSION };
+    const resize = { width: dimension, height: dimension };
+    expect(fullSchema.properties).toMatchObject({ ...resize, request: { properties: resize } });
   });
 
   it("preserves keyboard guidance within the provider schema budget", () => {
-    const normalized = normalizeOpenAIToolSchemas({
+    const tool = { name: "browser", label: "B", description: "B", parameters: fullSchema };
+    const [normalized] = normalizeOpenAIToolSchemas({
       provider: "openai",
       modelApi: "openai-chatgpt-responses",
-      tools: [
-        {
-          name: "browser",
-          label: "Browser",
-          description: "Browser",
-          parameters: BrowserToolSchema,
-          execute: async () => ({ content: [], details: {} }),
-        },
-      ],
+      tools: [{ ...tool, execute: async () => ({ content: [], details: {} }) }],
     });
-    const projection = projectRuntimeToolInputSchema(normalized[0]?.parameters);
-    expect(projection.violations).toEqual([]);
+    const { schema, violations } = projectRuntimeToolInputSchema(normalized?.parameters);
+    expect(violations).toEqual([]);
     // Codex strips parameter descriptions above 5,000 bytes after schema normalization.
-    expect(Buffer.byteLength(JSON.stringify(projection.schema))).toBeLessThanOrEqual(5_000);
-    expect(projection.schema).toHaveProperty(
-      "properties.key.description",
-      expect.stringContaining("aliases Esc, Return, Del, Ctrl, Cmd"),
-    );
-    expect(projection.schema).toHaveProperty(
-      "properties.request.properties.key.description",
-      expect.stringContaining("aliases Esc, Return, Del, Ctrl, Cmd"),
-    );
+    expect(Buffer.byteLength(JSON.stringify(schema))).toBeLessThanOrEqual(5_000);
+    for (const scope of ["properties", "properties.request.properties"]) {
+      expect(schema).toHaveProperty(
+        `${scope}.key.description`,
+        expect.stringContaining("aliases Esc, Return, Del, Ctrl, Cmd"),
+      );
+    }
   });
 
   it("hides Playwright-only actions for an existing-session binding", () => {
     const capabilities = resolveBrowserToolCapabilities({
+      canJudge: true,
       tabBound: true,
       profileCapabilities: {
         supportsBatchActions: false,
@@ -62,56 +49,49 @@ describe("browser tool schema", () => {
         supportsEmulation: false,
       },
     });
-    for (const action of [
+    const hidden = [
       "requests",
       "errors",
       "text",
+      "judge",
       "emulate",
       "pdf",
       "download",
       "waitfordownload",
-    ]) {
+    ];
+    for (const action of hidden) {
       expect(capabilities.actions).not.toContain(action);
     }
-    expect(capabilities.actions).toContain("snapshot");
-    expect(capabilities.actions).toContain("console");
+    expect(capabilities.actions).toEqual(expect.arrayContaining(["snapshot", "console"]));
     const schema = createBrowserToolSchema(capabilities);
-    for (const scope of ["properties", "properties.request.properties"]) {
-      expect(schema).toHaveProperty(`${scope}.kind.enum`, expect.not.arrayContaining(["batch"]));
-      expect(schema).toHaveProperty(
-        `${scope}.kind.description`,
-        expect.not.stringContaining("batch"),
-      );
-      expect(schema).toHaveProperty(`${scope}.actions`);
-      expect(schema).toHaveProperty(`${scope}.stopOnError`);
-      expect(schema).not.toHaveProperty(`${scope}.actions.description`);
-      expect(schema).not.toHaveProperty(`${scope}.stopOnError.description`);
+    for (const act of [schema.properties, schema.properties.request.properties]) {
+      expect(act.kind).toMatchObject({
+        enum: expect.not.arrayContaining(["batch"]),
+        description: expect.not.stringContaining("batch"),
+      });
+      for (const field of [act.actions, act.stopOnError]) {
+        expect(field).toEqual(expect.any(Object));
+        expect(field).not.toHaveProperty("description");
+      }
     }
   });
 
   it("advertises only semantic actions for a bound Lightpanda profile", () => {
-    const profile = expectDefined(
-      resolveProfile(
-        resolveBrowserConfig({
-          profiles: {
-            lightweight: {
-              engine: "lightpanda",
-              cdpUrl: "ws://127.0.0.1:9222/",
-              attachOnly: true,
-            },
-          },
-        }),
-        "lightweight",
-      ),
-      "Lightpanda profile",
-    );
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        lightweight: { engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222/", attachOnly: true },
+      },
+    });
+    const profile = expectDefined(resolveProfile(resolved, "lightweight"), "Lightpanda profile");
     const capabilities = resolveBrowserToolCapabilities({
       tabBound: true,
+      canJudge: true,
       profileCapabilities: getBrowserProfileCapabilities(profile),
     });
     const schema = createBrowserToolSchema(capabilities);
     expect(Value.Check(schema, { action: "screenshot" })).toBe(false);
     expect(Value.Check(schema, { action: "text" })).toBe(true);
+    expect(Value.Check(schema, { action: "judge" })).toBe(true);
     expect(Value.Check(schema, { action: "act", request: { kind: "batch" } })).toBe(false);
     expect(Value.Check(schema, { action: "act", kind: "clickCoords" })).toBe(false);
     expect(schema.properties).not.toHaveProperty("selector");

@@ -1,5 +1,3 @@
-// Public SDK data contracts for Gateway transport, runs, sessions, tools,
-// artifacts, environments, and normalized event streams.
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import type {
   ArtifactSummary as GatewayArtifactSummaryType,
@@ -37,7 +35,6 @@ export type JsonObject = Record<string, unknown>;
 /** SDK request projection; additional GatewayClient lifecycle hooks stay client-owned. */
 export type GatewayRequestOptions = Pick<GatewayClientRequestOptions, "expectFinal" | "timeoutMs">;
 
-/** Raw event payload emitted by the Gateway transport. */
 export type GatewayEvent = {
   event: string;
   payload?: unknown;
@@ -45,7 +42,6 @@ export type GatewayEvent = {
   stateVersion?: unknown;
 };
 
-/** Minimal transport interface consumed by the OpenClaw SDK client. */
 export type OpenClawTransport = {
   request<T = unknown>(
     method: string,
@@ -56,7 +52,6 @@ export type OpenClawTransport = {
   close?(): Promise<void> | void;
 };
 
-/** Transport variant that requires an explicit connection step. */
 export type ConnectableOpenClawTransport = OpenClawTransport & {
   connect(): Promise<void>;
 };
@@ -108,12 +103,8 @@ export type EnvironmentSummary = SDKEnvironmentSummary;
 
 export type EnvironmentCreateParams = GatewayEnvironmentsCreateParamsType;
 
-type GatewayWorkerEnvironmentProfileSummary = NonNullable<
-  GatewayEnvironmentsListResultType["profiles"]
->[number];
-
 export type SDKWorkerEnvironmentProfileSummary = Omit<
-  GatewayWorkerEnvironmentProfileSummary,
+  NonNullable<GatewayEnvironmentsListResultType["profiles"]>[number],
   "trust"
 > & {
   trust?: SDKEnvironmentTrust;
@@ -145,7 +136,6 @@ export type ApprovalDecisionParams = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-/** Terminal and non-terminal status values returned by Run.wait. */
 export type RunStatus = "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
 
 export type RunTimestamp = number | string;
@@ -157,30 +147,26 @@ export type SDKMessage = {
   toolCallId?: string;
 };
 
-/** SDK-friendly artifact type suggestions over the protocol's open string. */
-type SDKArtifactType =
-  | "file"
-  | "patch"
-  | "diff"
-  | "log"
-  | "media"
-  | "screenshot"
-  | "trajectory"
-  | "pull_request"
-  | "workspace"
-  | (string & {});
-
-/** The SDK remains forward-compatible with future artifact delivery modes. */
-type SDKArtifactDownloadMode = GatewayArtifactSummaryType["download"]["mode"] | (string & {});
-
 /**
  * SDK artifact projection retained for pre-protocol consumers.
  * Wire responses satisfy this shape, while legacy sparse summaries remain assignable.
  */
 export type SDKArtifactSummary = Omit<GatewayArtifactSummaryType, "type" | "title" | "download"> & {
-  type: SDKArtifactType;
+  /** SDK-friendly artifact type suggestions over the protocol's open string. */
+  type:
+    | "file"
+    | "patch"
+    | "diff"
+    | "log"
+    | "media"
+    | "screenshot"
+    | "trajectory"
+    | "pull_request"
+    | "workspace"
+    | (string & {});
   title?: GatewayArtifactSummaryType["title"];
-  download?: { mode: SDKArtifactDownloadMode };
+  /** The SDK remains forward-compatible with future artifact delivery modes. */
+  download?: { mode: GatewayArtifactSummaryType["download"]["mode"] | (string & {}) };
   sessionId?: string;
   createdAt?: string;
   expiresAt?: string;
@@ -223,7 +209,6 @@ export type SDKError = {
   details?: unknown;
 };
 
-/** Parameters for direct tool invocation through the SDK. */
 export type ToolInvokeParams = Omit<
   GatewayToolsInvokeParamsType,
   "name" | "conversationReadOrigin"
@@ -233,7 +218,6 @@ export type ToolInvokeResult = Omit<GatewayToolsInvokeResultType, "error"> & {
   error?: SDKError;
 };
 
-/** Normalized result returned by Run.wait. */
 export type RunResult = {
   runId: string;
   status: RunStatus;
@@ -256,7 +240,6 @@ export type RunResult = {
   raw?: unknown;
 };
 
-/** Stable SDK event type taxonomy derived from raw Gateway events. */
 export type OpenClawEventType =
   | "run.created"
   | "run.queued"
@@ -286,7 +269,6 @@ export type OpenClawEventType =
   | "git.pr"
   | "raw";
 
-/** Normalized SDK event with common run/session metadata. */
 export type OpenClawEvent<TData = unknown> = {
   version: 1;
   id: string;
@@ -300,7 +282,6 @@ export type OpenClawEvent<TData = unknown> = {
   raw?: GatewayEvent;
 };
 
-/** Parameters for creating an agent run. */
 export type AgentRunParams = {
   input: string;
   agentId?: string;
@@ -329,30 +310,17 @@ type SDKSessionCreateKeys =
   | "emitCommandHooks"
   | "succeedsParent"
   | "task"
-  | "message"
-  | "attachments";
+  | "message";
 
 /** SDK session-create projection with transport-neutral attachment inputs. */
-export type SessionCreateParams = Omit<
-  Pick<GatewaySessionsCreateParamsType, SDKSessionCreateKeys>,
-  "attachments"
-> & {
+export type SessionCreateParams = Pick<GatewaySessionsCreateParamsType, SDKSessionCreateKeys> & {
   attachments?: unknown[];
 };
 
-type SDKSessionSendKeys =
-  | "key"
-  | "message"
-  | "thinking"
-  | "attachments"
-  | "timeoutMs"
-  | "idempotencyKey";
+type SDKSessionSendKeys = "key" | "message" | "thinking" | "timeoutMs" | "idempotencyKey";
 
 /** SDK session-send projection with transport-neutral attachment inputs. */
-export type SessionSendParams = Omit<
-  Pick<GatewaySessionsSendParamsType, SDKSessionSendKeys>,
-  "attachments"
-> & {
+export type SessionSendParams = Pick<GatewaySessionsSendParamsType, SDKSessionSendKeys> & {
   attachments?: unknown[];
 };
 

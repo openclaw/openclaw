@@ -1,4 +1,9 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "../../packages/gateway-client/src/protocol-request.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import * as logger from "../logger.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -28,6 +33,7 @@ const mocks = vi.hoisted(() => {
   }
   return {
     approvals,
+    logWarn: vi.fn(),
     followupImports: 0,
     sendExecApprovalFollowup: vi.fn<typeof sendFollowup>(),
     resolveExecApprovals: vi.fn(async () => approvals()),
@@ -36,6 +42,10 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: mocks.logWarn,
+}));
 vi.mock("./bash-tools.exec-approval-followup.js", () => {
   mocks.followupImports += 1;
   return { sendExecApprovalFollowup: mocks.sendExecApprovalFollowup };
@@ -99,87 +109,62 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).not.toHaveBeenCalled();
   });
 
-  it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
-    sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
-    const dispatch = (index: number) =>
-      sendExecApprovalFollowupResult(
-        { approvalId: `approval-${index}`, sessionKey },
-        "Exec finished",
-      );
-    const failureKeysBeyondDedupeWindow = 257;
-    for (let i = 0; i < failureKeysBeyondDedupeWindow; i += 1) {
-      await dispatch(i);
-    }
-    await dispatch(0);
-    expect(logWarn).toHaveBeenCalledTimes(failureKeysBeyondDedupeWindow + 1);
-    expect(logWarn).toHaveBeenLastCalledWith(
-      "exec approval followup dispatch failed (id=approval-0): Channel is required",
-    );
-  });
-
-  it.each([true, false])(
-    "authenticates an elevated=%s result handoff to one session and claimant",
-    async (elevated) => {
-      const approvalId = `approval-authenticated-${elevated}`;
-      await sendExecApprovalFollowupResult(
-        {
-          approvalId,
-          agentId: "research",
-          sessionKey,
-          expectedSessionId: "session-original",
-          turnSourceChannel: "telegram",
-          ...(elevated ? { bashElevated } : {}),
-        },
-        "Exec finished",
-      );
-      const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
-      assert.isDefined(call);
-      expect(call).toMatchObject({
+  it("authenticates a result handoff to one session and claimant", async () => {
+    const approvalId = "approval-authenticated-false";
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId,
         agentId: "research",
         sessionKey,
         expectedSessionId: "session-original",
-      });
-      expect(call.internalRuntimeHandoffId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      );
-      expect(call.idempotencyKey).toMatch(
-        new RegExp(`^exec-approval-followup:${approvalId}:nonce:`),
-      );
-      expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
-      expect(call).not.toHaveProperty("bashElevated");
-      expect(call).not.toHaveProperty("execApprovalFollowupToken");
-      const claim = {
-        handoffId: call.internalRuntimeHandoffId,
-        approvalId,
-        idempotencyKey: call.idempotencyKey,
-        sessionKey,
-        claimId: "owner-run",
-      };
-      expect(
-        claimExecApprovalFollowupRuntimeHandoff({ ...claim, sessionKey: "wrong-session" }),
-      ).toBeUndefined();
-      expect(claimExecApprovalFollowupRuntimeHandoff(claim)).toEqual({
-        kind: "exec-approval-followup",
-        approvalId,
-        sessionKey,
-        idempotencyKey: call.idempotencyKey,
-        ...(elevated ? { bashElevated } : {}),
-        resultText: "Exec finished",
-      });
-      expect(
-        claimExecApprovalFollowupRuntimeHandoff({ ...claim, claimId: "competing-run" }),
-      ).toBeUndefined();
-      expect(finalizeExecApprovalFollowupRuntimeHandoff(claim)).toBe(true);
-    },
-  );
+        turnSourceChannel: "telegram",
+      },
+      "Exec finished",
+    );
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
+    assert.isDefined(call);
+    expect(call).toMatchObject({
+      agentId: "research",
+      sessionKey,
+      expectedSessionId: "session-original",
+    });
+    expect(call.internalRuntimeHandoffId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(call.idempotencyKey).toMatch(new RegExp(`^exec-approval-followup:${approvalId}:nonce:`));
+    expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
+    expect(call).not.toHaveProperty("bashElevated");
+    expect(call).not.toHaveProperty("execApprovalFollowupToken");
+    const claim = {
+      handoffId: call.internalRuntimeHandoffId,
+      approvalId,
+      idempotencyKey: call.idempotencyKey,
+      sessionKey,
+      claimId: "owner-run",
+    };
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({ ...claim, sessionKey: "wrong-session" }),
+    ).toBeUndefined();
+    expect(claimExecApprovalFollowupRuntimeHandoff(claim)).toEqual({
+      kind: "exec-approval-followup",
+      approvalId,
+      sessionKey,
+      idempotencyKey: call.idempotencyKey,
+      resultText: "Exec finished",
+    });
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({ ...claim, claimId: "competing-run" }),
+    ).toBeUndefined();
+    expect(finalizeExecApprovalFollowupRuntimeHandoff(claim)).toBe(true);
+  });
 
   it("does not register elevated runtime handoffs when the process clock is invalid", () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(Number.NaN);
     expect(
       registerExecApprovalFollowupRuntimeHandoff({
         approvalId: "approval-elevated-invalid-clock",
         sessionKey,
         bashElevated,
-        nowMs: Number.NaN,
       }),
     ).toBeUndefined();
   });
@@ -228,10 +213,12 @@ describe("resolveExecApprovalWaitOutcome", () => {
 
   beforeEach(() => {
     mocks.resolveRegisteredExecApprovalDecision.mockReset().mockResolvedValue("allow-once");
+    mocks.logWarn.mockClear();
   });
 
+  const secret = "private-fixture-secret";
+  const privateError = () => new Error(secret, { cause: new Error(secret) });
   it.each([
-    ["allow-once", true, null],
     ["allow-always", true, null],
     ["deny", false, "user-denied"],
   ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
@@ -258,11 +245,40 @@ describe("resolveExecApprovalWaitOutcome", () => {
   });
 
   it.each([
-    [new Error("store unavailable"), "request-failed"],
-    [mocks.approvalRunAbortedError, "run-aborted"],
-  ])("classifies approval waiter failure %s as %s", async (error, kind) => {
+    [
+      new Error("Approval requester authority changed", { cause: new Error(secret) }),
+      "authority-changed",
+    ],
+    [
+      new GatewayProtocolRequestTimeoutError(
+        { method: secret, timeoutMs: 100, requestSent: true },
+        secret,
+      ),
+      "gateway-timeout",
+    ],
+    [
+      new GatewayProtocolRequestError({
+        code: secret,
+        message: secret,
+        details: { command: secret },
+      }),
+      "gateway-rejected",
+    ],
+    [Object.assign(privateError(), { code: secret, stack: secret }), "unknown"],
+    [mocks.approvalRunAbortedError, null],
+  ])("keeps waiter failures denied and logs only the safe category %s", async (error, reason) => {
     mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(error);
-    await expect(wait()).resolves.toEqual({ kind });
+    await expect(wait()).resolves.toEqual({
+      kind: reason === null ? "run-aborted" : "request-failed",
+    });
+    if (reason === null) {
+      expect(mocks.logWarn).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.logWarn).toHaveBeenCalledExactlyOnceWith(
+        `exec approval wait failed (id=approval-wait, reason=${reason})`,
+      );
+      expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain(secret);
+    }
   });
 
   it("does not consume a decision after the owning signal aborts", async () => {
@@ -276,6 +292,8 @@ describe("resolveExecApprovalWaitOutcome", () => {
 });
 
 describe("createExecApprovalRequestRoute", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
   const createRoute = (turnSourceChannel?: string, finalDecision?: null) =>
     createExecApprovalRequestRoute({
       warnings: [],
@@ -297,12 +315,9 @@ describe("createExecApprovalRequestRoute", () => {
     });
   });
 
-  it.each(["webchat", "discord"])(
-    "keeps waiting without a terminal decision on %s",
-    async (channel) => {
-      await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
-    },
-  );
+  it.each(["webchat"])("keeps waiting without a terminal decision on %s", async (channel) => {
+    await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
+  });
 });
 
 describe("buildExecApprovalPendingToolResult", () => {

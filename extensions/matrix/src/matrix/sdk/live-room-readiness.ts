@@ -9,7 +9,6 @@ import { withMatrixSendCurrentness } from "./send-currentness.js";
 type MatrixLiveSyncSnapshot = {
   state: MatrixSyncState | null;
   fromCache: boolean;
-  revision: number;
 };
 
 type MatrixLiveEncryptedRoomParams = {
@@ -94,7 +93,6 @@ async function probeMatrixLiveEncryptedRoom(
     for (;;) {
       changed = false;
       assertActive();
-      const sync = params.getSync();
       const room = params.client.getRoom(params.roomId);
       const crypto = params.client.getCrypto();
       const isCurrent = () => {
@@ -115,9 +113,7 @@ async function probeMatrixLiveEncryptedRoom(
         // a canceled waiter must not let shutdown destroy its crypto backend.
         const encrypted = await crypto.isEncryptionEnabledInRoom(params.roomId);
         assertActive();
-        // A sync during the probe invalidates that result, even if the state
-        // string repeats. Once admitted, healthy live sync is not revocation.
-        if (params.getSync().revision !== sync.revision || !isCurrent()) {
+        if (!isCurrent()) {
           continue;
         }
         if (encrypted) {

@@ -1,11 +1,59 @@
 import fs from "node:fs";
 import os from "node:os";
-import type { CiaoService } from "@homebridge/ciao";
+import { format } from "node:util";
+import type { CiaoLogger, CiaoService } from "@homebridge/ciao/native.js";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
+} from "openclaw/plugin-sdk/runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
-import { classifyCiaoProcessError } from "./ciao.js";
-import { formatBonjourError } from "./errors.js";
+
+function formatBonjourError(err: unknown): string {
+  if (err instanceof Error) {
+    const trimmedMessage = err.message.trim();
+    const msg = trimmedMessage || err.name || String(err).trim();
+    if (err.name && err.name !== "Error") {
+      return msg === err.name ? err.name : `${err.name}: ${msg}`;
+    }
+    return msg;
+  }
+  return String(err);
+}
+
+const CIAO_NETMASK_ASSERTION_MESSAGE_RE =
+  /IP ADDRESS VERSION MUST MATCH\.\s+NETMASK CANNOT HAVE A VERSION DIFFERENT FROM THE ADDRESS!?/u;
+// Restricted sandboxes (NemoClaw, Docker-in-Docker, k3s with locked-down policy)
+// can refuse os.networkInterfaces(), which ciao calls during NetworkManager init.
+// Node surfaces this as a SystemError mentioning the libuv syscall by name.
+const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
+
+type CiaoProcessErrorClassification =
+  | { kind: "netmask-assertion"; formatted: string }
+  | { kind: "interface-enumeration-failure"; formatted: string };
+
+function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClassification | null {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) => [
+    current.cause,
+    current.reason,
+    current.original,
+    current.error,
+    current.data,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ])) {
+    const formatted = formatBonjourError(candidate);
+    const message = formatted.toUpperCase();
+    if (CIAO_NETMASK_ASSERTION_MESSAGE_RE.test(message)) {
+      return { kind: "netmask-assertion", formatted };
+    }
+    if (CIAO_INTERFACE_ENUMERATION_FAILURE_RE.test(message)) {
+      return { kind: "interface-enumeration-failure", formatted };
+    }
+  }
+  return null;
+}
 
 type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
@@ -23,15 +71,6 @@ type GatewayBonjourAdvertiseOpts = {
   minimal?: boolean;
 };
 
-type UncaughtExceptionHandler = (error: unknown) => boolean;
-type UnhandledRejectionHandler = (reason: unknown) => boolean;
-
-type BonjourAdvertiserDeps = {
-  logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
-  registerUncaughtExceptionHandler: (handler: UncaughtExceptionHandler) => () => void;
-  registerUnhandledRejectionHandler: (handler: UnhandledRejectionHandler) => () => void;
-};
-
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
 
@@ -42,24 +81,14 @@ const CIAO_SELF_PROBE_RETRY_FRAGMENT =
 const CIAO_MDNS_SOCKET_ERROR_FRAGMENT = "Encountered MDNS socket error on socket";
 const CIAO_ENODEV_SOCKET_ERROR_FRAGMENT = "send ENODEV";
 
-const defaultLogger = {
-  info: (_msg: string) => {},
-  warn: (_msg: string) => {},
-  debug: (_msg: string) => {},
-};
-
 function isContainerEnvironment() {
   if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
     return true;
   }
 
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    try {
-      if (fs.existsSync(sentinelPath)) {
-        return true;
-      }
-    } catch {
-      // ignore
+    if (fs.existsSync(sentinelPath)) {
+      return true;
     }
   }
 
@@ -73,16 +102,6 @@ function isContainerEnvironment() {
   }
 }
 
-function isDisabledByEnv() {
-  if (process.env.NODE_ENV === "test") {
-    return true;
-  }
-  if (process.env.VITEST) {
-    return true;
-  }
-  return parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment();
-}
-
 function resolveSystemMdnsHostname(): string | null {
   let raw: string;
   try {
@@ -90,12 +109,9 @@ function resolveSystemMdnsHostname(): string | null {
   } catch {
     return null;
   }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
   const firstLabel =
-    trimmed
+    raw
+      .trim()
       .replace(/\.local$/i, "")
       .split(".")[0]
       ?.trim() ?? "";
@@ -113,86 +129,61 @@ function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
   return truncateUtf8Prefix(name, MAX_DNS_LABEL_BYTES).replace(/-+$/, "").trim() || fallback;
 }
 
-function safeServiceName(name: string) {
-  const trimmed = name.trim();
-  return trimmed.length > 0 ? truncateToDnsLabel(trimmed) : "OpenClaw";
-}
-
-function prettifyInstanceName(name: string) {
-  const normalized = name.trim().replace(/\s+/g, " ");
-  return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
-}
-
 function serviceSummary(label: string, svc: CiaoService): string {
   return `${label} fqdn=${svc.getFQDN()} host=${svc.getHostname()} port=${svc.getPort()} state=${svc.serviceState}`;
 }
 
-function installCiaoConsoleNoiseFilter(): () => void {
-  const previousConsoleLog = console.log;
-  const previousConsoleWarn = console.warn;
-  const logWrapper = (...args: unknown[]) => {
-    if (
-      args.some((arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT))
-    ) {
-      return;
-    }
-    previousConsoleLog(...args);
-  };
-  const warnWrapper = (...args: unknown[]) => {
-    if (
-      args.some(
-        (arg) =>
-          typeof arg === "string" &&
-          arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
-          arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
-      )
-    ) {
-      return;
-    }
-    previousConsoleWarn(...args);
-  };
-  console.log = logWrapper;
-  console.warn = warnWrapper;
-  return () => {
-    if (console.log === logWrapper) {
-      console.log = previousConsoleLog;
-    }
-    if (console.warn === warnWrapper) {
-      console.warn = previousConsoleWarn;
-    }
+function createCiaoLogger(logger: Pick<PluginLogger, "info" | "warn" | "error">): CiaoLogger {
+  return {
+    log(...args) {
+      if (
+        args.some((arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT))
+      ) {
+        return;
+      }
+      logger.info(`bonjour: ${format(...args)}`);
+    },
+    warn(...args) {
+      if (
+        args.some(
+          (arg) =>
+            typeof arg === "string" &&
+            arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
+            arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
+        )
+      ) {
+        return;
+      }
+      logger.warn(`bonjour: ${format(...args)}`);
+    },
+    error(...args) {
+      logger.error(`bonjour: ${format(...args)}`);
+    },
   };
 }
 
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
-  deps: BonjourAdvertiserDeps,
+  logger: Pick<PluginLogger, "info" | "warn" | "error">,
 ): Promise<GatewayBonjourAdvertiser> {
-  if (isDisabledByEnv()) {
+  if (
+    process.env.NODE_ENV === "test" ||
+    process.env.VITEST ||
+    (parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment())
+  ) {
     return { stop: async () => {} };
   }
 
-  const logger = {
-    info: deps.logger?.info ?? defaultLogger.info,
-    warn: deps.logger?.warn ?? defaultLogger.warn,
-    debug: deps.logger?.debug ?? defaultLogger.debug,
-  };
-  let restoreConsoleLog: () => void = () => {};
   let cleanupUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
-  let processHandlersCleaned = false;
 
   function cleanupProcessHandlers() {
-    if (processHandlersCleaned) {
-      return;
-    }
-    processHandlersCleaned = true;
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
 
   try {
-    const { getResponder } = await import("@homebridge/ciao");
-    restoreConsoleLog = installCiaoConsoleNoiseFilter();
+    const { getResponder } = await import("@homebridge/ciao/native.js");
     const handleCiaoProcessError = (reason: unknown): boolean => {
       const classification = classifyCiaoProcessError(reason);
       if (!classification) {
@@ -211,8 +202,8 @@ export async function startGatewayBonjourAdvertiser(
       }
       return true;
     };
-    cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler(handleCiaoProcessError);
-    cleanupUncaughtException = deps.registerUncaughtExceptionHandler(handleCiaoProcessError);
+    cleanupUnhandledRejection = registerUnhandledRejectionHandler(handleCiaoProcessError);
+    cleanupUncaughtException = registerUncaughtExceptionHandler(handleCiaoProcessError);
 
     const hostnameRaw =
       process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
@@ -221,43 +212,39 @@ export async function startGatewayBonjourAdvertiser(
     const labelEnd = dotIndex === -1 ? hostnameWithoutLocal.length : dotIndex;
     const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
     const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
-    const instanceName =
-      typeof opts.instanceName === "string" && opts.instanceName.trim()
-        ? opts.instanceName.trim()
-        : `${hostname} (OpenClaw)`;
-    const displayName = prettifyInstanceName(instanceName);
+    const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
+    const normalizedInstanceName = instanceName.trim().replace(/\s+/g, " ");
+    const displayName =
+      normalizedInstanceName.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalizedInstanceName;
 
-    const txtBase: Record<string, string> = {
+    const gatewayTxt: Record<string, string> = {
       role: "gateway",
       gatewayPort: String(opts.gatewayPort),
       lanHost: `${hostname}.local`,
       displayName,
     };
     if (opts.gatewayTlsEnabled) {
-      txtBase.gatewayTls = "1";
+      gatewayTxt.gatewayTls = "1";
       if (opts.gatewayTlsFingerprintSha256) {
-        txtBase.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
+        gatewayTxt.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
       }
     }
     if (opts.gatewayDirectReachable) {
-      txtBase.gatewayDirectReachable = "1";
+      gatewayTxt.gatewayDirectReachable = "1";
     }
-    if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
-      txtBase.tailnetDns = opts.tailnetDns.trim();
+    if (!opts.minimal && opts.tailnetDns?.trim()) {
+      gatewayTxt.tailnetDns = opts.tailnetDns.trim();
     }
-    if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
-      txtBase.cliPath = opts.cliPath.trim();
+    if (!opts.minimal && opts.cliPath?.trim()) {
+      gatewayTxt.cliPath = opts.cliPath.trim();
     }
 
-    const gatewayTxt: Record<string, string> = {
-      ...txtBase,
-      transport: "gateway",
-    };
+    gatewayTxt.transport = "gateway";
     if (!opts.minimal) {
       gatewayTxt.sshPort = String(opts.sshPort ?? 22);
     }
 
-    const responder = getResponder();
+    const responder = getResponder({ logger: createCiaoLogger(logger) });
 
     function handleAdvertiseFailure(
       label: string,
@@ -280,32 +267,22 @@ export async function startGatewayBonjourAdvertiser(
       );
     }
 
-    logger.debug(
-      `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
-        safeServiceName(instanceName),
-      )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
-    );
-
     const gateway = responder.createService({
-      name: safeServiceName(instanceName),
+      name: truncateToDnsLabel(instanceName),
       type: "openclaw-gw",
       port: opts.gatewayPort,
       domain: "local",
       hostname,
       txt: gatewayTxt,
     });
-    try {
-      gateway.on("name-change", (name) => {
-        logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
-      });
-      gateway.on("hostname-change", (nextHostname) => {
-        logger.warn(
-          `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
-        );
-      });
-    } catch (err) {
-      logger.debug(`bonjour: failed to attach listeners for gateway: ${String(err)}`);
-    }
+    gateway.on("name-change", (name) => {
+      logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
+    });
+    gateway.on("hostname-change", (nextHostname) => {
+      logger.warn(
+        `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
+      );
+    });
     try {
       void gateway
         .advertise()
@@ -333,14 +310,12 @@ export async function startGatewayBonjourAdvertiser(
           } catch {
             /* ignore */
           }
-          restoreConsoleLog();
           cleanupProcessHandlers();
         })();
         return stopPromise;
       },
     };
   } catch (err) {
-    restoreConsoleLog();
     cleanupProcessHandlers();
     throw err;
   }

@@ -55,8 +55,10 @@ impl Fixture {
 
     fn runtime(&self) -> BundledRuntime {
         BundledRuntime {
-            bun: self.0.join("bun"),
+            executable: self.0.join("bun"),
             sqlite: None,
+            flavor: RuntimeFlavor::Jit,
+            entry: None,
         }
     }
 
@@ -89,10 +91,10 @@ impl Fixture {
     fn healthy(&self) -> Value {
         let mut state = self.state();
         state["service"]["command"]["programArguments"][0] =
-            self.runtime().bun.to_string_lossy().as_ref().into();
+            self.runtime().executable.to_string_lossy().as_ref().into();
         state["service"]["runtimeIntent"] = serde_json::json!({
             "status": "known", "revision": "bundled-pin", "definition": "bundled-definition", "stored": true,
-            "pin": { "runtime": "bun", "path": self.runtime().bun }
+            "pin": { "runtime": "bun", "path": self.runtime().executable }
         });
         state["service"]["revision"] = "bundled-service".into();
         state
@@ -127,9 +129,86 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn fresh_install_carries_null_definition_and_bundled_path() {
+fn fresh_setup_initializes_pending_profile_before_gateway_install() {
     let fixture = Fixture::new();
+    let mut pending = fixture.absent();
+    pending["service"]["runtimeIntent"] =
+        serde_json::json!({"status": "migrationPending", "nextStep": "run openclaw doctor"});
+    pending["service"]
+        .as_object_mut()
+        .unwrap()
+        .remove("revision");
+    pending["service"]
+        .as_object_mut()
+        .unwrap()
+        .remove("definitionMutation");
+    fixture.write_state(&pending);
+    let mut initialized = fixture.absent();
+    initialized["service"]["runtimeIntent"]["revision"] = "initialized-pin".into();
+    fs::write(
+        fixture.0.join("setup-state.json"),
+        serde_json::to_vec(&initialized).unwrap(),
+    )
+    .unwrap();
+
+    fresh(&fixture.cli(), &fixture.runtime(), &|| true).unwrap();
+
+    assert_eq!(fixture.installs(), 1);
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("setup-calls")).unwrap(),
+        "setup\n"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&fixture.argument("--expected-runtime-pin")).unwrap(),
+        serde_json::json!({"revision": "initialized-pin", "definition": null})
+    );
+    assert!(inspect(&fixture.cli())
+        .unwrap()
+        .healthy_for(&fixture.runtime()));
+}
+
+#[test]
+fn fresh_setup_failure_does_not_install_or_publish_the_launcher() {
+    let fixture = Fixture::new();
+    let wrapper = fixture.canonical_launcher();
+    let original = fs::read(&wrapper).unwrap();
     fixture.write_state(&fixture.absent());
+    fs::write(fixture.0.join("setup-reject"), "").unwrap();
+
+    let error = fresh(&fixture.cli(), &fixture.runtime(), &|| true).unwrap_err();
+
+    assert!(error.contains("baseline setup failed"));
+    assert_eq!(fixture.installs(), 0);
+    assert_eq!(fs::read(wrapper).unwrap(), original);
+}
+
+#[test]
+fn fresh_setup_refuses_existing_or_unknown_services_before_profile_changes() {
+    for kind in ["running", "paused", "unknown"] {
+        let fixture = Fixture::new();
+        let mut state = fixture.state();
+        if kind == "paused" {
+            state["service"]["loaded"] = false.into();
+            state["service"]["runtime"]["status"] = "stopped".into();
+        } else if kind == "unknown" {
+            state = fixture.absent();
+            state["service"]["runtimeIntent"] = serde_json::json!({"status": "unknown"});
+        }
+        fixture.write_state(&state);
+
+        assert!(fresh(&fixture.cli(), &fixture.runtime(), &|| true).is_err());
+
+        assert!(!fixture.0.join("setup-calls").exists(), "{kind}");
+        assert_eq!(fixture.installs(), 0, "{kind}");
+    }
+}
+
+#[test]
+fn fresh_install_with_unknown_mutation_capability_carries_null_definition_and_bundled_path() {
+    let fixture = Fixture::new();
+    let mut absent = fixture.absent();
+    absent["service"]["definitionMutation"] = "unknown".into();
+    fixture.write_state(&absent);
     fresh(&fixture.cli(), &fixture.runtime(), &|| true).unwrap();
     assert_eq!(fixture.installs(), 1);
     assert_eq!(
@@ -139,7 +218,7 @@ fn fresh_install_carries_null_definition_and_bundled_path() {
     assert_eq!(fixture.argument("--runtime"), "bun");
     assert_eq!(
         fixture.argument("--runtime-path"),
-        fixture.runtime().bun.to_string_lossy()
+        fixture.runtime().executable.to_string_lossy()
     );
 }
 
@@ -166,11 +245,15 @@ fn fresh_install_marks_a_preexisting_canonical_launcher_after_health() {
     let wrapper = fixture.canonical_launcher();
     assert!(Command::new("/bin/cp")
         .arg(Fixture::script())
-        .arg(&fixture.runtime().bun)
+        .arg(&fixture.runtime().executable)
         .status()
         .unwrap()
         .success());
-    fs::set_permissions(&fixture.runtime().bun, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(
+        &fixture.runtime().executable,
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
     fixture.write_state(&fixture.absent());
     let cli = fixture.cli();
     fresh(&cli, &fixture.runtime(), &|| true).unwrap();
@@ -181,22 +264,19 @@ fn fresh_install_marks_a_preexisting_canonical_launcher_after_health() {
     assert_eq!(launcher.runtime, fixture.runtime());
     assert!(inspect(&cli).unwrap().healthy_for(&fixture.runtime()));
     let executables = fs::read_to_string(fixture.0.join("executables")).unwrap();
-    assert_eq!(executables.lines().last(), fixture.runtime().bun.to_str());
+    assert_eq!(
+        executables.lines().last(),
+        fixture.runtime().executable.to_str()
+    );
     assert_eq!(fixture.installs(), 1);
 }
 
 #[test]
-fn fresh_install_does_not_mark_an_existing_launcher_after_health_failure() {
+fn fresh_install_does_not_mark_an_existing_launcher_after_health_inspection_failure() {
     let fixture = Fixture::new();
     let wrapper = fixture.canonical_launcher();
     let original = fs::read(&wrapper).unwrap();
-    let mut failed = fixture.healthy();
-    failed["service"]["runtime"]["status"] = "stopped".into();
-    fs::write(
-        fixture.0.join("healthy.json"),
-        serde_json::to_vec(&failed).unwrap(),
-    )
-    .unwrap();
+    fs::write(fixture.0.join("healthy.json"), "invalid JSON").unwrap();
     fixture.write_state(&fixture.absent());
     assert!(fresh(&fixture.cli(), &fixture.runtime(), &|| true).is_err());
     assert_eq!(fs::read(wrapper).unwrap(), original);
@@ -400,7 +480,7 @@ fn previous_bun_runtime_is_reported_for_manual_recovery() {
 }
 
 #[test]
-fn health_requires_the_intended_service_and_its_listener_not_the_inspecting_cli_runtime() {
+fn health_requires_the_intended_service_and_rejects_reported_foreign_listeners() {
     let fixture = Fixture::new();
     let healthy = fixture.healthy();
     assert!(Observation(healthy.clone()).healthy_for(&fixture.runtime()));
@@ -414,7 +494,8 @@ fn health_requires_the_intended_service_and_its_listener_not_the_inspecting_cli_
         ("/port/listeners/0/pid", 9000.into()),
         ("/port/port", 18790.into()),
         ("/port/status", "unknown".into()),
-        ("/port/listeners", serde_json::json!([])),
+        ("/port/listeners", Value::Null),
+        ("/port/listeners", serde_json::json!({})),
         ("/rpc/ok", false.into()),
     ] {
         let mut state = healthy.clone();
@@ -427,6 +508,60 @@ fn health_requires_the_intended_service_and_its_listener_not_the_inspecting_cli_
     let mut state = healthy;
     state["port"]["listeners"][0] = serde_json::json!({ "pid": 9000, "ppid": 4100 });
     assert!(Observation(state).healthy_for(&fixture.runtime()));
+    let mut missing = fixture.healthy();
+    missing["port"].as_object_mut().unwrap().remove("listeners");
+    assert!(!Observation(missing).healthy_for(&fixture.runtime()));
+}
+
+#[test]
+fn activation_accepts_a_healthy_service_without_optional_process_details() {
+    let fixture = Fixture::new();
+    let mut healthy = fixture.healthy();
+    healthy["port"]["listeners"] = serde_json::json!([]);
+    healthy["port"]["hints"] = serde_json::json!([
+        "Port is in use but process details are unavailable (install lsof or run as an admin user)."
+    ]);
+    fs::write(
+        fixture.0.join("healthy.json"),
+        serde_json::to_vec(&healthy).unwrap(),
+    )
+    .unwrap();
+    let cli = fixture.cli();
+    let confirmed = inspect(&cli).unwrap();
+
+    let result = perform(
+        &cli,
+        &fixture.runtime(),
+        &confirmed,
+        false,
+        &|| true,
+        Duration::ZERO,
+    )
+    .unwrap();
+
+    assert!(result.healthy_for(&fixture.runtime()));
+    assert_eq!(fixture.installs(), 1);
+}
+
+#[test]
+fn fresh_activation_waits_for_service_start_but_existing_activation_respects_stop() {
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime();
+    for pointer in ["/service/loaded", "/service/runtime/status"] {
+        let mut starting = fixture.healthy();
+        *starting.pointer_mut(pointer).unwrap() = if pointer.ends_with("loaded") {
+            false.into()
+        } else {
+            "stopped".into()
+        };
+        let observation = Observation(starting);
+        assert_eq!(observation.check_health(&runtime, true), Ok(false));
+        assert_eq!(observation.check_health(&runtime, false), Err(UNHEALTHY));
+    }
+    assert_eq!(
+        Observation(fixture.healthy()).check_health(&runtime, true),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -435,11 +570,11 @@ fn read_only_inspection_offers_current_runtime_without_installing() {
     let cli = fixture.cli();
     let before = inspect(&cli).unwrap();
     assert!(before.current_runtime().contains("/operator/node"));
-    assert!(!before.is_current(&fixture.runtime()));
+    assert!(!before.uses_runtime_path(&fixture.runtime().executable));
     fixture.write_state(&fixture.healthy());
     assert!(inspect(&cli)
         .unwrap()
-        .uses_runtime_path(&fixture.runtime().bun));
+        .uses_runtime_path(&fixture.runtime().executable));
     assert_eq!(fixture.installs(), 0);
 }
 
@@ -499,27 +634,150 @@ fn binding_does_not_follow_an_operator_launcher_symlink() {
     assert_eq!(fs::read(&target).unwrap(), original);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn detached_runtime_action_delivers_the_complete_error_to_its_presenter() {
-    use crate::gateway_operation_queue::{GatewayOperationError, GatewayOperationQueue};
-    let fixture = Fixture::new();
-    let error = "The Gateway is paused. Start it before choosing Use bundled runtime.\nTo select the previous runtime manually, run:\nopenclaw gateway install --force --runtime node";
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let queue = GatewayOperationQueue::new(
-        move |_, _| Err(error.to_string()),
-        move |failure| {
-            assert!(sender.send(failure).is_ok());
-        },
-    );
-    queue.submit_runtime(crate::RuntimeAction {
-        cli: fixture.cli(),
-        observation: Observation(fixture.healthy()),
-    });
-    match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
-        GatewayOperationError::Runtime(message) => assert_eq!(message, error),
-        GatewayOperationError::Action(_) => {
-            panic!("runtime guidance reached the generic error presenter")
-        }
+fn healthy_activation_persists_previous_selection_and_failure_keeps_it() {
+    const CHILD: &str = "OPENCLAW_RETENTION_ACTIVATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
     }
+    let fixture = Fixture::new();
+    let wrapper = fixture.canonical_launcher();
+    assert!(Command::new("/bin/cp")
+        .arg(Fixture::script())
+        .arg(&fixture.runtime().executable)
+        .status()
+        .unwrap()
+        .success());
+    fs::set_permissions(
+        &fixture.runtime().executable,
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let cli = fixture.cli();
+    bind_runtime(&cli, &fixture.runtime(), Purpose::Gateway).unwrap();
+    fixture.write_state(&fixture.healthy());
+    let second = fixture.0.join("second-bun");
+    let third = fixture.0.join("third-bun");
+    for (index, path) in [&second, &third, &third].into_iter().enumerate() {
+        if index == 1 {
+            let mut wrapped = inspect(&cli).unwrap().0;
+            wrapped["service"]["command"]["programArguments"][0] =
+                serde_json::json!(fixture.runtime().executable);
+            fixture.write_state(&wrapped);
+        }
+        assert!(Command::new("/bin/cp")
+            .arg(Fixture::script())
+            .arg(path)
+            .status()
+            .unwrap()
+            .success());
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = BundledRuntime {
+            executable: path.clone(),
+            sqlite: None,
+            flavor: RuntimeFlavor::Jit,
+            entry: None,
+        };
+        let mut healthy = fixture.healthy();
+        healthy["service"]["command"]["programArguments"][0] = serde_json::json!(path);
+        healthy["service"]["runtimeIntent"]["pin"]["path"] = serde_json::json!(path);
+        fs::write(fixture.0.join("healthy.json"), healthy.to_string()).unwrap();
+        activate(&cli, &runtime, &inspect(&cli).unwrap(), &|| true).unwrap();
+    }
+    let bytes = fs::read(&wrapper).unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let marker: Value =
+        serde_json::from_str(text.lines().nth(1).unwrap().strip_prefix(MARKER).unwrap()).unwrap();
+    assert_eq!(
+        marker.pointer("/retention/current"),
+        Some(&serde_json::json!(&third))
+    );
+    assert_eq!(
+        marker.pointer("/retention/previous"),
+        Some(&serde_json::json!(&second))
+    );
+    fs::write(fixture.0.join("healthy.json"), "invalid status").unwrap();
+    assert!(activate(&cli, &fixture.runtime(), &inspect(&cli).unwrap(), &|| true).is_err());
+    assert_eq!(fs::read(wrapper).unwrap(), bytes);
+}
+
+#[test]
+fn successive_aot_activations_replace_the_jit_launcher_entry() {
+    const CHILD: &str = "OPENCLAW_AOT_ACTIVATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let fixture = Fixture::new();
+    let entry = fixture.0.join("package/entry.mjs");
+    fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    fs::write(&entry, "fixture").unwrap();
+    let old = fixture.runtime();
+    assert!(Command::new("/bin/cp")
+        .arg(Fixture::script())
+        .arg(&old.executable)
+        .status()
+        .unwrap()
+        .success());
+    fs::set_permissions(&old.executable, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::remove_file(fixture.0.join("bin/openclaw")).unwrap();
+    install_launcher(&fixture.0, &old, &entry, Purpose::Gateway).unwrap();
+    let cli = fixture.cli();
+    fixture.write_state(&fixture.healthy());
+    let mut runtime = old.clone();
+    runtime.flavor = RuntimeFlavor::Aot;
+    let mut previous = old.executable.clone();
+    for name in ["aot-openclaw", "aot-next-openclaw"] {
+        runtime.executable = fixture.0.join(name);
+        assert!(Command::new("/bin/cp")
+            .arg(Fixture::script())
+            .arg(&runtime.executable)
+            .status()
+            .unwrap()
+            .success());
+        fs::set_permissions(&runtime.executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut health = fixture.healthy();
+        health["service"]["command"]["programArguments"] =
+            serde_json::json!([runtime.executable, "gateway"]);
+        health["service"]["runtimeIntent"]["pin"] =
+            serde_json::json!({"runtime": "standalone", "path": runtime.executable});
+        fs::write(fixture.0.join("healthy.json"), health.to_string()).unwrap();
+        let confirmed = inspect(&cli).unwrap();
+        activate(&cli, &runtime, &confirmed, &|| true).unwrap();
+        assert_eq!(fixture.argument("--runtime"), "standalone");
+        let args = fs::read_to_string(fixture.0.join("args")).unwrap();
+        assert!(!args.contains("--no-install"));
+        assert!(!args.contains("entry.mjs"));
+        let launcher = read_launcher(&cli).unwrap().unwrap().selection.unwrap();
+        assert_eq!(launcher.runtime.flavor, RuntimeFlavor::Aot);
+        assert_eq!(launcher.runtime.executable, runtime.executable);
+        assert_eq!(launcher.entry, runtime.executable);
+        let retention = launcher.retention.unwrap();
+        assert_eq!(retention.current, runtime.executable);
+        assert_eq!(retention.previous, Some(previous));
+        assert!(inspect(&cli).unwrap().healthy_for(&runtime));
+        previous = runtime.executable.clone();
+    }
+    assert!(old.executable.is_file());
 }

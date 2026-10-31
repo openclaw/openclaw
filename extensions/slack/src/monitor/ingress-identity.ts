@@ -23,10 +23,6 @@ function normalizeSlackUserId(raw?: string | null): string {
   return value.replace(/^(slack:|user:)/, "");
 }
 
-function isSlackStableUserId(value: string): boolean {
-  return /^[ubw][a-z0-9_]+$/i.test(value);
-}
-
 function normalizeSlackWorkspaceUserEntry(entry: string): string | null {
   const normalized = entry.trim().toLowerCase();
   if (!normalized) {
@@ -49,7 +45,7 @@ function normalizeSlackBareUserEntry(entry: string): string | null {
     return null;
   }
   const userId = normalizeSlackUserId(normalized);
-  return isSlackStableUserId(userId) ? userId : null;
+  return /^[ubw][a-z0-9_]+$/i.test(userId) ? userId : null;
 }
 
 function normalizeSlackStableEntry(entry: string): string | null {

@@ -21,8 +21,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
   const {
     cleanBlockTtsDirectiveText,
     commentaryPayloadsEnabled,
-    cfg,
-    deliveryChannel,
     deferFinalTtsText,
     dispatcher,
     flushPendingCommentaryProgress,
@@ -33,9 +31,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
     normalizeReplyMediaPayload,
     params,
     reasoningPayloadsEnabled,
-    replyRoute,
-    sessionAgentId,
-    sessionTtsAuto,
     shouldRouteToOriginating,
     trackDispatchLifecycleWork,
   } = state;
@@ -44,10 +39,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
   const dispatchBlockReply = (operation: ReplyDispatchOperation, context?: BlockReplyContext) => {
     const inputPayload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
     setBlockReplyDelivery(Promise.resolve({ outcome: "cancelled" }));
-    // A monitor decides notify only after its structured final result.
-    if (state.replyOperationRunState.heartbeat) {
-      return Promise.resolve();
-    }
     markProgress();
     const run = async () => {
       if (isDispatchOperationAborted()) {
@@ -100,7 +91,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           state.progressState.accumulatedBlockTtsText += "\n";
         }
         state.progressState.accumulatedBlockTtsText += payload.text;
-        state.progressState.blockCount++;
       }
       let source: BlockReplySource | undefined;
       let cleanedPayload = payload;
@@ -160,15 +150,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
         const ttsPayload =
           terminal || payload.isReasoning === true || payload.isCommentary === true
             ? visiblePayload
-            : await maybeApplyTtsWithFinalizationLease({
-                payload: visiblePayload,
-                cfg,
-                channel: deliveryChannel,
-                kind: "block",
-                ttsAuto: sessionTtsAuto,
-                agentId: sessionAgentId,
-                accountId: replyRoute.accountId,
-              });
+            : await maybeApplyTtsWithFinalizationLease(visiblePayload, "block");
         const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
         let deliveryOperation: ReplyDispatchOperation = { kind: "raw", payload: normalizedPayload };
         if (operation.kind === "prepared") {
@@ -188,7 +170,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           const result = await state.sendReplyOperationAsync(
             deliveryOperation,
             context?.abortSignal,
-            false,
             "block",
             context?.deliveryIntentId,
           );
@@ -199,6 +180,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
         } else {
           markInboundDedupeReplayUnsafe();
           const delivery = state.sendTrackedBlockReply(deliveryOperation);
+          state.observeDeliveryProgress(delivery.outcome, "reply:block_delivered");
           if (delivery.queued) {
             // This block's receipt owns its settlement. A turn-wide no-send
             // verdict is premature while a recovery final can still arrive.
@@ -225,6 +207,10 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           }
         }
       };
+      const sendWithSource = (sourcePayload: ReplyPayload, terminal = false) => {
+        const send = () => sendPrepared(sourcePayload, terminal);
+        return source ? source.run(send) : send();
+      };
       if (cleanBlockTtsDirectiveText && contributesToFinalReply && payload.text) {
         drain = async (text) => {
           if (!text || deferFinalTtsText) {
@@ -237,20 +223,10 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           const tail = buildCaptionedFinalTextFallback(payload);
           tail.text = text;
           source?.setComplete(true);
-          const send = () => sendPrepared(tail, true);
-          if (source) {
-            await source.run(send);
-          } else {
-            await send();
-          }
+          await sendWithSource(tail, true);
         };
       }
-      const send = () => sendPrepared(cleanedPayload);
-      if (source) {
-        await source.run(send);
-      } else {
-        await send();
-      }
+      await sendWithSource(cleanedPayload);
     };
     return run();
   };

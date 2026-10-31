@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
-import { createRetiredStateInspectionError } from "./state-migrations.retired-files.js";
+import {
+  createRetiredStateInspectionError,
+  listExistingRetiredStateFiles,
+} from "./state-migrations.retired-files.js";
 import { resolveLegacyMigrationSourcePath } from "./state-migrations.source-path.js";
 
 export function listRetiredDeliveryQueueFiles(stateDir: string): string[] {
@@ -11,15 +14,11 @@ export function listRetiredDeliveryQueueFiles(stateDir: string): string[] {
       try {
         entries = fs.readdirSync(directory, { withFileTypes: true });
       } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          try {
-            fs.lstatSync(directory);
-          } catch (inspectionError) {
-            if (hasErrnoCode(inspectionError, "ENOENT")) {
-              return [];
-            }
-            throw createRetiredStateInspectionError(directory, inspectionError);
-          }
+        if (
+          hasErrnoCode(error, "ENOENT") &&
+          listExistingRetiredStateFiles([directory]).length === 0
+        ) {
+          return [];
         }
         throw createRetiredStateInspectionError(directory, error);
       }

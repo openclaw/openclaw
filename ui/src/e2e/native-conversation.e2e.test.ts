@@ -7,14 +7,13 @@ import {
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
+  textContent,
   captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
-  requireString,
 } from "./chat-flow.test-support.ts";
-import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 import { catalog } from "./native-plugin-ui.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -139,21 +138,19 @@ suite.define(() => {
       await installConversationHost(page);
       const linkedUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:linked");
       const gateway = await installMockGateway(page, {
-        workspace: "/workspace",
+        workspace: "/default-workspace",
         sessions: ["main", "next", "linked"].map((name) => ({
           key: `agent:main:${name}`,
           label: name,
           kind: "direct",
+          spawnedCwd: "/workspace",
         })),
         historyMessages: [
           {
             role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
-              },
-            ],
+            content: textContent(
+              `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
+            ),
           },
         ],
         methodResponses: {
@@ -213,16 +210,16 @@ suite.define(() => {
       expect(await header.isVisible()).toBe(true);
       expect(await pane.locator(".chat-thread").isVisible()).toBe(true);
       expect(await headerLeadingInset(page)).toBe(12);
-      expect(await header.boundingBox()).toMatchObject({ y: 0, height: 52 });
-      expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: 52 });
+      expect(await header.boundingBox()).toMatchObject({ y: 0, height: 48 });
+      expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: 48 });
       const leadingBox = await header.locator(".chat-pane__header-leading").boundingBox();
-      expect(leadingBox!.y + leadingBox!.height / 2).toBe(26);
+      expect(leadingBox!.y + leadingBox!.height / 2).toBe(24);
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "conversation-titlebar.png") });
       }
       const dragMessages = () =>
         page.evaluate(() => (window as ConversationTestWindow).windowDragMessages);
-      await header.hover({ position: { x: viewport.width / 2, y: 26 } });
+      await header.hover({ position: { x: viewport.width / 2, y: 24 } });
       await page.mouse.down();
       expect(await dragMessages()).toEqual([{ type: "window-drag" }]);
       await page.mouse.up();
@@ -232,9 +229,11 @@ suite.define(() => {
       expect(await dragMessages()).toEqual([{ type: "window-drag" }]);
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 700, height: viewport.height });
+      // Narrow desktop breadcrumbs stack two 32px rows. A taller host band
+      // expands the compact header; clearing it restores that intrinsic floor.
       for (const [height, expected] of [
-        ["64px", 64],
-        ["", 52],
+        ["80px", 76],
+        ["", 64],
       ] as const) {
         await page.evaluate((value) => {
           document.documentElement.style.setProperty("--openclaw-native-titlebar-height", value);
@@ -248,7 +247,6 @@ suite.define(() => {
       });
       const first = (await messages(page))[0];
       expect(first).toMatchObject({ type: "ready", contract: 1, surface: "conversation" });
-      expect(first?.capabilities).toEqual(["navigate", "presentation", "focus-composer"]);
       const documentId = first?.documentId;
       const timeOrigin = await page.evaluate(() => performance.timeOrigin);
       const initialUrl = page.url();
@@ -273,19 +271,6 @@ suite.define(() => {
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "conversation-initial.png") });
       }
-      await composer.fill("Verify the web composer");
-      await pane.getByRole("button", { name: "Send message", exact: true }).click();
-      const request = requireRecord((await gateway.waitForRequest("chat.send")).params);
-      expect(request.message).toBe("Verify the web composer");
-      expect(request.sessionKey).toBe("agent:main:main");
-      await gateway.emitChatFinal({
-        runId: requireString(request.idempotencyKey, "run id"),
-        text: "Web composer verified.",
-      });
-      await pane
-        .locator(".chat-thread-inner")
-        .getByText("Web composer verified.", { exact: true })
-        .waitFor();
       await command(
         page,
         "navigate",
@@ -306,7 +291,19 @@ suite.define(() => {
       );
       expect(targetState).toBeGreaterThan(-1);
       expect(targetState).toBeLessThan(navigationResult);
-      await pane.getByRole("link", { name: "Linked conversation", exact: true }).click();
+      const linkedConversation = pane.getByRole("link", {
+        name: "Linked conversation",
+        exact: true,
+      });
+      // An empty native-session preview must not starve the next frame or navigation.
+      await linkedConversation.focus();
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+      await linkedConversation.click();
       await expect
         .poll(async () =>
           (await messages(page)).findLast((message) => message.type === "route-changed"),
@@ -569,50 +566,6 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.reclaim", { ok: true });
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-      expect((await messages(page)).some((message) => message.type === "session-facts")).toBe(
-        false,
-      );
     });
   });
-
-  it.each(["browser", "dashboard", "ios"] as const)(
-    "preserves %s chat and settings presentation",
-    async (mode) => {
-      await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
-        if (mode === "ios") {
-          await installNativeEmbed(page, { platform: "ios", formFactor: "pad" });
-        } else if (mode === "dashboard") {
-          await installNativeWebChrome(page);
-        }
-        await installMockGateway(page, {
-          historyMessages: [
-            { role: "assistant", content: [{ type: "text", text: "Ordinary conversation." }] },
-          ],
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-        expect(await page.locator(".chat-pane__header").isVisible()).toBe(true);
-        expect(await page.locator(".native-embed-header").count()).toBe(mode === "ios" ? 1 : 0);
-        expect(await page.locator(".settings-sidebar__agent").count()).toBe(mode === "ios" ? 1 : 0);
-        expect(
-          await page.evaluate(() => "__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__" in window),
-        ).toBe(false);
-        if (mode === "ios") {
-          await page.locator(".native-embed-header__back").click();
-          await page
-            .locator(".native-embed-header")
-            .getByText("Settings", { exact: true })
-            .waitFor();
-          expect(new URL(page.url()).pathname).toBe("/settings");
-        } else {
-          expect(await headerLeadingInset(page)).toBe(12);
-          expect(await page.locator(".chat-pane__header").boundingBox()).toMatchObject({
-            y: 0,
-            height: mode === "dashboard" ? 52 : 48,
-          });
-          expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(true);
-        }
-      });
-    },
-  );
 });

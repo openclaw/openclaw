@@ -1,12 +1,7 @@
+import { hasGatewayToolRoutingContext, listNodes } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
-import {
-  getRuntimeConfig,
-  hasGatewayToolRoutingContext,
-  listNodes,
-  resolveBrowserConfig,
-  resolveProfile,
-  getBrowserProfileCapabilities,
-} from "./browser-tool.runtime.js";
+import { resolveBrowserConfig } from "./browser/config.js";
 
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;
@@ -97,58 +92,6 @@ export function resolveBrowserBaseUrl(params: {
     throw new Error(
       "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
     );
-  }
-  return undefined;
-}
-
-const DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
-const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
-  "status",
-  "start",
-  "stop",
-  "profiles",
-  "tabs",
-  "open",
-  "focus",
-  "close",
-]);
-const PERSISTENT_TAB_ACTIONS = new Set(["profiles", "tabs", "open", "focus", "close"]);
-
-function hasExistingSessionProfile(resolved: ReturnType<typeof resolveBrowserConfig>) {
-  return Object.keys(resolved.profiles).some((name) => {
-    const candidate = resolveProfile(resolved, name);
-    return candidate ? getBrowserProfileCapabilities(candidate).usesChromeMcp : false;
-  });
-}
-
-export function resolveBrowserToolTimeoutMs({
-  requestedTimeoutMs,
-  action,
-  isUserBrowserProfile,
-  usesPersistentPlaywright,
-  isNodeProxy,
-  resolvedBrowser,
-}: {
-  requestedTimeoutMs?: number;
-  action: string;
-  isUserBrowserProfile: boolean;
-  usesPersistentPlaywright: boolean;
-  isNodeProxy: boolean;
-  resolvedBrowser: ReturnType<typeof resolveBrowserConfig>;
-}) {
-  if (requestedTimeoutMs !== undefined) {
-    return requestedTimeoutMs;
-  }
-  if (
-    EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
-    (isUserBrowserProfile || (action === "profiles" && hasExistingSessionProfile(resolvedBrowser)))
-  ) {
-    return DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS;
-  }
-  // A node proxy resolves the profile on its execution host, so the Gateway
-  // must budget tab operations for the possible persistent Playwright path.
-  if (PERSISTENT_TAB_ACTIONS.has(action) && (usesPersistentPlaywright || isNodeProxy)) {
-    return resolvedBrowser.actionTimeoutMs;
   }
   return undefined;
 }

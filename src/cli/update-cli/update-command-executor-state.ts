@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
-import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery-types.js";
 import type { ChildOperation, ChildPurpose } from "./update-command-executor-children.js";
 
 export type ManagedUpdateLeaseAuthority = ManagedUpdateLeaseDatabaseIdentity &
@@ -32,4 +32,10 @@ export const childOwners = new WeakMap<
 export const originalCancellations = new WeakMap<
   UpdateRecoveryFence,
   (runId: string, cause: Error) => void
+>();
+
+/** Terminal state/report preparation, consumed after descendants join and before release. */
+export const terminalPreparations = new WeakMap<
+  UpdateRecoveryFence,
+  (failure?: unknown) => Promise<void>
 >();

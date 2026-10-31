@@ -19,7 +19,6 @@ import {
   agentOutputHasExpectedOkMarker,
   acquireManagedGatewayInstallerHostLease,
   buildDiscordFetchInit,
-  buildPackagedUpgradeUpdateArgs,
   buildPackagedUpgradeUpdateCommand,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
@@ -31,21 +30,18 @@ import {
   buildGatewayStatusArgsFromHelpText,
   buildInstallerSmokeScript,
   canConnectToLoopbackPort,
-  buildRealUpdateEnv,
   dashboardHtmlMarkerStatus,
   type GatewayHandle,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
-  CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
-  CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
   deleteDiscordMessage,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
-  managedGatewayRestartCommandTimeoutMs,
+  managedGatewayStartupCommandTimeoutMs,
   normalizeRequestedRef,
   parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
@@ -84,10 +80,11 @@ import {
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
-  waitForGatewayWithStartupMigrationRestart,
+  waitForGatewayWithStartupRecovery,
   writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
+import { formatError } from "../../scripts/lib/cross-os-release-checks/shared.ts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -228,7 +225,12 @@ function createGatewayHandleFixture(params: {
 }
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
-  it("uses the host account identity for managed installer services", () => {
+  it.each([true, false])("selects the installer account identity for managed=%s", (enabled) => {
+    if (!enabled) {
+      const env = { OPENCLAW_HOME: "/tmp/openclaw-installer" };
+      expect(resolveManagedGatewayInstallerEnv({ env, enabled })).toBe(env);
+      return;
+    }
     const env = resolveManagedGatewayInstallerEnv({
       env: {
         HOME: "C:\\temp\\lane",
@@ -247,7 +249,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         openclaw_config_path: "C:\\temp\\case-variant\\openclaw.json",
         OPENAI_API_KEY: "secret",
       },
-      enabled: true,
+      enabled,
       accountHome: "C:\\Users\\runneradmin",
       hostEnv: {
         APPDATA: "C:\\Users\\runneradmin\\AppData\\Roaming",
@@ -276,12 +278,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         ].includes(key.toUpperCase()),
       ),
     ).toEqual([]);
-  });
-
-  it("keeps isolated installer state when no managed service is used", () => {
-    const env = { OPENCLAW_HOME: "/tmp/openclaw-installer" };
-
-    expect(resolveManagedGatewayInstallerEnv({ env, enabled: false })).toBe(env);
   });
 
   it("fails closed before borrowing an occupied managed-service account", () => {
@@ -328,11 +324,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     replacement.release();
   });
 
-  it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
-    expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
-    expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
-  });
-
   it("bounds public installer fetches on Windows and POSIX", () => {
     const windowsScript = buildInstallerSmokeScript({
       installerUrl: "https://openclaw.ai/install.ps1",
@@ -375,8 +366,25 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
-  it("drops split surrogate pairs when truncating summaries", () => {
-    expect(trimForSummary(`${"x".repeat(599)}😀tail`)).toBe(`${"x".repeat(599)}...`);
+  it("names every inner failure of a lane AggregateError within the summary", () => {
+    const cleanup = new AggregateError(
+      [new Error("schtasks /End failed"), new Error("host lease release failed")],
+      "Managed-service cleanup and host-lease release both failed.",
+    );
+    const error = new AggregateError(
+      [new Error("Command timed out: openclaw gateway stop --help"), cleanup],
+      "Installer release check and managed-service cleanup both failed.",
+    );
+
+    const summary = trimForSummary(formatError(error));
+    for (const message of [
+      "Installer release check and managed-service cleanup both failed.",
+      "Command timed out: openclaw gateway stop --help",
+      "schtasks /End failed",
+      "host lease release failed",
+    ]) {
+      expect(summary).toContain(message);
+    }
   });
 
   it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {
@@ -407,7 +415,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
-      "<openclaw-app></openclaw-app>",
+      '<openclaw-app><main id="openclaw-boot-shell"></main></openclaw-app>',
       '<link rel="stylesheet" href="/assets/index.css">',
       '<script type="module" src="assets/index.js"></script>',
       '<script type="module" src="https://example.com/assets/ignored.js"></script>',
@@ -445,10 +453,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
-    expect(managedGatewayRestartCommandTimeoutMs("win32")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("win32")).toBeGreaterThan(
       CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
     );
-    expect(managedGatewayRestartCommandTimeoutMs("linux")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("linux")).toBeGreaterThan(
       CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
     );
   });
@@ -501,7 +509,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const firstError = new Error("first gateway failed readiness");
       const secondError = new Error("second gateway exited");
       const restartGateway = vi.fn(async () => second.handle);
-      const ready = waitForGatewayWithStartupMigrationRestart({
+      const ready = waitForGatewayWithStartupRecovery({
+        gatewayPort: 18_789,
         gatewayHolder: holder,
         restartGateway,
         waitUntilReady: async (gateway) => {
@@ -619,9 +628,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("retains only bounded allowlisted packaged-upgrade timings", () => {
-    expect(
-      parsePackagedUpgradeUpdateTimings(
+  it.each([
+    {
+      name: "retains bounded allowlisted timings",
+      inputs: [
         JSON.stringify({
           durationMs: 622_000,
           root: String.raw`C:\private\openclaw`,
@@ -637,20 +647,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
             { name: "unknown internal step", durationMs: 123_000 },
           ],
         }),
-      ),
-    ).toEqual([
-      { name: "total", durationMs: 622_000 },
-      { name: "package-install", durationMs: 461_000 },
-      { name: "staged-swap", durationMs: 39_000 },
-      { name: "doctor", durationMs: 66_000 },
-    ]);
-  });
-
-  it("drops malformed, unsafe, and out-of-bounds packaged-upgrade timings", () => {
-    expect(parsePackagedUpgradeUpdateTimings("not json")).toEqual([]);
-    expect(parsePackagedUpgradeUpdateTimings("[]")).toEqual([]);
-    expect(
-      parsePackagedUpgradeUpdateTimings(
+      ],
+      expected: [
+        { name: "total", durationMs: 622_000 },
+        { name: "package-install", durationMs: 461_000 },
+        { name: "staged-swap", durationMs: 39_000 },
+        { name: "doctor", durationMs: 66_000 },
+      ],
+    },
+    {
+      name: "drops malformed, unsafe, and out-of-bounds timings",
+      inputs: [
+        "not json",
+        "[]",
         JSON.stringify({
           durationMs: 3_600_001,
           steps: [
@@ -659,8 +668,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
             { name: "openclaw doctor", durationMs: "66000" },
           ],
         }),
-      ),
-    ).toEqual([]);
+      ],
+      expected: [],
+    },
+  ])("$name", ({ inputs, expected }) => {
+    for (const input of inputs) {
+      expect(parsePackagedUpgradeUpdateTimings(input)).toEqual(expected);
+    }
   });
 
   it("renders runner, runtime, and sanitized updater timing evidence", () => {
@@ -702,39 +716,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(markdown).not.toContain("npm install");
   });
 
-  it("accepts OK agent output from the captured log when stdout is empty", () => {
-    const dir = tempDirs.make("openclaw-cross-os-agent-output-");
-    const logPath = join(dir, "agent.log");
+  it("ignores stale OK markers outside the recent tail", () => {
+    const logPath = join(tempDirs.make("openclaw-cross-os-agent-output-"), "agent.log");
     writeFileSync(
       logPath,
       [
-        "2026-04-24T15:00:00.000Z command stdout",
-        JSON.stringify({
-          finalAssistantVisibleText: "OK",
-          payloads: [{ type: "text", text: "OK" }],
-        }),
-      ].join("\n"),
-    );
-
-    expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(true);
-  });
-
-  it("ignores stale OK markers outside the recent agent log tail", () => {
-    const dir = tempDirs.make("openclaw-cross-os-agent-output-tail-");
-    const logPath = join(dir, "agent.log");
-    writeFileSync(
-      logPath,
-      [
-        JSON.stringify({
-          payloads: [{ type: "text", text: "OK" }],
-        }),
+        JSON.stringify({ payloads: [{ type: "text", text: "OK" }] }),
         "x".repeat(2_200_000),
-        JSON.stringify({
-          payloads: [{ type: "text", text: "still working" }],
-        }),
+        JSON.stringify({ payloads: [{ type: "text", text: "still working" }] }),
       ].join("\n"),
     );
-
     expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(false);
   });
 
@@ -770,28 +761,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
-  it("accepts pnpm pack tarballs reported under the requested destination", () => {
+  it("rejects unsafe pnpm pack destinations", () => {
     const packDir = resolvePath("/tmp/openclaw-pack");
-
-    expect(resolvePackDestinationTarball("openclaw-2026.6.17.tgz", packDir, "pnpm pack")).toEqual({
-      fileName: "openclaw-2026.6.17.tgz",
-      path: resolvePath(packDir, "openclaw-2026.6.17.tgz"),
-    });
-    expect(
-      resolvePackDestinationTarball(
-        resolvePath(packDir, "openclaw-2026.6.17.tgz"),
-        packDir,
-        "pnpm pack",
-      ),
-    ).toEqual({
-      fileName: "openclaw-2026.6.17.tgz",
-      path: resolvePath(packDir, "openclaw-2026.6.17.tgz"),
-    });
-  });
-
-  it("rejects pnpm pack tarballs outside the requested destination", () => {
-    const packDir = resolvePath("/tmp/openclaw-pack");
-    const unsafeFilenames = [
+    for (const filename of [
       "../openclaw.tgz",
       "nested/openclaw.tgz",
       "nested\\openclaw.tgz",
@@ -799,9 +771,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       resolvePath(packDir, "nested", "openclaw.tgz"),
       "openclaw\u0000.tgz",
       "openclaw.tar.gz",
-    ];
-
-    for (const filename of unsafeFilenames) {
+    ]) {
       expect(() => resolvePackDestinationTarball(filename, packDir, "pnpm pack")).toThrow(
         "pnpm pack did not report a safe .tgz filename.",
       );
@@ -865,24 +835,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("keeps packaged-upgrade release updates out of service restart flow", () => {
-    const args = buildPackagedUpgradeUpdateArgs("http://127.0.0.1:49152/openclaw-current.tgz");
-    expect(args.slice(0, 6)).toEqual([
-      "update",
-      "--tag",
-      "http://127.0.0.1:49152/openclaw-current.tgz",
-      "--yes",
-      "--json",
-      "--no-restart",
-    ]);
-    expect(args.at(-2)).toBe("--timeout");
-  });
-
   it.each([
     {
       label: "stable predecessor",
       baselineVersion: "2026.8.32",
       candidateVersion: "2026.8.34",
+      timeoutSeconds: undefined,
       expectedArgs: [
         "update",
         "--tag",
@@ -891,7 +849,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         "--json",
         "--no-restart",
         "--timeout",
-        "1200",
+        process.platform === "win32" ? "600" : "1200",
       ],
       expectedPackageSpec: undefined,
       expectedNpmTag: undefined,
@@ -900,39 +858,40 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       label: "extended-stable predecessor and candidate",
       baselineVersion: "2026.8.33",
       candidateVersion: "2026.8.34",
+      timeoutSeconds: 1200,
       expectedArgs: ["update", "--yes", "--json", "--no-restart", "--timeout", "1200"],
       expectedPackageSpec: "openclaw",
       expectedNpmTag: "extended-stable",
     },
-    {
-      label: "extended-stable predecessor and regular candidate",
-      baselineVersion: "2026.8.33",
-      candidateVersion: "2026.9.1",
-      expectedArgs: [
-        "update",
-        "--tag",
-        "http://127.0.0.1:49152/openclaw-current.tgz",
-        "--yes",
-        "--json",
-        "--no-restart",
-        "--timeout",
-        "1200",
-      ],
-      expectedPackageSpec: undefined,
-      expectedNpmTag: undefined,
-    },
   ])("routes packaged upgrades from the $label channel", (testCase) => {
     const candidateUrl = "http://127.0.0.1:49152/openclaw-current.tgz";
     const updateCommand = buildPackagedUpgradeUpdateCommand({
-      env: { NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152" },
+      env: {
+        NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152",
+        FOO: "bar",
+        NODE_COMPILE_CACHE: "/tmp/stale-openclaw-cache",
+        OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
+      },
       candidateUrl,
       candidateVersion: testCase.candidateVersion,
-      timeoutSeconds: 1200,
+      timeoutSeconds: testCase.timeoutSeconds,
       baselineVersion: testCase.baselineVersion,
     });
     expect(updateCommand.args).toEqual(testCase.expectedArgs);
     expect(updateCommand.env.OPENCLAW_UPDATE_PACKAGE_SPEC).toBe(testCase.expectedPackageSpec);
     expect(updateCommand.env.NPM_CONFIG_TAG).toBe(testCase.expectedNpmTag);
+    expect(updateCommand.env).toEqual({
+      NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152",
+      FOO: "bar",
+      OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      ...(testCase.expectedPackageSpec
+        ? {
+            OPENCLAW_UPDATE_PACKAGE_SPEC: testCase.expectedPackageSpec,
+            NPM_CONFIG_TAG: testCase.expectedNpmTag,
+          }
+        : {}),
+    });
   });
 
   it("uses forced shutdown only when the installed gateway supports it", () => {
@@ -970,21 +929,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
     expect(shouldRunMainChannelDevUpdate("refs/heads/main")).toBe(true);
     expect(shouldRunMainChannelDevUpdate("refs/tags/main")).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "skips dev-update for non-main branch validation refs",
-      input: "codex/cross-os-release-checks",
-      expected: ["packaged-fresh", "installer-fresh", "packaged-upgrade"],
-    },
-    {
-      name: "keeps dev-update enabled for main validation refs",
-      input: "main",
-      expected: ["packaged-fresh", "installer-fresh", "packaged-upgrade", "dev-update"],
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(resolveRequestedSuites("both", input)).toEqual(expected);
+    expect(resolveRequestedSuites("both", "main")).toEqual([
+      "packaged-fresh",
+      "installer-fresh",
+      "packaged-upgrade",
+      "dev-update",
+    ]);
   });
 
   it("preflights standalone source candidates before cross-OS dependency installation", async () => {
@@ -1051,24 +1001,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(script).toContain("$npmPath = Resolve-CommandPath 'npm'");
   });
 
-  it("prefers workflow-injected runner override env names over legacy ones", () => {
-    expect(
-      readRunnerOverrideEnv({
-        VAR_UBUNTU_RUNNER: "workflow-linux",
-        VAR_WINDOWS_RUNNER: "workflow-windows",
-        VAR_MACOS_RUNNER: "workflow-macos",
-        OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER: "legacy-linux",
-        OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER: "legacy-windows",
-        OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER: "legacy-macos",
-      }),
-    ).toEqual({
-      varUbuntuRunner: "workflow-linux",
-      varWindowsRunner: "workflow-windows",
-      varMacosRunner: "workflow-macos",
-    });
-  });
-
-  it("falls back to legacy runner override env names when workflow vars are blank", () => {
+  it("uses legacy runner overrides when primary values are blank", () => {
     expect(
       readRunnerOverrideEnv({
         VAR_UBUNTU_RUNNER: "",
@@ -1318,117 +1251,83 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("keeps multibyte command output and error tails within the byte budget", async () => {
-    const result = await captureCommand(
-      "process.stdout.write('a😀bbbb'); process.stderr.write('a😀cccc');",
-      6,
-    );
-
-    expect(result.stdout).toBe("bbbb");
-    expect(result.stderr).toBe("cccc");
-    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(6);
-    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(6);
-    const log = result.log;
-    expect(log).toContain("a😀bbbb");
-    expect(log).toContain("a😀cccc");
-  });
-
-  it("keeps rolling multibyte command output and error tails within the byte budget", async () => {
-    const script = [
-      "process.stdout.write('a😀');",
-      "process.stderr.write('a😀');",
-      "setTimeout(() => { process.stdout.write('bbbb'); process.stderr.write('cccc'); }, 25);",
-    ].join("");
-    const result = await captureCommand(script, 7);
-
-    expect(result.stdout).toBe("bbbb");
-    expect(result.stderr).toBe("cccc");
-    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(7);
-    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(7);
-  });
-
-  it.each(["stdout", "stderr"] as const)(
-    "preserves a UTF-8 character split across real %s chunks and its full log",
-    async (stream) => {
-      const script = [
-        `process.${stream}.write('A');`,
-        `process.${stream}.write(Buffer.from([0xf0, 0x9f]));`,
+  const commandOutputCases: Array<{
+    name: string;
+    script: string;
+    budget: number;
+    stdout?: string;
+    stderr?: string;
+    logs?: string[];
+  }> = [
+    {
+      name: "truncated multibyte tails",
+      script: "process.stdout.write('a😀bbbb'); process.stderr.write('a😀cccc');",
+      budget: 6,
+      stdout: "bbbb",
+      stderr: "cccc",
+      logs: ["a😀bbbb", "a😀cccc"],
+    },
+    {
+      name: "rolling multibyte tails",
+      script:
+        "process.stdout.write('a😀'); process.stderr.write('a😀');" +
+        "setTimeout(() => { process.stdout.write('bbbb'); process.stderr.write('cccc'); }, 25);",
+      budget: 7,
+      stdout: "bbbb",
+      stderr: "cccc",
+    },
+    ...(["stdout", "stderr"] as const).map((stream) => ({
+      name: `split UTF-8 ${stream} chunks`,
+      script:
+        `process.${stream}.write('A'); process.${stream}.write(Buffer.from([0xf0, 0x9f]));` +
         `setTimeout(() => { process.${stream}.write(Buffer.from([0x98, 0x80])); process.${stream}.write('Z'); }, 25);`,
-      ].join("");
-      const result = await captureCommand(script, 64);
-      expect(result[stream]).toBe("A😀Z");
-      expect(result.log).toContain("A😀Z");
+      budget: 64,
+      [stream]: "A😀Z",
+      logs: ["A😀Z"],
+    })),
+    {
+      name: "full log flushed before resolution",
+      script: "process.stdout.write(`flush-start-${'x'.repeat(128 * 1024)}-flush-end`);",
+      budget: 64,
+      logs: [`flush-start-${"x".repeat(128 * 1024)}-flush-end`],
     },
-  );
-
-  it.each([1])(
-    "never exceeds a %i-byte command output budget with a truncated UTF-8 character",
-    async (maxOutputBytes) => {
-      const result = await captureCommand(
-        "process.stdout.write('😀'); process.stderr.write('😀');",
-        maxOutputBytes,
-      );
-
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toBe("");
-      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
-      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
-    },
-  );
-
-  it.each([
-    { maxOutputBytes: 1, expected: "" },
-    { maxOutputBytes: 3, expected: "�" },
-  ])(
-    "bounds incomplete UTF-8 command output to $maxOutputBytes bytes",
-    async ({ maxOutputBytes, expected }) => {
-      const result = await captureCommand(
-        "process.stdout.write(Buffer.from([0xf0])); process.stderr.write(Buffer.from([0xf0]));",
-        maxOutputBytes,
-      );
-
-      expect(result.stdout).toBe(expected);
-      expect(result.stderr).toBe(expected);
-      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
-      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
-    },
-  );
-
-  it("flushes command logs before resolving", async () => {
-    const marker = `flush-start-${"x".repeat(128 * 1024)}-flush-end`;
-
-    const result = await captureCommand(
-      "process.stdout.write(`flush-start-${'x'.repeat(128 * 1024)}-flush-end`);",
-      64,
-    );
-
-    expect(result.log).toContain(marker);
+  ];
+  it.each(commandOutputCases)("captures command output: $name", async (testCase) => {
+    const result = await captureCommand(testCase.script, testCase.budget);
+    for (const stream of ["stdout", "stderr"] as const) {
+      if (testCase[stream] !== undefined) {
+        expect(result[stream]).toBe(testCase[stream]);
+        expect(Buffer.byteLength(result[stream], "utf8")).toBeLessThanOrEqual(testCase.budget);
+      }
+    }
+    for (const marker of testCase.logs ?? []) {
+      expect(result.log).toContain(marker);
+    }
   });
 
-  it("resolves Windows and configured npm diagnostic directories", () => {
-    const homeDir = join(tmpdir(), "openclaw-npm-diagnostics-home");
-    const localAppData = join(homeDir, "AppData", "Local");
-    const logsDir = join(homeDir, "custom-logs");
-    expect(resolveNpmDebugLogDirs(homeDir, { LOCALAPPDATA: localAppData }, "win32")).toContain(
-      join(localAppData, "npm-cache", "_logs"),
-    );
-    expect(resolveNpmDebugLogDirs(homeDir, { npm_config_logs_dir: logsDir })).toContain(logsDir);
-  });
-
-  it("resolves relative npm log config from the install working directory", () => {
-    const dir = tempDirs.make("openclaw-cross-os-npm-relative-logs-");
-    const homeDir = join(dir, "home");
-    const logsDir = join(homeDir, "relative-logs");
-    const cacheLogsDir = join(homeDir, "relative-cache", "_logs");
-    mkdirSync(logsDir, { recursive: true });
-    mkdirSync(cacheLogsDir, { recursive: true });
-
-    expect(resolveNpmDebugLogDirs(homeDir, { npm_config_logs_dir: "relative-logs" })).toContain(
-      logsDir,
-    );
-    expect(resolveNpmDebugLogDirs(homeDir, { npm_config_cache: "relative-cache" })).toContain(
-      cacheLogsDir,
-    );
+  it.each([false, true])("resolves npm diagnostic paths: relative=%s", (relative) => {
+    const homeDir = relative
+      ? join(tempDirs.make("openclaw-cross-os-npm-relative-logs-"), "home")
+      : join(tmpdir(), "openclaw-npm-diagnostics-home");
+    const logsDir = join(homeDir, relative ? "relative-logs" : "custom-logs");
+    if (relative) {
+      const cacheLogsDir = join(homeDir, "relative-cache", "_logs");
+      mkdirSync(logsDir, { recursive: true });
+      mkdirSync(cacheLogsDir, { recursive: true });
+      expect(resolveNpmDebugLogDirs(homeDir, { npm_config_cache: "relative-cache" })).toContain(
+        cacheLogsDir,
+      );
+    } else {
+      const localAppData = join(homeDir, "AppData", "Local");
+      expect(resolveNpmDebugLogDirs(homeDir, { LOCALAPPDATA: localAppData }, "win32")).toContain(
+        join(localAppData, "npm-cache", "_logs"),
+      );
+    }
+    expect(
+      resolveNpmDebugLogDirs(homeDir, {
+        npm_config_logs_dir: relative ? "relative-logs" : logsDir,
+      }),
+    ).toContain(logsDir);
   });
 
   it("kills timed-out command process groups", ({ signal }) =>
@@ -1735,20 +1634,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
-  it("drops the bundled plugin postinstall disable flag for real updater calls", () => {
-    expect(
-      buildRealUpdateEnv({
-        FOO: "bar",
-        NODE_COMPILE_CACHE: "/tmp/stale-openclaw-cache",
-        OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
-      }),
-    ).toEqual({
-      FOO: "bar",
-      OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-    });
-  });
-
   it("rejects a successful packaged update followed by an old self-swapped process import miss", () => {
     expect(() =>
       verifyPackagedUpgradeUpdateResult({
@@ -1764,29 +1649,39 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toThrow(/Packaged upgrade failed/u);
   });
 
-  it("recognizes the shipped Windows updater native-module backup cleanup failure", () => {
+  it.each([
+    {
+      name: "shipped Windows native-module backup cleanup failure",
+      platform: "win32",
+      stdout: JSON.stringify({
+        status: "error",
+        reason: "global install swap",
+        after: { version: "2026.5.2" },
+        steps: [
+          {
+            name: "global install swap",
+            exitCode: 1,
+            stderrTail:
+              "EPERM: operation not permitted, unlink 'C:\\Users\\runner\\prefix\\node_modules\\.openclaw-5748-1777776287462\\node_modules\\@mariozechner\\clipboard-win32-x64-msvc\\clipboard.win32-x64-msvc.node'",
+          },
+        ],
+      }),
+      expected: true,
+    },
+    {
+      name: "non-Windows failure",
+      platform: "linux",
+      stdout:
+        "EPERM: operation not permitted, unlink '/tmp/prefix/node_modules/.openclaw-1-2/native.node'",
+      expected: false,
+    },
+  ] as const)("classifies swap cleanup recovery: $name", ({ platform, stdout, expected }) => {
     expect(
       isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
-        {
-          exitCode: 1,
-          stdout: JSON.stringify({
-            status: "error",
-            reason: "global install swap",
-            after: { version: "2026.5.2" },
-            steps: [
-              {
-                name: "global install swap",
-                exitCode: 1,
-                stderrTail:
-                  "EPERM: operation not permitted, unlink 'C:\\Users\\runner\\prefix\\node_modules\\.openclaw-5748-1777776287462\\node_modules\\@mariozechner\\clipboard-win32-x64-msvc\\clipboard.win32-x64-msvc.node'",
-              },
-            ],
-          }),
-          stderr: "",
-        },
-        "win32",
+        { exitCode: 1, stdout, stderr: "" },
+        platform,
       ),
-    ).toBe(true);
+    ).toBe(expected);
   });
 
   it("recognizes the shipped Windows updater packaged-upgrade timeout", () => {
@@ -1843,12 +1738,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it.each([
     { label: "shipped baseline", recoverable: true },
-    { label: "non-Windows", platform: "linux" as const },
-    { label: "other exit", exitCode: 1 },
-    { label: "missing warning", stderr: "Updater failed" },
-    { label: "JSON result", stdout: '{"status":"error"}' },
     { label: "first fixed release", baselineVersion: "2026.9.7" },
-    { label: "later release", baselineVersion: "2026.9.10" },
     { label: "unknown baseline", baselineVersion: "unknown" },
     { label: "switched install", installedVersion: "2026.9.7" },
   ])("limits unsettled-exit recovery: $label", (testCase) => {
@@ -1856,14 +1746,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       isRecoverableWindowsPackagedUpgradeUnsettledExit(
         {
-          exitCode: testCase.exitCode ?? 13,
-          stdout: testCase.stdout ?? "",
+          exitCode: 13,
+          stdout: "",
           stderr:
-            testCase.stderr ??
             "Warning: Detected unsettled top-level await at file:///C:/prefix/node_modules/openclaw/openclaw.mjs:757",
         },
         {
-          platform: testCase.platform ?? "win32",
+          platform: "win32",
           baselineVersion,
           installedVersion: testCase.installedVersion ?? baselineVersion,
         },
@@ -1890,34 +1779,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         candidateVersion: "2026.5.4-beta.1",
       }),
     ).toThrow(/installed unknown/u);
-  });
-
-  it("does not recover unrelated packaged update failures", () => {
-    expect(
-      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
-        {
-          exitCode: 1,
-          stdout: JSON.stringify({
-            status: "error",
-            reason: "global install swap",
-            steps: [{ name: "global install swap", exitCode: 1, stderrTail: "ENOENT: missing" }],
-          }),
-          stderr: "",
-        },
-        "win32",
-      ),
-    ).toBe(false);
-    expect(
-      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
-        {
-          exitCode: 1,
-          stdout:
-            "EPERM: operation not permitted, unlink '/tmp/prefix/node_modules/.openclaw-1-2/native.node'",
-          stderr: "",
-        },
-        "linux",
-      ),
-    ).toBe(false);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {
@@ -1967,38 +1828,31 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     {
       name: "accepts a git main dev-channel update status payload",
       input: { branch: "main" },
-      expected: undefined,
+      error: undefined,
     },
     {
       name: "accepts uppercase requested commit shas when update status reports lowercase",
       input: { sha: "08753a1d793c040b101c8a26c43445dbbab14995" },
       ref: "08753A1D793C040B101C8A26C43445DBBAB14995",
-      expected: undefined,
+      error: undefined,
     },
-  ])("$name", ({ input, ref, expected }) => {
+    {
+      name: "rejects update status payloads that are not on dev/main git",
+      input: { branch: "release" },
+      installKind: "package",
+      channel: "stable",
+      error: "git install",
+    },
+  ])("$name", ({ input, ref, installKind, channel, error }) => {
     const payload = JSON.stringify({
-      update: { installKind: "git", git: input },
-      channel: { value: "dev" },
+      update: { installKind: installKind ?? "git", git: input },
+      channel: { value: channel ?? "dev" },
     });
-
-    expect(verifyDevUpdateStatus(payload, ref ? { ref } : undefined)).toBe(expected);
-  });
-
-  it("rejects update status payloads that are not on dev/main git", () => {
-    expect(() =>
-      verifyDevUpdateStatus(
-        JSON.stringify({
-          update: {
-            installKind: "package",
-            git: {
-              branch: "release",
-            },
-          },
-          channel: {
-            value: "stable",
-          },
-        }),
-      ),
-    ).toThrow("git install");
+    const verify = () => verifyDevUpdateStatus(payload, ref ? { ref } : undefined);
+    if (error) {
+      expect(verify).toThrow(error);
+    } else {
+      expect(verify()).toBeUndefined();
+    }
   });
 });

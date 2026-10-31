@@ -1,5 +1,7 @@
+import type { EmbeddingProviderCallOptions } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
+  extractEmbeddingUsage,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
@@ -11,7 +13,7 @@ import {
   redactProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalObjectRecord,
   filterStringEntries,
@@ -19,8 +21,7 @@ import {
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
 import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
-import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
+import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
@@ -38,89 +39,6 @@ type CopilotModelEntry = {
   id?: unknown;
   supported_endpoints?: unknown;
 };
-
-type GitHubCopilotEmbeddingClient = {
-  model: string;
-  baseUrl: string;
-  headers: Record<string, string>;
-  fetchImpl: typeof fetch;
-};
-
-function isCopilotSetupError(err: unknown): boolean {
-  if (err instanceof CopilotRuntimeAuthError) {
-    return true;
-  }
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  // All Copilot-specific setup failures should allow auto-selection to
-  // fall through to the next provider (e.g. OpenAI). This covers: missing
-  // GitHub token, authentication failures, no embedding models on the plan,
-  // model discovery errors, and user-pinned model not available on Copilot.
-  return (
-    err.message.includes("No GitHub token available") ||
-    err.message.includes("Copilot user response") ||
-    err.message.includes("No embedding models available") ||
-    err.message.includes("GitHub Copilot model discovery") ||
-    err.message.includes("github-copilot.model-discovery") ||
-    err.message.includes("GitHub Copilot embedding model") ||
-    err.message.includes("Unexpected response from GitHub Copilot user endpoint")
-  );
-}
-
-async function discoverEmbeddingModels(params: {
-  baseUrl: string;
-  copilotToken: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<string[]> {
-  const url = `${params.baseUrl.replace(/\/$/, "")}/models`;
-  const headers = {
-    ...params.headers,
-    Authorization: `Bearer ${params.copilotToken}`,
-  };
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    init: {
-      method: "GET",
-      headers,
-    },
-    policy: params.ssrfPolicy,
-    timeoutMs: COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS,
-    auditContext: "memory-remote",
-  });
-  try {
-    if (!response.ok) {
-      // Copilot requests carry a bearer token, so reflected upstream text must
-      // be sanitized independently of the operator's log-redaction setting.
-      const detail = redactProviderResponseErrorText(
-        await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
-        headers,
-      );
-      throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
-    }
-    const payload = await readProviderJsonResponse(response, "github-copilot.model-discovery");
-    const allModels = Array.isArray((payload as { data?: unknown })?.data)
-      ? ((payload as { data: CopilotModelEntry[] }).data ?? [])
-      : [];
-    // Filter for embedding models. The Copilot API may list embedding models
-    // with an explicit /v1/embeddings endpoint, or with an empty
-    // supported_endpoints array. Match both: endpoint-declared embedding
-    // models and models whose ID indicates embedding capability.
-    return allModels.flatMap((entry) => {
-      const id = typeof entry.id === "string" ? entry.id.trim() : "";
-      if (!id) {
-        return [];
-      }
-      const endpoints = filterStringEntries(entry.supported_endpoints);
-      return endpoints.some((ep) => ep.includes("embeddings")) || /\bembedding/i.test(id)
-        ? [id]
-        : [];
-    });
-  } finally {
-    await release();
-  }
-}
 
 function normalizeCopilotEmbeddingModel(model: string): string {
   const normalized = model.trim();
@@ -191,72 +109,12 @@ function parseGitHubCopilotEmbeddingPayload(payload: unknown, expectedCount: num
   return vectors as number[][];
 }
 
-function createGitHubCopilotEmbeddingProvider(
-  client: GitHubCopilotEmbeddingClient,
-): MemoryEmbeddingProvider {
-  const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
-    if (input.length === 0) {
-      return [];
-    }
-
-    const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
-    return await withRemoteHttpResponse({
-      url,
-      fetchImpl: client.fetchImpl,
-      ssrfPolicy: buildRemoteBaseUrlPolicy(client.baseUrl),
-      signal,
-      init: {
-        method: "POST",
-        headers: client.headers,
-        body: JSON.stringify({ model: client.model, input }),
-      },
-      onResponse: async (response) => {
-        if (!response.ok) {
-          const detail = redactProviderResponseErrorText(
-            await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
-            client.headers,
-          );
-          throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
-        }
-
-        const payload = await readProviderJsonResponse(response, "github-copilot.embeddings", {
-          maxBytes: COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES,
-        });
-        return parseGitHubCopilotEmbeddingPayload(payload, input.length);
-      },
-    });
-  };
-
-  return {
-    id: COPILOT_EMBEDDING_PROVIDER_ID,
-    model: client.model,
-    embed: async (input, options) => {
-      const [vector] = await embedMany(
-        [typeof input === "string" ? input : input.text],
-        options?.signal,
-      );
-      return vector ?? [];
-    },
-    embedBatch: async (inputs, options) => {
-      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
-      if (options?.inputType === "query") {
-        return await Promise.all(
-          texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
-        );
-      }
-      return await embedMany(texts, options?.signal);
-    },
-  };
-}
-
 export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: COPILOT_EMBEDDING_PROVIDER_ID,
   transport: "remote",
   authProviderId: COPILOT_EMBEDDING_PROVIDER_ID,
   normalizeModel: ({ model }) => normalizeCopilotEmbeddingModel(model),
   autoSelectPriority: 15,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isCopilotSetupError,
   create: async (options) => {
     const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
@@ -299,7 +157,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         env: process.env,
         githubDomain,
       }));
-    const baseUrl = runtimeAuth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
+    const baseUrl = runtimeAuth.baseUrl;
     const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
     const headers = buildCopilotRuntimeHeaders({
       config: options.config,
@@ -309,25 +167,112 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
     // Always discover models even when the user pins one: this validates
     // the Copilot token and confirms the plan supports embeddings before
     // we attempt any embedding requests.
-    const availableModels = await discoverEmbeddingModels({
-      baseUrl,
-      copilotToken: runtimeAuth.apiKey,
-      headers,
-      ssrfPolicy,
-    });
+    const copilotToken = runtimeAuth.apiKey;
+    const discoverEmbeddingModels = async (): Promise<string[]> => {
+      const url = `${baseUrl.replace(/\/$/, "")}/models`;
+      const discoveryHeaders = { ...headers, Authorization: `Bearer ${copilotToken}` };
+      const { response, release } = await fetchWithSsrFGuard({
+        url,
+        init: { method: "GET", headers: discoveryHeaders },
+        policy: ssrfPolicy,
+        timeoutMs: COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS,
+        auditContext: "memory-remote",
+      });
+      try {
+        if (!response.ok) {
+          // Copilot requests carry a bearer token, so reflected upstream text must
+          // be sanitized independently of the operator's log-redaction setting.
+          const detail = redactProviderResponseErrorText(
+            await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+            discoveryHeaders,
+          );
+          throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
+        }
+        const payload = await readProviderJsonResponse(response, "github-copilot.model-discovery");
+        const allModels = Array.isArray((payload as { data?: unknown })?.data)
+          ? ((payload as { data: CopilotModelEntry[] }).data ?? [])
+          : [];
+        // Filter for embedding models. The Copilot API may list embedding models
+        // with an explicit /v1/embeddings endpoint, or with an empty
+        // supported_endpoints array. Match both: endpoint-declared embedding
+        // models and models whose ID indicates embedding capability.
+        return allModels.flatMap((entry) => {
+          const id = typeof entry.id === "string" ? entry.id.trim() : "";
+          if (!id) {
+            return [];
+          }
+          const endpoints = filterStringEntries(entry.supported_endpoints);
+          return endpoints.some((ep) => ep.includes("embeddings")) || /\bembedding/i.test(id)
+            ? [id]
+            : [];
+        });
+      } finally {
+        await release();
+      }
+    };
+    const availableModels = await discoverEmbeddingModels();
 
     const userModel = options.model?.trim() || undefined;
     const model = pickBestModel(availableModels, userModel);
 
-    const provider = createGitHubCopilotEmbeddingProvider({
-      baseUrl,
-      fetchImpl: fetch,
-      headers: {
-        ...headers,
-        Authorization: `Bearer ${runtimeAuth.apiKey}`,
-      },
+    const fetchImpl = fetch;
+    const providerHeaders = { ...headers, Authorization: `Bearer ${runtimeAuth.apiKey}` };
+    const embedMany = async (
+      input: string[],
+      callOptions?: EmbeddingProviderCallOptions,
+    ): Promise<number[][]> => {
+      if (input.length === 0) {
+        return [];
+      }
+
+      const url = `${baseUrl.replace(/\/$/, "")}/embeddings`;
+      return await withRemoteHttpResponse({
+        url,
+        fetchImpl,
+        ssrfPolicy,
+        signal: callOptions?.signal,
+        init: {
+          method: "POST",
+          headers: providerHeaders,
+          body: JSON.stringify({ model, input }),
+        },
+        onResponse: async (response) => {
+          if (!response.ok) {
+            const detail = redactProviderResponseErrorText(
+              await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+              providerHeaders,
+            );
+            throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
+          }
+          const payload = await readProviderJsonResponse(response, "github-copilot.embeddings", {
+            maxBytes: COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES,
+          });
+          const vectors = parseGitHubCopilotEmbeddingPayload(payload, input.length);
+          callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+          return vectors;
+        },
+      });
+    };
+    const provider: MemoryEmbeddingProvider = {
+      id: COPILOT_EMBEDDING_PROVIDER_ID,
       model,
-    });
+      embed: async (input, callOptions) => {
+        const [vector] = await embedMany(
+          [typeof input === "string" ? input : input.text],
+          callOptions,
+        );
+        return vector ?? [];
+      },
+      embedBatch: async (inputs, callOptions) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        if (callOptions?.inputType === "query") {
+          return await Promise.all(
+            texts.map(async (text) => (await embedMany([text], callOptions))[0] ?? []),
+          );
+        }
+        return await embedMany(texts, callOptions);
+      },
+    };
 
     return {
       provider,

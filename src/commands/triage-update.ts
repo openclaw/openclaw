@@ -12,7 +12,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 const UPDATE_FAILURE_MAX_BYTES = 8 * 1024;
@@ -33,6 +33,7 @@ const createUpdateFailureSchema = <T extends z.ZodRawShape>(stepFields: T) =>
           reason: z.string().optional(),
           before: updateIdentitySchema.optional(),
           after: updateIdentitySchema.optional(),
+          target: updateIdentitySchema.optional(),
           steps: z.array(
             z.object({
               name: z.string(),
@@ -139,6 +140,7 @@ export function sanitizeTriageUpdateFailure(
   input: unknown,
   redaction: SupportRedactionContext,
   format: "prompt" | "artifact" | "inventory" = "prompt",
+  errorDetail?: string,
 ): TriageUpdateFailure {
   const parsed = updateFailureArtifactSchema.safeParse(input);
   if (!parsed.success) {
@@ -167,20 +169,29 @@ export function sanitizeTriageUpdateFailure(
       return redacted;
     }
     // Reserve quotes and the omission marker; escaping also consumes the JSON field budget.
-    let budget = maxBytes - 5;
+    let budget = maxBytes - 7;
     for (;;) {
       const headBytes = Math.floor(budget / 2);
+      // Separate excerpts from words and redacted tokens so a second pass stays readable.
+      const head = truncateUtf8Prefix(redacted, excerpt === "ends" ? headBytes : budget).replace(
+        /\s+\S*$/u,
+        "",
+      );
+      const tail = truncateUtf8Suffix(
+        redacted,
+        excerpt === "ends" ? budget - headBytes : budget,
+      ).replace(/^\S*\s+/u, "");
       const bounded =
         excerpt === "tail"
-          ? `...${truncateUtf8Suffix(redacted, budget)}`
+          ? `... ${tail}`
           : excerpt === "ends"
-            ? `${truncateUtf8Prefix(redacted, headBytes)}...${truncateUtf8Suffix(redacted, budget - headBytes)}`
-            : `${truncateUtf8Prefix(redacted, budget)}...`;
+            ? `${head} ... ${tail}`
+            : `${head} ...`;
       const bytes = Buffer.byteLength(JSON.stringify(bounded));
       if (bytes <= maxBytes) {
         return bounded;
       }
-      budget = Math.floor((budget * (maxBytes - 5)) / (bytes - 5));
+      budget = Math.floor((budget * (maxBytes - 7)) / (bytes - 7));
     }
   }
   let error = text(failure.error, 768, "ends");
@@ -207,9 +218,17 @@ export function sanitizeTriageUpdateFailure(
       result.steps.findLast((step) => step.doctorLintFindings && isFailedUpdateStep(step)) ??
       result.steps.findLast((step) => step.doctorLintFindings);
     if (lint) {
-      // Released 9.4 keeps only 160-byte step tails, but preserves this 768-byte field.
+      // Released 9.4 preserves this field. Reserve the complete link and receipt
+      // together so a second excerpt cannot cut into the inventory locator.
+      const detail = text(errorDetail, Number.MAX_SAFE_INTEGER);
       const receipt = ` Doctor lint receipt: ${lintReceipt(lint)}`;
-      error = `${text(error ?? result.reason ?? "Update failed", 768 - Buffer.byteLength(JSON.stringify(receipt)), "ends")}${receipt}`;
+      let suffix = `${detail ? `. ${detail}` : ""}${receipt}`;
+      // A valid filesystem path can exceed the diagnostic field's entire budget.
+      if (768 - Buffer.byteLength(JSON.stringify(suffix)) <= 7) {
+        suffix = `. Complete Doctor lint inventory unavailable: diagnostic link exceeds error limit.${receipt}`;
+      }
+      const errorBudget = 768 - Buffer.byteLength(JSON.stringify(suffix));
+      error = `${text(failure.error ?? result.reason ?? "Update failed", errorBudget, "ends")}${suffix}`;
     }
   }
   const preserveFindings =
@@ -321,6 +340,7 @@ export function sanitizeTriageUpdateFailure(
       root: text(result.root, 96),
       before: identity(result.before),
       after: identity(result.after),
+      target: identity(result.target),
       recovery: result.recovery
         ? {
             serviceRestartSafe: result.recovery.serviceRestartSafe,
@@ -344,9 +364,7 @@ export function sanitizeTriageUpdateFailure(
           format !== "prompt" ? (step.signal === null ? null : text(step.signal, 32)) : undefined,
         killed: format !== "prompt" ? step.killed : undefined,
         outputLimitExceeded: format !== "prompt" ? step.outputLimitExceeded : undefined,
-        // Failed-step stderr leads with the triggering error: keep both ends. The 384-byte cap's
-        // tail half is wider than the previous tail-only window, so previously visible excerpts
-        // remain visible; stdout keeps its tail-only outcome excerpt.
+        // Keep both ends of failed-step stderr; stdout keeps its terminal outcome excerpt.
         stderrTail:
           format === "artifact" && step.doctorLintFindings
             ? lintReceipt(step)
@@ -393,7 +411,10 @@ export async function readTriageUpdateFailure(
   inputPath: string,
   redaction: SupportRedactionContext,
 ): Promise<TriageUpdateFailure> {
-  const file = await fs.open(inputPath, "r");
+  // Let the descriptor check reject FIFOs without waiting for a writer.
+  const flags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+  const file = await fs.open(inputPath, flags);
   try {
     if (!(await file.stat()).isFile()) {
       throw new Error("Update failure diagnostics must be a regular file.");

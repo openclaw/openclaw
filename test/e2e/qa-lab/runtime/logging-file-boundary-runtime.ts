@@ -9,18 +9,14 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../../src/infra/diagnostic-trace-context.js";
-import { getChildLogger, resetLogger, setLoggerOverride } from "../../../../src/logging/logger.js";
-import { testApi } from "../../../../src/logging/logger.test-support.js";
+import {
+  flushLogger,
+  getChildLogger,
+  resetLogger,
+  setLoggerOverride,
+} from "../../../../src/logging/logger.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
-
-function artifactBase(argv: readonly string[]): string {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
+import { parseQaArtifactBase } from "./script-options.js";
 
 function rotatedPath(file: string): string {
   const ext = path.extname(file);
@@ -39,7 +35,7 @@ export async function runLoggingFileBoundary(outputRoot: string) {
   const diagnostics: Extract<DiagnosticEventPayload, { type: "log.record" }>[] = [];
   resetDiagnosticEventsForTest();
   resetLogger();
-  testApi.resetFileLogTransportForTests();
+  await flushLogger();
   setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 512 });
   const unsubscribe = onInternalDiagnosticEvent((event) => {
     if (event.type === "log.record") {
@@ -52,7 +48,7 @@ export async function runLoggingFileBoundary(outputRoot: string) {
       logger.info(`rotation-fill-${"x".repeat(700)}`);
       logger.info({ marker: "correlated" }, "qa-correlated-record");
     });
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -85,16 +81,16 @@ export async function runLoggingFileBoundary(outputRoot: string) {
     return { currentRecords: current.length, archivedRecords: archived.length, trace: expected };
   } finally {
     unsubscribe();
+    await flushLogger();
     setLoggerOverride(null);
     resetLogger();
-    testApi.resetFileLogTransportForTests();
     resetDiagnosticEventsForTest();
   }
 }
 
 async function main() {
   const repoRoot = process.cwd();
-  const outputRoot = artifactBase(process.argv.slice(2));
+  const outputRoot = parseQaArtifactBase(process.argv.slice(2));
   const startedAt = Date.now();
   const writer = createQaScriptEvidenceWriter({
     artifactBase: outputRoot,

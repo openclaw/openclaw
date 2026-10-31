@@ -5,21 +5,21 @@ import { copyCallRecord, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import { clearMaxDurationTimer, rejectTranscriptWaiter } from "./timers.js";
 
-// Shared call finalization path for manager and webhook lifecycle exits.
-
 const log = createSubsystemLogger("voice-call/lifecycle");
-
-type CallLifecycleContext = Pick<
-  CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "storePath" | "stateRuntime"
-> &
-  Partial<
-    Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "notifyHangupTimers">
-  >;
 
 /** Finalize under the manager mutation queue, publishing cleanup only after persistence. */
 export async function finalizeCall(params: {
-  ctx: CallLifecycleContext;
+  ctx: Pick<
+    CallManagerContext,
+    | "activeCalls"
+    | "onCallUpdated"
+    | "providerCallIdMap"
+    | "storePath"
+    | "stateRuntime"
+    | "transcriptWaiters"
+    | "maxDurationTimers"
+    | "notifyHangupTimers"
+  >;
   call: CallRecord;
   preparedCall?: CallRecord;
   endReason: EndReason;
@@ -42,25 +42,22 @@ export async function finalizeCall(params: {
     );
   }
 
-  if (ctx.maxDurationTimers) {
-    clearMaxDurationTimer({ maxDurationTimers: ctx.maxDurationTimers }, call.callId);
-  }
-  const notifyTimer = ctx.notifyHangupTimers?.get(call.callId);
+  clearMaxDurationTimer(ctx, call.callId);
+  const notifyTimer = ctx.notifyHangupTimers.get(call.callId);
   if (notifyTimer) {
     clearTimeout(notifyTimer);
-    ctx.notifyHangupTimers?.delete(call.callId);
+    ctx.notifyHangupTimers.delete(call.callId);
   }
-  if (ctx.transcriptWaiters) {
-    rejectTranscriptWaiter(
-      { transcriptWaiters: ctx.transcriptWaiters },
-      call.callId,
-      params.transcriptRejectReason ?? `Call ended: ${endReason}`,
-    );
-  }
+  rejectTranscriptWaiter(
+    ctx,
+    call.callId,
+    params.transcriptRejectReason ?? `Call ended: ${endReason}`,
+  );
 
   ctx.activeCalls.delete(call.callId);
   // Remove a provider-call mapping only when it still points at this call.
   if (call.providerCallId && ctx.providerCallIdMap.get(call.providerCallId) === call.callId) {
     ctx.providerCallIdMap.delete(call.providerCallId);
   }
+  void ctx.onCallUpdated?.(call);
 }

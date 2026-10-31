@@ -1,15 +1,16 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { BrowserTabNotFoundError } from "./errors.js";
+import { BrowserError, BrowserTabNotFoundError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
+  CLOSE_TAB_VERIFY_POLL_MS,
+  CLOSE_TAB_VERIFY_WINDOW_MS,
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
@@ -106,11 +107,7 @@ export function createProfileSelectionOps({
     const candidateTabs = (tabs: BrowserTab[]) =>
       capabilities.supportsPerTabWs ? tabs.filter((tab) => Boolean(tab.wsUrl)) : tabs;
     const canResolveSelection = (tabs: BrowserTab[]) => {
-      const desiredTargetId =
-        targetId ??
-        openedTab?.targetId ??
-        normalizeOptionalString(runtime.lastTargetId) ??
-        undefined;
+      const desiredTargetId = targetId ?? openedTab?.targetId ?? runtime.lastTargetId ?? undefined;
       if (!desiredTargetId) {
         return tabs.length > 0;
       }
@@ -138,8 +135,8 @@ export function createProfileSelectionOps({
         canResolveSelection(unfilteredTabs) ||
         preservedCanResolveSelection())
     ) {
-      const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-      while (Date.now() < deadline) {
+      const deadline = performance.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+      while (performance.now() < deadline) {
         await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, options?.signal);
         listedTabs = await readTabs();
         await openWhenConfirmedEmpty(listedTabs);
@@ -169,7 +166,7 @@ export function createProfileSelectionOps({
         : new Error(formatErrorMessage(lastListError));
     }
 
-    const stickyTargetId = normalizeOptionalString(runtime.lastTargetId);
+    const stickyTargetId = runtime.lastTargetId ?? undefined;
     // Sticky selection is an identity promise: a missing target requires a fresh
     // explicit choice. Without one, prefer page tabs over background targets.
     const chosen = targetId
@@ -193,72 +190,104 @@ export function createProfileSelectionOps({
     return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId).targetId;
   };
 
-  const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
-
-    if (capabilities.usesChromeMcp) {
-      assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
-      const { focusChromeMcpTab } = await getChromeMcpModule();
-      options?.signal?.throwIfAborted();
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile, options);
-      runtime.lastTargetId = resolvedTargetId;
-      return;
-    }
-
-    if (capabilities.usesPersistentPlaywright || options?.assertCurrent) {
-      const mod = await getPwAiModule({ mode: "strict" });
-      if (mod) {
+  // /json/close answers 200 "Target is closing" once Chrome has requested the close,
+  // not once the page is gone, so confirm the target left the list before reporting success.
+  const assertTabClosed = async (
+    targetId: string,
+    options?: BrowserTabTargetOptions,
+  ): Promise<void> => {
+    const deadline = performance.now() + CLOSE_TAB_VERIFY_WINDOW_MS;
+    for (;;) {
+      let stillOpen: boolean;
+      try {
+        stillOpen = (await listTabs(options)).some((tab) => tab.targetId === targetId);
+      } catch (error) {
         options?.signal?.throwIfAborted();
-        await mod.focusPageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
-          targetId: resolvedTargetId,
-          ssrfPolicy: getCdpControlPolicy(),
-          ...(options?.signal ? { signal: options.signal } : {}),
-          ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
-        });
-        runtime.lastTargetId = resolvedTargetId;
+        // A failed listing (timeout, 429, policy) proves nothing about the tab. Accepted edge:
+        // a browser that exited with its last tab also lands here and reports this error.
+        throw new BrowserError(
+          `Close was requested but tab ${targetId} may still be open: ` +
+            `the tab list could not be read (${formatErrorMessage(error)}). ` +
+            "Confirm the tab's state in the browser, or ask the user to, before closing again.",
+          500,
+          { cause: error },
+        );
+      }
+      if (!stillOpen) {
         return;
       }
-      if (options?.assertCurrent) {
+      if (performance.now() >= deadline) {
+        throw new BrowserError(
+          `Browser did not close tab ${targetId}: it is still open after the close request. ` +
+            "A page prompt such as a beforeunload dialog may be blocking it; resolve the prompt " +
+            "in the browser (or ask the user to), then retry close.",
+        );
+      }
+      await sleepWithAbort(CLOSE_TAB_VERIFY_POLL_MS, options?.signal);
+    }
+  };
+
+  const prepareTabOperation = async (
+    action: "focus" | "close",
+    resolvedTargetId: string,
+    options?: BrowserTabTargetOptions,
+  ): Promise<() => Promise<void>> => {
+    if (capabilities.usesChromeMcp) {
+      assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
+      const mod = await getChromeMcpModule();
+      const run = action === "focus" ? mod.focusChromeMcpTab : mod.closeChromeMcpTab;
+      return () => run(profile.name, resolvedTargetId, profile, options);
+    }
+
+    const assertCurrent = action === "focus" ? options?.assertCurrent : undefined;
+    if (capabilities.usesPersistentPlaywright || assertCurrent) {
+      const mod = await getPwAiModule({ mode: "strict" });
+      if (mod) {
+        const run =
+          action === "focus"
+            ? mod.focusPageByTargetIdViaPlaywright
+            : mod.closePageByTargetIdViaPlaywright;
+        return () =>
+          run({
+            cdpUrl: profile.cdpUrl,
+            targetId: resolvedTargetId,
+            ssrfPolicy: getCdpControlPolicy(),
+            ...(options?.signal ? { signal: options.signal } : {}),
+            ...(assertCurrent ? { assertCurrent } : {}),
+          });
+      }
+      if (assertCurrent) {
         throw new Error("Playwright focus is unavailable for this dashboard tab");
       }
     }
 
+    return async () => {
+      await fetchOk(
+        appendCdpPath(
+          cdpHttpBase,
+          `/json/${action === "focus" ? "activate" : "close"}/${resolvedTargetId}`,
+        ),
+        undefined,
+        options?.signal ? { signal: options.signal } : undefined,
+        getCdpControlPolicy(),
+      );
+      if (action === "close") {
+        await assertTabClosed(resolvedTargetId, options);
+      }
+    };
+  };
+
+  const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    const focus = await prepareTabOperation("focus", resolvedTargetId, options);
     options?.signal?.throwIfAborted();
-    await fetchOk(
-      appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
-      undefined,
-      options?.signal ? { signal: options.signal } : undefined,
-      getCdpControlPolicy(),
-    );
+    await focus();
     runtime.lastTargetId = resolvedTargetId;
   };
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
-    let close = () =>
-      fetchOk(
-        appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
-        undefined,
-        options?.signal ? { signal: options.signal } : undefined,
-        getCdpControlPolicy(),
-      );
-    if (capabilities.usesChromeMcp) {
-      assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
-      const { closeChromeMcpTab } = await getChromeMcpModule();
-      close = () => closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
-    } else if (capabilities.usesPersistentPlaywright) {
-      const mod = await getPwAiModule({ mode: "strict" });
-      if (mod) {
-        close = () =>
-          mod.closePageByTargetIdViaPlaywright({
-            cdpUrl: profile.cdpUrl,
-            targetId: resolvedTargetId,
-            ssrfPolicy: getCdpControlPolicy(),
-            ...(options?.signal ? { signal: options.signal } : {}),
-          });
-      }
-    }
+    const close = await prepareTabOperation("close", resolvedTargetId, options);
     options?.signal?.throwIfAborted();
     await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
       options?.signal?.throwIfAborted();

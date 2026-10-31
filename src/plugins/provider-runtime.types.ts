@@ -11,14 +11,6 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.types.js").ModelProviderRequestTransportOverrides;
 
-type ProviderRuntimeProviderConfig = {
-  baseUrl?: string;
-  api?: ModelProviderConfig["api"];
-  auth?: ModelProviderConfig["auth"];
-  models?: ModelProviderConfig["models"];
-  headers?: unknown;
-};
-
 /**
  * Sync hook for provider-owned model ids that are not present in the local
  * registry/catalog yet.
@@ -27,15 +19,13 @@ type ProviderRuntimeProviderConfig = {
  * behavior. The hook should be cheap and side-effect free; async refreshes
  * belong in `prepareDynamicModel`.
  */
-export type ProviderResolveDynamicModelContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
+export type ProviderResolveDynamicModelContext = ProviderPreferRuntimeResolvedModelContext & {
   agentRuntimeId?: string;
-  provider: string;
-  modelId: string;
   modelRegistry: ModelRegistry;
-  providerConfig?: ProviderRuntimeProviderConfig;
+  providerConfig?: Partial<Pick<ModelProviderConfig, "baseUrl" | "api" | "auth" | "models">> & {
+    headers?: unknown;
+    request?: ModelProviderConfig["request"];
+  };
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
 };
@@ -73,10 +63,10 @@ export type ProviderNormalizeResolvedModelContext = ProviderPreferRuntimeResolve
  * Use this for provider-specific alias cleanup that should stay with the
  * plugin rather than in core string tables.
  */
-export type ProviderNormalizeModelIdContext = {
-  provider: string;
-  modelId: string;
-};
+export type ProviderNormalizeModelIdContext = Pick<
+  ProviderPreferRuntimeResolvedModelContext,
+  "provider" | "modelId"
+>;
 
 /**
  * Provider-owned transport normalization for arbitrary provider/model config.
@@ -100,17 +90,27 @@ export type ProviderNormalizeTransportContext = {
  * profiles/env/config. The returned value should be the actual token/key to use
  * for the request.
  */
-export type ProviderPrepareRuntimeAuthContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
+export type ProviderPrepareRuntimeAuthContext = ProviderPreferRuntimeResolvedModelContext & {
   env: NodeJS.ProcessEnv;
-  provider: string;
-  modelId: string;
   model: ProviderRuntimeModel;
   apiKey: string;
   authMode: string;
   profileId?: string;
+  /** Cancel caller-owned exchanges when the run stops or its auth budget expires. */
+  signal?: AbortSignal;
+};
+
+/** Transport identity available to every inference capability, without invented chat limits. */
+export type ProviderRuntimeAuthModel = Pick<ProviderRuntimeModel, "id" | "provider"> &
+  Partial<Pick<ProviderRuntimeModel, "name" | "api" | "baseUrl" | "headers">>;
+
+/** Capability-aware exchange; the legacy hook retains its shipped full chat-model contract. */
+export type ProviderPrepareRuntimeAuthContextV2 = Omit<
+  ProviderPrepareRuntimeAuthContext,
+  "model"
+> & {
+  capability: "chat" | "decision";
+  model: ProviderRuntimeAuthModel;
 };
 
 /**
@@ -152,6 +152,7 @@ export type ProviderResolveUsageAuthContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
+  /** @deprecated Await resolveApiKeyCandidatesFromConfigAndStore instead. Removal follows an announced ordinary stable release window. */
   resolveApiKeyFromConfigAndStore: (params?: {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
@@ -235,29 +236,21 @@ export type ProviderAuthDoctorHintContext = {
  * Use this to set provider defaults or rewrite provider-specific config keys
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
-/** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
-type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
-
-export type ProviderPrepareExtraParamsContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
+export type ProviderPrepareExtraParamsContext = ProviderPreferRuntimeResolvedModelContext & {
   agentId?: string;
   /** Selected credential facts; excludes credential material. */
   auth?: { mode: string; authFlow?: string };
   nativeWebSearchAllowedByToolPolicy?: boolean;
-  provider: string;
-  modelId: string;
   model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
-  thinkingLevel?: ProviderTransportThinkingLevel;
+  /** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
+  thinkingLevel?: Exclude<ThinkLevel, "ultra">;
 };
 
 export type ProviderExtraParamsForTransportContext = Omit<
   ProviderPrepareExtraParamsContext,
   "extraParams"
 > & {
-  model?: ProviderRuntimeModel;
   transport?: "sse" | "websocket" | "websocket-cached" | "auto";
   extraParams: Record<string, unknown>;
 };
@@ -270,12 +263,7 @@ export type ProviderResolvePromptOverlayContext = ProviderSystemPromptContributi
   baseOverlay?: ProviderSystemPromptContribution;
 };
 
-export type ProviderFollowupFallbackRouteContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
+export type ProviderFollowupFallbackRouteContext = ProviderPreferRuntimeResolvedModelContext & {
   payload: ReplyPayload;
   originatingChannel?: string;
   originatingTo?: string;
@@ -288,12 +276,7 @@ export type ProviderFollowupFallbackRouteResult = {
   reason?: string;
 };
 
-export type ProviderResolveAuthProfileIdContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
+export type ProviderResolveAuthProfileIdContext = ProviderPreferRuntimeResolvedModelContext & {
   preferredProfileId?: string;
   lockedProfileId?: string;
   profileOrder: string[];

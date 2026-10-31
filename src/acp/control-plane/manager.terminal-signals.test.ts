@@ -1,30 +1,45 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import * as terminalState from "../../sessions/subagent-terminal-state.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockMutableSession,
   mockParentedAcpSessionEntries,
+  readySessionMeta,
 } from "./manager.test-helpers.js";
 
 describe("ACP terminal state signals", () => {
   installAcpSessionManagerTestLifecycle();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   function setupParentedTurn(childSessionKey: string) {
+    setRuntimeConfigSnapshot(baseCfg);
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    mockParentedAcpSessionEntries({ childSessionKey, parentSessionKey: "agent:main:main" });
+    const metadata = { currentMeta: readySessionMeta() };
+    mockMutableSession(childSessionKey, metadata);
+    mockParentedAcpSessionEntries({
+      childSessionKey,
+      parentSessionKey: "agent:main:main",
+      state: metadata,
+    });
     return {
       runtimeState,
       manager: new AcpSessionManager(),
@@ -79,10 +94,49 @@ describe("ACP terminal state signals", () => {
     });
   });
 
-  it("keeps ACP completion joined without blocking the event loop on terminal signal contention", async () => {
+  it("leaves a same-id predecessor's terminal outcome to it when a queued duplicate is cancelled", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const childSessionKey = "agent:main:acp:same-id-duplicate";
+      const { runtimeState, manager, input } = setupParentedTurn(childSessionKey);
+      const entered = createDeferred();
+      const release = createDeferred();
+      runtimeState.runTurn.mockImplementationOnce(async function* () {
+        entered.resolve();
+        await release.promise;
+        yield { type: "done" as const, stopReason: "end_turn" };
+      });
+      const predecessor = manager.runTurn({ ...input, requestId: "same-id" });
+      const abortDuplicate = new AbortController();
+      let duplicate: Promise<void> | undefined;
+      try {
+        await Promise.race([entered.promise, predecessor]);
+        duplicate = manager.runTurn({
+          ...input,
+          requestId: "same-id",
+          signal: abortDuplicate.signal,
+        });
+        abortDuplicate.abort();
+        await duplicate;
+        expect((await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events).toEqual(
+          [],
+        );
+        release.resolve();
+        await predecessor;
+      } finally {
+        release.resolve();
+        await Promise.allSettled([predecessor, duplicate]);
+      }
+      expect(runtimeState.runTurn).toHaveBeenCalledOnce();
+      expect(
+        (await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events,
+      ).toMatchObject([{ kind: "run_completed", runId: "same-id" }]);
+    });
+  });
+
+  it("keeps Stop joined to a finishing ACP turn's physical terminal writer", async () => {
     await withStateDirEnv("openclaw-acp-manager-", async () => {
       const childSessionKey = "agent:main:acp:contended-terminal";
-      const { manager, input } = setupParentedTurn(childSessionKey);
+      const { manager, input, runtimeState } = setupParentedTurn(childSessionKey);
       await manager.runTurn({ ...input, requestId: "warm-terminal-worker" });
       const databasePath = resolveOpenClawStateSqlitePath();
       let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
@@ -97,14 +151,21 @@ describe("ACP terminal state signals", () => {
           return await record(...args);
         });
       let settled = false;
+      let stopSettled = false;
       let pending: Promise<void> | undefined;
+      let stopped: Promise<void> | undefined;
       try {
         pending = manager.runTurn({ ...input, requestId: "contended-terminal" }).finally(() => {
           settled = true;
         });
         await Promise.race([entered.promise, pending]);
+        stopped = stopAcpControllerTurns(input).then(() => {
+          stopSettled = true;
+        });
         await nextTurn();
         expect(settled).toBe(false);
+        expect(stopSettled).toBe(false);
+        expect(runtimeState.cancel).not.toHaveBeenCalled();
         if (!holder) {
           throw new Error("Expected terminal state writer contention");
         }
@@ -118,10 +179,11 @@ describe("ACP terminal state signals", () => {
         try {
           await holder?.joined;
         } finally {
-          await pending;
+          await Promise.all([pending, stopped]);
         }
       }
       expect(settled).toBe(true);
+      expect(stopSettled).toBe(true);
       expect(
         (await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events.map(
           (event) => ({

@@ -1,4 +1,3 @@
-/** Core Canvas document materialization and hosted-path resolution. */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,14 +8,13 @@ import { root as fsRoot } from "../infra/fs-safe.js";
 import { CANVAS_DOCUMENTS_PATH } from "./constants.js";
 
 const CANVAS_DOCUMENT_MANIFEST_MAX_BYTES = 2 * 1024 * 1024;
+const WIDGET_MAX_PER_SCOPE = 32;
 
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
 type CanvasDocumentCreateInput = {
-  id?: string;
   html: string;
   title?: string;
-  surface?: "assistant_message" | "tool_card" | "sidebar";
   retentionScope?: string;
   /** Serve with a CSP sandbox header so direct opens get an opaque origin. */
   cspSandbox?: "scripts";
@@ -73,14 +71,12 @@ export function resolveCanvasDocumentsDir(stateDir = resolveStateDir()): string 
   return path.resolve(stateDir, "canvas", "documents");
 }
 
-/** Reads the managed HTML entrypoint for a core Canvas document. */
 export async function readCanvasDocumentHtmlSource(
   documentId: string,
-  options?: { stateDir?: string; maxBytes?: number },
 ): Promise<{ html: string; cspSandbox?: "scripts" }> {
   const id = normalizeCanvasDocumentId(documentId);
   // Keep the document directory inside the guarded root so aliases cannot select another document.
-  const root = await fsRoot(resolveCanvasDocumentsDir(options?.stateDir), {
+  const root = await fsRoot(resolveCanvasDocumentsDir(), {
     maxBytes: CANVAS_DOCUMENT_MANIFEST_MAX_BYTES,
   });
   const manifest = await root.readJson<Partial<CanvasDocumentManifest>>(`${id}/manifest.json`);
@@ -93,7 +89,7 @@ export async function readCanvasDocumentHtmlSource(
   }
   return {
     html: await root.readText(`${id}/${entrypoint}`, {
-      maxBytes: options?.maxBytes ?? WIDGET_HTML_MAX_UTF8_BYTES,
+      maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
     }),
     ...(manifest.cspSandbox === "scripts" ? { cspSandbox: "scripts" as const } : {}),
   };
@@ -102,7 +98,6 @@ export async function readCanvasDocumentHtmlSource(
 async function pruneCanvasDocumentsForScope(params: {
   documentsDir: string;
   retentionScope: string;
-  maxDocuments: number;
 }): Promise<void> {
   const entries = await fs.readdir(params.documentsDir, { withFileTypes: true });
   const scopedDocuments = (
@@ -130,7 +125,7 @@ async function pruneCanvasDocumentsForScope(params: {
         }),
     )
   ).filter((entry): entry is { id: string; createdAt: string } => entry !== null);
-  const deleteCount = Math.max(0, scopedDocuments.length - params.maxDocuments);
+  const deleteCount = Math.max(0, scopedDocuments.length - WIDGET_MAX_PER_SCOPE);
   const oldest = scopedDocuments
     .toSorted(
       (left, right) =>
@@ -144,11 +139,9 @@ async function pruneCanvasDocumentsForScope(params: {
   );
 }
 
-/** Maps a Canvas hosted document URL path back to its managed local file. */
-export function resolveCanvasHttpPathToLocalPath(
+export function parseCanvasDocumentHttpPath(
   requestPath: string,
-  options?: { stateDir?: string },
-): string | null {
+): { documentId: string; entrypoint: string } | null {
   const trimmed = requestPath.trim();
   const prefix = `${CANVAS_DOCUMENTS_PATH}/`;
   if (!trimmed.startsWith(prefix)) {
@@ -165,31 +158,27 @@ export function resolveCanvasHttpPathToLocalPath(
       return null;
     }
     const documentId = normalizeCanvasDocumentId(rawDocumentId);
-    const normalizedEntrypoint = normalizeLogicalPath(entrySegments.join("/"));
-    const documentsDir = resolveCanvasDocumentsDir(options?.stateDir);
-    const candidatePath = path.resolve(documentsDir, documentId, normalizedEntrypoint);
-    if (!candidatePath.startsWith(`${documentsDir}${path.sep}`)) {
-      return null;
-    }
-    return candidatePath;
+    return { documentId, entrypoint: normalizeLogicalPath(entrySegments.join("/")) };
   } catch {
     return null;
   }
 }
 
-/** Persists the inline widget's HTML bytes and its Canvas manifest. */
+export function resolveCanvasHttpPathToLocalPath(requestPath: string): string | null {
+  const parsed = parseCanvasDocumentHttpPath(requestPath);
+  if (!parsed) {
+    return null;
+  }
+  const documentsDir = resolveCanvasDocumentsDir();
+  const candidatePath = path.resolve(documentsDir, parsed.documentId, parsed.entrypoint);
+  return candidatePath.startsWith(`${documentsDir}${path.sep}`) ? candidatePath : null;
+}
+
 export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
-  options?: {
-    stateDir?: string;
-    maxDocumentsPerScope?: number;
-  },
 ): Promise<CanvasDocumentManifest> {
-  const id = input.id?.trim()
-    ? normalizeCanvasDocumentId(input.id)
-    : `cv_${randomUUID().replaceAll("-", "")}`;
-  const rootDir = path.join(resolveCanvasDocumentsDir(options?.stateDir), id);
-  await fs.rm(rootDir, { recursive: true, force: true }).catch(() => undefined);
+  const id = `cv_${randomUUID().replaceAll("-", "")}`;
+  const rootDir = path.join(resolveCanvasDocumentsDir(), id);
   await fs.mkdir(rootDir, { recursive: true });
   const root = await fsRoot(rootDir);
   await root.write("index.html", input.html);
@@ -197,7 +186,7 @@ export async function createCanvasDocument(
     id,
     kind: "html_bundle",
     ...(input.title?.trim() ? { title: input.title.trim() } : {}),
-    ...(input.surface ? { surface: input.surface } : {}),
+    surface: "assistant_message",
     ...(input.retentionScope ? { retentionScope: input.retentionScope } : {}),
     ...(input.cspSandbox ? { cspSandbox: input.cspSandbox } : {}),
     createdAt: new Date().toISOString(),
@@ -206,12 +195,11 @@ export async function createCanvasDocument(
     assets: [],
   };
   await root.writeJson("manifest.json", manifest, { space: 2 });
-  if (input.retentionScope && options?.maxDocumentsPerScope) {
+  if (input.retentionScope) {
     // Bounded transcript widgets cannot grow managed Canvas storage without limit.
     await pruneCanvasDocumentsForScope({
-      documentsDir: resolveCanvasDocumentsDir(options.stateDir),
+      documentsDir: resolveCanvasDocumentsDir(),
       retentionScope: input.retentionScope,
-      maxDocuments: options.maxDocumentsPerScope,
     });
   }
   return manifest;

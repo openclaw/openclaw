@@ -112,7 +112,7 @@ async function runNodeDesktopStreamCommand(params: {
   if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65535) {
     throw new Error("desktop stream target port is invalid");
   }
-  void params.emitStatus?.("probing local RFB server\n").catch(() => undefined);
+  void params.emitStatus?.("checking local RFB server\n").catch(() => undefined);
   const probe = await connectRfbServer({
     host: "127.0.0.1",
     port: params.port,

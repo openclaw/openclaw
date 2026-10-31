@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   inspectAcpSessionClaimsForDoctor,
@@ -19,9 +18,13 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
-} from "../config/sessions/targets-read-availability.js";
-import { dedupeSessionStoreTargetsBySqliteTarget } from "../config/sessions/targets.js";
+} from "../config/sessions/targets-read-availability.worker.js";
+import {
+  dedupeSessionStoreTargetsBySqliteTarget,
+  type SessionStoreTarget as DoctorSessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pluginStatePublication } from "../plugin-state/plugin-state-publication.js";
 import { runWriteTransaction } from "../plugin-state/plugin-state-store.database.js";
 import {
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
@@ -53,6 +56,7 @@ import {
   resolveVerifiedSessionSource,
 } from "./deferred-plugin-session-sources.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -63,8 +67,6 @@ import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 type SessionEvidenceResult = Awaited<
   ReturnType<NonNullable<PluginDoctorStateMigrationContext["readSessionIdentityEvidenceBatch"]>>
 >[number];
-type DoctorSessionStoreTarget = { agentId: string; storePath: string };
-
 type SessionSourceEvidence = { imported: boolean; sessionIds: ReadonlySet<string> };
 
 function hasUnimportedSessionIdentity(params: {
@@ -111,7 +113,12 @@ function hasUnimportedSessionIdentity(params: {
           const index = receipt.sources.find((source) => source.path === path.resolve(storePath));
           if (
             !index ||
-            !resolveVerifiedSessionSource(index, { agentId, storePath, sqlitePath }, params.env)
+            !resolveVerifiedSessionSource(
+              index,
+              { agentId, storePath, sqlitePath },
+              params.env,
+              new Map(),
+            )
           ) {
             throw new Error(`Retained plugin session index requires Doctor repair: ${storePath}`);
           }
@@ -334,7 +341,7 @@ async function repairPluginStateEntriesForDoctor(params: {
     authority.assertCurrent();
     assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
   };
-  const validate = (db: DatabaseSync) => {
+  const validate = (db: EngineConnection) => {
     for (const { entry } of rows) {
       const query = getPluginStateKysely(db)
         .selectFrom("plugin_state_entries")
@@ -368,7 +375,7 @@ async function repairPluginStateEntriesForDoctor(params: {
       assertCurrent();
       authority.assertOwnedInTransaction(db);
       validate(db);
-      for (const { key, valueJson } of rows) {
+      for (const { entry, key, valueJson } of rows) {
         executeSqliteQuerySync(
           db,
           getPluginStateKysely(db)
@@ -378,6 +385,14 @@ async function repairPluginStateEntriesForDoctor(params: {
             .where("namespace", "=", namespace)
             .where("entry_key", "=", key),
         );
+        pluginStatePublication.stagePostimage(db, {
+          plugin_id: pluginId,
+          namespace,
+          entry_key: key,
+          value_json: valueJson,
+          created_at: entry.createdAt,
+          expires_at: entry.expiresAt,
+        });
       }
       authority.assertOwnedInTransaction(db);
     },

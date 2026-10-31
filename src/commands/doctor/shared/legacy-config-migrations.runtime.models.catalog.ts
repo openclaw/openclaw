@@ -239,7 +239,7 @@ export function migrateModelCompatCatalogOwnership(
   }
 }
 
-export function resolveStaleContextWindowFix(params: {
+function resolveStaleContextWindowFix(params: {
   providerId: string;
   modelId: string;
   contextWindow: number;
@@ -255,27 +255,36 @@ export function resolveStaleContextWindowFix(params: {
   return fix && params.contextWindow === fix.stale ? fix : undefined;
 }
 
-export function hasStaleContextWindowValue(providers: unknown): boolean {
-  for (const { providerId, model } of providerModelEntries(providers)) {
+export function* staleModelContextWindows(providers: unknown) {
+  for (const entry of providerModelEntries(providers)) {
+    const { providerId, model } = entry;
     const modelId = typeof model.id === "string" ? model.id : undefined;
     const contextWindow = model.contextWindow;
     if (!modelId || typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
       continue;
     }
-    if (resolveStaleContextWindowFix({ providerId, modelId, contextWindow })) {
-      return true;
+    const fix = resolveStaleContextWindowFix({ providerId, modelId, contextWindow });
+    if (fix) {
+      yield { ...entry, modelId, contextWindow, fix };
     }
   }
-  return false;
+}
+
+export function hasStaleContextWindowValue(providers: unknown): boolean {
+  return !staleModelContextWindows(providers).next().done;
+}
+
+export function* invalidModelThinkingFormats(providers: unknown) {
+  for (const entry of providerModelEntries(providers)) {
+    const { model } = entry;
+    const compat = getRecord(model.compat);
+    const thinkingFormat = compat?.thinkingFormat;
+    if (compat && typeof thinkingFormat === "string" && !isModelThinkingFormat(thinkingFormat)) {
+      yield { ...entry, compat, thinkingFormat };
+    }
+  }
 }
 
 export function hasInvalidThinkingFormat(providers: unknown): boolean {
-  for (const { model } of providerModelEntries(providers)) {
-    const compat = getRecord(model.compat);
-    const thinkingFormat = compat?.thinkingFormat;
-    if (typeof thinkingFormat === "string" && !isModelThinkingFormat(thinkingFormat)) {
-      return true;
-    }
-  }
-  return false;
+  return !invalidModelThinkingFormats(providers).next().done;
 }

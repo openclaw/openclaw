@@ -27,10 +27,6 @@ type MentionTarget = {
   replacementText?: string;
 };
 
-function isWhatsAppGroupJid(jid: string): boolean {
-  return jid.endsWith("@g.us");
-}
-
 export function mayContainWhatsAppOutboundMention(text: string): boolean {
   return /@\+?\d/.test(text);
 }
@@ -117,13 +113,36 @@ function chooseMentionJid(
   );
 }
 
-function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionParticipant[]): {
-  byPhone: Map<string, MentionTarget>;
-  byLid: Map<string, MentionTarget>;
-} {
+function shouldSkipMentionAt(
+  text: string,
+  index: number,
+  end: number,
+  codeRanges: CodeRegion[],
+): boolean {
+  if (isInsideCode(index, codeRanges)) {
+    return true;
+  }
+  const previous = index > 0 ? text[index - 1] : "";
+  const next = text[end] ?? "";
+  return Boolean((previous && /[\w@]/.test(previous)) || (next && /[\w@]/.test(next)));
+}
+
+export function resolveWhatsAppOutboundMentions(params: {
+  chatJid: string;
+  text: string;
+  participants?: readonly WhatsAppOutboundMentionParticipant[];
+}): WhatsAppOutboundMentionResolution {
+  if (
+    !params.chatJid.endsWith("@g.us") ||
+    !mayContainWhatsAppOutboundMention(params.text) ||
+    !params.participants?.length
+  ) {
+    return { text: params.text, mentionedJids: [] };
+  }
+
   const byPhone = new Map<string, MentionTarget>();
   const byLid = new Map<string, MentionTarget>();
-  for (const participant of participants) {
+  for (const participant of params.participants) {
     const values = typeof participant === "string" ? { id: participant } : participant;
     const mentionJid = chooseMentionJid(values);
     if (!mentionJid) {
@@ -147,92 +166,37 @@ function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionPa
       }
     }
   }
-  return { byPhone, byLid };
-}
-
-function shouldSkipMentionAt(
-  text: string,
-  index: number,
-  end: number,
-  codeRanges: CodeRegion[],
-): boolean {
-  if (isInsideCode(index, codeRanges)) {
-    return true;
-  }
-  const previous = index > 0 ? text[index - 1] : "";
-  const next = text[end] ?? "";
-  return Boolean((previous && /[\w@]/.test(previous)) || (next && /[\w@]/.test(next)));
-}
-
-export function resolveWhatsAppOutboundMentions(params: {
-  chatJid: string;
-  text: string;
-  participants?: readonly WhatsAppOutboundMentionParticipant[];
-}): WhatsAppOutboundMentionResolution {
-  if (
-    !isWhatsAppGroupJid(params.chatJid) ||
-    !mayContainWhatsAppOutboundMention(params.text) ||
-    !params.participants?.length
-  ) {
-    return { text: params.text, mentionedJids: [] };
-  }
-
-  const { byPhone, byLid } = buildMentionTargetMaps(params.participants);
   if (byPhone.size === 0 && byLid.size === 0) {
     return { text: params.text, mentionedJids: [] };
   }
 
   const codeRanges = collectCodeRanges(params.text);
-  const replacements: Array<{ start: number; end: number; text: string }> = [];
   const mentionedJids = new Set<string>();
-
-  for (const match of params.text.matchAll(OUTBOUND_MENTION_RE)) {
-    const start = match.index;
-    const token = match[0];
-    if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
-      continue;
-    }
-    const rawDigits = match[1];
-    if (!rawDigits) {
-      continue;
-    }
-    const digits = rawDigits.replace(/\D/g, "");
-    const target = token.startsWith("@+")
-      ? (byPhone.get(digits) ?? byLid.get(digits))
-      : (byLid.get(digits) ?? byPhone.get(digits));
-    if (!target) {
-      continue;
-    }
-    mentionedJids.add(target.mentionJid);
-    if (target.replacementText && target.replacementText !== token) {
-      replacements.push({
-        start,
-        end: start + token.length,
-        text: target.replacementText,
-      });
-    }
-  }
-
-  if (replacements.length === 0) {
-    return { text: params.text, mentionedJids: [...mentionedJids] };
-  }
-
-  let text = "";
-  let cursor = 0;
-  for (const replacement of replacements) {
-    text += params.text.slice(cursor, replacement.start);
-    text += replacement.text;
-    cursor = replacement.end;
-  }
-  text += params.text.slice(cursor);
+  const text = params.text.replace(
+    OUTBOUND_MENTION_RE,
+    (token, rawDigits: string, start: number) => {
+      if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
+        return token;
+      }
+      const digits = rawDigits.replace(/\D/g, "");
+      const target = token.startsWith("@+")
+        ? (byPhone.get(digits) ?? byLid.get(digits))
+        : (byLid.get(digits) ?? byPhone.get(digits));
+      if (!target) {
+        return token;
+      }
+      mentionedJids.add(target.mentionJid);
+      return target.replacementText ?? token;
+    },
+  );
   return { text, mentionedJids: [...mentionedJids] };
 }
 
 export function addWhatsAppOutboundMentionsToContent(
   content: AnyMessageContent,
-  mentionedJids: readonly string[],
+  mentionedJids: string[],
 ): AnyMessageContent {
   return mentionedJids.length > 0
-    ? ({ ...content, mentions: [...mentionedJids] } as AnyMessageContent)
+    ? ({ ...content, mentions: mentionedJids } as AnyMessageContent)
     : content;
 }

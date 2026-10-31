@@ -27,7 +27,7 @@ Auth profiles are per-agent, read from `<agentDir>/openclaw-agent.sqlite`. With 
 ```
 
 <Note>
-`sessions_history` is the safer cross-session recall path: it returns a bounded, redacted view, not a raw transcript dump. It strips thinking-block signatures, tool-result payload details, `<relevant-memories>` scaffolding, tool-call XML tags (`<tool_call>`, `<function_call>`, and their plural/downgraded forms), and MiniMax tool-call XML, then truncates and caps output by byte size.
+`sessions_history` provides bounded cross-session recall without secret-masking the retained text. It strips thinking-block signatures, tool-result payload details, `<relevant-memories>` markup, tool-call XML tags (`<tool_call>`, `<function_call>`, and their plural/downgraded forms), and MiniMax tool-call XML, then truncates and caps output by byte size.
 </Note>
 
 <Warning>
@@ -96,7 +96,7 @@ edits keep their normal automatic save behavior.
 
 OpenClaw records how each configured agent was created: `operator` for CLI,
 onboarding, and Gateway requests; `agent` when the system agent requested it;
-and `claw` when a Claw install added it. Agent-created entries also retain the
+and `template` when a Template install added it. Agent-created entries also retain the
 requesting agent id. A configured agent can ask OpenClaw to create another
 agent through its `openclaw` tool. The system agent files the typed operation,
 shows the requesting agent id to the operator, and creates the agent only after
@@ -126,12 +126,12 @@ artifacts and evidence to the coordinator without delegating further. Their
 operating programs live in `AGENTS.md`, so they also apply in spawned sessions
 that do not load `SOUL.md` or `IDENTITY.md`.
 
-The bundled roles are [Claw sources](/cli/claws), sharing the portable
+The bundled roles are [Template sources](/cli/templates), sharing the portable
 `CLAW.md` format for identity, the `SOUL.md` body, and declared workspace
 files. `agents add --role <role>` loads one of these sources. With the
-experimental Claws surface enabled, the equivalent source path from a source
-checkout is `openclaw claws add docs/reference/templates/roles/<role>`; follow
-the [Claw preview and consent flow](/cli/claws#inspect-and-preview).
+Templates surface enabled, the equivalent source path from a source
+checkout is `openclaw templates add docs/reference/templates/roles/<role>`; follow
+the [Template preview and consent flow](/cli/templates#inspect-and-preview).
 
 You can also create the chief of staff or the full team from the Control UI:
 choose **New agent** in the sidebar or Agents home, then select the role or
@@ -163,8 +163,8 @@ not a scheduler. `allowAgents` controls explicit spawn targets. The preset keeps
 `agents.defaults.subagents` and `tools.*` unchanged, so existing tool availability
 and access policy still apply. Role instructions require human approval before
 external sends, publication, purchases, deletion, or production changes.
-These delegation settings remain team wiring in config. The role Claws will
-carry them once the separate Claw profile support lands.
+These delegation settings remain team wiring in config. The role Templates will
+carry them once the separate Template profile support lands.
 
 The coordinator is an explicit target. Team creation
 sets `agents.defaults.systemAgent.agentId` to the coordinator only when that
@@ -281,7 +281,6 @@ Direct chats collapse to the agent's main session key by default, so true isolat
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "alex" },
-      heartbeat: { agentId: "alex" },
       systemAgent: { agentId: "alex" },
     },
     entries: {
@@ -314,13 +313,14 @@ DM access control (pairing/allowlist) is global per WhatsApp account, not per ag
 
 ## Routing rules
 
-Bindings are deterministic and most-specific wins. See [Channel routing](/channels/channel-routing#routing-rules-how-an-agent-is-chosen) for the full tier order (exact peer, parent peer, peer wildcard, guild+roles, guild, team, account, channel, fallback owner). A few rules worth calling out here:
+Bindings follow a fixed order, and the most-specific match wins. See [Channel routing](/channels/channel-routing#routing-rules-how-an-agent-is-chosen) for the full tier order (exact peer, parent peer, peer wildcard, guild+roles, guild, team, account, channel, fallback owner). A few rules worth calling out here:
 
 - If multiple bindings match within the same tier, the first one in config order wins.
+- With more than one configured agent and no explicit owner, a message that matches no binding is not given to an arbitrary first-listed agent. A configured `agents.defaults.systemAgent.agentId`, retained legacy owner, or caller-supplied owner still catches that unbound traffic; only when no binding matches and no such fallback owner remains is the message left undispatched. A channel that keeps inbound messages for retry (Telegram, for example) may then deliver it later once a binding gives that account an owner, but delivery is not guaranteed. A retryable message is dead-lettered once it reaches both the attempt limit and the minimum age (24 hours by default), and a channel like Telegram can reject an ownerless account at startup, so rebinding delivers the message only while it is still queued and the account is running.
 - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
 - A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
-For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, Talk, and auth-inheritance owners where needed. It also removes retired default markers from single-agent configs; the sole agent still resolves implicitly. Runtime admission requires the canonical roster, so run Doctor before starting a directly replaced binary with legacy markers. The normal update flow runs the candidate Doctor.
+For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit Custodian, Talk, and auth-inheritance owners where needed. It resolves legacy heartbeat enrollment before converting each monitor into an ordinary automation. It also removes retired default markers from single-agent configs; the sole agent still resolves implicitly. Runtime admission requires the current roster format, so run Doctor before starting a directly replaced binary with legacy markers. The normal update flow runs the candidate Doctor.
 
 For a multi-agent roster defined directly in the main config file without a
 legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
@@ -354,7 +354,7 @@ Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to ident
 
 Set `channels.<channel>.defaultAccount` to choose the account used when `accountId` is omitted. When unset, OpenClaw falls back to `default` if present, otherwise the first configured account id (sorted).
 
-Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
+Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
 
 ## Concepts
 
@@ -366,7 +366,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 ## Platform examples
 
 These examples select channel and service owners explicitly. Channel bindings route
-messages; `systemAgent`, `heartbeat`, and `talk.agentId` select their own owners.
+messages; `systemAgent`, each automation job, and `talk.agentId` select their own owners.
 When the previous owner was not `main`, `authInheritance.agentId` preserves the
 shared credential source independently of channel routing.
 
@@ -379,7 +379,6 @@ shared credential source independently of channel routing.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: {
@@ -433,7 +432,6 @@ shared credential source independently of channel routing.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: {
@@ -490,7 +488,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "home" },
-          heartbeat: { agentId: "home" },
           systemAgent: { agentId: "home" },
         },
         entries: {
@@ -507,7 +504,7 @@ shared credential source independently of channel routing.
         },
       },
 
-      // Deterministic routing: first match wins (most-specific first).
+      // Fixed routing order: first match wins (most-specific first).
       bindings: [
         { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
         { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
@@ -565,7 +562,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "chat" },
-          heartbeat: { agentId: "chat" },
           systemAgent: { agentId: "chat" },
         },
         entries: {
@@ -601,7 +597,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "chat" },
-          heartbeat: { agentId: "chat" },
           systemAgent: { agentId: "chat" },
         },
         entries: {
@@ -676,7 +671,7 @@ shared credential source independently of channel routing.
     }
     ```
 
-    Tool allow/deny lists are **tools**, not skills. If a skill needs to run a binary, ensure `exec` is allowed and the binary exists in the sandbox. For stricter gating, set `agents.entries.*.groupChat.mentionPatterns` and keep group allowlists enabled for the channel.
+    Tool allow/deny lists are **tools**, not skills. If a skill needs to run a binary, check that `exec` is allowed and the binary exists in the sandbox. For stricter gating, set `agents.entries.*.groupChat.mentionPatterns` and keep group allowlists enabled for the channel.
 
   </Tab>
 </Tabs>
@@ -691,7 +686,6 @@ Each agent can have its own sandbox and tool restrictions:
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "personal" },
-      heartbeat: { agentId: "personal" },
       systemAgent: { agentId: "personal" },
     },
     entries: {

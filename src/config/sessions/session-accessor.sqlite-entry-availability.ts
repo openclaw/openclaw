@@ -9,8 +9,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { prepareSqliteSessionEntryRowDecoder } from "./session-accessor.sqlite-entry-read.js";
-import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
+import {
+  prepareSqliteSessionEntryRowDecoder,
+  readExactSessionEntryRowValidated,
+} from "./session-accessor.sqlite-entry-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -19,15 +21,16 @@ import {
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionIdentityEvidenceResult =
-  | { status: "current"; sessionKey: string }
-  | { status: "absent" }
-  | {
-      status: "unknown";
-      reason: "ambiguous" | "read-failed" | "row-invalid" | "schema-missing";
-    };
+export type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 
 type ExactSessionEntryReadOnlyResult =
   | { found: true; value: ExactSessionEntry | undefined }
@@ -100,11 +103,6 @@ type SessionIdentityEvidenceProbe = {
 };
 
 const SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE = 400;
-
-export type SessionIdentityEvidenceIdentity = {
-  sessionId: string;
-  sessionKey?: string;
-};
 
 type SessionIdentityEvidenceRow = {
   current_session_id: string;

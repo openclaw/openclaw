@@ -5,6 +5,8 @@
   },
   "include": [
     "../../src/gateway/server-methods/**/*.test.ts",
-    "../../src/gateway/server-methods/**/*.test.tsx"
+    "../../src/gateway/server-methods/**/*.test.tsx",
+    "../../src/gateway/github*.test.ts",
+    "../../src/gateway/github*.test.tsx"
   ]
 }

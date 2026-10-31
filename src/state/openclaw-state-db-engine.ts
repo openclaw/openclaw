@@ -1,0 +1,528 @@
+import type { DatabaseSync } from "node:sqlite";
+import { getEnvironmentData } from "node:worker_threads";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import type { PostgresSchemaFragment, StoreSchema } from "../infra/database-engine/contract.js";
+import { openEngineStore } from "../infra/database-engine/open.js";
+import {
+  admitPostgresPhysicalFacts,
+  getPostgresPhysicalFacts,
+  requireNativeDatabaseFile,
+} from "../infra/database-engine/physical-facts.js";
+import { assertPostgresCatalog } from "../infra/database-engine/postgres-catalog.js";
+import {
+  postgresIndexOrderingMigration,
+  withLegacyPostgresIndexOrdering,
+} from "../infra/database-engine/postgres-index-ordering.js";
+import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
+import {
+  invalidateLocalSqliteSchemaAdmissions,
+  publishSqliteDatabaseSchemaChange,
+} from "../infra/sqlite-database-admission.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { VERSION } from "../version.js";
+import {
+  getStateRuntimeSchemaAdmission,
+  publishStateRuntimeSchemaAdmission,
+  publishStateSchemaVersionAdmission,
+} from "./openclaw-state-db-admission.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
+import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
+import {
+  withLegacyLocalWorkspaceCas,
+  WORKSPACE_CAS_TABLES,
+} from "./openclaw-state-db-schema-v35-workspace-cas.js";
+import {
+  TEMPLATE_STATE_POSTGRES_MIGRATION_SQL,
+  withLegacyTemplateStateSchema,
+  legacyTemplateStateIdentifier,
+} from "./openclaw-state-db-schema-v36-template-names.js";
+import {
+  admitStateSchemaFacts,
+  PostgresSchemaAdmissionUnavailableError,
+} from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
+import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
+import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
+
+const recovery =
+  "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
+
+export function stateEngineInput() {
+  const selected = getDatabaseEngineSelection();
+  if (selected) {
+    return getDatabaseEngineInput("state");
+  }
+  const connection: unknown =
+    process.env.NODE_ENV === "test"
+      ? getEnvironmentData("openclaw.test.state.connection")
+      : undefined;
+  return typeof connection === "string" ? { connection, schemaPrefix: "openclaw_test" } : undefined;
+}
+
+export function isStatePostgres(): boolean {
+  return stateEngineInput() !== undefined;
+}
+
+export function assertStateFileSnapshotAllowed(): void {
+  if (stateEngineInput()) {
+    requireNativeDatabaseFile("postgres", "file-snapshot");
+  }
+}
+
+export function inspectStateSqlite(db: Parameters<typeof openEngineStore>[0]["anchor"]) {
+  // Dynamic authorizers cannot reuse admitted facts; capture through their current policy.
+  const facts = getAdmittedSqliteSchemaFacts(db) ?? captureSqliteSchemaFacts(db);
+  return {
+    hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
+    hasExistingData: [...facts.tables, ...facts.views, ...facts.triggers.keys()].some(
+      (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
+    ),
+  };
+}
+
+export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): void {
+  if (!fresh && getStateRuntimeSchemaAdmission(db)?.startupReady) {
+    return;
+  }
+  const facts = withPostgresSchemaAdmissionRetry(db, () => {
+    const admitted = getPostgresPhysicalFacts(db);
+    if (!admitted) {
+      throw new PostgresSchemaAdmissionUnavailableError(
+        `Missing PostgreSQL state admission. ${recovery}`,
+      );
+    }
+    return admitted;
+  });
+  const tables = new Set(
+    facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
+  );
+  const absent = new Set(
+    runtime.fragments.flatMap((fragment) =>
+      fragment.tables.some((table) => tables.has(table)) ? [] : fragment.tables,
+    ),
+  );
+  // Older inspection schemas are checked against their migration's exact source DDL.
+  if (facts.version === OPENCLAW_STATE_SCHEMA_VERSION) {
+    assertPostgresCatalog(
+      facts.catalog.filter(
+        (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
+      ),
+      runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
+    );
+  }
+  if (fresh) {
+    const now = Date.now();
+    // sqlite-allow-raw: PostgreSQL bootstrap publishes the matching state schema metadata.
+    db.prepare(
+      `INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'global', ?, NULL, ?, ?, ?)`,
+    ).run(OPENCLAW_STATE_SCHEMA_VERSION, VERSION, now, now);
+    writeStateSchemaContentVersion(db);
+  }
+  const meta = db // sqlite-allow-raw: Schema admission verifies identity fields before ordinary store queries.
+    .prepare("SELECT schema_version, role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
+    .get();
+  const content = db // sqlite-allow-raw: Schema admission compares physical and content schema versions.
+    .prepare(
+      "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+    )
+    .get();
+  // SQLite may publish the current header without a redundant content-version row.
+  if (
+    meta?.schema_version !== facts.version ||
+    meta.role !== "global" ||
+    meta.agent_id !== null ||
+    (content !== undefined && content.value_json !== String(facts.version))
+  ) {
+    throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
+  }
+  publishStateSchemaVersionAdmission(db, {
+    userVersion: facts.version,
+    contentVersion: facts.version,
+  });
+  publishStateRuntimeSchemaAdmission(db, true);
+}
+
+const statePostgresSchema = {
+  postgres: runtime.eagerSql,
+  postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
+    const { activation } = fragment;
+    if (activation !== "first-use" && activation !== "version-additive") {
+      throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
+    }
+    return {
+      id: fragment.id,
+      tables: fragment.tables,
+      sql: fragment.sql,
+      dependencies: fragment.dependencies,
+      activation,
+    };
+  }),
+};
+
+function statePostgresVersionSql(version: number): string {
+  return `UPDATE schema_meta
+        SET schema_version = ${version},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '${version}',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`;
+}
+
+function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchemaV35 = {
+    postgres: withLegacyTemplateStateSchema(statePostgresSchema.postgres),
+    postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+      ...fragment,
+      tables: fragment.tables.map(legacyTemplateStateIdentifier),
+      sql: withLegacyTemplateStateSchema(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV33 = {
+    postgres: withLegacyLocalWorkspaceCas(statePostgresSchemaV35.postgres),
+    postgresFragments: statePostgresSchemaV35.postgresFragments.map((fragment) => ({
+      ...fragment,
+      tables: fragment.tables.filter(
+        (table) => !WORKSPACE_CAS_TABLES.some((name) => name === table),
+      ),
+      sql: withLegacyLocalWorkspaceCas(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV32 = {
+    postgres: withLegacyPostgresIndexOrdering(
+      statePostgresSchemaV33.postgres,
+      "schema-nullability",
+    ),
+    postgresFragments: statePostgresSchemaV33.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyPostgresIndexOrdering(fragment.sql, "schema-nullability"),
+    })),
+  };
+  const statePostgresSchemaV31 = {
+    postgres: withLegacyPostgresIndexOrdering(statePostgresSchemaV32.postgres),
+    postgresFragments: statePostgresSchemaV32.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyPostgresIndexOrdering(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV30 = {
+    postgres: withLegacyLocalWorkspaceManifests(statePostgresSchemaV31.postgres),
+    postgresFragments: statePostgresSchemaV31.postgresFragments.map((fragment) => ({
+      ...fragment,
+      tables: fragment.tables.filter((table) => table !== "local_workspace_manifest_nodes"),
+      sql: withLegacyLocalWorkspaceManifests(fragment.sql),
+    })),
+  };
+  // v28 owns the current publication columns and pre-cutover credential tables.
+  const statePostgresSchemaV28 = {
+    ...statePostgresSchemaV30,
+    postgres: `${statePostgresSchemaV30.postgres}\n${runtime.clientCredentialSource.sql}`,
+  };
+  const statePostgresSchemaV27 = {
+    postgres: withLegacyPublicationDraft(statePostgresSchemaV28.postgres),
+    postgresFragments: statePostgresSchemaV28.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyPublicationDraft(fragment.sql),
+    })),
+  };
+  // v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
+  const statePostgresSchemaV26 = {
+    ...statePostgresSchemaV27,
+    postgres:
+      statePostgresSchemaV27.postgres.replace(
+        /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
+        runtime.preWriteIndexesV27Sql.state_leases,
+      ) +
+      runtime.preWriteIndexesV27Sql.skill_usage +
+      runtime.preWriteIndexesV27Sql.acp_replay_events,
+    postgresFragments: statePostgresSchemaV27.postgresFragments,
+  };
+  return [
+    {
+      version: 25,
+      sql: runtime.operatorRecoveryV25Sql,
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV26,
+    },
+    {
+      version: 26,
+      // WITHOUT ROWID only changes SQLite storage; PostgreSQL keeps the same catalog.
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV26,
+      sql: statePostgresVersionSql(26),
+    },
+    {
+      version: 27,
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV27,
+      sql: `${runtime.writeIndexesV27Sql}
+        ${statePostgresVersionSql(27)}`,
+    },
+    {
+      version: 28,
+      fromSchema: statePostgresSchemaV27,
+      schema: statePostgresSchemaV28,
+      sql: `ALTER TABLE IF EXISTS github_publication_requests ADD COLUMN draft bigint;
+        ALTER TABLE IF EXISTS github_personal_publication_requests ADD COLUMN draft bigint;
+        ALTER TABLE IF EXISTS github_repository_publication_requests ADD COLUMN draft bigint;
+        ${statePostgresVersionSql(28)}`,
+    },
+    {
+      version: 29,
+      fromSchema: statePostgresSchemaV28,
+      schema: statePostgresSchemaV30,
+      sql: runtime.clientCredentialV29Sql,
+    },
+    {
+      version: 30,
+      fromSchema: statePostgresSchemaV30,
+      schema: statePostgresSchemaV30,
+      sql: statePostgresVersionSql(30),
+    },
+    {
+      version: 31,
+      fromSchema: statePostgresSchemaV30,
+      schema: statePostgresSchemaV31,
+      sql: `DO $workspace$
+        DECLARE baseline_constraint text;
+        BEGIN
+          IF to_regclass('local_workspace_projections') IS NOT NULL THEN
+            SELECT conname INTO STRICT baseline_constraint FROM pg_constraint
+              WHERE conrelid = 'local_workspace_projections'::regclass AND contype = 'c'
+                AND pg_get_constraintdef(oid) LIKE '%baseline_json%baseline_ref%';
+            EXECUTE format('ALTER TABLE local_workspace_projections DROP CONSTRAINT %I', baseline_constraint);
+            ALTER TABLE local_workspace_projections
+              ADD COLUMN checkpoint_json text COLLATE "C",
+              ADD CHECK (baseline_json IS NULL OR baseline_ref IS NOT NULL);
+            CREATE TABLE local_workspace_manifest_nodes (
+              worktree_id text COLLATE "C" NOT NULL,
+              path text COLLATE "C" NOT NULL,
+              node_json text COLLATE "C" NOT NULL,
+              PRIMARY KEY (worktree_id, path),
+              FOREIGN KEY (worktree_id) REFERENCES local_workspace_projections(worktree_id)
+                ON DELETE CASCADE
+            );
+          END IF;
+        END $workspace$;
+        ${statePostgresVersionSql(31)}`,
+    },
+    {
+      version: 32,
+      fromSchema: statePostgresSchemaV31,
+      schema: statePostgresSchemaV32,
+      sql: `${postgresIndexOrderingMigration(
+        [
+          statePostgresSchemaV32.postgres,
+          ...statePostgresSchemaV32.postgresFragments.map((fragment) => fragment.sql),
+        ].join("\n"),
+      )}
+        ${statePostgresVersionSql(32)}`,
+    },
+    {
+      version: 33,
+      fromSchema: statePostgresSchemaV32,
+      schema: statePostgresSchemaV33,
+      sql: `${postgresIndexOrderingMigration(
+        [
+          statePostgresSchemaV33.postgres,
+          ...statePostgresSchemaV33.postgresFragments.map((fragment) => fragment.sql),
+        ].join("\n"),
+        "schema-nullability",
+      )}
+        ${statePostgresVersionSql(33)}`,
+    },
+    {
+      version: 34,
+      fromSchema: statePostgresSchemaV33,
+      schema: statePostgresSchemaV33,
+      // The state owner's beforeMigrate hook binds identity before this atomic version advance.
+      sql: statePostgresVersionSql(34),
+    },
+    {
+      version: 35,
+      fromSchema: statePostgresSchemaV33,
+      schema: statePostgresSchemaV35,
+      sql: `${runtime.workspaceCasV35Sql}\n${statePostgresVersionSql(35)}`,
+    },
+    {
+      version: 36,
+      fromSchema: statePostgresSchemaV35,
+      schema: statePostgresSchema,
+      sql: `${TEMPLATE_STATE_POSTGRES_MIGRATION_SQL}\n${statePostgresVersionSql(36)}`,
+    },
+  ];
+}
+
+export const stateEngineSchema: StoreSchema = {
+  id: "state",
+  version: OPENCLAW_STATE_SCHEMA_VERSION,
+  sqlite: "",
+  ...statePostgresSchema,
+  get postgresMigrations() {
+    // SQLite workers never need historical PostgreSQL schemas. Materialize once on first use.
+    const value = createStatePostgresMigrations();
+    Object.defineProperty(this, "postgresMigrations", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
+};
+
+export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
+  const facts = getPostgresPhysicalFacts(db);
+  if (!facts) {
+    throw new PostgresSchemaAdmissionUnavailableError(
+      `Missing PostgreSQL state admission. ${recovery}`,
+    );
+  }
+  const fragment = runtime.fragments.find((item) => item.tables.includes(table));
+  if (!fragment) {
+    const eager = runtime.expectedCatalog.some(
+      (fact) => fact.kind === "table" && fact.table === table,
+    );
+    if (eager && facts.catalog.some((fact) => fact.kind === "table" && fact.table === table)) {
+      return;
+    }
+    throw new Error(`No PostgreSQL state fragment owns ${table}`);
+  }
+  const fragmentTables = fragment.tables.filter(
+    (name) =>
+      facts.version >= 35 ||
+      !WORKSPACE_CAS_TABLES.some((migrationTable) => migrationTable === name),
+  );
+  if (
+    fragmentTables.every((name) =>
+      facts.catalog.some((fact) => fact.kind === "table" && fact.table === name),
+    )
+  ) {
+    return;
+  }
+  for (const id of fragment.dependencies) {
+    const dependency = runtime.fragments.find((item) => item.id === id);
+    if (!dependency) {
+      throw new Error(`Unknown state fragment dependency ${id}`);
+    }
+    ensureStatePostgresFragment(db, dependency.tables[0]!);
+  }
+  if (
+    !stageSqliteTransactionState(db, {
+      commit: () => publishSqliteDatabaseSchemaChange(db),
+      invalidate: () => publishSqliteDatabaseSchemaChange(db),
+    })
+  ) {
+    throw new Error("PostgreSQL state fragments require the owner's transaction");
+  }
+  invalidateLocalSqliteSchemaAdmissions(db);
+  const templateSql =
+    facts.version < 36 ? withLegacyTemplateStateSchema(fragment.sql) : fragment.sql;
+  const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(templateSql) : templateSql;
+  // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
+  // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
+  db.exec(
+    facts.version < 33
+      ? withLegacyPostgresIndexOrdering(
+          fragmentSql,
+          facts.version < 32 ? "sqlite" : "schema-nullability",
+        )
+      : fragmentSql,
+  );
+  admitPostgresPhysicalFacts({
+    db,
+    namespace: facts.namespace,
+    storeId: facts.storeId,
+    store: facts.store,
+    version: facts.version,
+    schema: stateEngineSchema,
+    recordSchema: true,
+  });
+  admitStatePostgres(db, false);
+}
+
+export function openExistingStatePostgresConnection(pathname: string, expectedIdentity?: string) {
+  if (!stateEngineInput()) {
+    return undefined;
+  }
+  const anchor = openTrackedStateDatabase(pathname, { existingOnly: true, expectedIdentity });
+  return openExistingStatePostgresConnectionFromAnchor(anchor, pathname);
+}
+
+/** Consumes an anchor whose caller owns path admission, including updater read-only custody. */
+export function openExistingStatePostgresConnectionFromAnchor(
+  anchor: DatabaseSync,
+  pathname: string,
+) {
+  let db: PostgresSqlConnection | undefined;
+  try {
+    const input = stateEngineInput();
+    if (!input) {
+      throw new Error("PostgreSQL state inspection requires the configured state connection.");
+    }
+    admitStateSchemaFacts(anchor, pathname);
+    const selected = openEngineStore({
+      anchor,
+      schema: stateEngineSchema,
+      input,
+      inspectSqlite: () => inspectStateSqlite(anchor),
+      prepareAnchor: () => {},
+      openSqlite: () => {},
+      existingOnly: true,
+      reusePostgresConnection: true,
+      existingVersion: true,
+      admitPostgres: admitStatePostgres,
+      closeOnFailure: (connection, error) => {
+        db = connection;
+        throw error;
+      },
+    });
+    if (!isPostgresSqlConnection(selected)) {
+      throw new Error("Expected PostgreSQL state connection");
+    }
+    db = selected;
+    return {
+      database: { db, path: pathname },
+      close() {
+        throwSqliteLifecycleErrors(
+          openClawStateDatabaseCache.closeUnpublishedOpenClawStateDatabaseHandle({
+            db: selected,
+            path: pathname,
+          }),
+          "PostgreSQL state connection cleanup failed.",
+        );
+        return !selected.isOpen && !anchor.isOpen;
+      },
+    };
+  } catch (error) {
+    const errors = openClawStateDatabaseCache.closeUnpublishedOpenClawStateDatabaseHandle({
+      db: db ?? anchor,
+      path: pathname,
+    });
+    if (errors.length) {
+      throw createSqliteLifecycleAggregateError(
+        [error, ...errors],
+        "PostgreSQL state connection acquisition and cleanup failed.",
+        error,
+      );
+    }
+    throw error;
+  }
+}

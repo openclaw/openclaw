@@ -1,24 +1,29 @@
-// Shared command-queue runtime state, split out of command-queue.ts so the
-// capacity-group policy can read lane state without importing the queue itself.
+// Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
 
-export type CommandLaneTaskMarker = Readonly<{
-  lane: string;
-  taskId: number;
-  generation: number;
-}>;
+export function getDefaultLaneConcurrency(lane: string): number {
+  if (lane === "restart-recovery") {
+    return 4;
+  }
+  return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
+    ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
+    : 1;
+}
 
 export type QueuePriority = -1 | 0 | 1;
+
+const PRIORITY_HEAD_START_MS = 15_000;
 
 export type QueueEntry = {
   queued?: true;
   previous?: QueueEntry;
   next?: QueueEntry;
-  task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
+  task: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
+  /** Monotonic enqueue time; wall-clock corrections must not reorder work. */
   enqueuedAt: number;
   sequence: number;
   priority: QueuePriority;
@@ -27,12 +32,6 @@ export type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
   sessionTarget?: CommandQueueEnqueueOptions["sessionTarget"];
-  taskTimeoutMs?: number;
-  taskTimeoutProgressAtMs?: () => number | undefined;
-  taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
-  taskTimeoutAbortSignal?: AbortSignal;
-  taskTimeoutAbortGraceMs?: number;
-  taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   releaseQueuedAbort?: () => void;
 };
@@ -40,10 +39,8 @@ export type QueueEntry = {
 type QueueFifo = {
   head: QueueEntry | undefined;
   tail: QueueEntry | undefined;
-  length: number;
 };
 
-/** Three fixed FIFO lists, one for each supported priority. */
 type LaneQueue = {
   background: QueueFifo;
   normal: QueueFifo;
@@ -54,11 +51,29 @@ type LaneQueue = {
 export type LaneState = {
   lane: string;
   queue: LaneQueue;
-  activeTaskIds: Set<number>;
+  activeTasks: Map<number, CommandQueueEnqueueOptions["sessionTarget"]>;
   maxConcurrent: number;
   draining: boolean;
   generation: number;
 };
+
+export function getLaneState(lane: string): LaneState {
+  const queueState = getQueueState();
+  const existing = queueState.lanes.get(lane);
+  if (existing) {
+    return existing;
+  }
+  const created: LaneState = {
+    lane,
+    queue: createLaneQueue(),
+    activeTasks: new Map(),
+    maxConcurrent: getDefaultLaneConcurrency(lane),
+    draining: false,
+    generation: 0,
+  };
+  queueState.lanes.set(lane, created);
+  return created;
+}
 
 export type LaneGroupState = {
   group: string;
@@ -68,10 +83,10 @@ export type LaneGroupState = {
 };
 
 function createQueueFifo(): QueueFifo {
-  return { head: undefined, tail: undefined, length: 0 };
+  return { head: undefined, tail: undefined };
 }
 
-export function createLaneQueue(): LaneQueue {
+function createLaneQueue(): LaneQueue {
   return {
     background: createQueueFifo(),
     normal: createQueueFifo(),
@@ -91,13 +106,10 @@ function getPriorityFifo(queue: LaneQueue, priority: QueuePriority): QueueFifo {
   }
 }
 
-/** Append to one of three fixed priority FIFOs and return the queued work ahead. */
+/** Append to a priority FIFO; return enqueue-time backlog, not predicted admission order. */
 export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
   const fifo = getPriorityFifo(queue, entry.priority);
-  const queuedAhead =
-    fifo.length +
-    (entry.priority <= 0 ? queue.foreground.length : 0) +
-    (entry.priority < 0 ? queue.normal.length : 0);
+  const queuedAhead = queue.length;
   entry.queued = true;
   entry.previous = fifo.tail;
   entry.next = undefined;
@@ -107,13 +119,27 @@ export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
     fifo.head = entry;
   }
   fifo.tail = entry;
-  fifo.length += 1;
   queue.length += 1;
   return queuedAhead;
 }
 
 export function peekLaneQueue(queue: LaneQueue): QueueEntry | undefined {
-  return queue.foreground.head ?? queue.normal.head ?? queue.background.head;
+  let selected = queue.foreground.head;
+  for (const head of [queue.normal.head, queue.background.head]) {
+    if (head && (!selected || compareQueueEntries(head, selected) < 0)) {
+      selected = head;
+    }
+  }
+  return selected;
+}
+
+/** Bound priority overtaking without timers, promotion, or scanning a backlog. */
+export function compareQueueEntries(left: QueueEntry, right: QueueEntry): number {
+  return (
+    left.enqueuedAt -
+      right.enqueuedAt +
+      (right.priority - left.priority) * PRIORITY_HEAD_START_MS || left.sequence - right.sequence
+  );
 }
 
 export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
@@ -141,7 +167,6 @@ export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boole
     fifo.tail = entry.previous;
   }
   entry.queued = undefined;
-  fifo.length -= 1;
   queue.length -= 1;
   // A completed entry must not retain its neighbours or expose stale membership
   // if listener cleanup reenters the queue.
@@ -158,15 +183,16 @@ export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boole
  * the same lanes, counters, and draining flag in production builds.
  */
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
+const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  lanes: new Map<string, LaneState>(),
+  nextTaskId: 1,
+  nextQueueSequence: 1,
+  laneGroups: new Map<string, LaneGroupState>(),
+  laneGroupByLane: new Map<string, string>(),
+}));
 
 export function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-    lanes: new Map<string, LaneState>(),
-    nextTaskId: 1,
-    nextQueueSequence: 1,
-    laneGroups: new Map<string, LaneGroupState>(),
-    laneGroupByLane: new Map<string, string>(),
-  }));
+  return queueState;
 }
 
 export function normalizeLane(lane: string): string {

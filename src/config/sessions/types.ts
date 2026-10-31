@@ -15,6 +15,8 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { SessionCommunicationPolicy } from "../../../packages/gateway-protocol/src/session-communication.js";
+import type { PreemptiveCompactionRoute as SessionContextBudgetStatusRoute } from "../../agents/embedded-agent-runner/run/preemptive-compaction.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -23,15 +25,14 @@ import type {
   CronToolsAllowExecTargetRequirement,
 } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { PluginJsonValue as SessionPluginJsonValue } from "../../plugins/host-hook-json.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
-import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type {
   PendingDeliveryNoticeState,
   PendingFinalDeliveryState,
 } from "./pending-final-delivery-types.js";
-import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
   SessionActor,
@@ -51,8 +52,28 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
-export type PersistedSessionRunStatus = SessionRunStatus;
+export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
+
+type SessionGitHubPullRequestSource = {
+  repository: string;
+  repositoryId: number;
+  branch: string;
+  commit: string;
+};
+
+/** Original PR selection for one managed workspace; never a publication receipt or permission grant. */
+export type SessionGitHubPullRequestBinding = {
+  url: string;
+  host: string;
+  number: number;
+  base: SessionGitHubPullRequestSource;
+  head: SessionGitHubPullRequestSource;
+  /** Verified publication before first binding; absent on already-admitted legacy bindings. */
+  origin?: "session-publication" | "external-pr";
+  /** Prepared initial PR head; absence means its first import is incomplete. */
+  preparedHeadCommit?: string;
+};
 
 export type SessionOrigin = {
   label?: string;
@@ -146,6 +167,13 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Last input snapshot supplied to this native session, independent of recovery authority. */
+  transcriptCursor?: {
+    localSessionId: string;
+    entryId: string | null;
+    runId: string;
+    userEntryId?: string;
+  };
 };
 
 type AcpSessionBinding = {
@@ -153,12 +181,6 @@ type AcpSessionBinding = {
   acpAgentId: string;
   agentSessionId: string;
 };
-
-type SessionContextBudgetStatusRoute =
-  | "fits"
-  | "compact_only"
-  | "truncate_tool_results_only"
-  | "compact_then_truncate";
 
 export type SessionContextBudgetStatus = {
   schemaVersion: 1;
@@ -193,13 +215,7 @@ type SessionPluginDebugEntry = {
   lines: string[];
 };
 
-export type SessionPluginJsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | SessionPluginJsonValue[]
-  | { [key: string]: SessionPluginJsonValue };
+export type { SessionPluginJsonValue };
 
 type SessionPluginNextTurnInjection = {
   id: string;
@@ -211,21 +227,6 @@ type SessionPluginNextTurnInjection = {
   ttlMs?: number;
   createdAt: number;
   metadata?: SessionPluginJsonValue;
-};
-
-type SubagentRecoveryState = {
-  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
-  automaticAttempts?: number;
-  /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
-  lastAttemptAt?: number;
-  /** Registry run id that triggered the latest automatic orphan-recovery resume. */
-  lastRunId?: string;
-  /** Visible execution retained while the recovered run uses an internal transcript. */
-  sessionLifecycleRunId?: string;
-  /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
-  wedgedAt?: number;
-  /** Human-readable reason automatic recovery was tombstoned. */
-  wedgedReason?: string;
 };
 
 type LaneExecutionState =
@@ -260,13 +261,7 @@ export type {
   SessionGoalStatus,
 } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 
-export type RestartRecoveryRun = {
-  runId: string;
-  lifecycleGeneration: string;
-};
-
-type SessionEntryCore = SessionRestartRecoveryState &
-  SessionEntryProvenance &
+type SessionEntryCore = SessionEntryProvenance &
   Pick<SessionRow, "permissionMode" | "sandboxMode" | "nativeRuntimeConsent" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: NonNullable<SessionRow["visibility"]>;
@@ -294,6 +289,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Latest operator client declaration; retained across internal turns and restart. */
+    clientCapabilities?: string[];
     updatedAt: number;
     /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
     incognito?: true;
@@ -314,6 +311,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Independent sidebar placement; origin, execution ownership, and access remain unchanged. */
+    sidebarRoot?: boolean;
     /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
     snoozedUntil?: number;
     /** Server-stamped epoch ms when the current snooze was set. */
@@ -344,6 +343,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedCwd?: string;
     /** Content-free fingerprints for checkout changes that predate this session generation. */
     sessionDiffBaseline?: SessionDiffBaseline;
+    /** Canonical existing directory owned by the user on a paired session host. */
+    deviceFolder?: { deviceId: string; path: string };
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
@@ -354,6 +355,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
       repoRoot: string;
       /** Durable skill workspace prepared when this session runs from a managed worktree. */
       canonicalWorkspaceDir?: string;
+      githubPullRequest?: SessionGitHubPullRequestBinding;
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
@@ -367,6 +369,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     parentSessionLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
+    /** Creation-only presentation surface; stored in entry_json without a column projection. */
+    createdSurface?: SessionRow["createdSurface"];
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
     /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
@@ -391,20 +395,26 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
+    /** Spawn-time blind child: its rendered prompt omits its model, identity and workspace path. */
+    blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
+    /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
+    inheritedToolPolicySource?: "sender";
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
     inheritedToolAllow?: string[];
+    /** Host-created native execution exception; the full inherited snapshot still owns completion. */
+    delegatedToolPolicy?: {
+      requesterSessionKey: string;
+      targetAgentId: string;
+      deny: string[];
+      /** The immediate parent’s effective deny snapshot, separately from revocation fallback. */
+      requesterDeny: string[];
+    };
     systemSent?: boolean;
     abortedLastRun?: boolean;
-    /** Interrupted run generations whose late lifecycle events must be ignored. */
-    restartRecoveryRuns?: RestartRecoveryRun[];
-    /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
-    restartRecoveryForceSafeTools?: true;
-    /** Durable guard state for automatic subagent orphan recovery. */
-    subagentRecovery?: SubagentRecoveryState;
     /** Quota cascade protection and state-aware failover status. */
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
@@ -427,6 +437,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     status?: PersistedSessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
+    /** The latest failed run is diagnostic-only, not a request for the user to retry. */
+    suppressErrorNotice?: boolean;
     /**
      * Session-level stop cutoff captured when /stop is received.
      * Messages at/before this boundary are skipped to avoid replaying
@@ -468,6 +480,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
         requireExplicitMessageTarget?: boolean;
       };
     };
+    /** Explicit requested access program; omission follows the model/project default. */
+    cyberAccessProgram?: SessionRow["cyberAccessProgram"];
     fastMode?: FastMode;
     toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */
@@ -492,6 +506,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     responseUsage?: "on" | "off" | "tokens" | "full";
     providerOverride?: string;
     modelOverride?: string;
+    /** Last submitted selection, retained when picker edits clear runtime fields. */
+    lastSubmittedModel?: { provider: string; model: string };
     /** Session-scoped agent runtime/harness override selected with the model picker. */
     agentRuntimeOverride?: string;
     /**
@@ -521,12 +537,16 @@ type SessionEntryCore = SessionRestartRecoveryState &
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
+    /** Human-selected peer messaging preferences; omitted directions inherit configuration. */
+    communication?: SessionCommunicationPolicy;
     queueMode?: QueueMode;
     queueDebounceMs?: number;
     queueCap?: number;
     queueDrop?: "old" | "new" | "summarize";
     inputTokens?: number;
     outputTokens?: number;
+    /** Completeness of the latest run's token and cost accounting. */
+    usageReport?: { state: "available" | "unavailable" };
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
     pendingDeliveryNotice?: PendingDeliveryNoticeState;
@@ -567,6 +587,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
+    /** A committed lossy compaction affected this history; cleared with a new session. */
+    compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
@@ -620,6 +642,14 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Original unbound files, private to this conversation's adopted workspace. */
+  priorWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    workspaceDir: string;
+    fileRoot: string;
+    through: { generation: string | null; maxSeq: number | null };
+  };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */
@@ -644,14 +674,15 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
-  mainRestartRecovery?: MainRestartRecoveryState;
+  /** Written only by committed graceful shutdown, consumed by the next startup. */
+  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
+  mainRestartRecovery?: { cycleId: string };
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
-export function isTerminalSessionStatus(
-  status: unknown,
-): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+export function isTerminalSessionStatus(status: unknown): status is PersistedSessionRunStatus {
   return (
     status === "done" ||
     status === "failed" ||
@@ -780,6 +811,7 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdVia !== undefined) {
     next.createdVia = existing.createdVia;
   }
+  next.createdSurface = existing.createdSurface;
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
   }
@@ -791,9 +823,6 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
-  }
-  if (existing.conversationLink !== undefined) {
-    next.conversationLink = existing.conversationLink;
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;

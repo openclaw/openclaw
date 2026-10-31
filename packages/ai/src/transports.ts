@@ -1,7 +1,11 @@
 /** Provider transport implementations and transport-specific compatibility helpers. */
-export type { OpenAIResponsesCompactionRejection } from "./provider-options.js";
+export type {
+  CompactionReplayRejection,
+  OpenAIResponsesCompactionRejection,
+} from "./provider-options.js";
 export * from "./transports/anthropic-payload-policy.js";
 export * from "./transports/anthropic-transport-stream.js";
+export { resolveCompletionTokenReservation } from "./transports/anthropic-transport-options.js";
 export * from "./transports/deepseek-text-filter.js";
 export * from "./transports/google-thinking-level.js";
 export * from "./transports/json-unsafe-integers.js";
@@ -25,6 +29,7 @@ export * from "./transports/openai-transport-params.js";
 export * from "./transports/openai-transport-shared.js";
 export * from "./transports/provider-compaction-replay.js";
 export * from "./transports/provider-transport-stream.js";
+export * from "./transports/provider-wait.js";
 export * from "./transports/responses-image-payload-sanitizer.js";
 export * from "./transports/simple-completion-transport.js";
 export * from "./transports/transport-stream-shared.js";

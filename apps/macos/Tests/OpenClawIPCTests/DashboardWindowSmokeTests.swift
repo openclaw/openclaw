@@ -114,7 +114,7 @@ struct DashboardWindowSmokeTests {
         defer { NSWindow.removeFrame(usingName: windowAutosaveName) }
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/control/").absoluteString,
                 token: "device-token",
                 password: nil),
@@ -188,11 +188,11 @@ struct DashboardWindowSmokeTests {
     @Test func `dashboard reload decision preserves live same URL content`() throws {
         let current = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let replacement = try #require(URL(string: "http://127.0.0.1:18790/control/"))
-        let auth = DashboardWindowAuth(
+        let auth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: "ws://127.0.0.1:18789/control/",
             token: nil,
             password: "secret")
-        let rotatedAuth = DashboardWindowAuth(
+        let rotatedAuth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: "ws://127.0.0.1:18789/control/",
             token: nil,
             password: "rotated")
@@ -242,7 +242,7 @@ struct DashboardWindowSmokeTests {
         let url = server.url("/control/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -341,7 +341,7 @@ struct DashboardWindowSmokeTests {
         let dashboard = server.url("/control/")
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -371,7 +371,7 @@ struct DashboardWindowSmokeTests {
         var firstRequestContinuation: CheckedContinuation<Bool, Never>?
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in
@@ -399,7 +399,7 @@ struct DashboardWindowSmokeTests {
 
         controller.update(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+            auth: DashboardWindowAuth.unauthenticated)
         firstRequestContinuation?.resume(returning: false)
         firstRequestContinuation = nil
         #expect(try await nextDashboardImportRequest(requests.stream) == 2)
@@ -419,7 +419,7 @@ struct DashboardWindowSmokeTests {
         let gate = DashboardBrowserImportGate()
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in gate.request() })
@@ -455,7 +455,7 @@ struct DashboardWindowSmokeTests {
         var firstRequestApplied: Bool?
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { shouldApply in
@@ -501,13 +501,13 @@ struct DashboardWindowSmokeTests {
         let dataStore = WKWebsiteDataStore.nonPersistent()
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: dataStore, windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         let other = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: dataStore, windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { other.closeDashboard() }
@@ -692,7 +692,7 @@ extension DashboardWindowSmokeTests {
         defer { server.stop() }
         let controller = DashboardWindowController(
             url: server.url("/control/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
@@ -722,7 +722,7 @@ extension DashboardWindowSmokeTests {
             html: html,
             contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'")
         defer { replacement.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url("/control/"), auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -743,7 +743,7 @@ extension DashboardWindowSmokeTests {
         defer { server.stop() }
         let controller = DashboardWindowController(
             url: server.url("/control/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
@@ -776,7 +776,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/control/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -795,7 +795,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "device-token",
                 password: nil),
@@ -866,7 +866,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
@@ -921,7 +921,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
@@ -959,7 +959,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "device-token",
                 password: nil),

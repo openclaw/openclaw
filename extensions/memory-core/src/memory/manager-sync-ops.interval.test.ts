@@ -1,4 +1,4 @@
-// Memory Core tests cover manager sync ops.interval plugin behavior.
+// Memory Core tests cover resolved batch timeout bounds.
 import type { DatabaseSync } from "node:sqlite";
 import type {
   OpenClawConfig,
@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
@@ -19,33 +19,16 @@ type MemoryIndexEntry = {
   content?: string;
 };
 
-class IntervalSyncHarness extends MemorySyncTestHarness {
-  protected readonly createProvider = (): never => {
-    throw new Error("Interval harness does not acquire embedding providers");
-  };
-  protected releaseProvider(): never {
-    throw new Error("Interval harness does not own embedding providers");
-  }
+class BatchTimeoutHarness extends MemorySyncTestHarness {
+  readonly sync = vi.fn(async () => {});
   protected readonly cfg = {} as OpenClawConfig;
-  protected readonly agentId = "main";
-  protected readonly workspaceDir = "/tmp/openclaw-memory-interval-test";
+  protected override readonly workspaceDir = "/tmp/openclaw-memory-interval-test";
   protected readonly settings: ResolvedMemorySearchConfig;
-  protected readonly batch = {
-    enabled: false,
-    wait: false,
-    concurrency: 1,
-    pollIntervalMs: 0,
-    timeoutMs: 0,
-  };
-  protected readonly cache = { enabled: false };
-  protected providerUnavailableReason?: string;
-  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
   protected publishedDatabase = new MemoryIndexDatabase({} as DatabaseSync);
 
-  constructor(params: { intervalMinutes?: number; batchTimeoutMinutes?: number }) {
+  constructor(params: { batchTimeoutMinutes: number }) {
     super();
     this.settings = {
-      sync: { intervalMinutes: params.intervalMinutes ?? 0 },
       remote: {
         batch: {
           enabled: true,
@@ -55,69 +38,20 @@ class IntervalSyncHarness extends MemorySyncTestHarness {
     } as ResolvedMemorySearchConfig;
   }
 
-  arm(): void {
-    this.ensureIntervalSync();
-  }
-
-  stop(): void {
-    if (this.intervalTimer) {
-      clearInterval(this.intervalTimer);
-      this.intervalTimer = null;
-    }
-  }
-
   batchConfig(): ReturnType<MemorySyncTestHarness["resolveBatchConfig"]> {
     return this.resolveBatchConfig();
-  }
-
-  protected computeProviderKey(): string {
-    return "test";
-  }
-
-  protected resolveProviderIndexIdentities() {
-    return [];
-  }
-
-  protected async sync(): Promise<void> {}
-
-  protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
-    return await promise;
   }
 
   protected getIndexConcurrency(): number {
     return 1;
   }
 
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
-
-  protected resetProviderInitializationForRetry(): void {}
-
-  protected assertRequiredProviderAvailable(): void {}
-
-  protected async indexFile(
-    _entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {}
+  protected async indexFile(_entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {}
 }
 
-describe("MemoryManagerSyncOps interval sync", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("clamps oversized interval sync timers", () => {
-    vi.useFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const harness = new IntervalSyncHarness({ intervalMinutes: Number.MAX_SAFE_INTEGER });
-
-    harness.arm();
-
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    harness.stop();
-  });
-
+describe("MemoryManagerSyncOps batch timeout", () => {
   it("clamps oversized batch timeout minutes", () => {
-    const harness = new IntervalSyncHarness({
+    const harness = new BatchTimeoutHarness({
       batchTimeoutMinutes: Number.MAX_SAFE_INTEGER,
     });
 

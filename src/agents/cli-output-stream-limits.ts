@@ -1,7 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Stream-json output limits and raw-line framing for the CLI streaming parser.
 // Kept beside `cli-output-stream.ts` so the parser stays within the file-size
 // budget; the limits are process constants, not per-backend configuration.
-import type { CliStreamJsonOutputLimits } from "./cli-output-contracts.js";
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
+import { readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
@@ -9,19 +11,144 @@ export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
-} satisfies CliStreamJsonOutputLimits);
+});
+
+// Claude Code attaches `api_message_id` to every partial frame and the
+// `thinking_display` display setting to thinking frames. The parser reads
+// neither; both stay bounded, and `thinking_display` only on thinking deltas.
+const PARTIAL_RECORD_METADATA_LIMITS = {
+  uuid: 128,
+  session_id: 128,
+  parent_tool_use_id: 128,
+  api_message_id: 64,
+  thinking_display: 32,
+} as const;
+const PARTIAL_RECORD_KEYS = new Set([
+  "type",
+  "event",
+  ...Object.keys(PARTIAL_RECORD_METADATA_LIMITS),
+]);
+const PARTIAL_EVENT_KEYS = new Set(["type", "index", "delta"]);
+
+/** Discount recognized token envelopes, retaining payload, padding, and a per-frame budget. */
+function measureClaudePartialMessage(
+  parsed: Record<string, unknown>,
+  rawLine: string,
+): number | undefined {
+  if (
+    parsed.type !== "stream_event" ||
+    !isRecord(parsed.event) ||
+    Object.keys(parsed).some((key) => !PARTIAL_RECORD_KEYS.has(key))
+  ) {
+    return undefined;
+  }
+  for (const [key, limit] of Object.entries(PARTIAL_RECORD_METADATA_LIMITS)) {
+    const value = parsed[key];
+    if (value != null && (typeof value !== "string" || value.length > limit)) {
+      return undefined;
+    }
+  }
+  const event = parsed.event;
+  if (
+    event.type !== "content_block_delta" ||
+    !isRecord(event.delta) ||
+    Object.keys(event).some((key) => !PARTIAL_EVENT_KEYS.has(key)) ||
+    (event.index !== undefined &&
+      (typeof event.index !== "number" || !Number.isSafeInteger(event.index) || event.index < 0))
+  ) {
+    return undefined;
+  }
+  const delta = event.delta;
+  const field =
+    delta.type === "text_delta"
+      ? "text"
+      : delta.type === "thinking_delta"
+        ? "thinking"
+        : delta.type === "input_json_delta"
+          ? "partial_json"
+          : undefined;
+  const payload = field ? delta[field] : undefined;
+  if (
+    typeof payload !== "string" ||
+    !payload ||
+    (parsed.thinking_display != null && delta.type !== "thinking_delta") ||
+    Object.keys(delta).some(
+      (key) =>
+        key !== "type" &&
+        key !== field &&
+        !(delta.type === "thinking_delta" && key === "estimated_tokens"),
+    )
+  ) {
+    return undefined;
+  }
+  const estimatedTokens = delta.estimated_tokens;
+  if (
+    estimatedTokens != null &&
+    (typeof estimatedTokens !== "number" || !Number.isFinite(estimatedTokens))
+  ) {
+    return undefined;
+  }
+  // The fixed charge bounds tiny delta floods and retained chunk bookkeeping:
+  // the smallest frame costs 36 characters with its newline, so the 8 MiB
+  // budget admits at most 233,016 partial frames. Metadata is not charged: the
+  // per-field caps allow up to 480 characters of values per frame, so a flood
+  // can pass more raw bytes through the parser than the budget counts. Empty
+  // deltas, unknown fields, and oversized metadata keep the ordinary raw/frame
+  // limits.
+  return (
+    JSON.stringify(payload).length +
+    32 +
+    (estimatedTokens === undefined
+      ? 0
+      : JSON.stringify({ estimated_tokens: estimatedTokens }).length) +
+    Math.max(0, rawLine.length - JSON.stringify(parsed).length)
+  );
+}
+
+// Forwarded child message payloads are discarded; only their progress id survives.
+// Stream events can retain text even with child attribution, so keep their full charge.
+const CLAUDE_SUBAGENT_RECORD_CHARS = 64;
+
+/** Fixed charge only for child message records the parser discards. */
+function measureClaudeSubagentRecord(parsed: Record<string, unknown>): number | undefined {
+  if ((parsed.type !== "assistant" && parsed.type !== "user") || parsed.item != null) {
+    return undefined;
+  }
+  const parentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
+  if (!parentToolUseId || parentToolUseId.length > 128) {
+    return undefined;
+  }
+  return CLAUDE_SUBAGENT_RECORD_CHARS;
+}
+
+/** Budget charge for one Claude stream-json line, and whether it is a partial-message frame. */
+export function chargeClaudeStreamJsonLine(
+  record: Record<string, unknown> | undefined,
+  rawLine: string,
+): { chars: number; partialMessage: boolean } {
+  const partialChars = record ? measureClaudePartialMessage(record, rawLine) : undefined;
+  const subagentChars = record ? measureClaudeSubagentRecord(record) : undefined;
+  const normalized = record ? normalizeClaudeCliStreamJsonRecord(record) : undefined;
+  // Neither media omission nor token-envelope discounts may erase wire whitespace.
+  const chars =
+    subagentChars ??
+    partialChars ??
+    (normalized
+      ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
+      : rawLine.length);
+  return { chars, partialMessage: partialChars !== undefined };
+}
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
 export function frameBoundedCliJsonlChunk(
   state: { pending: string },
   chunk: string,
-  maxLineChars: number,
   onLine: (line: string) => boolean | void,
 ): boolean {
   for (let offset = 0; offset < chunk.length;) {
     const newlineIndex = chunk.indexOf("\n", offset);
     const lineEnd = newlineIndex === -1 ? chunk.length : newlineIndex;
-    if (state.pending.length + (lineEnd - offset) > maxLineChars) {
+    if (state.pending.length + (lineEnd - offset) > CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS) {
       state.pending = "";
       return false;
     }

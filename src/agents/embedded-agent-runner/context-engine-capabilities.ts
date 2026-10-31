@@ -3,18 +3,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { resolveBoundAgentIdForSession } from "../session-agent-binding.js";
 
-type ResolveContextEngineCapabilitiesParams = {
+export function resolveContextEngineCapabilities(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   explicitAgentId?: string;
   authProfileId?: string;
   contextEnginePluginId?: string;
   purpose: string;
-};
-
-export function resolveContextEngineCapabilities(
-  params: ResolveContextEngineCapabilitiesParams,
-): Pick<ContextEngineRuntimeContext, "llm"> {
+}): Pick<ContextEngineRuntimeContext, "llm"> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const agentId = resolveBoundAgentIdForSession({
     config: params.config,

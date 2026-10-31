@@ -2,11 +2,6 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import {
-  extractJsonNullableStringFieldPrefix,
-  extractJsonNumberFieldPrefix,
-  extractJsonStringFieldPrefix,
-} from "./session-transcript-json.js";
 
 export type TranscriptRecord = {
   byteLength: number;
@@ -21,6 +16,37 @@ const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
+
+const TRANSCRIPT_STRING_FIELD_REGEXES = {
+  id: /"id"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  parentId: /"parentId"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  type: /"type"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  timestamp: /"timestamp"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  role: /"role"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  idempotencyKey: /"idempotencyKey"\s*:\s*"((?:\\.|[^"\\])*)"/,
+};
+const TRANSCRIPT_PARENT_ID_NULL_RE = /"parentId"\s*:\s*null/;
+const TRANSCRIPT_TIMESTAMP_NUMBER_RE = /"timestamp"\s*:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/;
+
+function extractJsonStringFieldPrefix(
+  prefix: string,
+  field: keyof typeof TRANSCRIPT_STRING_FIELD_REGEXES,
+): string | undefined {
+  const match = TRANSCRIPT_STRING_FIELD_REGEXES[field].exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  return readNonBlankString(safeParseJson(`"${match[1]}"`));
+}
+
+function extractJsonNumberFieldPrefix(prefix: string): number | undefined {
+  const match = TRANSCRIPT_TIMESTAMP_NUMBER_RE.exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  const decoded = Number(match[1]);
+  return Number.isFinite(decoded) ? decoded : undefined;
+}
 
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   for (let index = tokenIndex - 1; index >= 0; index--) {
@@ -244,11 +270,13 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
   const id = extractJsonStringFieldPrefix(prefix, "id");
-  const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
+  const parentId = TRANSCRIPT_PARENT_ID_NULL_RE.test(prefix)
+    ? null
+    : extractJsonStringFieldPrefix(prefix, "parentId");
   const type = extractJsonStringFieldPrefix(prefix, "type");
   const timestamp =
     extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
-    extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
+    extractJsonNumberFieldPrefix(recordPrefix);
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
   const idempotencyKey =
     extractJsonStringFieldPrefix(prefix, "idempotencyKey") ??

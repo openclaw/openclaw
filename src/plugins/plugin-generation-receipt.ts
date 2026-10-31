@@ -1,7 +1,12 @@
 import { createHash, type Hash } from "node:crypto";
+import {
+  createRootFileOpenBatchSync,
+  type RootFileOpenBatchSync,
+} from "@openclaw/fs-safe/advanced";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { hashPluginSourceFile } from "./plugin-source-file.js";
+import type { PluginCapturedSourceFact as PluginSourceContent } from "./plugin-source-verification.js";
 
-type PluginSourceContent = { contentHash: string; sizeBytes: number };
 type PluginGenerationReceipt = { signature: string; sourceDigest: string };
 type PluginReceiptFile = {
   target: string;
@@ -27,17 +32,28 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       file.onContent(content);
     }
   };
-  const readContent = (file: PluginReceiptFile, receipt?: Hash, expected = file.content) => {
+  const readContent = (
+    file: PluginReceiptFile,
+    receipt?: Hash,
+    expected = file.content,
+    openFile?: RootFileOpenBatchSync["openFile"],
+  ) => {
     const content = hashPluginSourceFile(
       file.target,
       file.boundary,
       receipt,
       file.native ? file.content : undefined,
+      openFile,
     );
     if (!file.native && expected && content.contentHash !== expected.contentHash) {
       throw new Error(
         "Plugin source changed while preparing its reload; retry after the edit finishes.",
       );
+    }
+    const metrics = getPluginGenerationMetrics();
+    if (metrics) {
+      metrics.receiptFileReads++;
+      metrics.receiptReadBytes += content.sizeBytes;
     }
     publishContent(file, content);
   };
@@ -63,17 +79,20 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
         events.push(framed);
       }
     },
-    file(params: Omit<PluginReceiptFile, "content"> & { prepared?: PluginSourceContent }): void {
+    file(
+      params: Omit<PluginReceiptFile, "content"> & { prepared?: PluginSourceContent },
+      openFile?: RootFileOpenBatchSync["openFile"],
+    ): void {
       const { prepared: content, ...input } = params;
       const file: PluginReceiptFile = input;
       if (content) {
         if (finished && !file.native) {
-          readContent(file, undefined, content);
+          readContent(file, undefined, content, openFile);
         } else {
           publishContent(file, content);
         }
       } else if (!file.native || finished) {
-        readContent(file);
+        readContent(file, undefined, undefined, openFile);
       }
       if (!finished) {
         events.push(file);
@@ -83,18 +102,24 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       if (finished) {
         return finished;
       }
+      const metrics = getPluginGenerationMetrics();
+      if (metrics) {
+        metrics.receiptPasses++;
+      }
       const signature = inputSignature();
       const receipt =
         signature !== undefined && prepared?.signature === signature
           ? undefined
           : createHash("sha256");
+      using opened = createRootFileOpenBatchSync();
+      const openFile = opened.openFile.bind(opened);
       for (const event of events) {
         if (typeof event === "string") {
           receipt?.update(event);
         } else if (receipt || !event.content || !event.native) {
           // Copied descriptors supply bytes, not pathname admission. Recheck ordinary
           // destinations even on a receipt hit; misses also replay native raw bytes.
-          readContent(event, receipt);
+          readContent(event, receipt, event.content, openFile);
         }
       }
       finished = {

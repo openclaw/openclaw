@@ -9,6 +9,9 @@ on:
       mode:
         type: string
         default: stock
+      resource_diagnostics:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       mode:
@@ -16,6 +19,10 @@ on:
         type: choice
         options: [stock, compare]
         default: stock
+      resource_diagnostics:
+        description: Collect the temporary resource timeline
+        type: boolean
+        default: true
 
 permissions:
   actions: read
@@ -52,6 +59,10 @@ jobs:
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
           [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
+
+      - name: Reserve host CPU for release qualification
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
 
       - name: Checkout exact qualification target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +113,7 @@ jobs:
 
       - name: Restore this run's stable Gateway selection
         if: steps.gateway-selection.outputs.artifact-id != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.gateway-selection.outputs.artifact-id }}
           github-token: ${{ github.token }}
@@ -117,12 +128,13 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           install-bun: "false"
           cache-mode: "off"
 
       - name: Prepare stable Gateway selection
         env:
+          GH_TOKEN: ${{ github.token }}
           RESTORED_SELECTION: ${{ steps.gateway-selection.outputs.artifact-id != '' }}
         shell: bash
         run: |
@@ -137,7 +149,7 @@ jobs:
 
       - name: Save this run's stable Gateway selection
         if: steps.gateway-selection.outputs.create == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-gateway-selection-${{ github.run_id }}
           path: |
@@ -180,8 +192,10 @@ jobs:
       - name: Qualify native pairing and chat
         env:
           OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.simslim.outputs.binary }}
+          OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ inputs.resource_diagnostics && '1' || '0' }}
         run: |
-          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
             --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
             --gateway-selection "$GATEWAY_SELECTION_DIR"
 
@@ -208,9 +222,11 @@ jobs:
 
       - name: Upload sanitized proof only
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ios-release-e2e-proof.json
+          path: |
+            ${{ runner.temp }}/ios-release-e2e-proof.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
           if-no-files-found: error
           retention-days: 14

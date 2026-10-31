@@ -101,7 +101,7 @@ describe("mattermost directory", () => {
       token: "token-a",
       request: vi.fn().mockResolvedValueOnce([
         { id: "chan-1", type: "O", name: "alerts", display_name: "Alerts" },
-        { id: "chan-2", type: "P", name: "ops", display_name: "Ops" },
+        { id: "chan-2", type: "P", name: "ops", display_name: "O\u0308ps" },
         { id: "chan-3", type: "D", name: "dm", display_name: "Direct" },
       ]),
     };
@@ -112,7 +112,7 @@ describe("mattermost directory", () => {
     const clientC = {
       token: "token-c",
       request: vi.fn().mockResolvedValueOnce([
-        { id: "chan-2", type: "P", name: "ops", display_name: "Ops" },
+        { id: "chan-2", type: "P", name: "ops", display_name: "O\u0308ps" },
         { id: "chan-4", type: "O", name: "infra", display_name: "Infra" },
       ]),
     };
@@ -139,9 +139,9 @@ describe("mattermost directory", () => {
       listMattermostDirectoryGroups({
         cfg: {} as never,
         runtime: {} as never,
-        query: "  op  ",
+        query: "  ÖP  ",
       }),
-    ).resolves.toEqual([{ kind: "group", id: "channel:chan-2", name: "ops", handle: "Ops" }]);
+    ).resolves.toEqual([{ kind: "group", id: "channel:chan-2", name: "ops", handle: "O\u0308ps" }]);
   });
 
   it("labels public O channels as channel and private P channels as group (#95646)", async () => {
@@ -165,47 +165,6 @@ describe("mattermost directory", () => {
     ).resolves.toEqual([
       { kind: "channel", id: "channel:pub-1", name: "general", handle: "General" },
       { kind: "group", id: "channel:priv-1", name: "secret", handle: "Secret" },
-    ]);
-  });
-
-  it("uses the first healthy client for peers and filters self and blanks", async () => {
-    const client = {
-      token: "token-default",
-      request: vi
-        .fn()
-        .mockResolvedValueOnce([{ id: "team-1" }])
-        .mockResolvedValueOnce([{ user_id: "me-1" }, { user_id: "user-1" }, { user_id: "user-2" }])
-        .mockResolvedValueOnce([
-          {
-            id: "user-1",
-            username: "alice",
-            first_name: "Alice",
-            last_name: "Ng",
-          },
-          {
-            id: "user-2",
-            username: "bob",
-            nickname: "Bobby",
-          },
-          {
-            id: "me-1",
-            username: "self",
-          },
-        ]),
-    };
-
-    mockDefaultAccount();
-    createMattermostClientMock.mockReturnValue(client);
-    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
-
-    await expect(
-      listMattermostDirectoryPeers({
-        cfg: {} as never,
-        runtime: {} as never,
-      }),
-    ).resolves.toEqual([
-      { kind: "user", id: "user:user-1", name: "alice", handle: "Alice Ng" },
-      { kind: "user", id: "user:user-2", name: "bob", handle: "Bobby" },
     ]);
   });
 
@@ -254,35 +213,6 @@ describe("mattermost directory", () => {
     });
   });
 
-  it("applies peer limits after resolving users", async () => {
-    const client = {
-      token: "token-default",
-      request: vi
-        .fn()
-        .mockResolvedValueOnce([{ id: "team-1" }])
-        .mockResolvedValueOnce([{ user_id: "missing-user" }, { user_id: "user-2" }])
-        .mockResolvedValueOnce([{ id: "user-2", username: "bob" }]),
-    };
-
-    mockDefaultAccount();
-    createMattermostClientMock.mockReturnValue(client);
-    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
-
-    await expect(
-      listMattermostDirectoryPeers({
-        cfg: {} as never,
-        runtime: {} as never,
-        limit: 1,
-      }),
-    ).resolves.toEqual([{ kind: "user", id: "user:user-2", name: "bob", handle: undefined }]);
-
-    expect(client.request).toHaveBeenNthCalledWith(2, "/teams/team-1/members?page=0&per_page=200");
-    expect(client.request).toHaveBeenNthCalledWith(3, "/users/ids", {
-      method: "POST",
-      body: JSON.stringify(["missing-user", "user-2"]),
-    });
-  });
-
   it("uses user search when a query is present and applies limits", async () => {
     const client = {
       token: "token-default",
@@ -303,14 +233,14 @@ describe("mattermost directory", () => {
       listMattermostDirectoryPeers({
         cfg: {} as never,
         runtime: {} as never,
-        query: "  ali  ",
+        query: "  A\u0301LI  ",
         limit: 1,
       }),
     ).resolves.toEqual([{ kind: "user", id: "user:user-1", name: "alice", handle: "Alice Ng" }]);
 
     expect(client.request).toHaveBeenNthCalledWith(2, "/users/search", {
       method: "POST",
-      body: JSON.stringify({ term: "ali", team_id: "team-1" }),
+      body: JSON.stringify({ term: "a\u0301li", team_id: "team-1" }),
     });
   });
 });

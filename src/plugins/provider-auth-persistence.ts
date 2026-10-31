@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { ProviderAuthPersistenceError } from "@openclaw/normalization-core/error-coercion";
 import { persistAuthProfileBatch } from "../agents/auth-profiles.js";
 import { OAUTH_REFRESH_LOCK_OPTIONS } from "../agents/auth-profiles/constants.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -45,44 +46,32 @@ type ProviderAuthProtectedProfilesReceipt = {
   rollback: (retainProfileIds?: ReadonlySet<string>) => Promise<void>;
 };
 
-/** Own commit fencing and one-shot compensation for both persistence stages. */
+/** Settle each persistence stage once, retaining failures for subsequent callers. */
 function createProviderAuthPersistenceReceipt(
   profiles: ProviderAuthProfile[],
   commit: () => Promise<void>,
   rollback: ProviderAuthProtectedProfilesReceipt["rollback"],
 ): ProviderAuthProtectedProfilesReceipt {
-  let outcome: "pending" | "committed" | "rolled-back" | "rollback-failed" = "pending";
-  let rollbackPromise: Promise<void> | undefined;
+  let settlement: Promise<void> | undefined;
   return {
     profiles,
-    commit: async () => {
-      // A concurrent commit cannot release locks while compensation is still running.
-      if (rollbackPromise) {
-        await rollbackPromise.catch(() => undefined);
-      }
-      if (outcome === "rolled-back") {
-        throw new Error("Cannot commit rolled-back provider auth persistence.");
-      }
-      if (outcome === "rollback-failed") {
-        throw new Error("Cannot commit provider auth persistence after rollback failed.");
-      }
-      outcome = "committed";
-      await commit();
-    },
+    commit: () => (settlement ??= Promise.resolve().then(commit)),
     rollback: (retainProfileIds) =>
-      (rollbackPromise ??=
-        outcome === "committed"
-          ? commit()
-          : rollback(retainProfileIds).then(
-              () => {
-                outcome = "rolled-back";
-              },
-              (error: unknown) => {
-                outcome = "rollback-failed";
-                throw error;
-              },
-            )),
+      (settlement ??= Promise.resolve().then(() => rollback(retainProfileIds))),
   };
+}
+
+async function failProviderAuthPersistence(
+  error: unknown,
+  cleanup: () => Promise<void>,
+  message: string,
+): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cause) {
+    throw new ProviderAuthPersistenceError(message, error, { cause });
+  }
+  throw error;
 }
 
 function resolveProfileDigest(profile: ProviderAuthProfile): string {
@@ -223,17 +212,11 @@ async function materializeProviderAuthProfiles(params: {
     }
     return { profiles, rollback };
   } catch (error) {
-    try {
-      await rollback();
-    } catch (rollbackError) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
-      throw new AggregateError(
-        [error, rollbackError],
-        "Provider credential persistence failed and protected-store rollback could not be confirmed.",
-        { cause: error },
-      );
-    }
-    throw error;
+    return await failProviderAuthPersistence(
+      error,
+      rollback,
+      "Provider credential persistence failed and protected-store rollback could not be confirmed.",
+    );
   }
 }
 
@@ -326,17 +309,11 @@ async function stageProviderAuthProfilesForPersistence(params: {
       beforeWrite: params.beforeWrite,
     });
   } catch (error) {
-    try {
-      await releaseProviderAuthLocks(locks);
-    } catch (releaseError) {
-      // oxlint-disable-next-line preserve-caught-error -- The aggregate retains the release error and the initiating failure remains its cause.
-      throw new AggregateError(
-        [error, releaseError],
-        "Provider auth persistence failed and staged state could not be fully released.",
-        { cause: error },
-      );
-    }
-    throw error;
+    return await failProviderAuthPersistence(
+      error,
+      () => releaseProviderAuthLocks(locks),
+      "Provider auth persistence failed and staged state could not be fully released.",
+    );
   }
 
   let releasePromise: Promise<void> | undefined;
@@ -387,24 +364,18 @@ async function stageProviderAuthProfileBatchCore(
       validateCurrentCredential: params.validateCurrentCredential,
     });
   } catch (error) {
-    try {
-      await prepared.rollback();
-    } catch (rollbackError) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
-      throw new AggregateError(
-        [error, rollbackError],
-        "Provider auth persistence failed and staged state could not be fully released.",
-        { cause: error },
-      );
-    }
-    throw error;
+    return await failProviderAuthPersistence(
+      error,
+      prepared.rollback,
+      "Provider auth persistence failed and staged state could not be fully released.",
+    );
   }
 
   return createProviderAuthPersistenceReceipt(prepared.profiles, prepared.commit, async () => {
     let profileRollbackError: unknown;
-    let rollbackResult: ReturnType<typeof persisted.rollback> | undefined;
+    let rollbackResult: Awaited<ReturnType<typeof persisted.rollback>> | undefined;
     try {
-      rollbackResult = persisted.rollback();
+      rollbackResult = await persisted.rollback();
     } catch (error) {
       profileRollbackError = error;
     }

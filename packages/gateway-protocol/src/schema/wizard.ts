@@ -4,7 +4,6 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SetupInferenceActivationRejectionSchema } from "./setup-inference.js";
 
-/** Runtime state reported for gateway-driven setup wizard sessions. */
 const WizardRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
@@ -12,7 +11,6 @@ const WizardRunStatusSchema = Type.Union([
   Type.Literal("error"),
 ]);
 
-/** Starts a setup wizard, optionally scoped to a local or remote workspace. */
 export const WizardStartParamsSchema = closedObject({
   mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
   workspace: Type.Optional(Type.String()),
@@ -29,7 +27,11 @@ export const McpAuthLoginParamsSchema = closedObject({
   serverName: NonEmptyString,
 });
 
-/** Client answer payload for the current wizard step. */
+/** Clears the shared operator OAuth credentials of one MCP server. */
+export const McpAuthLogoutParamsSchema = closedObject({
+  serverName: NonEmptyString,
+});
+
 export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
   value: Type.Optional(Type.Unknown()),
@@ -51,7 +53,6 @@ export const WizardStatusParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
-/** Selectable value shown in a choice-based wizard step. */
 const WizardStepOptionSchema = closedObject({
   value: Type.Unknown(),
   label: NonEmptyString,
@@ -64,7 +65,6 @@ const WizardDeviceCodeSchema = closedObject({
   message: Type.Optional(Type.String()),
 });
 
-/** UI contract for one wizard step rendered by gateway clients. */
 export const WizardStepSchema = closedObject({
   id: NonEmptyString,
   type: Type.Union([
@@ -78,6 +78,7 @@ export const WizardStepSchema = closedObject({
   ]),
   title: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
+  progressMessage: Type.Optional(Type.String()),
   format: Type.Optional(Type.Union([Type.Literal("plain")])),
   options: Type.Optional(Type.Array(WizardStepOptionSchema)),
   initialValue: Type.Optional(Type.Unknown()),
@@ -94,7 +95,6 @@ const WizardConfiguredAccountSchema = closedObject({
   accountId: NonEmptyString,
 });
 
-/** Common response fields for start and next calls. */
 const WizardResultFields = {
   done: Type.Boolean(),
   step: Type.Optional(WizardStepSchema),
@@ -114,6 +114,7 @@ const WizardResultFields = {
   modelActivation: Type.Optional(
     closedObject({
       modelRef: NonEmptyString,
+      modelName: Type.Optional(NonEmptyString),
       modelTarget: Type.Optional(Type.Literal("utility")),
       gatewayRestartRequired: Type.Optional(Type.Literal(true)),
     }),
@@ -123,10 +124,8 @@ const WizardResultFields = {
   activationRejection: Type.Optional(SetupInferenceActivationRejectionSchema),
 };
 
-/** Result after advancing a wizard session. */
 export const WizardNextResultSchema = closedObject(WizardResultFields);
 
-/** Result returned when a wizard session is created. */
 export const WizardStartResultSchema = closedObject({
   sessionId: NonEmptyString,
   ...WizardResultFields,
@@ -142,6 +141,7 @@ export const WizardStatusResultSchema = closedObject({
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
 export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
+export type McpAuthLogoutParams = Static<typeof McpAuthLogoutParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

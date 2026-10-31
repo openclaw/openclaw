@@ -13,11 +13,25 @@ import android.app.Activity
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.provider.Settings
 import androidx.activity.compose.LocalActivity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.filter
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import org.junit.After
@@ -145,6 +159,35 @@ class NotificationSettingsScreenTest {
     assertNull(shadowOf(activity).nextStartedActivity)
   }
 
+  @Test
+  fun selectedAppExposesOneNamedSwitchAndUpdatesThePackageFilter() {
+    val packageName = "com.example.alerts"
+    shadowOf(app.packageManager).installPackage(
+      PackageInfo().apply {
+        this.packageName = packageName
+        applicationInfo =
+          ApplicationInfo().apply {
+            this.packageName = packageName
+            nonLocalizedLabel = "Example Alerts"
+          }
+      },
+    )
+    prefs.setNotificationForwardingPackages(listOf(packageName))
+    showNotificationSettings()
+
+    composeRule.onNodeWithText("Open App Picker").performScrollTo().performClick()
+    val appRow = composeRule.onNodeWithText(packageName)
+    appRow
+      .performScrollTo()
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+      .assertTextEquals("Example Alerts", packageName)
+      .assertIsOn()
+    appRow.onChildren().filter(hasClickAction()).assertCountEquals(0)
+    appRow.performClick()
+
+    composeRule.runOnIdle { assertFalse(packageName in prefs.notificationForwardingPackages.value) }
+  }
+
   private fun showNotificationSettings() {
     val viewModel = MainViewModel(app, prefs, SavedStateHandle()).also { viewModels.put("notifications", it) }
     composeRule.setContent {
@@ -166,6 +209,7 @@ class NotificationSettingsScreenTest {
 
   private fun assertListenerSetupRequired() {
     assertFalse(prefs.notificationForwardingEnabled.value)
+    composeRule.onNodeWithText("Forward Notifications").assertIsOff()
     assertEquals(
       Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
       shadowOf(activity).nextStartedActivity?.action,

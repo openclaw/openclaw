@@ -10,6 +10,7 @@ import {
 } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { DeleteSessionEntryLifecycleParams } from "./session-accessor.sqlite-contract.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { sqliteLifecycleTargetSnapshotsEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -17,12 +18,8 @@ import {
   readSqliteSessionGenerationWindows,
 } from "./session-accessor.sqlite-generation-copy.js";
 import {
-  collectSessionStateIdsForEntry,
   shouldRemoveSessionEntry,
-  planSessionStateDeleteIfUnreferenced,
-  readSessionGenerationIdsForKeys,
   planSessionStateAfterEntryRemoval,
-  readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   SessionDeletionPlanningOperation,
@@ -37,6 +34,11 @@ import type {
   SqliteSessionDeletionScope,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { readSessionNodeArtifactFingerprint } from "./session-accessor.sqlite-node-artifacts.js";
+import {
+  collectSessionStateIdsForEntry,
+  readSessionGenerationIdsForKeys,
+  readReferencedSessionIdsAfterTargetMutation,
+} from "./session-accessor.sqlite-references.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -138,7 +140,6 @@ function prepareSessionEntryDeletionInDatabase(
           archiveTranscript: params.archiveTranscript,
           database,
           entry,
-          reason: "deleted",
           referencedSessionIds: referencedAfterDelete,
         }),
       )

@@ -1,9 +1,8 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
-import {
-  sanitizeGoogleTurnOrdering,
-  sanitizeSessionMessagesImages,
-} from "./embedded-agent-helpers.js";
+import { expect, it } from "vitest";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
+import { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 import {
   castAgentMessages,
   makeAgentAssistantMessage,
@@ -15,6 +14,53 @@ const assistant = (
   content: AssistantMessage["content"],
   overrides: Partial<AssistantMessage> = {},
 ) => makeAgentAssistantMessage({ content, model: "gpt-5.4", ...overrides });
+const bareAssistant = (content: unknown[]) => ({ role: "assistant", content });
+const thinking = (value: string, signature?: string) => ({
+  type: "thinking",
+  thinking: value,
+  ...(signature ? { thought_signature: signature } : {}),
+});
+type Options = Parameters<typeof sanitizeSessionMessagesImages>[2];
+async function check(input: unknown[], expected: unknown[], options?: Options) {
+  const actual = await sanitizeSessionMessagesImages(castAgentMessages(input), "test", options);
+  expect(actual).toEqual(expected);
+}
+
+it("reuses owned text cleanup across rebuilt envelopes without mixing replay policies", async () => {
+  const content = [
+    { ...text(" "), textSignature: "signed" },
+    { ...text("visible"), thought_signature: "msg_private", thoughtSignature: "msg_camel" },
+  ];
+  const message = assistant(content);
+  normalizeTranscriptJsonValue({ message }, "entry");
+  const sanitize = async (options?: Options) =>
+    (await sanitizeSessionMessagesImages([{ ...message }], "test", options)).find(
+      (entry) => entry.role === "assistant",
+    )?.content;
+  const strict = { sanitizeThoughtSignatures: { allowBase64Only: true, includeCamelCase: true } };
+  const first = await sanitize(strict);
+  expect(first).toEqual([{ ...text(" "), textSignature: "signed" }, text("visible")]);
+  expect(await sanitize({ preserveSignatures: true })).toBe(content);
+  expect(await sanitize(strict)).toBe(first);
+  expect(Object.isFrozen(first)).toBe(true);
+  const user = { role: "user" as const, content, timestamp: 0 };
+  expect((await sanitizeSessionMessagesImages([user], "test"))[0]).toHaveProperty("content", [
+    content[1],
+  ]);
+  expect(await sanitize(strict)).toBe(first);
+});
+
+it("sanitizes mutable content again after an in-place edit", async () => {
+  const block = text("first");
+  const message = { role: "user" as const, content: [block], timestamp: 0 };
+  expect((await sanitizeSessionMessagesImages([message], "test"))[0]).toHaveProperty("content", [
+    text("first"),
+  ]);
+  block.text = " ";
+  expect((await sanitizeSessionMessagesImages([message], "test"))[0]).toHaveProperty("content", [
+    text("[empty content omitted]"),
+  ]);
+});
 const replay = {
   v: 1,
   type: "openai-responses-compaction",
@@ -25,167 +71,104 @@ const replay = {
   model: "gpt-5.4",
 } as const;
 
-describe("sanitizeSessionMessagesImages", () => {
-  it.each([
-    { options: undefined, expected: "call_123|fc_456" },
-    {
-      options: { sanitizeMode: "images-only", sanitizeToolCallIds: true, toolCallIdMode: "strict" },
-      expected: "call123fc456",
-    },
-  ] as const)("keeps paired tool IDs consistent: $expected", async ({ options, expected }) => {
-    const input = castAgentMessages([
-      assistant([call("call_123|fc_456")]),
-      { role: "toolResult", toolCallId: "call_123|fc_456", content: [text("ok")] },
-    ]);
-    expect(await sanitizeSessionMessagesImages(input, "test", options)).toEqual([
-      { ...input[0], content: [call(expected)] },
-      { ...input[1], toolCallId: expected },
-    ]);
-  });
-
-  it("sanitizes legacy tool-use IDs alongside tool-call IDs", async () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolUse", id: "call_abc|item:123", name: "test", input: {} },
-          call("call_abc|item:456"),
-        ],
-      },
-      { role: "toolResult", toolUseId: "call_abc|item:123", content: [text("ok")] },
-    ]);
-    expect(
-      await sanitizeSessionMessagesImages(input, "test", {
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-      }),
-    ).toEqual([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolUse", id: "callabcitem123", name: "test", input: {} },
-          call("callabcitem456"),
-        ],
-      },
-      { ...input[1], toolUseId: "callabcitem123", toolCallId: "callabcitem123" },
-    ]);
-  });
-
-  it("reindexes checkpoints after dropping empty text without inventing tool input", async () => {
-    const message = assistant([text(""), call("call_1")], { providerReplay: replay });
-    expect(await sanitizeSessionMessagesImages([message], "test")).toEqual([
-      { ...message, content: [call("call_1")], providerReplay: { ...replay, replayIndex: 0 } },
-    ]);
-  });
-
-  it("strips an exact checkpoint when its owner content becomes empty", async () => {
-    const message = assistant([text("")], { providerReplay: { ...replay, replayIndex: 0 } });
-    expect(await sanitizeSessionMessagesImages([message], "test")).toEqual([
-      { ...message, content: [], providerReplay: undefined },
-    ]);
-  });
-
-  it.each(["length", "error"] as const)(
-    "preserves an opaque replay owner after %s",
-    async (stopReason) => {
-      const message = assistant([text("")], {
-        stopReason,
-        providerReplay: { ...replay, type: "opaque-checkpoint", replayIndex: undefined },
-      });
-      expect(await sanitizeSessionMessagesImages([message], "test")).toEqual([
-        { ...message, content: [] },
-      ]);
-    },
+it("sanitizes legacy tool-use IDs alongside tool-call IDs", async () => {
+  const toolUse = (id: string) => ({ type: "toolUse", id, name: "test", input: {} });
+  const result = { role: "toolResult", toolUseId: "call_abc|item:123", content: [text("ok")] };
+  await check(
+    [bareAssistant([toolUse("call_abc|item:123"), call("call_abc|item:456")]), result],
+    [
+      bareAssistant([toolUse("callabcitem123"), call("callabcitem456")]),
+      { ...result, toolUseId: "callabcitem123", toolCallId: "callabcitem123" },
+    ],
+    { sanitizeToolCallIds: true, toolCallIdMode: "strict" },
   );
-
-  it("drops empty assistant turns while preserving the user turn", async () => {
-    const user = { role: "user" as const, content: "hello", timestamp: 0 };
-    expect(
-      await sanitizeSessionMessagesImages(
-        [user, assistant([text(" ")]), assistant([], { stopReason: "error" })],
-        "test",
-      ),
-    ).toEqual([user]);
-  });
-
-  it.each([
-    { visible: "hello", expected: "hello" },
-    { visible: "", expected: "[empty content omitted]" },
-  ])("keeps user and tool-result content nonempty: $visible", async ({ visible, expected }) => {
-    const input = castAgentMessages([
-      { role: "user", content: [text(""), text(visible)] },
-      { role: "toolResult", toolCallId: "tool-1", content: [text("   "), text(visible)] },
-    ]);
-    expect(await sanitizeSessionMessagesImages(input, "test")).toEqual([
-      { ...input[0], content: [text(expected)] },
-      { ...input[1], content: [text(expected)] },
-    ]);
-  });
-
-  it("strips message-id signatures but retains provider signatures", async () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { ...text("hello"), thought_signature: "msg_abc123" },
-          { type: "thinking", thinking: "reasoning", thought_signature: "AQID" },
-        ],
-      },
-    ]);
-    expect(await sanitizeSessionMessagesImages(input, "test")).toEqual([
-      {
-        role: "assistant",
-        content: [
-          text("hello"),
-          { type: "thinking", thinking: "reasoning", thought_signature: "AQID" },
-        ],
-      },
-    ]);
-  });
-
-  it("applies explicit signature policy in images-only mode", async () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thought_signature: "msg_abc123" },
-          text(" "),
-          text("visible"),
-        ],
-      },
-    ]);
-    expect(
-      await sanitizeSessionMessagesImages(input, "test", {
-        sanitizeMode: "images-only",
-        sanitizeThoughtSignatures: { allowBase64Only: true, includeCamelCase: true },
-      }),
-    ).toEqual([
-      { role: "assistant", content: [{ type: "thinking", thinking: "internal" }, text("visible")] },
-    ]);
-  });
-
-  it("preserves signed thinking order when removing empty text", async () => {
-    const first = { type: "thinking", thinking: "first", thought_signature: "sig-1" };
-    const redacted = { type: "redacted_thinking", data: "opaque", thought_signature: "sig-2" };
-    const input = castAgentMessages([
-      { role: "assistant", content: [first, text(""), text("visible"), redacted, text("tail")] },
-    ]);
-    expect(
-      await sanitizeSessionMessagesImages(input, "test", { preserveSignatures: true }),
-    ).toEqual([{ role: "assistant", content: [first, text("visible"), redacted, text("tail")] }]);
-  });
 });
 
-describe("sanitizeGoogleTurnOrdering", () => {
-  it("prepends a user turn before assistant-first history", () => {
-    const message = assistant([call("call_1")]);
-    expect(sanitizeGoogleTurnOrdering([message])).toEqual([
-      expect.objectContaining({ role: "user" }),
-      message,
-    ]);
+it.each([true, false])("repairs an empty-text checkpoint (tool=%s)", async (hasTool) => {
+  const content = hasTool ? [call("call_1")] : [];
+  const message = assistant([text(""), ...content], {
+    providerReplay: { ...replay, replayIndex: hasTool ? 1 : 0 },
   });
-  it("leaves user-first history unchanged", () => {
-    const input = castAgentMessages([{ role: "user", content: "hi" }]);
-    expect(sanitizeGoogleTurnOrdering(input)).toBe(input);
-  });
+  const providerReplay = hasTool ? { ...replay, replayIndex: 0 } : undefined;
+  await check([message], [{ ...message, content: structuredClone(content), providerReplay }]);
+});
+
+it("drops empty assistant turns while preserving the user turn", async () => {
+  const user = { role: "user" as const, content: "hello", timestamp: 0 };
+  await check([user, assistant([text(" ")]), assistant([], { stopReason: "error" })], [user]);
+});
+
+it("keeps user and tool-result content nonempty", async () => {
+  const input = castAgentMessages([
+    { role: "user", content: [text(""), text("")] },
+    { role: "toolResult", toolCallId: "tool-1", content: [text("   "), text("")] },
+  ]);
+  await check(input, [
+    { ...input[0], content: [text("[empty content omitted]")] },
+    { ...input[1], content: [text("[empty content omitted]")] },
+  ]);
+});
+
+it.each([false, true])("applies signature policy (images-only=%s)", async (imagesOnly) => {
+  const input = imagesOnly
+    ? [thinking("internal", "msg_abc123"), text(" "), text("visible")]
+    : [{ ...text("hello"), thought_signature: "msg_abc123" }, thinking("reasoning", "AQID")];
+  const expected = imagesOnly
+    ? [thinking("internal"), text("visible")]
+    : [text("hello"), thinking("reasoning", "AQID")];
+  await check(
+    [bareAssistant(input)],
+    [bareAssistant(expected)],
+    imagesOnly
+      ? {
+          sanitizeMode: "images-only",
+          sanitizeThoughtSignatures: { allowBase64Only: true, includeCamelCase: true },
+        }
+      : undefined,
+  );
+});
+it("keeps corrupt history images omitted after error and a recovered reply", async () => {
+  const png = createNoisyPngBuffer(64, 64);
+  const truncated = png.subarray(0, Math.floor(png.length / 2)).toString("base64");
+  const valid = png.toString("base64");
+  const image = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
+  const omitted = {
+    type: "text",
+    text: expect.stringMatching(/^\[session:history\] omitted image payload: .*decode/i),
+  };
+  const stored = castAgentMessages([
+    {
+      role: "user",
+      content: [text("inspect these"), image(truncated), image(valid)],
+      timestamp: 1,
+    },
+    assistant([call("t1")], { stopReason: "toolUse" }),
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "read",
+      content: [text("permission denied"), image(truncated)],
+      isError: true,
+      timestamp: 3,
+    },
+    assistant([text("interrupted")], { stopReason: "error" }),
+  ]);
+  const original = structuredClone(stored);
+  for (const message of stored) {
+    normalizeTranscriptJsonValue({ message }, "entry");
+  }
+  const expected = castAgentMessages([
+    { ...stored[0], content: [text("inspect these"), omitted, image(valid)] },
+    stored[1],
+    { ...stored[2], content: [text("permission denied"), omitted] },
+    stored[3],
+  ]);
+  expect(await sanitizeSessionMessagesImages(stored, "session:history")).toEqual(expected);
+  expect(stored).toEqual(original);
+
+  const recovered = assistant([text("recovered")]);
+  expect(await sanitizeSessionMessagesImages([...stored, recovered], "session:history")).toEqual([
+    ...expected,
+    recovered,
+  ]);
 });

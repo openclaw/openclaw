@@ -1,9 +1,16 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerEnv } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
   type AwaitedStdoutChildAdapter,
@@ -11,7 +18,13 @@ import {
 import { assertProcessGroupControl } from "../process/supervisor/service-child-group-ownership.js";
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
+import type { SpawnSecretInput } from "../process/supervisor/types.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import {
+  WORKER_NATIVE_INFERENCE_STARTUP_ARG,
+  WORKER_NATIVE_INFERENCE_STARTUP_FD,
+  WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES,
+} from "../worker/native-inference-startup.js";
 import {
   parseNodeWorkerConnectionFailureMessage,
   type NodeWorkerLaunchInput,
@@ -21,18 +34,20 @@ import {
   type WorkerProcessInput,
 } from "../worker/worker-process-protocol.js";
 import {
-  buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
   type NodeWorkerContainerEngine,
 } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
-import { resolveNodeWorkerEntry } from "./node-worker-entry.js";
 import type { NodeWorkerCleanupMode } from "./node-worker-launch-receipt.js";
 import type {
   NodeWorkerContainerIdentity,
   NodeWorkerLaunchReceipt,
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
+import {
+  projectNodeWorkerNativeInference,
+  type NodeWorkerNativeInferenceSnapshot,
+} from "./node-worker-native-inference.js";
 import {
   sanitizeNodeWorkerDiagnostic,
   type NodeWorkerCredentialScrubber,
@@ -46,6 +61,8 @@ export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
   workerEnv: NodeJS.ProcessEnv;
+  homeDir?: string;
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
   descriptor: WorkerLaunchDescriptor;
@@ -68,10 +85,62 @@ type NodeWorkerLaunchTransport =
       container?: NodeWorkerContainerIdentity;
     };
 
+/** Resolves one exact Gateway-managed worker bundle from its isolated namespace. */
+function resolveNodeWorkerEntry(params: {
+  bundleRoot: string;
+  expectedBundleHash: string;
+  gatewayNamespace: string;
+}): string {
+  const root = fs.realpathSync.native(params.bundleRoot);
+  const bundle = fs.realpathSync.native(
+    path.join(root, params.gatewayNamespace, "bundles", params.expectedBundleHash),
+  );
+  if (!isPathInside(root, bundle)) {
+    throw new Error("node worker bundle resolves outside its configured root");
+  }
+  const entry = fs.realpathSync.native(
+    fileURLToPath(resolveRuntimeDeployEntrypointUrl("worker", bundle)),
+  );
+  if (!isPathInside(bundle, entry) || !fs.statSync(entry).isFile()) {
+    throw new Error("node worker entry must be a regular file inside its bundle");
+  }
+  return entry;
+}
+
 /** Keep local IPC and container stdio as transport choices of one launch state machine. */
 export async function prepareNodeWorkerLaunchTransport(
   options: NodeWorkerLaunchTransportOptions,
 ): Promise<NodeWorkerLaunchTransport> {
+  // Only the trusted snapshot can grant inference custody. Never forward a
+  // caller-provided carrier, including to ordinary proxied children.
+  const workerEnv = { ...options.workerEnv };
+  let secretInput: SpawnSecretInput | undefined;
+  if (options.descriptor.assignment.inference === "runtime-local") {
+    if (options.containerEngine) {
+      throw new Error(
+        'Worker-local inference requires nodeHost.workerRuns.isolation to be "none"; ' +
+          "nested-container worker isolation is unsupported.",
+      );
+    }
+    if (!options.nativeInferenceSnapshot) {
+      throw new Error(NODE_WORKER_INFERENCE_SETUP_ERROR);
+    }
+    const startup = projectNodeWorkerNativeInference(
+      options.nativeInferenceSnapshot,
+      options.descriptor,
+    );
+    const encoded = JSON.stringify(startup);
+    if (Buffer.byteLength(encoded) > WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES) {
+      throw new Error(
+        "Worker-local inference startup data exceeds 2 MiB. Reduce the configured node models " +
+          "or headers, then restart the node host.",
+      );
+    }
+    secretInput = {
+      fd: WORKER_NATIVE_INFERENCE_STARTUP_FD,
+      createData: () => Buffer.from(encoded),
+    };
+  }
   const entry = resolveNodeWorkerEntry({
     bundleRoot: options.bundleRoot,
     expectedBundleHash: options.input.expectedBundleHash,
@@ -83,9 +152,11 @@ export async function prepareNodeWorkerLaunchTransport(
       entry,
       "--internal-worker-ipc",
       "--internal-worker-session",
+      ...(secretInput ? [WORKER_NATIVE_INFERENCE_STARTUP_ARG] : []),
     ];
     const workerOptions = {
-      env: options.workerEnv,
+      env: resolveRuntimeWorkerEnv(pathToFileURL(entry), workerEnv),
+      secretInput,
       ownedWorker: true,
       stdinMode: "pipe-open",
       stdoutConsumption: "awaited",
@@ -110,13 +181,14 @@ export async function prepareNodeWorkerLaunchTransport(
         WORKER_LINEAGE_START_PROTOCOL_FEATURE,
       )
     ) {
+      const features = options.descriptor.admission.handshake.protocolFeatures;
+      const nativeProcessOwnerSupported =
+        features.includes(WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE) ||
+        (process.platform === "linux" &&
+          features.includes(WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE));
       const { adapter, ready } = await createServiceChildRelayAdapter({
         ...workerOptions,
-        ...(options.descriptor.admission.handshake.protocolFeatures.includes(
-          WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
-        )
-          ? { nativeProcessOwnerSupported: true as const }
-          : {}),
+        ...(nativeProcessOwnerSupported ? { nativeProcessOwnerSupported: true as const } : {}),
         cleanupBinding: await options.store.cleanupBinding({
           launchId: options.input.launchId,
           planHash: options.planHash,
@@ -136,7 +208,11 @@ export async function prepareNodeWorkerLaunchTransport(
       exactEnv: true,
     });
     await ready;
-    return { kind: "started", adapter, cleanupMode: "process-group" };
+    return {
+      kind: "started",
+      adapter,
+      cleanupMode: adapter.jobKillOnClose ? "windows-job" : "process-group",
+    };
   }
 
   const endpoint = options.descriptor.connectionEndpoint;
@@ -164,9 +240,10 @@ export async function prepareNodeWorkerLaunchTransport(
       bundleRoot: options.bundleRoot,
       bundleEntry: entry,
       workspaceDir: options.descriptor.assignment.workspaceDir,
+      homeDir: options.homeDir,
       gatewayNamespace: options.input.gatewayNamespace,
       launchId: options.input.launchId,
-      env: options.workerEnv,
+      env: workerEnv,
       ...(options.containerImage ? { image: options.containerImage } : {}),
     });
     const claimed = await options.store.get(options.input.launchId);
@@ -178,7 +255,13 @@ export async function prepareNodeWorkerLaunchTransport(
       return { kind: "terminal", receipt: claimed };
     }
     const { adapter, ready } = await createChildAdapter({
-      argv: buildNodeWorkerContainerStartArgv(options.containerEngine, container.containerId),
+      argv: [
+        options.containerEngine.command,
+        "start",
+        "--attach",
+        "--interactive",
+        container.containerId,
+      ],
       env: options.containerEngine.env ?? options.engineEnv,
       exactEnv: true,
       stdinMode: "pipe-open",

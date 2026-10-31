@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { ensureWorkerEnvironmentNodeEnrollmentSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type {
@@ -20,6 +16,7 @@ import { isTerminalWorkerEnvironmentState } from "./state.js";
 import {
   credentialInsert,
   revokeCredential,
+  updateRow,
   updateWorkerEnvironmentRecord,
   upsertCredential,
 } from "./store-mutations.js";
@@ -39,6 +36,7 @@ import {
   requireWorkerEnvironmentString,
 } from "./store-validation.js";
 import type { CredentialRevocationInput } from "./store-write-types.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
 
 export function createWorkerEnvironmentStoreKernel(
@@ -47,15 +45,12 @@ export function createWorkerEnvironmentStoreKernel(
 ) {
   ensureWorkerEnvironmentStoreSchema(database);
   const db = database.db;
-  const createIntent = (
-    intentDb: DatabaseSync,
-    input: WorkerEnvironmentIntentInput,
-  ): WorkerEnvironmentRecord => {
+  const createIntent = (input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord => {
     const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
     const createdAtMs = now();
-    executeSqliteQuerySync(
-      intentDb,
-      queryWorkerEnvironmentStore(intentDb)
+    executeWorkerEnvironmentWrite(
+      db,
+      queryWorkerEnvironmentStore(db)
         .insertInto("worker_environments")
         .values({
           environment_id: environmentId,
@@ -93,7 +88,7 @@ export function createWorkerEnvironmentStoreKernel(
           last_error: null,
         }),
     );
-    return getRequiredWorkerEnvironment(intentDb, environmentId);
+    return getRequiredWorkerEnvironment(db, environmentId);
   };
   return {
     ...createPreparedEnvironmentStoreOps({ db, now, createIntent, get: findWorkerEnvironment }),
@@ -104,9 +99,7 @@ export function createWorkerEnvironmentStoreKernel(
       getEnvironment: findWorkerEnvironment,
     }),
     ...createWorkerEnvironmentTransitionOps(db, now),
-    createIntent(input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord {
-      return createIntent(db, input);
-    },
+    createIntent,
     ensureNodeEnrollment(environmentIdInput: string): WorkerEnvironmentRecord {
       const environmentId = requireWorkerEnvironmentString(environmentIdInput, "id");
       ensureWorkerEnvironmentNodeEnrollmentSchema(db);
@@ -229,7 +222,7 @@ export function createWorkerEnvironmentStoreKernel(
       const updatedAtMs = now();
       const ownerEpoch = Math.max(1, current.ownerEpoch);
       if (ownerEpoch !== current.ownerEpoch) {
-        updateWorkerEnvironmentRecord(db, environmentId, current.state, {
+        updateRow(db, environmentId, current.state, {
           owner_epoch: ownerEpoch,
           updated_at_ms: updatedAtMs,
         });
@@ -272,7 +265,7 @@ export function createWorkerEnvironmentStoreKernel(
       if (deliveredAtMs >= credential.expiresAtMs) {
         throw new Error("Expired worker credential cannot be marked delivered");
       }
-      const result = executeSqliteQuerySync(
+      const result = executeWorkerEnvironmentWrite(
         db,
         queryWorkerEnvironmentStore(db)
           .updateTable("worker_environment_credentials")

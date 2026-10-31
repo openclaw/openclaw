@@ -5,8 +5,6 @@ const REPLY_SYSTEM_EVENT_CONTEXT = Symbol("openclaw.reply.systemEventContext");
 type ReplySystemEventContext = {
   sessionKey: string;
   events?: readonly SystemEvent[];
-  /** Captured occurrences whose delivery owner, not prompt admission, settles them. */
-  deferredEventIds?: readonly string[];
 };
 
 /** Carry the queue and its optional prepared selection through internal option spreads. */

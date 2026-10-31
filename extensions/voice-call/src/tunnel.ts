@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { formatBoundedChildOutput } from "./bounded-child-output.js";
 import type { VoiceCallStreamExposurePath } from "./config.js";
 import {
   cleanupTailscaleExposureRoute,
@@ -8,6 +8,7 @@ import {
 } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
+const NGROK_ERROR_OUTPUT_MAX_CHARS = 16_384;
 const NGROK_ERROR_MARKER = "ERR_NGROK";
 const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
 const NGROK_STOP_GRACE_MS = 2_000;
@@ -71,19 +72,14 @@ interface TunnelConfig {
 }
 
 export interface TunnelResult {
-  /** The public URL */
   publicUrl: string;
-  /** Function to stop the tunnel */
   stop: () => Promise<void>;
-  /** Tunnel provider name */
-  provider: string;
 }
 
 /** Start an ngrok CLI tunnel and retain its child until the tunnel is stopped. */
 async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
   const args = ["http", String(config.port), "--log", "stdout", "--log-format", "json"];
 
-  // Add custom domain if provided (paid ngrok feature)
   if (config.ngrokDomain) {
     args.push("--domain", config.ngrokDomain);
   }
@@ -100,7 +96,6 @@ async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
     // win before the child has been reaped.
     let startupSettled = false;
     let childClosed = false;
-    let publicUrl: string | null = null;
     let outputBuffer = "";
     // Keep only enough UTF-16-safe suffix to recognize an error marker split
     // at the next stream chunk boundary; otherwise the caller loses the code.
@@ -132,31 +127,17 @@ async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
       try {
         const log = JSON.parse(line);
 
-        // ngrok logs the public URL in a 'started tunnel' message
-        if (log.msg === "started tunnel" && log.url) {
-          publicUrl = log.url;
+        if (startupSettled || !log.url || (log.msg !== "started tunnel" && !log.addr)) {
+          return;
         }
-
-        if (log.addr && log.url && !publicUrl) {
-          publicUrl = log.url;
-        }
-
-        if (publicUrl && !startupSettled) {
-          startupSettled = true;
-          clearTimeout(timeout);
-
-          const fullUrl = publicUrl + config.path;
-
-          console.log(`[voice-call] ngrok tunnel active: ${fullUrl}`);
-
-          resolve({
-            publicUrl: fullUrl,
-            provider: "ngrok",
-            stop: async () => {
-              await terminateNgrokProcess(proc, () => childClosed);
-            },
-          });
-        }
+        startupSettled = true;
+        clearTimeout(timeout);
+        const publicUrl = log.url + config.path;
+        console.log(`[voice-call] ngrok tunnel active: ${publicUrl}`);
+        resolve({
+          publicUrl,
+          stop: () => terminateNgrokProcess(proc, () => childClosed),
+        });
       } catch {
         // Not JSON, might be startup message
       }
@@ -183,7 +164,12 @@ async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
     proc.stderr.on("data", (chunk: string) => {
       const combined = stderrTail + chunk;
       if (combined.includes(NGROK_ERROR_MARKER)) {
-        rejectIfPending(`ngrok error: ${formatBoundedChildOutput(combined)}`, true);
+        // Keep the newest diagnostic text without splitting a surrogate pair.
+        const diagnostic =
+          combined.length > NGROK_ERROR_OUTPUT_MAX_CHARS
+            ? `[output truncated]\n${sliceUtf16Safe(combined, -NGROK_ERROR_OUTPUT_MAX_CHARS)}`
+            : combined;
+        rejectIfPending(`ngrok error: ${diagnostic}`, true);
       }
       stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
     });
@@ -200,11 +186,7 @@ async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
 
     proc.on("close", (code) => {
       childClosed = true;
-      if (!startupSettled) {
-        startupSettled = true;
-        clearTimeout(timeout);
-        reject(new Error(`ngrok exited unexpectedly with code ${code}`));
-      }
+      rejectIfPending(`ngrok exited unexpectedly with code ${code}`);
     });
   });
 }
@@ -240,7 +222,6 @@ export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | 
 
       return {
         publicUrl,
-        provider: `tailscale-${mode}`,
         stop: async () => {
           for (const route of routes) {
             await cleanupTailscaleExposureRoute({

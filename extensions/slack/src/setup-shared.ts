@@ -38,16 +38,15 @@ export function buildSlackAllowFromPrompt() {
   };
 }
 
-export function buildSlackManifest(botName = "OpenClaw") {
-  const safeName = botName.trim() || "OpenClaw";
+export function buildSlackManifest() {
   const manifest = {
     display_information: {
-      name: safeName,
-      description: `${safeName} connector for OpenClaw`,
+      name: "OpenClaw",
+      description: "OpenClaw app for OpenClaw",
     },
     features: {
       bot_user: {
-        display_name: safeName,
+        display_name: "OpenClaw",
         always_online: true,
       },
       app_home: {
@@ -56,7 +55,7 @@ export function buildSlackManifest(botName = "OpenClaw") {
         messages_tab_read_only_enabled: false,
       },
       agent_view: {
-        agent_description: `${safeName} connects Slack Agent View conversations to OpenClaw agents.`,
+        agent_description: "OpenClaw connects Slack Agent View conversations to OpenClaw agents.",
         suggested_prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
       },
       slash_commands: [
@@ -73,7 +72,9 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "app_mentions:read",
           "assistant:write",
           "channels:history",
+          "channels:manage",
           "channels:read",
+          "channels:write.invites",
           "chat:write",
           "commands",
           "emoji:read",

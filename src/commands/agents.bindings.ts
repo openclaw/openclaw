@@ -1,5 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -11,21 +14,20 @@ import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginContributionIds } from "../plugins/plugin-registry.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
-export { describeBinding } from "./agents.binding-format.js";
-
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
-  const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
+  const accountId = normalizeOptionalString(match.accountId);
   const identityKey = bindingMatchIdentityKey(match);
-  return JSON.stringify([identityKey, accountId]);
+  return JSON.stringify([identityKey, accountId === "*" ? "*" : normalizeAccountId(accountId)]);
 }
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   const roles = Array.isArray(match.roles) ? normalizeSortedUniqueStringEntries(match.roles) : [];
+  // Match runtime routing's trim/lowercase identity without expanding chat aliases.
   return JSON.stringify([
-    match.channel,
+    normalizeLowercaseStringOrEmpty(match.channel),
     match.peer?.kind ?? "",
     match.peer?.id ?? "",
     match.guildId ?? "",
@@ -34,16 +36,7 @@ function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   ]);
 }
 
-export function applyAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  added: AgentRouteBinding[];
-  updated: AgentRouteBinding[];
-  skipped: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = [...listRouteBindings(cfg)];
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const existingMatchMap = new Map<string, string>();
@@ -121,15 +114,7 @@ export function applyAgentBindings(
   };
 }
 
-export function removeAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  removed: AgentRouteBinding[];
-  missing: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function removeAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = listRouteBindings(cfg);
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const removeIndexes = new Set<number>();
@@ -188,41 +173,35 @@ export function removeAgentBindings(
   };
 }
 
-function getBindingChannelPlugin(channel: ChannelId) {
-  return getLoadedChannelPlugin(channel) ?? getBundledChannelSetupPlugin(channel);
-}
-
-function resolveBindingAccountId(params: {
+function buildChannelBinding(params: {
   channel: ChannelId;
   config: OpenClawConfig;
   agentId: string;
   explicitAccountId?: string;
-}): string | undefined {
-  const explicitAccountId = params.explicitAccountId?.trim();
-  if (explicitAccountId) {
-    return explicitAccountId;
+}): AgentRouteBinding {
+  let accountId = params.explicitAccountId?.trim();
+  if (!accountId) {
+    const plugin =
+      getLoadedChannelPlugin(params.channel) ?? getBundledChannelSetupPlugin(params.channel);
+    const resolvePluginAccountId =
+      plugin?.setupContract?.resolveBindingAccountId ?? plugin?.setup?.resolveBindingAccountId;
+    const pluginAccountId = resolvePluginAccountId?.({
+      cfg: params.config,
+      agentId: params.agentId,
+    });
+    if (pluginAccountId?.trim()) {
+      accountId = pluginAccountId.trim();
+    } else if (plugin && plugin.config.listAccountIds(params.config).length > 1) {
+      accountId = "*";
+    } else if (plugin?.meta.forceAccountBinding) {
+      accountId = resolveChannelDefaultAccountId({ plugin, cfg: params.config });
+    }
   }
-
-  const plugin = getBindingChannelPlugin(params.channel);
-  const resolvePluginAccountId =
-    plugin?.setupContract?.resolveBindingAccountId ?? plugin?.setup?.resolveBindingAccountId;
-  const pluginAccountId = resolvePluginAccountId?.({
-    cfg: params.config,
-    agentId: params.agentId,
-  });
-  if (pluginAccountId?.trim()) {
-    return pluginAccountId.trim();
+  const match: AgentRouteBinding["match"] = { channel: params.channel };
+  if (accountId) {
+    match.accountId = accountId;
   }
-
-  if (plugin && plugin.config.listAccountIds(params.config).length > 1) {
-    return "*";
-  }
-
-  if (plugin?.meta.forceAccountBinding) {
-    return resolveChannelDefaultAccountId({ plugin, cfg: params.config });
-  }
-
-  return undefined;
+  return { type: "route", agentId: params.agentId, match };
 }
 
 export function buildChannelBindings(params: {
@@ -231,22 +210,15 @@ export function buildChannelBindings(params: {
   config: OpenClawConfig;
   accountIds?: Partial<Record<ChannelChoice, string>>;
 }): AgentRouteBinding[] {
-  const bindings: AgentRouteBinding[] = [];
   const agentId = normalizeAgentId(params.agentId);
-  for (const channel of params.selection) {
-    const match: AgentRouteBinding["match"] = { channel };
-    const accountId = resolveBindingAccountId({
+  return Array.from(params.selection, (channel) =>
+    buildChannelBinding({
       channel,
       config: params.config,
       agentId,
       explicitAccountId: params.accountIds?.[channel],
-    });
-    if (accountId) {
-      match.accountId = accountId;
-    }
-    bindings.push({ type: "route", agentId, match });
-  }
-  return bindings;
+    }),
+  );
 }
 
 export function parseBindingSpecs(params: {
@@ -297,24 +269,21 @@ export function parseBindingSpecs(params: {
       );
       continue;
     }
-    let accountId: string | undefined = accountRaw?.trim();
+    const accountId = accountRaw?.trim();
     if (accountRaw !== undefined && !accountId) {
       errors.push(
         `Invalid binding "${trimmed}". Account id is empty. Use <channel>:<account>, for example telegram:default.`,
       );
       continue;
     }
-    accountId = resolveBindingAccountId({
-      channel,
-      config: params.config,
-      agentId,
-      explicitAccountId: accountId,
-    });
-    const match: AgentRouteBinding["match"] = { channel };
-    if (accountId) {
-      match.accountId = accountId;
-    }
-    bindings.push({ type: "route", agentId, match });
+    bindings.push(
+      buildChannelBinding({
+        channel,
+        config: params.config,
+        agentId,
+        explicitAccountId: accountId,
+      }),
+    );
   }
   return { bindings, errors };
 }

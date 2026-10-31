@@ -1,6 +1,8 @@
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
+import { retryableGitNetworkOperation, withGitNetworkRetry } from "./git-network-retry.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
@@ -24,12 +26,8 @@ const warnedHeartbeats = new WeakSet<() => void>();
 
 function selectCommandFailureMessage(stdout: string, stderr: string): string {
   const lines = stripAnsi(stderr).split(/[\r\n\u2028\u2029]/u);
-  if (
-    !lines
-      .find((line) => line.trim())
-      ?.trimStart()
-      .startsWith("$ ")
-  ) {
+  const firstLine = lines.find((line) => line.trim())?.trimStart();
+  if (!firstLine?.startsWith("$ ")) {
     return stderr;
   }
   // Package-manager banners can hide the child Error from the one-line fact formatter.
@@ -45,24 +43,23 @@ export async function reportUpdateStepCompletion(
   step: Parameters<NonNullable<UpdateStepProgress["onStepComplete"]>>[0],
   commandFailure?: { cause: unknown },
 ): Promise<void> {
-  let reportOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  let reportingFailure: { cause: unknown };
   try {
     await progress?.onStepComplete?.(step);
-  } catch (error) {
-    reportOutcome = { ok: false, error };
-  }
-  if (reportOutcome.ok) {
     return;
+  } catch (error) {
+    reportingFailure = { cause: error };
   }
   if (commandFailure || isFailedUpdateStep(step)) {
     const failure = commandFailure ? commandFailure.cause : createUpdateStepFailureError(step);
+    // Keep the command failure primary without discarding the reporting failure.
     throw new AggregateError(
-      [failure, reportOutcome.error],
+      [failure, reportingFailure.cause],
       "Update command and completion reporting failed",
       { cause: failure },
     );
   }
-  throw reportOutcome.error;
+  throw reportingFailure.cause;
 }
 
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
@@ -199,21 +196,32 @@ export function normalizeFallbackFailureReason(
 
 export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
-): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
+  beforeGitNetworkAttempt?: () => void,
+): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
   return {
     defaultCommandEnv,
     runCommand:
       runCommand ??
-      (async (argv, options) =>
-        await runCommandWithTimeout(argv, {
-          ...options,
-          env:
-            defaultCommandEnv && options.env
-              ? { ...defaultCommandEnv, ...options.env }
-              : (defaultCommandEnv ?? options.env),
-          // Package-manager trees must not outlive a timed-out updater.
-          killProcessTree: true,
-        })),
+      ((argv, options) => {
+        const operation =
+          argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined;
+        return withGitNetworkRetry(
+          operation,
+          {
+            timeoutMs: options.timeoutMs,
+            signal: resolveCommandProcessSignal(options.signal),
+            beforeRun: operation ? beforeGitNetworkAttempt : undefined,
+          },
+          (timeoutMs) =>
+            runCommandWithTimeout(argv, {
+              ...options,
+              timeoutMs,
+              env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
+              // Package-manager trees must not outlive a timed-out updater.
+              killProcessTree: true,
+            }),
+        );
+      }),
   };
 }

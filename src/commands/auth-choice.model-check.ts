@@ -1,21 +1,17 @@
-// Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
-import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderModelRouteAuthRequirement,
+  ProviderModelRouteSource as ModelRouteObservation,
+} from "../plugin-sdk/provider-model-types.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-
-type ModelRouteObservation = {
-  api?: ModelApi | null;
-  baseUrl?: unknown;
-};
 
 type DefaultModelAuthOptions = {
   agentId?: string;
@@ -29,14 +25,13 @@ type DefaultModelAuthStatus = {
   provider: string;
   model: string;
 } & (
-  | { status: "ready"; hasAuth: true }
+  | { status: "ready" }
   | {
       status: "missing";
-      hasAuth: false;
       authRequirement?: ProviderModelRouteAuthRequirement;
     }
-  | { status: "indeterminate"; hasAuth: false }
-  | { status: "incompatible"; hasAuth: false; code: string; message: string }
+  | { status: "indeterminate" }
+  | { status: "incompatible"; message: string }
 );
 
 /**
@@ -45,15 +40,15 @@ type DefaultModelAuthStatus = {
  * indeterminate when provider facts cannot choose one route. Shared by the
  * onboarding model check and the finalize hatch gating.
  */
-export function resolveDefaultModelAuthStatus(
+export async function resolveDefaultModelAuthStatus(
   config: OpenClawConfig,
   options?: DefaultModelAuthOptions,
-): DefaultModelAuthStatus {
+): Promise<DefaultModelAuthStatus> {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
     agentId: options?.agentId,
   });
-  const store = ensureAuthProfileStore(options?.agentDir, {
+  const store = await ensureAuthProfileStoreAsync(options?.agentDir, {
     allowKeychainPrompt: false,
     config,
     ...(ref.provider === "openai" ? { externalCliProviderIds: ["openai"] } : {}),
@@ -83,15 +78,13 @@ export function resolveDefaultModelAuthStatus(
       provider: ref.provider,
       model: ref.model,
       status: "incompatible",
-      hasAuth: false,
-      code: evaluation.routeResolution.code,
       message: evaluation.routeResolution.message,
     };
   }
   const availability = evaluation.availability;
   const authRequirement = evaluation.selectedRoute?.authRequirement;
   if (availability === true) {
-    return { provider: ref.provider, model: ref.model, status: "ready", hasAuth: true };
+    return { provider: ref.provider, model: ref.model, status: "ready" };
   }
   if (
     availability === undefined &&
@@ -99,23 +92,17 @@ export function resolveDefaultModelAuthStatus(
       evaluation.routeResolution !== null ||
       evaluation.evidence !== undefined)
   ) {
-    return { provider: ref.provider, model: ref.model, status: "indeterminate", hasAuth: false };
+    return { provider: ref.provider, model: ref.model, status: "indeterminate" };
   }
   return {
     provider: ref.provider,
     model: ref.model,
     status: "missing",
-    hasAuth: false,
     ...(authRequirement ? { authRequirement } : {}),
   };
 }
 
-function catalogRouteObservation(
-  entry: ModelCatalogEntry | undefined,
-): ModelRouteObservation | undefined {
-  if (!entry) {
-    return undefined;
-  }
+function catalogRouteObservation(entry: ModelCatalogEntry): ModelRouteObservation | undefined {
   const baseUrl = entry.baseUrl;
   if (entry.api === undefined && baseUrl === undefined) {
     return undefined;
@@ -156,29 +143,23 @@ export async function warnIfModelConfigLooksOff(
   prompter: WizardPrompter,
   options?: DefaultModelAuthOptions,
 ) {
-  const warnings: string[] = [];
-  const authStatus = resolveDefaultModelAuthStatus(config, options);
+  let warning: string | undefined;
+  const authStatus = await resolveDefaultModelAuthStatus(config, options);
   if (authStatus.status === "missing") {
-    warnings.push(
-      `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
-        {
-          provider: authStatus.provider,
-          config,
-          includeEnvVar: authStatus.authRequirement !== "subscription",
-        },
-      )}`,
-    );
+    warning = `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+      {
+        provider: authStatus.provider,
+        config,
+        includeEnvVar: authStatus.authRequirement !== "subscription",
+      },
+    )}`;
   } else if (authStatus.status === "incompatible") {
-    warnings.push(
-      `Model route is incompatible for "${authStatus.provider}/${authStatus.model}": ${authStatus.message}`,
-    );
+    warning = `Model route is incompatible for "${authStatus.provider}/${authStatus.model}": ${authStatus.message}`;
   } else if (authStatus.status === "indeterminate") {
-    warnings.push(
-      `Auth readiness could not be confirmed for "${authStatus.provider}/${authStatus.model}". Verify the selected model route and credential source before continuing.`,
-    );
+    warning = `Auth readiness could not be confirmed for "${authStatus.provider}/${authStatus.model}". Verify the selected model route and credential source before continuing.`;
   }
 
-  if (warnings.length > 0) {
-    await prompter.note(warnings.join("\n"), "Model check");
+  if (warning) {
+    await prompter.note(warning, "Model check");
   }
 }

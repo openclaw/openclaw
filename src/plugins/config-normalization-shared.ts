@@ -4,14 +4,18 @@ import {
   filterStringEntries,
   normalizeArrayBackedTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { DEFAULT_PLUGINS_ENABLED } from "./default-enablement.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
 export type NormalizedPluginsConfig = {
+  /** Prepared metadata owner; null means the engine has no unambiguous permitted owner. */
+  contextEngineOwnerId?: string | null;
   enabled: boolean;
   allow: string[];
   deny: string[];
@@ -24,25 +28,13 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
-      hooks?: {
-        allowPromptInjection?: boolean;
-        allowConversationAccess?: boolean;
-        timeoutMs?: number;
-        timeouts?: Record<string, number>;
-      };
-      subagent?: {
-        allowModelOverride?: boolean;
-        allowedModels?: string[];
+      hooks?: SchemaContract<NonNullable<PluginEntryConfig["hooks"]>>;
+      subagent?: SchemaContract<NonNullable<PluginEntryConfig["subagent"]>> & {
         hasAllowedModelsConfig?: boolean;
       };
-      llm?: {
-        allowModelOverride?: boolean;
-        allowedModels?: string[];
+      llm?: SchemaContract<NonNullable<PluginEntryConfig["llm"]>> & {
         hasAllowedModelsConfig?: boolean;
-        allowedCompletionModels?: string[];
         hasAllowedCompletionModelsConfig?: boolean;
-        allowAuthProfileOverride?: boolean;
-        allowAgentIdOverride?: boolean;
       };
       config?: unknown;
     }
@@ -201,14 +193,14 @@ export function normalizePluginsConfigWithResolverCore(
 export function resolveChannelConfigEnablement(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
-  channelIds: readonly string[] = [],
+  channelIds?: readonly string[],
 ): boolean | undefined {
   const channels = cfg?.channels as Record<string, unknown> | undefined;
-  if (!channels) {
+  if (!channels || channelIds?.length === 0) {
     return undefined;
   }
   // Declared ownership is authoritative; infer from the plugin id only when absent.
-  const candidateIds = channelIds.length
+  const candidateIds = channelIds?.length
     ? channelIds.map((channelId) => normalizeChatChannelId(channelId) ?? channelId)
     : [normalizeChatChannelId(pluginId)];
   const enablement = candidateIds.map((channelId) => {

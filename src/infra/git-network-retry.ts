@@ -18,24 +18,37 @@ type GitNetworkResult = {
 const log = createSubsystemLogger("git/network");
 const RETRY_DELAY_MS = 1_000;
 
+/** Resolve owner-prepared Git argv without mistaking a global option value for a command. */
+export function gitCommandName(args: readonly string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(arg)) {
+      index += 1;
+    } else if (
+      /^(?:-c.+|-C.+|--(?:git-dir|work-tree|namespace|config-env|attr-source)=.+)$/u.test(arg) ||
+      [
+        "--no-optional-locks",
+        "--no-lazy-fetch",
+        "--no-replace-objects",
+        "--bare",
+        "--literal-pathspecs",
+        "--no-pager",
+      ].includes(arg)
+    ) {
+      continue;
+    } else {
+      return arg;
+    }
+  }
+  return undefined;
+}
+
 /** Clone retries require destination cleanup by the clone owner, not this argv classifier. */
 export function retryableGitNetworkOperation(
   args: readonly string[],
 ): GitNetworkOperation | undefined {
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!;
-    if (arg === "-c" || arg === "-C" || arg === "--git-dir" || arg === "--work-tree") {
-      index += 1;
-    } else if (
-      /^(?:-c.+|-C.+|--(?:git-dir|work-tree|config-env)=.+)$/u.test(arg) ||
-      ["--no-optional-locks", "--no-lazy-fetch", "--no-replace-objects", "--bare"].includes(arg)
-    ) {
-      continue;
-    } else {
-      return arg === "fetch" || arg === "ls-remote" ? arg : undefined;
-    }
-  }
-  return undefined;
+  const command = gitCommandName(args);
+  return command === "fetch" || command === "ls-remote" ? command : undefined;
 }
 
 function isTransientGitFailure(result: GitNetworkResult): boolean {
@@ -60,24 +73,24 @@ function isTransientGitFailure(result: GitNetworkResult): boolean {
   ) {
     return false;
   }
-  return /did not send all necessary objects|could not resolve (?:host|proxy)|temporary failure in name resolution|failed to connect|connection (?:reset|timed out|refused|closed)|remote end hung up unexpectedly|unexpected disconnect|early EOF|empty reply from server|TLS connection was non-properly terminated|SSL_ERROR_SYSCALL|HTTP\/2.*(?:stream|internal_error)|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)\b|returned error: (?:408|429|500|502|503|504)\b/iu.test(
+  return /did not send all necessary objects|could not resolve (?:host|proxy)|temporary failure in name resolution|failed to connect|connection (?:reset|timed out|refused|closed)|transfer closed with \d+ bytes remaining to read|remote end hung up unexpectedly|unexpected disconnect|early EOF|empty reply from server|TLS connection was non-properly terminated|SSL_ERROR_SYSCALL|HTTP\/2.*(?:stream|internal_error)|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)\b|returned error: (?:408|429|500|502|503|504)\b/iu.test(
     stderr,
   );
 }
 
-/** Retry one settled network read inside its original deadline and caller-owned admission. */
+/** Retry one settled network read within its optional deadline and caller-owned admission. */
 export async function withGitNetworkRetry<T extends GitNetworkResult>(
   operation: GitNetworkOperation | undefined,
   options: {
-    timeoutMs: number;
+    timeoutMs?: number;
     signal?: AbortSignal;
     beforeRun?: () => void;
     startRun?: GitOperationStarter;
   },
-  run: (timeoutMs: number) => Promise<T>,
+  run: (timeoutMs: number | undefined) => Promise<T>,
 ): Promise<T> {
-  const started = performance.now();
-  const attempt = (timeoutMs: number) => {
+  const deadline = performance.now() + (options.timeoutMs ?? Infinity);
+  const attempt = (timeoutMs: number | undefined) => {
     const start = () => {
       options.beforeRun?.();
       return run(timeoutMs);
@@ -92,10 +105,10 @@ export async function withGitNetworkRetry<T extends GitNetworkResult>(
   if (options.signal?.aborted) {
     return cancelled();
   }
-  if (options.timeoutMs - (performance.now() - started) <= RETRY_DELAY_MS) {
+  if (deadline - performance.now() <= RETRY_DELAY_MS) {
     return result;
   }
-  log.warn(`Git ${operation} hit a transient transport failure; retrying once`, {
+  log.warn(`Git ${operation} hit a transient failure; retrying once`, {
     operation,
     attempt: 1,
     maxAttempts: 2,
@@ -113,9 +126,9 @@ export async function withGitNetworkRetry<T extends GitNetworkResult>(
   if (options.signal?.aborted) {
     return cancelled();
   }
-  const remainingMs = Math.floor(options.timeoutMs - (performance.now() - started));
+  const remainingMs = Math.floor(deadline - performance.now());
   if (remainingMs <= 0) {
     return result;
   }
-  return await attempt(remainingMs);
+  return await attempt(options.timeoutMs === undefined ? undefined : remainingMs);
 }

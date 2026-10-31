@@ -1,3 +1,4 @@
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -22,8 +23,6 @@ import {
   type RecallSubagentResult,
   type TranscriptReadLimits,
 } from "./types.js";
-
-let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
 export function readMemoryToolResultEvidence(params: {
   toolName: string;
@@ -150,9 +149,12 @@ async function waitForSubagentPartialTimeoutData(
         ...result,
         settled: true as const,
       }),
-      (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),
+      (error: unknown) => {
+        rethrowIncognitoSessionError(error);
+        return { ...readPartialTimeoutData(error), settled: true as const };
+      },
     ),
-    timeoutPartialDataGraceMs,
+    TIMEOUT_PARTIAL_DATA_GRACE_MS,
     () => ({ settled: false }),
     { ref: false },
   );
@@ -241,12 +243,4 @@ export function buildSubagentRecallResult(params: {
         ? "unavailable"
         : "no_relevant_memory";
   return { status, elapsedMs: params.elapsedMs, summary: null, searchDebug };
-}
-
-export function resetActiveMemoryTranscriptForTests(): void {
-  timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
-}
-
-export function setTimeoutPartialDataGraceMsForTests(value: number): void {
-  timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
 }

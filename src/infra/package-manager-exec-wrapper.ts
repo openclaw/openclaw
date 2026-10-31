@@ -187,11 +187,12 @@ const YARN_DLX_OPTIONS: PackageManagerContextOptions = {
   contextOptionsWithValue: YARN_DLX_OPTIONS_WITH_VALUE,
 };
 
-function findFirstNonOptionIndex(
+function scanPackageManagerOptions(
   argv: string[],
   startIdx: number,
   params: PackageManagerOptions,
-  terminator: "skip" | "stop" | "reject" = "skip",
+  terminator: "skip" | "stop" | "reject",
+  context?: { options: PackageManagerContextOptions; scope: "leading" | "before-terminator" },
 ): number | null {
   let idx = startIdx;
   while (idx < argv.length) {
@@ -201,7 +202,7 @@ function findFirstNonOptionIndex(
       continue;
     }
     if (token === "--") {
-      if (terminator === "reject") {
+      if (terminator === "reject" || context?.scope === "before-terminator") {
         return null;
       }
       if (terminator === "stop") {
@@ -211,10 +212,22 @@ function findFirstNonOptionIndex(
       continue;
     }
     if (!token.startsWith("-")) {
-      return idx;
+      if (context?.scope === "before-terminator") {
+        idx += 1;
+        continue;
+      }
+      return context ? null : idx;
     }
     const parsedOption = parseInlineOptionToken(token);
     const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
+    if (
+      context &&
+      (params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
+        context.options.contextOptionsWithValue.has(flag) ||
+        context.options.contextFlagOptions?.has(flag))
+    ) {
+      return idx;
+    }
     if (
       params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
       params.optionsWithValue.has(flag)
@@ -222,7 +235,7 @@ function findFirstNonOptionIndex(
       idx += parsedOption.hasInlineValue ? 1 : 2;
       continue;
     }
-    if (params.flagOptions.has(flag)) {
+    if (params.flagOptions.has(flag) || context?.scope === "before-terminator") {
       idx += 1;
       continue;
     }
@@ -237,50 +250,9 @@ function hasContextOption(
   params: PackageManagerContextOptions,
   scope: "leading" | "before-terminator" = "leading",
 ): boolean {
-  let idx = startIdx;
-  while (idx < argv.length) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (token === "--") {
-      if (scope === "before-terminator") {
-        return false;
-      }
-      idx += 1;
-      continue;
-    }
-    if (!token.startsWith("-")) {
-      if (scope === "leading") {
-        return false;
-      }
-      idx += 1;
-      continue;
-    }
-    const parsedOption = parseInlineOptionToken(token);
-    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (
-      params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
-      params.contextOptionsWithValue.has(flag) ||
-      params.contextFlagOptions?.has(flag)
-    ) {
-      return true;
-    }
-    if (params.optionsWithValue.has(flag)) {
-      idx += parsedOption.hasInlineValue ? 1 : 2;
-      continue;
-    }
-    if (params.flagOptions.has(flag)) {
-      idx += 1;
-      continue;
-    }
-    if (scope === "leading") {
-      return false;
-    }
-    idx += 1;
-  }
-  return false;
+  return (
+    scanPackageManagerOptions(argv, startIdx, params, "skip", { options: params, scope }) !== null
+  );
 }
 
 export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolean {
@@ -295,7 +267,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
   if (hasContextOption(argv, 1, options)) {
     return true;
   }
-  const subcommandIdx = findFirstNonOptionIndex(argv, 1, options);
+  const subcommandIdx = scanPackageManagerOptions(argv, 1, options, "skip");
   if (subcommandIdx === null) {
     return false;
   }
@@ -328,12 +300,12 @@ function unwrapPackageExecArguments(
   params: PackageManagerOptions,
   terminator: "stop" | "reject",
 ): string[] | null {
-  const idx = findFirstNonOptionIndex(argv, startIdx, params, terminator);
+  const idx = scanPackageManagerOptions(argv, startIdx, params, terminator);
   return idx === null ? null : argv.slice(idx);
 }
 
 function unwrapNpmExecInvocation(argv: string[]): string[] | null {
-  const idx = findFirstNonOptionIndex(argv, 1, NPM_EXEC_OPTIONS, "reject");
+  const idx = scanPackageManagerOptions(argv, 1, NPM_EXEC_OPTIONS, "reject");
   if (idx === null || !NPM_EXEC_SUBCOMMANDS.has(argv[idx]?.trim() ?? "")) {
     return null;
   }
@@ -345,12 +317,13 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
 }
 
 function unwrapPnpmOrYarnExecInvocation(argv: string[], manager: "pnpm" | "yarn"): string[] | null {
-  const idx = findFirstNonOptionIndex(
+  const idx = scanPackageManagerOptions(
     argv,
     1,
     manager === "pnpm"
       ? PNPM_EXEC_OPTIONS
       : { optionsWithValue: YARN_OPTIONS_WITH_VALUE, flagOptions: YARN_FLAG_OPTIONS },
+    "skip",
   );
   if (idx === null) {
     return null;
@@ -413,7 +386,7 @@ export function resolveKnownPackageManagerExecInvocation(
   if (unwrapped) {
     return { kind: "unwrapped", argv: unwrapped };
   }
-  const subcommandIndex = findFirstNonOptionIndex(argv, 1, options);
+  const subcommandIndex = scanPackageManagerOptions(argv, 1, options, "skip");
   const firstSubcommand =
     subcommandIndex === null ? null : normalizeLowercaseStringOrEmpty(argv[subcommandIndex] ?? "");
   const knownExec =

@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
-import type { StorageProvider } from "../storage/types.js";
+import { warnOnMissingCliBackendModelProvider } from "./cli-backend-registration.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -8,13 +8,9 @@ import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
 import type { PluginRegistryState } from "./registry-state.js";
-import type {
-  PluginOwnedProviderRegistration,
-  PluginRecord,
-  PluginTextTransformsRegistration,
-} from "./registry-types.js";
+import type { PluginOwnedProviderRegistration, PluginRecord } from "./registry-types.js";
 import { validateStorageProviderContract } from "./storage-provider-registry.js";
-import type { CliBackendPlugin, ProviderPlugin, WorkerProvider } from "./types.js";
+import type { CliBackendPlugin, ProviderPlugin } from "./types.js";
 import { validateWorkerProviderContract } from "./worker-provider-registry.js";
 
 export function createProviderRegistrars(state: PluginRegistryState) {
@@ -48,7 +44,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       record.providerIds.push(id);
     }
     if (normalizedProvider.normalizeToolSchemas) {
-      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas);
+      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas, "tool");
     }
     registry.providers.push(
       createRegistration(record, {
@@ -135,6 +131,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    warnOnMissingCliBackendModelProvider(backend, (message) =>
+      reportRegistrationWarning(record, message),
+    );
     if (backend.prepareExecution) {
       getPluginInstance(record)?.admitFactory(backend.prepareExecution);
     }
@@ -145,27 +144,6 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       }),
     );
     record.cliBackendIds.push(id);
-  };
-
-  const registerTextTransforms = (
-    record: PluginRecord,
-    transforms: PluginTextTransformsRegistration["transforms"],
-  ) => {
-    if (
-      (!transforms.input || transforms.input.length === 0) &&
-      (!transforms.output || transforms.output.length === 0)
-    ) {
-      reportRegistrationWarning(
-        record,
-        "text transform registration has no input or output replacements",
-      );
-      return;
-    }
-    registry.textTransforms.push(
-      createRegistration(record, {
-        transforms,
-      }),
-    );
   };
 
   const registerEmbeddingProvider = (record: PluginRecord, adapter: EmbeddingProviderAdapter) => {
@@ -183,7 +161,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }
     const coreEntry = getCoreEmbeddingProvider(id);
     const existing =
-      coreEntry ?? registry.embeddingProviders.find((entry) => entry.provider.id === id);
+      coreEntry ?? registry.embeddingProviders.find((entry) => entry.provider.id.trim() === id);
     if (existing) {
       const ownerPluginId =
         "ownerPluginId" in existing
@@ -210,6 +188,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     <T extends { id: string }>(params: {
       kindLabel: string;
       factory?: (provider: T) => ((...args: never[]) => unknown) | undefined;
+      factoryResult?: "tool";
       registrations: Array<PluginOwnedProviderRegistration<T>>;
       ownedIds: (record: PluginRecord) => string[];
       catalogKinds?: Parameters<typeof registerModelCatalogProvider>[1]["kinds"];
@@ -221,7 +200,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
         reportRegistrationError(record, `${kindLabel} registration missing id`);
         return params.catalogKinds ? undefined : false;
       }
-      const existing = params.registrations.find((entry) => entry.provider.id === id);
+      const existing = params.registrations.find((entry) => entry.provider.id.trim() === id);
       if (existing) {
         reportRegistrationError(
           record,
@@ -235,7 +214,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       }
       const factory = params.factory?.(provider);
       if (factory) {
-        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(factory);
+        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(
+          factory,
+          params.factoryResult,
+        );
       }
       params.registrations.push(
         createIdentityRegistration(record, {
@@ -249,62 +231,51 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       return true;
     };
 
-  const registerWorkerProvider = (record: PluginRecord, provider: WorkerProvider) => {
-    const validation = validateWorkerProviderContract(
-      provider,
-      record.contracts?.workerProviders ?? [],
-    );
-    if (!validation.ok) {
-      reportRegistrationError(record, validation.message);
-      return;
-    }
-    const { id } = validation;
-    const existing = registry.workerProviders.get(id);
-    if (existing) {
-      reportRegistrationError(
-        record,
-        `worker provider already registered: ${id} (${existing.pluginId})`,
-      );
-      return;
-    }
-    registry.workerProviders.set(
-      id,
-      createRegistration(record, {
-        provider,
-      }),
-    );
-  };
-
-  const registerStorageProvider = (record: PluginRecord, provider: StorageProvider) => {
-    const validation = validateStorageProviderContract(
-      provider,
-      record.contracts?.storageProviders ?? [],
-    );
-    if (!validation.ok) {
-      reportRegistrationError(record, validation.message);
-      return;
-    }
-    const { id } = validation;
-    const existing = registry.storageProviders.get(id);
-    if (existing) {
-      reportRegistrationError(
-        record,
-        `storage provider already registered: ${id} (${existing.pluginId})`,
-      );
-      return;
-    }
-    getPluginInstance(record)?.admitFactory(provider.open);
-    registry.storageProviders.set(id, createRegistration(record, { provider }));
-  };
+  const createContractProviderRegistrar =
+    <T>(
+      kind: "worker" | "storage",
+      registrations: Map<string, PluginOwnedProviderRegistration<T>>,
+      validate: (
+        provider: T,
+        declaredIds: readonly string[],
+      ) => { ok: true; id: string } | { ok: false; message: string },
+      admit?: (record: PluginRecord, provider: T) => void,
+    ) =>
+    (record: PluginRecord, provider: T) => {
+      const validation = validate(provider, record.contracts?.[`${kind}Providers`] ?? []);
+      if (!validation.ok) {
+        reportRegistrationError(record, validation.message);
+        return;
+      }
+      const { id } = validation;
+      const existing = registrations.get(id);
+      if (existing) {
+        reportRegistrationError(
+          record,
+          `${kind} provider already registered: ${id} (${existing.pluginId})`,
+        );
+        return;
+      }
+      admit?.(record, provider);
+      registrations.set(id, createRegistration(record, { provider }));
+    };
 
   return {
     registerProvider,
     registerAgentHarness,
     registerCliBackend,
-    registerTextTransforms,
     registerEmbeddingProvider,
-    registerWorkerProvider,
-    registerStorageProvider,
+    registerWorkerProvider: createContractProviderRegistrar(
+      "worker",
+      registry.workerProviders,
+      validateWorkerProviderContract,
+    ),
+    registerStorageProvider: createContractProviderRegistrar(
+      "storage",
+      registry.storageProviders,
+      validateStorageProviderContract,
+      (record, provider) => getPluginInstance(record)?.admitFactory(provider.open),
+    ),
     registerSpeechProvider: createProviderLikeRegistrar({
       kindLabel: "speech provider",
       factory: (provider) => provider.streamSynthesize,
@@ -358,12 +329,14 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerWebFetchProvider: createProviderLikeRegistrar({
       kindLabel: "web fetch provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webFetchProviders,
       ownedIds: (record) => record.webFetchProviderIds,
     }),
     registerWebSearchProvider: createProviderLikeRegistrar({
       kindLabel: "web search provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webSearchProviders,
       ownedIds: (record) => record.webSearchProviderIds,
     }),

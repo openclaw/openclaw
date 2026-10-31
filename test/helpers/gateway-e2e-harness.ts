@@ -123,7 +123,7 @@ export async function connectNode(
   inst: GatewayInstance,
   label: string,
 ): Promise<{ client: GatewayClient; nodeId: string }> {
-  const identityPath = path.join(inst.homeDir, `${label}-device.sqlite`);
+  const identityPath = path.join(inst.homeDir, `${label}-device`, "client", "credentials.sqlite");
   const deviceIdentity = loadOrCreateDeviceIdentity({ path: identityPath });
   const nodeId = deviceIdentity.deviceId;
   const client = await connectGatewayClient({

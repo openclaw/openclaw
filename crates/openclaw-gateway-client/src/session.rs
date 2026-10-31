@@ -184,15 +184,11 @@ pub struct DispatchRejection {
 /// with respect to that lock.
 pub struct DispatchContext<'a> {
     enqueue: &'a mut dyn FnMut(),
-    enqueued: bool,
 }
 
 impl DispatchContext<'_> {
     pub fn enqueue(&mut self) {
-        if !self.enqueued {
-            (self.enqueue)();
-            self.enqueued = true;
-        }
+        (self.enqueue)();
     }
 }
 
@@ -469,7 +465,7 @@ fn is_expected_protocol_mismatch(error: &ClientError, expected_protocol: u32) ->
     let ClientError::Gateway {
         method,
         message,
-        details,
+        details: Some(details),
         ..
     } = error
     else {
@@ -478,9 +474,6 @@ fn is_expected_protocol_mismatch(error: &ClientError, expected_protocol: u32) ->
     if method != "connect" {
         return false;
     }
-    let Some(details) = details.as_ref() else {
-        return false;
-    };
     let matches_expected_protocol = details.get("expectedProtocol").and_then(Value::as_u64)
         == Some(u64::from(expected_protocol));
     let matches_mismatch = details.get("code").and_then(Value::as_str) == Some("PROTOCOL_MISMATCH")
@@ -584,9 +577,7 @@ where
             closed: closed_tx,
             close: close_rx,
         },
-        SessionLimits {
-            write_timeout: config.write_timeout,
-        },
+        config.write_timeout,
     ));
 
     Ok(GatewaySession {
@@ -861,17 +852,11 @@ impl GatewaySession {
         .map_err(|_| self.closed_error())?;
 
         let mut cancellation = RequestCancellation::new(id, self.command_tx.clone(), cancelled);
-        match before_deadline(deadline, reply_rx).await {
-            Ok(Ok(result)) => {
-                cancellation.disarm();
-                result
-            }
-            Ok(Err(_)) => {
-                cancellation.disarm();
-                Err(self.closed_error())
-            }
-            Err(_) => Err(ClientError::RequestTimeout(method)),
-        }
+        let result = before_deadline(deadline, reply_rx)
+            .await
+            .map_err(|_| ClientError::RequestTimeout(method))?;
+        cancellation.disarm();
+        result.map_err(|_| self.closed_error())?
     }
 
     pub async fn close(&self) {
@@ -901,10 +886,7 @@ impl GatewaySession {
     }
 
     fn closed_error(&self) -> ClientError {
-        self.closed_rx.borrow().as_ref().map_or_else(
-            || ClientError::Closed("session task ended".into()),
-            SessionCloseCause::to_client_error,
-        )
+        closed_event_error(&self.closed_rx)
     }
 }
 
@@ -1032,7 +1014,7 @@ enum IncomingFrame {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct GatewayErrorShape {
     #[serde(default)]
     code: String,
@@ -1175,45 +1157,36 @@ where
         poll_fn(|context| Pin::new(&mut *socket).poll_ready(context))
             .await
             .map_err(|error| ClientError::Transport(error.to_string()))?;
-        if let Some(guard) = guard {
-            let mut message = Some(message);
-            let mut enqueue_result = None;
-            let mut enqueue = || {
+        let mut message = Some(message);
+        let mut enqueue_result = None;
+        let mut enqueue = || {
+            if let Some(message) = message.take() {
                 enqueue_result = Some(
                     Pin::new(&mut *socket)
-                        .start_send(message.take().expect("dispatch frame already consumed"))
+                        .start_send(message)
                         .map_err(|error| ClientError::Transport(error.to_string())),
                 );
-            };
-            let (guard_result, enqueued) = {
-                let mut dispatch = DispatchContext {
-                    enqueue: &mut enqueue,
-                    enqueued: false,
-                };
-                let result = guard(&mut dispatch);
-                (result, dispatch.enqueued)
-            };
-            if let Err(rejection) = guard_result {
-                if !enqueued {
+            }
+        };
+        if let Some(guard) = guard {
+            if let Err(rejection) = guard(&mut DispatchContext {
+                enqueue: &mut enqueue,
+            }) {
+                let Some(result) = enqueue_result else {
                     return Err(ClientError::DispatchRejected(rejection.reason));
-                }
-                enqueue_result.expect("enqueued dispatch must record a result")?;
+                };
+                result?;
                 return Err(ClientError::Closed(format!(
                     "dispatch guard rejected after enqueue: {}",
                     rejection.reason
                 )));
             }
-            if !enqueued {
-                return Err(ClientError::DispatchRejected(
-                    "dispatch guard did not enqueue the request".into(),
-                ));
-            }
-            enqueue_result.expect("enqueued dispatch must record a result")?;
         } else {
-            Pin::new(&mut *socket)
-                .start_send(message)
-                .map_err(|error| ClientError::Transport(error.to_string()))?;
+            enqueue();
         }
+        enqueue_result.ok_or_else(|| {
+            ClientError::DispatchRejected("dispatch guard did not enqueue the request".into())
+        })??;
         socket
             .flush()
             .await
@@ -1232,15 +1205,10 @@ struct SessionChannels {
     close: watch::Receiver<bool>,
 }
 
-#[derive(Clone, Copy)]
-struct SessionLimits {
-    write_timeout: Duration,
-}
-
 async fn run_session<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
     channels: SessionChannels,
-    limits: SessionLimits,
+    write_timeout: Duration,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -1252,17 +1220,9 @@ async fn run_session<S>(
         closed,
         mut close,
     } = channels;
-    let SessionLimits { write_timeout } = limits;
     let mut pending: HashMap<String, PendingRequest> = HashMap::new();
     let close_reason = loop {
-        let cancelled_pending = pending
-            .iter()
-            .filter(|(_, request)| request.cancelled.load(Ordering::Acquire))
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        for id in cancelled_pending {
-            pending.remove(&id);
-        }
+        pending.retain(|_, request| !request.cancelled.load(Ordering::Acquire));
         let next_deadline = pending
             .values()
             .filter_map(|request: &PendingRequest| request.deadline)
@@ -1283,17 +1243,10 @@ async fn run_session<S>(
             }
             () = &mut deadline => {
                 let now = Instant::now();
-                let expired = pending
-                    .iter()
-                    .filter(|(_, request)| request.deadline.is_some_and(|deadline| deadline <= now))
-                    .map(|(id, _)| id.clone())
-                    .collect::<Vec<_>>();
-                for id in expired {
-                    if let Some(request) = pending.remove(&id) {
-                        let _ = request.reply.send(Err(ClientError::RequestTimeout(
-                            request.method,
-                        )));
-                    }
+                for (_, request) in pending.extract_if(|_, request| {
+                    request.deadline.is_some_and(|deadline| deadline <= now)
+                }) {
+                    let _ = request.reply.send(Err(ClientError::RequestTimeout(request.method)));
                 }
             }
             Some(SessionControl::Ping { id, reply, permit, deadline, cancelled }) = controls.recv() => {
@@ -1456,13 +1409,7 @@ fn response_result(
     if ok {
         return Ok(payload);
     }
-    let mut error = error.unwrap_or(GatewayErrorShape {
-        code: "UNKNOWN".into(),
-        message: "Gateway rejected the request".into(),
-        details: None,
-        retryable: None,
-        retry_after_ms: None,
-    });
+    let mut error = error.unwrap_or_default();
     if error.code.is_empty() {
         error.code = "UNKNOWN".into();
     }
@@ -1674,9 +1621,7 @@ mod tests {
                 closed: closed_tx,
                 close: close_rx,
             },
-            SessionLimits {
-                write_timeout: Duration::from_millis(20),
-            },
+            Duration::from_millis(20),
         ));
 
         let permits = Arc::new(Semaphore::new(1));

@@ -4,11 +4,19 @@ import path from "node:path";
 import {
   createDefaultWorkboardSessionsBoardSpec,
   type WorkboardSessionFacts,
-  type WorkboardSessionsBoardSpec,
   type WorkboardSessionsColumn,
+  type WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createWorkboardSessionsBoardService } from "./sessions-board.js";
+import {
+  BOARD_ID,
+  DEFAULT_COLUMNS,
+  facts,
+  FOCUS_COLUMN,
+  NOW,
+  OTHER_COLUMN,
+} from "./sessions-board.test-support.js";
 import { WorkboardBoardStore } from "./store-boards.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 
@@ -26,55 +34,28 @@ beforeAll(() => {
 afterAll(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 type ServiceParams = Parameters<typeof createWorkboardSessionsBoardService>[0];
-const BOARD_ID = "sessions";
-const NOW = 10_000_000;
-const FOCUS_COLUMN: WorkboardSessionsColumn = {
-  id: "focus",
-  label: "Focus",
-  description: "Active sessions.",
-  match: { run: ["active"] },
-};
-const OTHER_COLUMN: WorkboardSessionsColumn = {
-  id: "other",
-  label: "Other",
-  description: "Remaining sessions.",
-  fallback: true,
-};
-const DEFAULT_COLUMNS = ["needs-input", "stuck", "working", "in-review", "merged", "done"];
+type SelectedFacts = Parameters<Parameters<ServiceParams["gateway"]["withSessionFacts"]>[1]>[0];
+type FactsSelection = Parameters<ServiceParams["gateway"]["withSessionFacts"]>[0];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(NOW);
 });
-afterEach(() => vi.useRealTimers());
-function facts(id: string, overrides: Partial<WorkboardSessionFacts> = {}): WorkboardSessionFacts {
-  return {
-    key: `agent:main:${id}`,
-    sessionId: `session-${id}`,
-    agentId: "main",
-    label: id,
-    run: "idle",
-    pullRequests: [],
-    archived: false,
-    lastActivityAt: NOW,
-    ...overrides,
-  };
-}
-async function withService(
-  options: Parameters<typeof createFixture>[0],
-  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
-) {
-  const fixture = await createFixture(options);
+let dispose: (() => Promise<void>) | undefined;
+afterEach(async () => {
   try {
-    await run(fixture);
+    await dispose?.();
   } finally {
-    await fixture.service.stop();
-    await fixture.store.close();
+    dispose = undefined;
+    vi.useRealTimers();
   }
-}
-async function createFixture(options: {
-  facts: WorkboardSessionFacts[];
-  spec?: Partial<WorkboardSessionsBoardSpec>;
-}) {
+});
+async function createFixture(
+  rows: (string | WorkboardSessionFacts)[] = [],
+  options: {
+    spec?: Partial<WorkboardSessionsBoardSpec>;
+    repair?: Promise<{ placements: number; boards: number }>;
+  } = {},
+) {
   const stores = createKernelStores(path.join(tempDir, `${nextDatabase++}.sqlite`));
   const store = new WorkboardBoardStore(stores.cards, {
     ...stores,
@@ -88,23 +69,27 @@ async function createFixture(options: {
     columns: [FOCUS_COLUMN, OTHER_COLUMN],
     ...options.spec,
   });
-  const state = { facts: options.facts, roster: options.facts };
-  const request = vi
-    .fn()
-    .mockImplementation(async () => ({ sessions: state.roster, hasMore: false }));
-  const readSessionFacts = vi
-    .fn<ServiceParams["gateway"]["readSessionFacts"]>()
-    .mockImplementation(async ({ sessionKeys }) => ({
-      sessions: state.facts.filter((session) => sessionKeys.includes(session.key)),
-    }));
+  const state: SelectedFacts = {
+    scope: "shared-scope",
+    revision: "initial",
+    sessions: rows.map((row) => (typeof row === "string" ? facts(row) : row)),
+  };
+  const selectSessionFacts = vi.fn<(selection: FactsSelection) => Promise<SelectedFacts>>(
+    async () => ({ ...state }),
+  );
+  const readSessionFacts = vi.fn<ServiceParams["gateway"]["readSessionFacts"]>(
+    async ({ sessionKeys }) => ({
+      sessions: state.sessions.filter((session) => sessionKeys.includes(session.key)),
+    }),
+  );
   let listener: Parameters<ServiceParams["gateway"]["subscribeSessionChanges"]>[0] | undefined;
   const unsubscribe = vi.fn(() => {
     listener = undefined;
   });
-  const gateway = {
-    request,
+  const gateway: ServiceParams["gateway"] = {
     readSessionFacts,
-    subscribeSessionChanges: (callback: NonNullable<typeof listener>) => {
+    withSessionFacts: async (select, run) => run(await selectSessionFacts(select)),
+    subscribeSessionChanges: (callback) => {
       listener = callback;
       return unsubscribe;
     },
@@ -113,510 +98,672 @@ async function createFixture(options: {
   const service = createWorkboardSessionsBoardService({ store, gateway });
   const context = { config: {}, stateDir: "unused", logger };
   const repair = vi.spyOn(store, "repairSessionPlacements");
+  if (options.repair) {
+    repair.mockReturnValueOnce(options.repair);
+  }
   await service.start(context);
+  dispose = async () => {
+    await service.stop();
+    await store.close();
+  };
+  const emit = (key: string, factsInvalidated?: string) =>
+    listener?.({ agentId: "main", sessionKey: key, factsInvalidated });
   return {
     store,
-    stores,
+    read: service.read.bind(service, BOARD_ID),
+    stored: (id = BOARD_ID) => store.getSessionsBoard(id),
+    selectOnce: (snapshot: Partial<SelectedFacts>) =>
+      selectSessionFacts.mockResolvedValueOnce({ ...state, ...snapshot }),
+    move: service.move.bind(service, BOARD_ID),
+    update: service.update.bind(service, BOARD_ID),
+    pins: store.listSessionPlacements.bind(store, BOARD_ID),
     state,
-    request,
-    readSessionFacts,
+    selectFacts: selectSessionFacts,
+    readFacts: readSessionFacts,
     logger,
     service,
     unsubscribe,
-    repair,
     context,
-    emit: (key: string) => listener?.({ agentId: "main", sessionKey: key }),
+    emit,
+    publish(
+      revision: string,
+      sessions: SelectedFacts["sessions"],
+      changed = sessions.slice(0, 1).map(({ key }) => key),
+    ) {
+      Object.assign(state, { revision, sessions });
+      changed.forEach((key) => emit(key));
+    },
   };
 }
 
-describe("Sessions board rules and live facts", () => {
-  it("rejects a move when caller authority ends during the facts read", async () => {
-    await withService({ facts: [facts("one")] }, async ({ service, store, readSessionFacts }) => {
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      let active = true;
-      readSessionFacts.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return { sessions: [facts("one")] };
-      });
-      const pending = service.move(BOARD_ID, facts("one").key, "other", {
-        assertCurrent() {
-          if (!active) {
-            throw new Error("Caller authority is no longer active.");
-          }
-        },
-      });
-      const rejected = expect(pending).rejects.toThrow("Caller authority is no longer active.");
-      await entered.promise;
-      active = false;
-      release.resolve();
-      await rejected;
-      expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
-    });
-  });
-
-  const digest = { health: "on-track", headline: "Making progress", revision: 1 } as const;
-  it.each([
-    {
-      name: "custom rules with conjunctions, alternatives, and unknown PR state",
-      spec: {
-        scope: { includeArchived: true },
-        columns: [
-          {
-            id: "review",
-            label: "Review",
-            description: "Active reviewed work.",
-            match: [
-              {
-                health: ["on-track"],
-                run: ["active"],
-                pullRequest: ["open"],
-                archived: false,
-              },
-              { run: ["failed"], archived: false },
-            ],
-          },
-          {
-            id: "active",
-            label: "Active",
-            description: "All active work.",
-            match: { run: ["active"] },
-          },
-          {
-            id: "no-pr",
-            label: "No PR",
-            description: "Confirmed no pull request.",
-            match: { pullRequest: ["none"] },
-          },
-          OTHER_COLUMN,
-        ],
-      },
-      facts: [
-        facts("all", {
-          run: "active",
-          observerDigest: digest,
-          pullRequests: [{ number: 1, state: "open" }],
-        }),
-        facts("no-digest", { run: "active", pullRequests: [{ number: 2, state: "open" }] }),
-        facts("active-no-pr", { run: "active", observerDigest: digest }),
-        facts("archived", {
-          run: "active",
-          observerDigest: digest,
-          archived: true,
-          pullRequests: [{ number: 3, state: "open" }],
-        }),
-        facts("idle-pr", {
-          observerDigest: digest,
-          pullRequests: [{ number: 4, state: "open" }],
-        }),
-        facts("none"),
-        facts("unknown", { pullRequestsUnavailable: true }),
-        facts("failed", { run: "failed" }),
-      ],
-      placements: [
-        ["all", "review"],
-        ["no-digest", "active"],
-        ["active-no-pr", "active"],
-        ["archived", "active"],
-        ["idle-pr", "other"],
-        ["none", "no-pr"],
-        ["unknown", "other"],
-        ["failed", "review"],
-      ],
-      columns: ["review", "active", "no-pr", "other"],
-      warning: "pull-request information is unavailable",
+function ruleColumn(id: string, match: WorkboardSessionsColumn["match"]): WorkboardSessionsColumn {
+  return { id, label: id, description: id, match };
+}
+function pr(number: number, state: "open" | "merged" = "open") {
+  return [{ number, state }];
+}
+function observed(health: NonNullable<WorkboardSessionFacts["observerDigest"]>["health"]) {
+  return { health, headline: health, revision: 1 };
+}
+function authority(isActive: () => boolean) {
+  return {
+    assertCurrent() {
+      if (!isActive()) {
+        throw new Error("Caller authority expired");
+      }
     },
-    {
-      name: "default rule priority for unobserved runs and PRs",
-      spec: createDefaultWorkboardSessionsBoardSpec(),
-      facts: [
-        facts("active", { run: "active" }),
-        facts("failed", { run: "failed" }),
-        facts("unhealthy-active", {
-          run: "active",
-          observerDigest: { health: "stuck", headline: "Stuck", revision: 1 },
-        }),
-        facts("needs-input", {
-          run: "active",
-          observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
-        }),
-        facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
-        facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
-        facts("idle"),
-      ],
-      placements: [
-        ["active", "working"],
-        ["failed", "stuck"],
-        ["unhealthy-active", "stuck"],
-        ["needs-input", "needs-input"],
-        ["review", "in-review"],
-        ["merged", "merged"],
-        ["idle", "done"],
-      ],
-      columns: DEFAULT_COLUMNS,
-      warning: undefined,
-    },
-  ] satisfies Array<{
-    name: string;
-    spec: Partial<WorkboardSessionsBoardSpec>;
-    facts: WorkboardSessionFacts[];
-    placements: string[][];
-    columns: string[];
-    warning: string | undefined;
-  }>)(
-    "classifies sessions using $name",
-    async ({ spec, facts: rows, placements, columns, warning }) => {
-      await withService({ spec, facts: rows }, async ({ service, store, request }) => {
-        const read = await service.read(BOARD_ID);
-        expect(read.columns.map((column) => column.id)).toEqual(columns);
-        expect(
-          read.sessions.map(({ label, columnId, source }) => [label, columnId, source]),
-        ).toEqual(placements.map(([label, columnId]) => [label, columnId, "state"]));
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
-        if (warning) {
-          expect(read.warning).toContain(warning);
-          expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
-            "facts-unavailable",
-          );
-        } else {
-          expect(read.warning).toBeUndefined();
-        }
-        expect(request).toHaveBeenCalledWith(
-          "sessions.list",
-          expect.objectContaining({
-            configuredAgentsOnly: true,
-            includeGlobal: false,
-            includeUnknown: false,
-          }),
-          { scopes: ["operator.read"] },
-        );
-      });
-    },
+  };
+}
+async function expectClassification(
+  spec: Partial<WorkboardSessionsBoardSpec>,
+  rows: [string, Partial<WorkboardSessionFacts>, string][],
+) {
+  const board = await createFixture(
+    rows.map(([id, overrides]) => facts(id, overrides)),
+    { spec },
   );
+  const read = await board.read();
+  expect(read.sessions.map(({ label, columnId, source }) => [label, columnId, source])).toEqual(
+    rows.map(([id, , target]) => [id, target, "state"]),
+  );
+  expect(await board.pins()).toEqual([]);
+  expect(board.selectFacts).toHaveBeenCalledWith(
+    expect.objectContaining({
+      configuredAgentsOnly: true,
+      includeGlobal: false,
+      includeUnknown: false,
+    }),
+  );
+  return read;
+}
 
-  it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
-    await withService(
-      { facts: [] },
-      async ({ service, store, context, logger, repair, readSessionFacts }) => {
-        expect(repair).toHaveBeenCalledOnce();
-        await service.read(BOARD_ID);
-        await service.read(BOARD_ID);
-        expect(repair).toHaveBeenCalledOnce();
-        expect(readSessionFacts).not.toHaveBeenCalled();
-        await service.stop();
-        const oldSpec = createDefaultWorkboardSessionsBoardSpec();
-        const oldOrder = ["needs-input", "working", "stuck", "in-review", "merged", "done"];
-        oldSpec.columns.sort((a, b) => oldOrder.indexOf(a.id) - oldOrder.indexOf(b.id));
-        for (const column of oldSpec.columns) {
-          if (column.id === "working") {
-            column.match = { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] };
-            column.label = "Building";
-            column.description = "My own description";
-          } else if (column.id === "stuck") {
-            column.match = { health: ["stuck", "failed"] };
-          }
-        }
-        oldSpec.scope = { maxAgeHours: 24 };
-        await store.updateSessionsBoard(BOARD_ID, oldSpec);
-        await store.upsertBoard({ id: "custom", kind: "sessions" });
-        const customSpec = structuredClone(oldSpec);
-        customSpec.columns = customSpec.columns.map((column) =>
-          column.id === "working" ? { ...column, match: { run: ["active"] } } : column,
-        );
-        const custom = await store.updateSessionsBoard("custom", customSpec);
-        await store.upsertBoard({ id: "custom-order", kind: "sessions" });
-        const reordered = structuredClone(oldSpec);
-        reordered.columns.reverse();
-        await store.updateSessionsBoard("custom-order", reordered);
-        logger.info.mockClear();
-        await service.start(context);
-        const repaired = await store.getSessionsBoard(BOARD_ID);
-        expect(repaired.sessions.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
-        expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
-          label: "Building",
-          description: "My own description",
-          match: { run: ["active"] },
-        });
-        expect(repaired.sessions.columns.find((column) => column.id === "stuck")?.match).toEqual([
-          { health: ["stuck", "failed"] },
-          { run: ["failed"] },
-        ]);
-        expect(repaired.sessions.scope).toEqual({ maxAgeHours: 24 });
-        expect(await store.getSessionsBoard("custom")).toEqual(custom);
-        expect(
-          (await store.getSessionsBoard("custom-order")).sessions.columns.map(
-            (column) => column.id,
-          ),
-        ).toEqual(oldOrder.toReversed());
-        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-          "Sessions board updated default rules on 2 boards.",
-        );
-        await service.stop();
-        await service.start(context);
-        expect(await store.getSessionsBoard(BOARD_ID)).toEqual(repaired);
-        expect(logger.info).toHaveBeenCalledOnce();
-        await service.stop();
-        repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
-        logger.info.mockClear();
-        await service.start(context);
-        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-          "Sessions board removed 3 non-operator placements.",
-        );
-      },
-    );
+it("always excludes dock conversations and filters automation unless the scope opts in", async () => {
+  const board = await createFixture();
+  await board.read();
+  expect(board.selectFacts.mock.calls[0]?.[0]).toMatchObject({
+    excludeCron: true,
+    excludeSystem: true,
+    excludeDock: true,
   });
-
-  it("shares cached facts across boards, invalidates only changed keys, and coalesces notifications", async () => {
-    await withService(
-      { facts: [facts("one"), facts("two")] },
-      async ({ service, store, state, emit, readSessionFacts, unsubscribe }) => {
-        const changed = vi.spyOn(store, "announceChangeEpoch");
-        expect(readSessionFacts).not.toHaveBeenCalled();
-        emit(facts("one").key);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(changed).not.toHaveBeenCalled();
-        await service.read(BOARD_ID);
-        await store.upsertBoard({ id: "second", kind: "sessions" });
-        await service.read("second");
-        expect(readSessionFacts).toHaveBeenCalledOnce();
-        changed.mockClear();
-        state.facts = [facts("one", { run: "active" }), facts("two")];
-        emit(facts("one").key);
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
-        state.facts = [
-          facts("one", { run: "active", label: "Updated during burst" }),
-          facts("two"),
-        ];
-        for (let event = 1; event < 100; event += 1) {
-          await vi.advanceTimersByTimeAsync(40);
-          emit(event === 99 ? "agent:main:not-cached" : facts("one").key);
-        }
-        await vi.advanceTimersByTimeAsync(1_039);
-        expect(changed).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(changed).toHaveBeenCalledOnce();
-        const read = await service.read(BOARD_ID);
-        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys)).toEqual([
-          [facts("one").key, facts("two").key],
-          [facts("one").key],
-          [facts("one").key],
-        ]);
-        expect(read.sessions[0]).toMatchObject({
-          columnId: "focus",
-          label: "Updated during burst",
-        });
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(changed).toHaveBeenCalledOnce();
-        emit(facts("two").key);
-        await service.stop();
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(unsubscribe).toHaveBeenCalledOnce();
-        expect(changed).toHaveBeenCalledOnce();
-      },
-    );
+  expect(board.selectFacts.mock.calls[0]?.[0]).not.toHaveProperty("excludeSubagents");
+  await expect(board.move("agent:main:cron:job:trigger", "other")).rejects.toThrow(
+    "not available in this board's scope",
+  );
+  expect(board.selectFacts.mock.lastCall?.[0]).toMatchObject({
+    excludeCron: true,
+    excludeSystem: true,
   });
+  expect(await board.pins()).toEqual([]);
+  await board.update({ scope: { includeAutomation: true } });
+  await board.read();
+  expect(board.selectFacts.mock.lastCall?.[0]).toHaveProperty("excludeDock", true);
+  expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeCron");
+  expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeSystem");
+  expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeSubagents");
+});
 
-  it("announces new sessions and refreshes unavailable PR facts only on publication", async () => {
-    await withService({ facts: [] }, async ({ service, store, state, emit, readSessionFacts }) => {
-      expect((await service.read(BOARD_ID)).sessions).toEqual([]);
-      const changed = vi.spyOn(store, "announceChangeEpoch");
-      state.roster = state.facts = [facts("new", { pullRequestsUnavailable: true })];
-      emit(facts("new").key);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(changed).toHaveBeenCalledOnce();
-      expect((await service.read(BOARD_ID)).warning).toContain(
-        "pull-request information is unavailable",
-      );
-      state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
-      expect((await service.read(BOARD_ID)).warning).toContain(
-        "pull-request information is unavailable",
-      );
-      vi.setSystemTime(NOW + 30 * 60_000);
-      await service.read(BOARD_ID);
-      expect(readSessionFacts).toHaveBeenCalledOnce();
-      emit(facts("new").key);
-      expect((await service.read(BOARD_ID)).warning).toBeUndefined();
-      expect(readSessionFacts).toHaveBeenCalledTimes(2);
+it("excludes each agent's configured Home session from reads and moves", async () => {
+  const home = { ...facts("home"), isMain: true };
+  const otherHome = {
+    ...facts("other-home", { key: "agent:ops:home", agentId: "ops" }),
+    isMain: true,
+  };
+  const work = facts("subagent:worker");
+  const board = await createFixture([home, otherHome, work]);
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+  await expect(board.move(home.key, "other")).rejects.toThrow(
+    "not available in this board's scope",
+  );
+  expect(await board.pins()).toEqual([]);
+  await board.update({ scope: { includeHome: true } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([
+    home.key,
+    otherHome.key,
+    work.key,
+  ]);
+  await board.move(home.key, "focus");
+  await board.update({ scope: { includeHome: false } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+});
+
+it("rejects a move when caller authority ends during the facts read", async () => {
+  const board = await createFixture(["one"]);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let active = true;
+  board.readFacts.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return { sessions: [facts("one")] };
+  });
+  const caller = authority(() => active);
+  const pending = board.move(facts("one").key, "other", caller);
+  const rejected = expect(pending).rejects.toThrow("Caller authority expired");
+  await entered.promise;
+  active = false;
+  release.resolve();
+  await rejected;
+  expect(await board.pins()).toEqual([]);
+});
+
+it("classifies custom conjunctions, alternatives, and unknown PR state", async () => {
+  const digest = observed("on-track");
+  const read = await expectClassification(
+    {
+      scope: { includeArchived: true },
+      columns: [
+        ruleColumn("review", [
+          { health: ["on-track"], run: ["active"], pullRequest: ["open"], archived: false },
+          { run: ["failed"], archived: false },
+        ]),
+        ruleColumn("active", { run: ["active"] }),
+        ruleColumn("no-pr", { pullRequest: ["none"] }),
+        OTHER_COLUMN,
+      ],
+    },
+    [
+      ["all", { run: "active", observerDigest: digest, pullRequests: pr(1) }, "review"],
+      ["no-digest", { run: "active", pullRequests: pr(2) }, "active"],
+      ["active-no-pr", { run: "active", observerDigest: digest }, "active"],
+      [
+        "archived",
+        { run: "active", observerDigest: digest, archived: true, pullRequests: pr(3) },
+        "active",
+      ],
+      ["idle-pr", { observerDigest: digest, pullRequests: pr(4) }, "other"],
+      ["none", {}, "no-pr"],
+      ["unknown", { pullRequestsUnavailable: true }, "other"],
+      ["failed", { run: "failed" }, "review"],
+    ],
+  );
+  expect(read.columns.map((column) => column.id)).toEqual(["review", "active", "no-pr", "other"]);
+  expect(read.warning).toContain("Pull-request facts for 1 session are not loaded yet.");
+  expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
+    "facts-unavailable",
+  );
+});
+
+it.each([false, true])(
+  "waits for placement repair on first use and drains it on stop (stop early: %s)",
+  async (stopEarly) => {
+    const repair = Promise.withResolvers<{ placements: number; boards: number }>();
+    const board = await createFixture([], { repair: repair.promise });
+    const readDone = vi.fn();
+    const updateDone = vi.fn();
+    const reading = board.read().finally(readDone);
+    const updating = board.update({ scope: { maxAgeHours: 48 } }).finally(updateDone);
+    const results = Promise.allSettled([reading, updating]);
+    const stopped = vi.fn();
+    const stopping = stopEarly ? board.service.stop().then(stopped) : undefined;
+    expect([readDone, updateDone, stopped].map((done) => done.mock.calls)).toEqual([[], [], []]);
+    repair.resolve({ placements: 3, boards: 0 });
+    if (stopEarly) {
+      const rejected = {
+        status: "rejected",
+        reason: expect.objectContaining({ message: "Sessions board service is no longer active." }),
+      };
+      expect(await results).toEqual([rejected, rejected]);
+      await stopping;
+      expect((await board.stored()).sessions.scope?.maxAgeHours).not.toBe(48);
+    } else {
+      expect((await results).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
+      expect((await board.stored()).sessions.scope?.maxAgeHours).toBe(48);
+    }
+  },
+);
+
+it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
+  const board = await createFixture();
+  await board.read();
+  await board.read();
+  expect(board.readFacts).not.toHaveBeenCalled();
+  await board.service.stop();
+  const oldSpec = createDefaultWorkboardSessionsBoardSpec();
+  const oldOrder = ["needs-input", "working", "stuck", "in-review", "merged", "done"];
+  oldSpec.columns.sort((a, b) => oldOrder.indexOf(a.id) - oldOrder.indexOf(b.id));
+  for (const column of oldSpec.columns) {
+    if (column.id === "working") {
+      column.match = { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] };
+      column.label = "Building";
+      column.description = "My own description";
+    } else if (column.id === "stuck") {
+      column.match = { health: ["stuck", "failed"] };
+    }
+  }
+  oldSpec.scope = { maxAgeHours: 24 };
+  await board.store.updateSessionsBoard(BOARD_ID, oldSpec);
+  await board.store.upsertBoard({ id: "custom", kind: "sessions" });
+  const customSpec = structuredClone(oldSpec);
+  customSpec.columns = customSpec.columns.map((column) =>
+    column.id === "working" ? { ...column, match: { run: ["active"] } } : column,
+  );
+  const custom = await board.store.updateSessionsBoard("custom", customSpec);
+  await board.store.upsertBoard({ id: "custom-order", kind: "sessions" });
+  const reordered = structuredClone(oldSpec);
+  reordered.columns.reverse();
+  await board.store.updateSessionsBoard("custom-order", reordered);
+  board.logger.info.mockClear();
+  await board.service.start(board.context);
+  await board.read();
+  const repaired = await board.stored();
+  expect(repaired.sessions.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
+  expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
+    label: "Building",
+    description: "My own description",
+    match: { run: ["active"] },
+  });
+  expect(repaired.sessions.columns.find((column) => column.id === "stuck")?.match).toEqual([
+    { health: ["stuck", "failed"] },
+    { run: ["failed"] },
+  ]);
+  expect(repaired.sessions.scope).toEqual({ maxAgeHours: 24 });
+  expect(await board.stored("custom")).toEqual(custom);
+  expect((await board.stored("custom-order")).sessions.columns.map((column) => column.id)).toEqual(
+    oldOrder.toReversed(),
+  );
+  await board.service.stop();
+  await board.service.start(board.context);
+  expect(await board.stored()).toEqual(repaired);
+  expect(board.logger.info).toHaveBeenCalledOnce();
+});
+
+it("coalesces notifications and refreshes board facts after publications", async () => {
+  const board = await createFixture();
+  const changed = vi.spyOn(board.store, "announceChangeEpoch");
+  expect(board.readFacts).not.toHaveBeenCalled();
+  board.emit(facts("one").key);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(changed).not.toHaveBeenCalled();
+  expect((await board.read()).sessions).toEqual([]);
+  await board.store.upsertBoard({ id: "second", kind: "sessions" });
+  changed.mockClear();
+  board.publish("active", [
+    facts("one", { run: "active" }),
+    facts("two", { pullRequestsUnavailable: true }),
+  ]);
+  expect((await board.service.read("second")).sessions).toHaveLength(2);
+  expect((await board.read()).sessions[1]).toMatchObject({ reason: "facts-unavailable" });
+  expect((await board.read()).sessions[0]).toMatchObject({ columnId: "focus" });
+  board.state.sessions = [
+    facts("one", { run: "active", label: "Updated during burst" }),
+    facts("two"),
+  ];
+  board.state.revision = "updated";
+  for (let event = 1; event < 100; event += 1) {
+    await vi.advanceTimersByTimeAsync(40);
+    board.emit(event === 99 ? "agent:main:not-cached" : facts("one").key);
+  }
+  await vi.advanceTimersByTimeAsync(1_039);
+  expect(changed).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(changed).toHaveBeenCalledOnce();
+  const read = await board.read();
+  expect(read.sessions[0]).toMatchObject({ columnId: "focus", label: "Updated during burst" });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(changed).toHaveBeenCalledOnce();
+  board.emit(facts("two").key);
+  await board.service.stop();
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(board.unsubscribe).toHaveBeenCalledOnce();
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])(
+  "prioritizes default rules over PR facts and reports availability (rate limited: %s)",
+  async (rateLimited) => {
+    const availability = rateLimited
+      ? { pullRequestsRateLimited: true as const }
+      : { pullRequestsUnavailable: true };
+    const rows = [
+      {
+        ...facts("review", { pullRequests: pr(1), ...availability }),
+        pullRequestsStale: true as const,
+      },
+      {
+        ...facts("merged", { pullRequests: pr(2, "merged"), ...availability }),
+        pullRequestsStale: true as const,
+      },
+      { ...facts("none", availability), pullRequestsStale: true as const },
+      facts("unknown", availability),
+      facts("failed", { run: "failed" }),
+      facts("unhealthy-active", { run: "active", observerDigest: observed("stuck") }),
+    ];
+    const board = await createFixture(rows, { spec: createDefaultWorkboardSessionsBoardSpec() });
+    const read = await board.read();
+    expect(read.sessions).toMatchObject([
+      { columnId: "in-review" },
+      { columnId: "merged" },
+      { columnId: "done", reason: "fallback" },
+      { columnId: "done", reason: "facts-unavailable" },
+      { columnId: "stuck" },
+      { columnId: "stuck" },
+    ]);
+    const suffix = rateLimited ? " (GitHub rate limited)" : "";
+    expect(read.warning).toBe(
+      `Pull-request facts for 3 sessions are stale${suffix}. Pull-request facts for 1 session are not loaded yet${suffix}.`,
+    );
+    board.state.sessions = [
+      { ...rows[0]!, run: "active" },
+      { ...rows[1]!, observerDigest: observed("waiting-on-user") },
+      ...rows.slice(2),
+    ];
+    board.state.revision = "new-run-and-health";
+    board.emit(rows[0]!.key);
+    board.emit(rows[1]!.key);
+    expect((await board.read()).sessions.slice(0, 2)).toMatchObject([
+      { run: "active", columnId: "working", pullRequests: rows[0]!.pullRequests },
+      {
+        observerDigest: { health: "waiting-on-user" },
+        columnId: "needs-input",
+        pullRequests: rows[1]!.pullRequests,
+      },
+    ]);
+  },
+);
+
+it("announces sessions added after the first read", async () => {
+  const board = await createFixture();
+  expect((await board.read()).sessions).toEqual([]);
+  const changed = vi.spyOn(board.store, "announceChangeEpoch");
+  board.publish("new-session", [facts("new", { pullRequestsUnavailable: true })]);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(changed).toHaveBeenCalledOnce();
+  expect((await board.read()).sessions).toMatchObject([
+    { key: facts("new").key, reason: "facts-unavailable" },
+  ]);
+});
+
+it("shares projections and reuses 80 unchanged rows after one session changes", async () => {
+  const board = await createFixture(
+    Array.from({ length: 81 }, (_, index) => Object.freeze(facts(String(index)))),
+  );
+  const placements = vi.spyOn(board.store, "listSessionPlacements");
+  const boards = vi.spyOn(board.store, "getSessionsBoard");
+  const changes = vi.fn();
+  board.store.onChange = changes;
+  const readers = await Promise.all(
+    Array.from({ length: 25 }, () => board.read(undefined, { assertCurrent() {} })),
+  );
+  const first = readers[0]!;
+  expect(readers.every((read) => read === first)).toBe(true);
+  expect(first.sessions).toHaveLength(81);
+  expect(boards).toHaveBeenCalledOnce();
+  expect(placements).toHaveBeenCalledOnce();
+  board.emit(facts("0").key, "category");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(changes).not.toHaveBeenCalled();
+  expect(await board.read()).toBe(first);
+  vi.setSystemTime(NOW + 10 * 60_000);
+  expect(await board.read()).toBe(first);
+  board.publish("one-row-changed", [
+    Object.freeze({ ...board.state.sessions[0]!, run: "active" as const }),
+    ...board.state.sessions.slice(1),
+  ]);
+  await vi.advanceTimersByTimeAsync(5_000);
+  const next = await board.read();
+  expect(next.revision!.revision).toBeGreaterThan(first.revision!.revision);
+  expect(changes).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ sessionsRevision: next.revision!.revision }),
+  );
+  expect(next.sessions[0]).toMatchObject({ run: "active", columnId: "focus" });
+  expect(next.sessions[0]).not.toBe(first.sessions[0]);
+  expect(next.sessions.slice(1).every((row, index) => row === first.sessions[index + 1])).toBe(
+    true,
+  );
+  expect(placements).toHaveBeenCalledOnce();
+  expect(boards).toHaveBeenCalledOnce();
+  expect(await board.read()).toBe(next);
+  const pinned = await board.move(facts("1").key, "focus");
+  expect(pinned.sessions[1]).toMatchObject({ columnId: "focus", source: "operator" });
+  expect(pinned.sessions[1]).not.toBe(next.sessions[1]);
+  expect(
+    pinned.sessions.filter((_, index) => index !== 1).every((row) => next.sessions.includes(row)),
+  ).toBe(true);
+  board.state.scope = "new-authorization";
+  const rebuilt = await board.read();
+  expect(rebuilt.sessions).toEqual(pinned.sessions);
+  expect(rebuilt.sessions[0]).not.toBe(pinned.sessions[0]);
+  expect(rebuilt.revision!.scope).not.toBe(pinned.revision!.scope);
+});
+
+it("keeps each visibility projection within its caller's sessions and people", async () => {
+  const board = await createFixture(["shared", "private"]);
+  const people: NonNullable<SelectedFacts["people"]> = [
+    { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 2 },
+  ];
+  const visible = { scope: "viewer", sessions: [board.state.sessions[0]!], people: [] };
+  board.selectOnce({ scope: "owner", people });
+  board.selectOnce(visible);
+  const [owner, viewer] = await Promise.all([
+    board.read({ includePeople: true }, { assertCurrent() {} }),
+    board.read({ includePeople: true }, { assertCurrent() {} }),
+  ]);
+  expect(owner.sessions.map(({ label }) => label)).toEqual(["shared", "private"]);
+  expect(owner.people).toEqual(people);
+  expect(viewer.sessions.map(({ label }) => label)).toEqual(["shared"]);
+  expect(viewer.people).toEqual([]);
+  expect(viewer.revision!.scope).not.toBe(owner.revision!.scope);
+  board.selectOnce({ ...visible, revision: "people-changed", people });
+  const otherPeople = await board.read({ includePeople: true });
+  expect(otherPeople.sessions).toEqual(viewer.sessions);
+  expect(otherPeople.people).toEqual(people);
+  expect(otherPeople.revision!.scope).not.toBe(viewer.revision!.scope);
+});
+
+it.each(["session", "people"] as const)(
+  "expires cached %s at the exact activity deadline",
+  async (kind) => {
+    const board = await createFixture(["one"], {
+      spec: { scope: { maxAgeHours: 1 } },
     });
-  });
+    const deadline = NOW + (kind === "people" ? 1_000 : 3_600_000);
+    const person = { identity: { type: "profile" as const, id: "one" }, label: "One" };
+    if (kind === "people") {
+      board.state.sessions = [];
+      board.state.people = [{ ...person, sessionCount: 1 }];
+      board.state.activityExpiresAt = deadline;
+    }
+    const view = { includePeople: true };
+    const first = await board.read(view);
+    vi.setSystemTime(deadline);
+    expect(await board.read(view)).toBe(first);
+    vi.setSystemTime(deadline + 1);
+    if (kind === "people") {
+      board.state.people = [];
+      board.state.activityExpiresAt = undefined;
+      board.state.revision = "people-expired";
+    }
+    const expired = await board.read(view);
+    expect(expired.sessions).toEqual([]);
+    if (kind === "people") {
+      expect(first.people).toEqual([{ ...person, sessionCount: 1 }]);
+      expect(expired.people).toEqual([]);
+    }
+    expect(expired.revision!.scope).not.toBe(first.revision!.scope);
+  },
+);
 
-  it("shares a concurrent roster and facts pass, retaining unchanged facts without age expiry", async () => {
-    await withService(
-      { facts: Array.from({ length: 81 }, (_, index) => facts(String(index))) },
-      async ({ service, request, readSessionFacts }) => {
-        const [first, second] = await Promise.all([service.read(BOARD_ID), service.read(BOARD_ID)]);
-        expect(first).toEqual(second);
-        expect(first.sessions).toHaveLength(81);
-        expect(request).toHaveBeenCalledOnce();
-        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys.length)).toEqual([
-          40, 40, 1,
-        ]);
-        vi.setSystemTime(NOW + 10 * 60_000 - 1);
-        await service.read(BOARD_ID);
-        expect(readSessionFacts).toHaveBeenCalledTimes(3);
-        vi.setSystemTime(NOW + 10 * 60_000);
-        await service.read(BOARD_ID);
-        expect(readSessionFacts).toHaveBeenCalledTimes(3);
-      },
-    );
+it("checks authority after the caller's facts selection even with a warm projection", async () => {
+  const board = await createFixture(["one"]);
+  const first = await board.read();
+  let active = true;
+  board.selectFacts.mockImplementationOnce(async () => {
+    active = false;
+    return { ...board.state };
   });
+  const caller = authority(() => active);
+  await expect(board.read(undefined, caller)).rejects.toThrow("Caller authority expired");
+  expect(await board.read()).toBe(first);
+});
 
-  it("shares a board facts pass while preserving each caller's visible roster and people", async () => {
-    await withService(
-      { facts: [facts("shared"), facts("private")] },
-      async ({ service, request, readSessionFacts }) => {
-        const people = [
-          { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 2 },
-        ];
-        request
-          .mockResolvedValueOnce({ sessions: [facts("shared"), facts("private")], people })
-          .mockResolvedValueOnce({ sessions: [facts("shared")], people: [] });
-        const [owner, viewer] = await Promise.all([
-          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
-          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
-        ]);
-        expect(owner.sessions.map(({ label }) => label)).toEqual(["shared", "private"]);
-        expect(owner.people).toEqual(people);
-        expect(viewer.sessions.map(({ label }) => label)).toEqual(["shared"]);
-        expect(viewer.people).toEqual([]);
-        expect(readSessionFacts).toHaveBeenCalledOnce();
-      },
-    );
-  });
-
-  it("keeps pins across fact changes and returns to rules when their column is deleted", async () => {
-    await withService(
-      { facts: [facts("one", { run: "active" })] },
-      async ({ service, store, state, emit }) => {
-        await service.move(BOARD_ID, facts("one").key, "other");
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "other",
-          source: "operator",
-        });
-        state.facts = [
-          facts("one", { observerDigest: { health: "stuck", headline: "Stuck", revision: 1 } }),
-        ];
-        emit(facts("one").key);
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "other",
-          source: "operator",
-        });
-        await service.update(BOARD_ID, {
-          columns: [FOCUS_COLUMN, { ...OTHER_COLUMN, id: "fallback" }],
-        });
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "fallback",
-          source: "state",
-        });
-        expect(
-          (await store.listSessionPlacements(BOARD_ID)).every((pin) => pin.source === "operator"),
-        ).toBe(true);
-      },
-    );
-  });
-
-  it("shows failure reasons, keeps stale facts, and falls back for unread sessions", async () => {
-    await withService(
-      { facts: [facts("known", { run: "active" })] },
-      async ({ service, state, emit, readSessionFacts, logger }) => {
-        await service.read(BOARD_ID);
-        state.roster = [...state.roster, facts("new")];
-        emit(facts("known").key);
-        readSessionFacts.mockRejectedValue(new Error("facts backend offline"));
-        const read = await service.read(BOARD_ID);
-        expect(read.warning).toContain(
-          "Session facts are unavailable for 2 sessions: Error: facts backend offline. Showing the last known placement.",
-        );
-        expect(read.sessions).toMatchObject([
-          { key: facts("known").key, run: "active", columnId: "focus" },
-          { key: facts("new").key, columnId: "other", reason: "facts-unavailable" },
-        ]);
-        await service.read(BOARD_ID);
-        expect(logger.warn).toHaveBeenCalledOnce();
-        readSessionFacts.mockResolvedValue({ sessions: state.roster });
-        expect((await service.read(BOARD_ID)).warning).toBeUndefined();
-        emit(facts("known").key);
-        readSessionFacts.mockRejectedValue(new Error("second outage"));
-        expect((await service.read(BOARD_ID)).warning).toContain("second outage");
-        expect(logger.warn).toHaveBeenCalledTimes(2);
-      },
-    );
-  });
-
-  it("does not let an in-flight read overwrite a newer invalidation", async () => {
-    await withService({ facts: [facts("one")] }, async ({ service, emit, readSessionFacts }) => {
-      await service.read(BOARD_ID);
-      emit(facts("one").key);
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      readSessionFacts.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return { sessions: [facts("one")] };
-      });
-      const pending = service.read(BOARD_ID);
-      await entered.promise;
-      emit(facts("one").key);
-      release.resolve();
-      await pending;
-      readSessionFacts.mockResolvedValue({ sessions: [facts("one", { run: "active" })] });
-      expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
-      expect(readSessionFacts).toHaveBeenCalledTimes(3);
-    });
-  });
-
-  it("intersects each caller roster with current identities and excludes the Board agent", async () => {
-    const own = facts("board-agent");
-    await withService(
-      { facts: [own, facts("one"), facts("hidden")], spec: { agentSessionKey: own.key } },
-      async ({ service, state }) => {
-        expect((await service.read(BOARD_ID)).sessions.map((session) => session.key)).toEqual([
-          facts("one").key,
-          facts("hidden").key,
-        ]);
-        state.roster = [facts("one", { sessionId: "replacement" })];
-        expect((await service.read(BOARD_ID)).sessions).toEqual([]);
-        state.facts = state.roster;
-        expect((await service.read(BOARD_ID)).sessions).toMatchObject([
-          { sessionId: "replacement" },
-        ]);
-        state.roster = [own];
-        await expect(service.move(BOARD_ID, own.key, "other")).rejects.toThrow(
-          "not available in this board's scope",
-        );
-      },
-    );
-  });
-
-  it("forwards people views without changing the board or pins", async () => {
-    await withService(
-      { facts: [facts("one"), facts("two")] },
-      async ({ service, store, request }) => {
-        await service.read(BOARD_ID);
-        const board = await store.getSessionsBoard(BOARD_ID);
-        const people = [
-          { identity: { type: "profile", id: "profile-one" }, label: "Alex", sessionCount: 1 },
-        ];
-        for (const view of [
-          { involvingMe: true, includePeople: true },
-          { involvingProfileId: "profile-one", includePeople: true },
-          { involvingMe: false, includePeople: false },
-        ]) {
-          request.mockClear();
-          request.mockResolvedValueOnce({ sessions: [facts("one")], people, hasMore: false });
-          const read = await service.read(BOARD_ID, view);
-          expect(request).toHaveBeenCalledExactlyOnceWith(
-            "sessions.list",
-            expect.objectContaining(view),
-            { scopes: ["operator.read"] },
-          );
-          expect(read.sessions.map(({ key }) => key)).toEqual([facts("one").key]);
-          expect(read.people).toBe(view.includePeople ? people : undefined);
+it.each(["owner", "joiner"] as const)(
+  "rejects an expired %s without retiring the other caller's authority",
+  async (expired) => {
+    const board = await createFixture(["one"]);
+    const entered = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let active = true;
+    let joinerSelected = false;
+    const caller = (name: "owner" | "joiner") => ({
+      assertCurrent() {
+        if (!active && name === expired) {
+          throw new Error("Caller authority expired");
         }
-        expect(await store.getSessionsBoard(BOARD_ID)).toEqual(board);
-        expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+        if (name === "joiner" && joinerSelected) {
+          joined.resolve();
+        }
       },
+    });
+    using placements = vi.spyOn(board.store, "listSessionPlacements");
+    placements.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return [];
+    });
+    const owner = board.read(undefined, caller("owner"));
+    await entered.promise;
+    board.selectFacts.mockImplementationOnce(async () => {
+      joinerSelected = true;
+      return { ...board.state };
+    });
+    const joiner = board.read(undefined, caller("joiner"));
+    const rejected = expect(expired === "owner" ? owner : joiner).rejects.toThrow(
+      "Caller authority expired",
     );
+    await joined.promise;
+    active = false;
+    release.resolve();
+    await rejected;
+    const survivor = await (expired === "owner" ? joiner : owner);
+    expect(survivor.sessions).toMatchObject([{ key: facts("one").key }]);
+    expect((await board.read()).sessions).toEqual(survivor.sessions);
+  },
+);
+
+it("keeps pins across fact changes and returns to rules when their column is deleted", async () => {
+  const board = await createFixture([facts("one", { run: "active" })]);
+  const pinned = { columnId: "other", source: "operator" };
+  await board.move(facts("one").key, "other");
+  expect((await board.read()).sessions[0]).toMatchObject(pinned);
+  board.publish("health-changed", [facts("one", { observerDigest: observed("stuck") })]);
+  expect((await board.read()).sessions[0]).toMatchObject(pinned);
+  await board.update({
+    columns: [FOCUS_COLUMN, { ...OTHER_COLUMN, id: "fallback" }],
   });
+  expect((await board.read()).sessions[0]).toMatchObject({ columnId: "fallback", source: "state" });
+  expect((await board.pins()).every((pin) => pin.source === "operator")).toBe(true);
+});
+
+it("shows failure reasons, keeps stale facts, and falls back for unread sessions", async () => {
+  const marker = "old-policy-text";
+  const known = facts("known", {
+    run: "active",
+    label: marker,
+    derivedTitle: marker,
+    lastMessagePreview: marker,
+    observerDigest: { health: "on-track", headline: marker, assessment: marker, revision: 1 },
+    pullRequests: [{ number: 12, state: "open", title: marker }],
+  });
+  const board = await createFixture([known]);
+  await board.read();
+  board.publish(
+    "unavailable",
+    [facts("known"), facts("new")].map((row) =>
+      Object.assign(row, { unavailable: "Error: facts backend offline" }),
+    ),
+  );
+  const read = await board.read();
+  expect(read.warning).toContain(
+    "Session facts are unavailable for 2 sessions: Error: facts backend offline. Showing the last known placement.",
+  );
+  expect(read.sessions).toMatchObject([
+    { key: facts("known").key, run: "active", columnId: "focus" },
+    { key: facts("new").key, columnId: "other", reason: "facts-unavailable" },
+  ]);
+  expect(read.sessions[0]).toMatchObject(known);
+  await board.read();
+  expect(board.logger.warn).toHaveBeenCalledOnce();
+  board.publish("recovered", [facts("known"), facts("new")], []);
+  const recovered = await board.read();
+  expect(recovered.warning).toBeUndefined();
+  expect(recovered.revision!.revision).toBe(read.revision!.revision);
+  expect(recovered.revision!.scope).not.toBe(read.revision!.scope);
+  expect(await board.read()).toBe(recovered);
+  board.state.missingSessionKeys = [facts("known").key, facts("new").key];
+  board.publish("missing-current-facts", [], [facts("known").key]);
+  expect((await board.read()).sessions).toEqual([]);
+  board.state.missingSessionKeys = undefined;
+  board.publish("unavailable-after-missing-facts", [
+    { ...facts("known"), unavailable: "second outage" },
+    { ...facts("new"), unavailable: "second outage" },
+  ]);
+  const unavailable = await board.read();
+  expect(unavailable.warning).toContain("second outage");
+  expect(unavailable.sessions).toMatchObject([
+    { key: facts("known").key, columnId: "other", reason: "facts-unavailable" },
+    { key: facts("new").key, columnId: "other", reason: "facts-unavailable" },
+  ]);
+  expect(board.logger.warn).toHaveBeenCalledTimes(2);
+});
+
+it("completes during continuous source invalidation without caching a stale revision", async () => {
+  const board = await createFixture(["one"]);
+  await board.read();
+  const admittedRevision = board.store.sessionsRevision;
+  let sourceReads = 0;
+  board.selectFacts.mockImplementation(async () => {
+    if (++sourceReads > 2) {
+      throw new Error("Sessions board kept retrying invalidated facts");
+    }
+    board.emit(facts("one").key);
+    return { ...board.state };
+  });
+  const duringChurn = await board.read();
+  expect(sourceReads).toBe(1);
+  expect(duringChurn.revision!.revision).toBe(admittedRevision.revision);
+  expect(duringChurn.revision!.revision).toBeLessThan(board.store.sessionsRevision.revision);
+  board.selectFacts.mockImplementation(async () => ({ ...board.state }));
+  const current = await board.read();
+  expect(current.revision!.revision).toBe(board.store.sessionsRevision.revision);
+  expect(current.revision!.scope).not.toBe(duringChurn.revision!.scope);
+  expect(await board.read()).toBe(current);
+  board.publish("active", [facts("one", { run: "active" })]);
+  expect((await board.read()).sessions[0]).toMatchObject({ columnId: "focus" });
+});
+
+it("excludes the Board agent from reads and moves", async () => {
+  const own = facts("board-agent");
+  const board = await createFixture([own, "one"], {
+    spec: { agentSessionKey: own.key },
+  });
+  expect((await board.read()).sessions.map((session) => session.key)).toEqual([facts("one").key]);
+  await expect(board.move(own.key, "other")).rejects.toThrow("not available in this board's scope");
+  expect(await board.pins()).toEqual([]);
+});
+
+it("forwards people views without changing the board or pins", async () => {
+  const board = await createFixture(["one", "two"]);
+  await board.read();
+  const initialBoard = await board.stored();
+  const people: NonNullable<SelectedFacts["people"]> = [
+    { identity: { type: "profile", id: "profile-one" }, label: "Alex", sessionCount: 1 },
+  ];
+  for (const view of [
+    { involvingMe: true, includePeople: true },
+    { involvingProfileId: "profile-one", includePeople: true },
+    { involvingMe: false, includePeople: false },
+  ]) {
+    board.selectFacts.mockClear();
+    board.selectOnce({
+      sessions: [board.state.sessions[0]!],
+      people: view.includePeople ? people : undefined,
+    });
+    const read = await board.read(view);
+    expect(board.selectFacts).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(view));
+    expect(read.sessions.map(({ key }) => key)).toEqual([facts("one").key]);
+    expect(read.people).toBe(view.includePeople ? people : undefined);
+  }
+  expect(await board.stored()).toEqual(initialBoard);
+  expect(await board.pins()).toEqual([]);
 });

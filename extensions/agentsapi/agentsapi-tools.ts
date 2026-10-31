@@ -1,4 +1,5 @@
 import type { AgentToolParam } from "openai/resources/beta/agents/agents";
+import { resolveStoredSessionPermissionPolicy } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
@@ -23,6 +24,7 @@ import {
   normalizeAgentRuntimeTools,
   projectRuntimeToolInputSchema,
   resolveAgentDir,
+  resolveMessageToolSourceReplyFinal,
   resolveToolExecutionErrorKind,
   runAgentHarnessAfterToolCallHook,
   sanitizeToolResult,
@@ -63,7 +65,6 @@ type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
   >;
 
 export type AgentsApiToolExecutionResult = AgentsApiFunctionResult & {
-  sourceReplyDelivered?: true;
   terminate?: true;
 };
 
@@ -77,12 +78,12 @@ export type AgentsApiToolSurface = {
 };
 
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
-export function buildAgentsApiToolSurface(
+export async function buildAgentsApiToolSurface(
   params: AgentHarnessAttemptParamsV2,
   signal: AbortSignal,
   assertCurrent: () => void,
   registerCleanup: (cleanup: (reason: string) => Promise<void>) => void,
-): AgentsApiToolSurface {
+): Promise<AgentsApiToolSurface> {
   assertCurrent();
   const agentId = params.agentId;
   if (!agentId) {
@@ -98,13 +99,13 @@ export function buildAgentsApiToolSurface(
     ...params,
     sessionKey: policySessionKey,
   }).channelId;
-  const createToolSurface = params.hostCapabilities.createToolSurface;
-  if (!createToolSurface) {
+  const createToolSurfaceAsync = params.hostCapabilities.createToolSurfaceAsync;
+  if (!createToolSurfaceAsync) {
     throw new Error("Agents API tool construction requires a current host capability");
   }
   const constructed = params.disableTools
     ? []
-    : createToolSurface(
+    : await createToolSurfaceAsync(
         {
           ...runContext,
           agentId,
@@ -117,6 +118,12 @@ export function buildAgentsApiToolSurface(
           agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
           workspaceDir: params.workspaceDir,
           cwd,
+          sessionPermissionPolicy: resolveStoredSessionPermissionPolicy(
+            params,
+            params.workspaceDir,
+          ),
+          requireWorkspaceOnly: params.requireWorkspaceOnly,
+          exec: { ...params.execOverrides, config: params.config, elevated: params.bashElevated },
           spawnWorkspaceDir: params.workspaceDir,
           preparedModelRuntime: params.preparedModelRuntime,
           skillsSnapshot: params.skillsSnapshot,
@@ -168,6 +175,8 @@ export function buildAgentsApiToolSurface(
         },
         { cwd },
       );
+  assertCurrent();
+  signal.throwIfAborted();
   const tools = applyEmbeddedAttemptToolsAllow(
     // Search stays native; requester yields and image generation are outside this prototype.
     constructed.filter(
@@ -237,9 +246,9 @@ export function buildAgentsApiToolSurface(
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const contextTokens = params.contextTokenBudget ?? params.model.contextWindow;
   const maxChars =
-    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
-      ? resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens })
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+    contextTokens === undefined
+      ? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
+      : resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens });
 
   return {
     declarations,
@@ -254,7 +263,7 @@ export function buildAgentsApiToolSurface(
       signal.throwIfAborted();
       const entry = toolMap.get(call.name);
       let startedAt: number;
-      let executedArgs = isRecord(call.arguments) ? call.arguments : {};
+      let executedArgs: Record<string, unknown> = {};
       let executionBoundary: ReturnType<
         ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>["begin"]
       >;
@@ -453,25 +462,87 @@ export function buildAgentsApiToolSurface(
                 result: raw,
                 isError: rawIsError,
               });
+              // An omitted final takes the run's default; cron sends do not end the turn.
+              const messageFinal = resolveMessageToolSourceReplyFinal(
+                executedArgs,
+                params.messageToolFinalByDefault,
+              );
               terminate =
-                sourceReplyDelivered ||
-                (raw.terminate === true && !(sourceRouteDelivered && executedArgs.final === false));
+                (sourceReplyDelivered && messageFinal) ||
+                (raw.terminate === true && !(sourceRouteDelivered && !messageFinal));
               if (sourceReplyDelivered) {
                 delivery.sourceReplyDelivered = true;
               }
               if (sourceRouteDelivered || sourceReplyDelivered) {
                 delivery.didDeliverSourceReplyViaMessageTool = true;
               }
-              recordDelivery(
-                tool,
-                executedArgs,
-                raw,
-                params,
-                messagingContext,
-                delivery,
-                signal,
-                sourceRouteDelivered ? executedArgs.final !== false : undefined,
-              );
+              function recordDelivery(sourceReplyFinal?: boolean): void {
+                const args = executedArgs;
+                if (
+                  isMessagingTool(tool.name) &&
+                  isDeliveredMessagingToolResult({ toolName: tool.name, args, result: raw })
+                ) {
+                  const payload = extractMessagingToolSourceReplyPayload(raw);
+                  if (payload) {
+                    recordAgentHarnessMessagingDelivery({
+                      facts: delivery,
+                      sourceReplyPayload: payload,
+                      sourceReplyFinal: messageFinal,
+                    });
+                  } else {
+                    const routedArgs = {
+                      provider: params.messageChannel ?? params.messageProvider,
+                      ...args,
+                    };
+                    const pending = extractMessagingToolSend(
+                      tool.name,
+                      routedArgs,
+                      messagingContext,
+                    );
+                    const text = ["message", "text", "content", "body"]
+                      .map((key) => args[key])
+                      .find(
+                        (value): value is string =>
+                          typeof value === "string" && value.trim().length > 0,
+                      );
+                    const mediaUrls = collectMessagingMediaUrlsFromRecord(args);
+                    recordAgentHarnessMessagingDelivery({
+                      facts: delivery,
+                      target: pending ? extractMessagingToolSendResult(pending, raw) : undefined,
+                      text,
+                      mediaUrls,
+                      sourceReplyFinal,
+                    });
+                  }
+                }
+                if (signal.aborted || isToolResultError(raw)) {
+                  return;
+                }
+                const pluginMeta = getPluginToolMeta(tool);
+                const trustedTools = pluginMeta
+                  ? new Set(pluginMeta.trustedLocalMedia === true ? [tool.name] : [])
+                  : undefined;
+                // A plugin named after a core tool cannot inherit that core owner's media trust.
+                const mediaToolName =
+                  pluginMeta && pluginMeta.trustedLocalMedia !== true ? undefined : tool.name;
+                const media = recordAgentHarnessToolResultMedia({
+                  facts: delivery,
+                  toolName: mediaToolName,
+                  result: raw,
+                  trustedLocalMediaToolNames: trustedTools,
+                });
+                if (!media) {
+                  return;
+                }
+                if (
+                  media.trustedLocalMedia &&
+                  (!pluginMeta || pluginMeta.trustedLocalMedia === true) &&
+                  media.mediaUrls.length
+                ) {
+                  delivery.toolTrustedLocalMedia = true;
+                }
+              }
+              recordDelivery(sourceRouteDelivered ? messageFinal : undefined);
               // Presentation failures cannot downgrade a completed host mutation's receipt.
               observeTerminal(
                 raw,
@@ -486,7 +557,21 @@ export function buildAgentsApiToolSurface(
           assertCurrent();
           signal.throwIfAborted();
           dispatchAfterHook(presented);
-          const text = serializeToolText(presented.content, maxChars);
+          let text = "";
+          for (const block of presented.content) {
+            if (text.length >= maxChars) {
+              break;
+            }
+            const next =
+              block.type === "text"
+                ? block.text
+                : "[Image result omitted from Agents API function output]";
+            text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
+          }
+          text = sliceToolResultTextToBudget(
+            text || "Tool completed with no text output.",
+            maxChars,
+          );
           return {
             transcriptResult: observed,
             ...(isError
@@ -504,9 +589,7 @@ export function buildAgentsApiToolSurface(
           executionBoundary = boundary;
           executedArgs = executedArguments;
           startedAt = invocationStartedAt;
-          const message = sanitizeToolResult(
-            formatToolExecutionErrorMessage(error, "OpenClaw tool failed"),
-          );
+          const message = formatToolExecutionErrorMessage(error, "OpenClaw tool failed");
           const disposition =
             getBeforeToolCallFailureDisposition(error) ??
             (signal.aborted ? "cancelled" : resolveToolExecutionErrorKind(error));
@@ -532,94 +615,8 @@ export function buildAgentsApiToolSurface(
       );
       return {
         ...nativeResult,
-        ...(sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
         ...(terminate ? { terminate: true as const } : {}),
       };
     },
   };
-}
-
-function recordDelivery(
-  tool: AnyAgentTool,
-  args: Record<string, unknown>,
-  raw: Awaited<ReturnType<AnyAgentTool["execute"]>>,
-  params: AgentHarnessAttemptParamsV2,
-  messagingContext: Parameters<typeof extractMessagingToolSend>[2],
-  delivery: ToolDelivery,
-  signal: AbortSignal,
-  sourceReplyFinal?: boolean,
-): void {
-  if (
-    isMessagingTool(tool.name) &&
-    isDeliveredMessagingToolResult({ toolName: tool.name, args, result: raw })
-  ) {
-    const payload = extractMessagingToolSourceReplyPayload(raw);
-    if (payload) {
-      recordAgentHarnessMessagingDelivery({
-        facts: delivery,
-        sourceReplyPayload: payload,
-        sourceReplyFinal: args.final !== false,
-      });
-    } else {
-      const routedArgs = {
-        provider: params.messageChannel ?? params.messageProvider,
-        ...args,
-      };
-      const pending = extractMessagingToolSend(tool.name, routedArgs, messagingContext);
-      const text = ["message", "text", "content", "body"]
-        .map((key) => args[key])
-        .find((value): value is string => typeof value === "string" && value.trim().length > 0);
-      const mediaUrls = collectMessagingMediaUrlsFromRecord(args);
-      recordAgentHarnessMessagingDelivery({
-        facts: delivery,
-        target: pending ? extractMessagingToolSendResult(pending, raw) : undefined,
-        text,
-        mediaUrls,
-        sourceReplyFinal,
-      });
-    }
-  }
-  if (signal.aborted || isToolResultError(raw)) {
-    return;
-  }
-  const pluginMeta = getPluginToolMeta(tool);
-  const trustedTools = pluginMeta
-    ? new Set(pluginMeta.trustedLocalMedia === true ? [tool.name] : [])
-    : undefined;
-  // A plugin named after a core tool cannot inherit that core owner's media trust.
-  const mediaToolName = pluginMeta && pluginMeta.trustedLocalMedia !== true ? undefined : tool.name;
-  const media = recordAgentHarnessToolResultMedia({
-    facts: delivery,
-    toolName: mediaToolName,
-    result: raw,
-    trustedLocalMediaToolNames: trustedTools,
-  });
-  if (!media) {
-    return;
-  }
-  if (
-    media.trustedLocalMedia &&
-    (!pluginMeta || pluginMeta.trustedLocalMedia === true) &&
-    media.mediaUrls.length
-  ) {
-    delivery.toolTrustedLocalMedia = true;
-  }
-}
-
-function serializeToolText(
-  content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"],
-  maxChars: number,
-): string {
-  let text = "";
-  for (const block of content) {
-    if (text.length >= maxChars) {
-      break;
-    }
-    const next =
-      block.type === "text"
-        ? sanitizeToolResult(block.text)
-        : "[Image result omitted from Agents API function output]";
-    text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
-  }
-  return sliceToolResultTextToBudget(text || "Tool completed with no text output.", maxChars);
 }

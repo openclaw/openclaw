@@ -4,7 +4,6 @@ import {
   requireSuccessfulPersistedNativeCommandExecution,
 } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
-  buildCodexHarnessLargeOutputCommand,
   CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
@@ -19,6 +18,12 @@ const commandMarker = "OPENCLAW-COMMAND";
 const expectedCommand = `node -e 'console.log("${commandMarker}")'`;
 const commandParams = { commandMarker, expectedCommand, minimumOutputChars: 1_000 };
 const shellSingleQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+const requireCommand = (events: readonly unknown[]) =>
+  requireSuccessfulNativeCommandExecution(events, commandParams);
+const requirePersisted = (messages: readonly unknown[], toolCallId?: string) =>
+  requireSuccessfulPersistedNativeCommandExecution(messages, { ...commandParams, toolCallId });
+const requireCompaction = (events: readonly unknown[], messages: readonly unknown[] = []) =>
+  requireSuccessfulNativeCommandCompactionEvidence({ ...commandParams, events, messages });
 
 function commandStart(itemId: string | undefined, command = expectedCommand) {
   return { stream: "tool", data: { phase: "start", name: "bash", itemId, args: { command } } };
@@ -59,16 +64,8 @@ function persistedResult(toolCallId = "call", isError = false) {
 }
 
 describe("gateway codex harness live helpers", () => {
-  it("builds an exact large-output command without escape-sensitive newlines", () => {
-    const command = buildCodexHarnessLargeOutputCommand({
-      commandMarker,
-      outputBytes: CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
-    });
-    expect(command).toContain(`"${commandMarker}|"`);
-    expect(command).toContain(".slice(0,800000)");
+  it("keeps large-output probes below the native output capture limit", () => {
     expect(CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES).toBeLessThan(1024 * 1024);
-    expect(command).not.toContain("\\n");
-    expect(command).not.toContain("\n");
   });
 
   it("keeps combined stress probes out of the subagent-only fast path", () => {
@@ -115,7 +112,7 @@ describe("gateway codex harness live helpers", () => {
       commandStart("retry", `/bin/bash -lc ${shellSingleQuote(wrappedCommand)}`),
       commandResult("retry"),
     ];
-    expect(requireSuccessfulNativeCommandExecution(events, commandParams)).toEqual({
+    expect(requireCommand(events)).toEqual({
       itemId: "retry",
       resultIndex: 5,
       startIndex: 4,
@@ -124,33 +121,29 @@ describe("gateway codex harness live helpers", () => {
 
   it("accepts completed commands with omitted or null exit codes", () => {
     for (const result of [{ status: "completed" }, { status: "completed", exitCode: null }]) {
-      expect(
-        requireSuccessfulNativeCommandExecution(
-          [commandStart("call"), commandResult("call", result)],
-          commandParams,
-        ),
-      ).toEqual({ itemId: "call", resultIndex: 1, startIndex: 0 });
+      expect(requireCommand([commandStart("call"), commandResult("call", result)])).toEqual({
+        itemId: "call",
+        resultIndex: 1,
+        startIndex: 0,
+      });
     }
   });
 
   it("reports a missing native command item id", () => {
-    expect(() =>
-      requireSuccessfulNativeCommandExecution([commandStart(undefined)], commandParams),
-    ).toThrow(`native bash command start for marker ${commandMarker} has no itemId`);
+    expect(() => requireCommand([commandStart(undefined)])).toThrow(
+      `native bash command start for marker ${commandMarker} has no itemId`,
+    );
   });
 
   it("bounds failed-command diagnostics to the matching item without raw output", () => {
     const secretOutput = "sensitive-command-output";
     let message = "";
     try {
-      requireSuccessfulNativeCommandExecution(
-        [
-          commandStart("failed"),
-          commandResult("other", { stderr: secretOutput, exitCode: 1 }, true),
-          commandResult("failed", { stdout: secretOutput, exitCode: 1 }, true),
-        ],
-        commandParams,
-      );
+      requireCommand([
+        commandStart("failed"),
+        commandResult("other", { stderr: secretOutput, exitCode: 1 }, true),
+        commandResult("failed", { stdout: secretOutput, exitCode: 1 }, true),
+      ]);
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -163,39 +156,27 @@ describe("gateway codex harness live helpers", () => {
 
   it("requires a matching call or explicit call id for a durable large result", () => {
     const result = persistedResult();
-    expect(
-      requireSuccessfulPersistedNativeCommandExecution([persistedCall(), result], commandParams),
-    ).toEqual({ callIndex: 0, resultIndex: 1, toolCallId: "call" });
-    expect(() => requireSuccessfulPersistedNativeCommandExecution([result], commandParams)).toThrow(
-      "has no successful large result",
-    );
-    expect(
-      requireSuccessfulPersistedNativeCommandExecution([result], {
-        ...commandParams,
-        toolCallId: "call",
-      }),
-    ).toEqual({ callIndex: -1, resultIndex: 0, toolCallId: "call" });
+    expect(requirePersisted([persistedCall(), result])).toEqual({
+      callIndex: 0,
+      resultIndex: 1,
+      toolCallId: "call",
+    });
+    expect(() => requirePersisted([result])).toThrow("has no successful large result");
+    expect(requirePersisted([result], "call")).toEqual({
+      callIndex: -1,
+      resultIndex: 0,
+      toolCallId: "call",
+    });
   });
 
   it("rejects echoed or failed native commands in durable history", () => {
-    expect(() =>
-      requireSuccessfulPersistedNativeCommandExecution(
-        [persistedCall(`echo ${shellSingleQuote(expectedCommand)}`), persistedResult()],
-        commandParams,
-      ),
-    ).toThrow("has no successful large result");
-    expect(() =>
-      requireSuccessfulPersistedNativeCommandExecution(
-        [persistedCall(), persistedResult("call", true)],
-        commandParams,
-      ),
-    ).toThrow("has no successful large result");
-    expect(() =>
-      requireSuccessfulPersistedNativeCommandExecution(
-        [persistedCall(), { ...persistedResult(), details: { status: "completed", exitCode: 17 } }],
-        commandParams,
-      ),
-    ).toThrow("has no successful large result");
+    for (const messages of [
+      [persistedCall(`echo ${shellSingleQuote(expectedCommand)}`), persistedResult()],
+      [persistedCall(), persistedResult("call", true)],
+      [persistedCall(), { ...persistedResult(), details: { status: "completed", exitCode: 17 } }],
+    ]) {
+      expect(() => requirePersisted(messages)).toThrow("has no successful large result");
+    }
   });
 
   it("accepts request-local evidence only when later compaction removed the durable result", () => {
@@ -203,66 +184,47 @@ describe("gateway codex harness live helpers", () => {
       ...completedCommandEvents(),
       { stream: "compaction", data: { phase: "end", completed: true } },
     ];
-    const params = { ...commandParams, events, messages: [] };
-    expect(requireSuccessfulNativeCommandCompactionEvidence(params)).toEqual({
-      source: "compacted-event",
-    });
-    expect(() =>
-      requireSuccessfulNativeCommandCompactionEvidence({ ...params, events: events.slice(0, 2) }),
-    ).toThrow("successful request-local command result was not followed by compaction");
-    expect(() =>
-      requireSuccessfulNativeCommandCompactionEvidence({
-        ...params,
-        messages: [persistedResult("call", true)],
-      }),
-    ).toThrow("durable result for successful request-local command failed validation");
+    expect(requireCompaction(events)).toEqual({ source: "compacted-event" });
+    expect(() => requireCompaction(events.slice(0, 2))).toThrow(
+      "successful request-local command result was not followed by compaction",
+    );
+    expect(() => requireCompaction(events, [persistedResult("call", true)])).toThrow(
+      "durable result for successful request-local command failed validation",
+    );
   });
 
   it("rejects durable output without successful request-local evidence", () => {
     expect(() =>
-      requireSuccessfulNativeCommandCompactionEvidence({
-        ...commandParams,
-        events: [],
-        messages: [persistedCall(`echo ${shellSingleQuote(expectedCommand)}`), persistedResult()],
-      }),
+      requireCompaction(
+        [],
+        [persistedCall(`echo ${shellSingleQuote(expectedCommand)}`), persistedResult()],
+      ),
     ).toThrow("has no successful request-local evidence");
   });
 
   it("ties a result-only durable row to the exact request-local item id", () => {
-    const params = { ...commandParams, events: completedCommandEvents() };
-    expect(
-      requireSuccessfulNativeCommandCompactionEvidence({
-        ...params,
-        messages: [persistedResult("different"), persistedResult()],
-      }),
-    ).toEqual({ source: "persisted-history" });
-    expect(() =>
-      requireSuccessfulNativeCommandCompactionEvidence({
-        ...params,
-        messages: [persistedResult("different")],
-      }),
-    ).toThrow("successful request-local command result was not followed by compaction");
+    const events = completedCommandEvents();
+    expect(requireCompaction(events, [persistedResult("different"), persistedResult()])).toEqual({
+      source: "persisted-history",
+    });
+    expect(() => requireCompaction(events, [persistedResult("different")])).toThrow(
+      "successful request-local command result was not followed by compaction",
+    );
   });
 
   it("accepts only paused yielded agent timeouts for native subagent delivery", () => {
-    expect(
-      isExpectedYieldedAgentTimeout({
-        status: "timeout",
-        result: { meta: { livenessState: "paused", yielded: true } },
-      }),
-    ).toBe(true);
-    expect(
-      isExpectedYieldedAgentTimeout({
-        status: "timeout",
-        result: { meta: { livenessState: "paused", yielded: false } },
-      }),
-    ).toBe(false);
-    expect(
-      isExpectedYieldedAgentTimeout({
-        status: "ok",
-        result: { meta: { livenessState: "paused", yielded: true } },
-      }),
-    ).toBe(false);
+    for (const [status, yielded, expected] of [
+      ["timeout", true, true],
+      ["timeout", false, false],
+      ["ok", true, false],
+    ] as const) {
+      expect(
+        isExpectedYieldedAgentTimeout({
+          status,
+          result: { meta: { livenessState: "paused", yielded } },
+        }),
+      ).toBe(expected);
+    }
   });
 
   it("requires the harness session for OpenClaw status prose", () => {
@@ -314,7 +276,6 @@ describe("gateway codex harness live helpers", () => {
 
   it("accepts sandbox escalation rejection for codex models", () => {
     const texts = [
-      "I couldn’t list them because `codex models` requires running outside the sandbox here, and that approval was rejected.",
       "I couldn’t list them because the local `codex models` command requires elevated execution in this environment, and that request was rejected.",
       "I couldn’t list them because the local `codex models` command requires host permissions here, and that escalation was rejected.",
       "I couldn’t run `codex models` because the sandboxed attempt failed and the required elevated retry was not approved.",

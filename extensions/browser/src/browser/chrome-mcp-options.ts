@@ -1,5 +1,5 @@
-// Normalizes Chrome MCP profile options and subprocess arguments.
-import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { resolveRuntimeDependencyEntrypointUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   hasNonEmptyString,
   normalizeOptionalString,
@@ -11,7 +11,6 @@ import type {
 } from "./chrome-mcp-contracts.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
-const require = createRequire(import.meta.url);
 const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
@@ -29,7 +28,6 @@ export function normalizeChromeMcpOptions(
   const configuredCommand = normalizeOptionalString(options.mcpCommand);
   // Explicit npx has always selected OpenClaw's pinned server, including its package prefix.
   const customCommand = configuredCommand === "npx" ? undefined : configuredCommand;
-  const managedServer = customCommand === undefined;
   const extraArgs = Array.isArray(options.mcpArgs) ? options.mcpArgs.filter(hasNonEmptyString) : [];
   // Match Chrome MCP's Yargs grammar, including short groups and camel-case
   // aliases. Policy and direct CDP operations must use the endpoint it launches.
@@ -73,28 +71,35 @@ export function normalizeChromeMcpOptions(
   const defaultFeatureArgs = extraArgs.some((arg) => CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg))
     ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
     : DEFAULT_CHROME_MCP_FEATURE_ARGS;
+  const commonArgs = [...connectionArgs, ...defaultFeatureArgs];
+  const trailingArgs = [
+    ...(!overridesConnection && !browserUrl && userDataDir && argv.userDataDir === undefined
+      ? ["--userDataDir", userDataDir]
+      : []),
+    ...extraArgs,
+  ];
+  if (customCommand !== undefined) {
+    return {
+      command: customCommand,
+      env: undefined,
+      userDataDir,
+      browserUrl,
+      // Stable custom launchers may still need the opt-in flag; the pinned server enables it by default.
+      args: [...commonArgs, "--experimental-page-id-routing", ...trailingArgs],
+    };
+  }
   return {
     // The pinned server runs on the Gateway's own runtime, Node or Bun.
-    command: customCommand ?? process.execPath,
-    // Its update check shells out to npm, which Bun-only installs lack; custom servers keep theirs.
-    env: managedServer ? { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" } : undefined,
+    command: process.execPath,
+    // Its update check shells out to npm, which Bun-only installs lack.
+    env: { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" },
     userDataDir,
     browserUrl,
     args: [
-      ...(managedServer
-        ? [
-            require.resolve("chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js"),
-            "--experimentalVision",
-          ]
-        : []),
-      ...connectionArgs,
-      ...defaultFeatureArgs,
-      // Stable custom launchers may still need the opt-in flag; the pinned server enables it by default.
-      ...(managedServer ? [] : ["--experimental-page-id-routing"]),
-      ...(!overridesConnection && !browserUrl && userDataDir && argv.userDataDir === undefined
-        ? ["--userDataDir", userDataDir]
-        : []),
-      ...extraArgs,
+      fileURLToPath(resolveRuntimeDependencyEntrypointUrl("chromeDevtoolsMcp", import.meta.url)),
+      "--experimentalVision",
+      ...commonArgs,
+      ...trailingArgs,
     ],
   };
 }

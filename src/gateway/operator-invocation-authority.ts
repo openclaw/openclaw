@@ -6,6 +6,10 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -44,7 +48,7 @@ export function hasOperatorToolGatewayAuthority(): boolean {
 
 /** Retain the already-issued source and its invocation fence for SDK-owned selection writes. */
 export function captureOperatorToolGatewayAuthority():
-  | { authority: AdmittedRunOperatorAuthority | undefined; assertCurrent: () => void }
+  | { authority: AdmittedRunOperatorAuthority | undefined; assertCurrent: SessionSourceAssertion }
   | undefined {
   const admitted = getGatewayToolCallerIdentity()?.operatorAuthority;
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
@@ -63,20 +67,22 @@ export function captureOperatorToolGatewayAuthority():
   }
   return {
     authority,
-    assertCurrent: () => {
-      assertCallerCurrent?.();
-      direct?.assertCurrent?.();
-      if (!admitted && !assertCallerCurrent) {
-        direct?.signal.throwIfAborted();
-        scope?.signal?.throwIfAborted();
-        if (scope?.hasCurrentClientAuthority?.() === false) {
-          throw new Error("Gateway caller authority is no longer active.");
+    assertCurrent: composeSessionSourceAssertion(
+      [assertCallerCurrent, direct?.assertCurrent],
+      (assertSources) => {
+        assertSources();
+        if (!admitted && !assertCallerCurrent) {
+          direct?.signal.throwIfAborted();
+          scope?.signal?.throwIfAborted();
+          if (scope?.hasCurrentClientAuthority?.() === false) {
+            throw new Error("Gateway caller authority is no longer active.");
+          }
         }
-      }
-      if (requiresOperatorAuthority && !authority) {
-        throw new Error("Operator model selection requires original Gateway authority.");
-      }
-    },
+        if (requiresOperatorAuthority && !authority) {
+          throw new Error("Operator model selection requires original Gateway authority.");
+        }
+      },
+    ),
   };
 }
 

@@ -12,6 +12,7 @@ import { CronService, type CronEvent } from "../../src/cron/service.js";
 import { createNoopLogger } from "../../src/cron/service.test-harness.js";
 import { getCronJobsStoreRevision } from "../../src/cron/store.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import type { EngineConnection } from "../../src/infra/sql-connection.js";
 import * as sqliteSnapshot from "../../src/infra/sqlite-snapshot.js";
 import { createPluginDoctorStateMigrationContext } from "../../src/infra/state-migrations.plugin-doctor-context.js";
 import type { PluginDoctorRepairAuthority } from "../../src/infra/state-migrations.types.js";
@@ -56,7 +57,7 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
   };
 }
 
-function readRows(db: DatabaseSync) {
+function readRows(db: EngineConnection) {
   return {
     jobs: db.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all(),
     scratch: db.prepare("SELECT * FROM cron_job_scratch ORDER BY store_key, job_id").all(),
@@ -73,7 +74,7 @@ type Fixture = {
   retiredStore: string;
   untouchedStore: string;
   databasePath: string;
-  db: () => DatabaseSync;
+  db: () => EngineConnection;
 };
 
 async function withCronFixture(
@@ -207,7 +208,6 @@ function createPausedCronService(fixture: Fixture) {
     log: logger,
     nowMs: () => 1_800_000_000_200,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent(event) {
       if (event.action === "added" || event.action === "updated" || event.action === "removed") {
@@ -227,38 +227,53 @@ async function runRegisteredDreamingService(
   scheduler: ReturnType<typeof createTestGatewayScheduler>,
 ) {
   const registry = createEmptyPluginRegistry();
-  memoryCore.register(
-    createTestPluginApi({
-      id: "memory-core",
-      config,
-      logger,
-      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerService(service) {
-        registry.services.push({
-          pluginId: "memory-core",
-          origin: "bundled",
-          source: "memory-core/index.ts",
-          id: service.id,
-          service,
-        });
-      },
-    }),
-  );
+  const starts: Array<{ mock: { results: Array<{ value: unknown }> } }> = [];
+  const backgroundTasks: Promise<unknown>[] = [];
+  const api = createTestPluginApi({
+    id: "memory-core",
+    config,
+    logger,
+    runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+    registerService(service) {
+      // Boot-path starts log failures instead of rejecting; observe them here.
+      starts.push(vi.spyOn(service, "start"));
+      registry.services.push({
+        pluginId: "memory-core",
+        origin: "bundled",
+        source: "memory-core/index.ts",
+        id: service.id,
+        service,
+      });
+    },
+  });
+  api.lifecycle.runInBackgroundContext = (run) => {
+    const result = run();
+    if (result instanceof Promise) {
+      backgroundTasks.push(result);
+    }
+    return result;
+  };
+  memoryCore.register(api);
   if (!registry.services.some(({ id }) => id === "memory-core-dreaming")) {
     throw new Error("Memory Core did not register its dreaming service");
   }
   let services: PluginServicesHandle | undefined;
   try {
+    // Gateway boot starts services without the hot-reload candidate deadline.
     services = await startPluginServices({
       scheduler,
       registry,
       config,
       getCronService: () => cron,
-      throwOnStartError: true,
       onHandle(handle) {
         services = handle;
       },
     });
+    const settled = await Promise.allSettled(
+      starts.flatMap(({ mock }) => mock.results.map(({ value }) => value)),
+    );
+    expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
+    await Promise.all(backgroundTasks);
     expect(logger.error).not.toHaveBeenCalled();
   } finally {
     await services?.stop({ strict: true });
@@ -688,7 +703,7 @@ describe("host Cron Doctor repair", () => {
             expect(managed).toHaveLength(enabled ? 1 : 0);
             if (enabled) {
               expect(managed[0]).toMatchObject({
-                enabled: true,
+                enabled: !activeDreaming,
                 sessionTarget: "isolated",
                 schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" },
                 payload: { kind: "agentTurn", lightContext: true },
@@ -808,7 +823,7 @@ describe("host Cron Doctor repair", () => {
           (job) => job.declarationKey === declarationKey,
         );
         expect(managed).toMatchObject([
-          { id: "survivor", enabled: true, payload: { kind: "agentTurn" } },
+          { id: "survivor", enabled: false, payload: { kind: "agentTurn" } },
         ]);
       } finally {
         cron.stop();

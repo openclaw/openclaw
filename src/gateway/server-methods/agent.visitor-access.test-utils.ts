@@ -17,8 +17,14 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasAgentRunContextExecutionOwner } from "../../infra/agent-run-registry.js";
 import * as mutationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
@@ -27,8 +33,10 @@ import {
   setCanonicalUserProfileRole,
   syncCanonicalGitHubIdentity,
 } from "../../state/user-profile-writes.js";
-import { getUserProfileListItem } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
@@ -66,6 +74,30 @@ const SESSION_KEY = "agent:main:main";
 const SESSION_ID = "existing-session-id";
 const EMAIL = "visitor@example.test";
 
+async function prepareVisitorSession(state: OpenClawTestState, config: OpenClawConfig) {
+  await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
+  const mocks = getAgentTestMocks();
+  mocks.loadConfigReturn = config;
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+  mocks.userTurnStorePath = storePath;
+  await upsertSessionEntryCore(
+    { storePath, sessionKey: SESSION_KEY, agentId: "main" },
+    { sessionId: SESSION_ID, updatedAt: Date.now(), visibility: "shared" },
+  );
+  prime(SESSION_ID, config);
+  return mocks;
+}
+
+function authenticatedProfile({
+  id: profileId,
+  displayName,
+  hasAvatar,
+  updatedAt,
+}: ReturnType<typeof getUserProfileListItem>) {
+  return { profileId, displayName, hasAvatar, updatedAt };
+}
+
 describe("visitor access admitted caller", () => {
   beforeEach(describe1BeforeEach0);
   afterEach(async () => {
@@ -79,21 +111,7 @@ describe("visitor access admitted caller", () => {
     async (scenario) => {
       await withOpenClawTestState(visitorTestStateOptions, async (state) => {
         const config = createVisitorGatewayConfig(state.workspaceDir);
-        await state.writeConfig(config);
-        setRuntimeConfigSnapshot(config);
-        const mocks = getAgentTestMocks();
-        mocks.loadConfigReturn = config;
-        const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        mocks.userTurnStorePath = storePath;
-        await upsertSessionEntryCore(
-          { storePath, sessionKey: SESSION_KEY, agentId: "main" },
-          {
-            sessionId: SESSION_ID,
-            updatedAt: Date.now(),
-            visibility: "shared",
-          },
-        );
-        prime(SESSION_ID, config);
+        const mocks = await prepareVisitorSession(state, config);
         const profile = await setCanonicalUserProfileRole(
           (await ensureCanonicalUserProfileForEmail("source@example.test")).id,
           scenario === "writer" ? "writer" : "admin",
@@ -104,18 +122,15 @@ describe("visitor access admitted caller", () => {
         const context = makeContext();
         const resolveGatewayContext = () => context;
         context.resolveGatewayContext = resolveGatewayContext;
+        const sdkResources = new LegacyPluginSdkResourceHost();
+        bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
         const connection = new AbortController();
         const client: GatewayClient = {
           ...operatorWriteCliClient([scenario === "writer" ? WRITE_SCOPE : ADMIN_SCOPE]),
           connectionSignal: connection.signal,
           invalidated: false,
           authenticatedUserId: "source@example.test",
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            hasAvatar: profile.hasAvatar,
-            updatedAt: profile.updatedAt,
-          },
+          authenticatedUserProfile: authenticatedProfile(profile),
           internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
         };
         const deviceId = `visitor-source-${scenario}`;
@@ -205,6 +220,7 @@ describe("visitor access admitted caller", () => {
                         await grants.lookup(EMAIL),
                         "invitation was not recorded",
                       );
+                      expect(previous.expiresAt).toBeGreaterThan(previous.createdAt);
                       if (scenario === "admin") {
                         return;
                       }
@@ -295,7 +311,7 @@ describe("visitor access admitted caller", () => {
           try {
             await expectDefined(proof, "admitted visitor proof missing");
           } finally {
-            await waitForAssertion(() => expect(context.chatAbortControllers.size).toBe(0));
+            await waitForAssertion(() => expect(rpcSourceTesting.size).toBe(0));
           }
           expect(mocks.agentCommand).toHaveBeenCalledOnce();
           const saved = await grants.lookup(EMAIL);
@@ -309,7 +325,6 @@ describe("visitor access admitted caller", () => {
           const original = expectDefined(previous, "initial grant missing");
           if (scenario === "admin") {
             expect(saved).toEqual(original);
-            expect(original.expiresAt).toBeGreaterThan(original.createdAt);
             return;
           }
           expect(revocationState).toEqual({
@@ -332,6 +347,7 @@ describe("visitor access admitted caller", () => {
           caller.release();
           closeGatewayDeviceRevocation(context);
           await gateway?.stop();
+          await sdkResources.close();
         }
       });
     },
@@ -356,17 +372,7 @@ describe("visitor access admitted caller", () => {
       delete guestRole.modelPolicy;
       expectDefined(config.agents?.defaults, "agent defaults missing").model = "fixture/allowed";
       roles.default = "writer";
-      await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
-      const mocks = getAgentTestMocks();
-      mocks.loadConfigReturn = config;
-      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-      mocks.userTurnStorePath = storePath;
-      await upsertSessionEntryCore(
-        { storePath, sessionKey: SESSION_KEY, agentId: "main" },
-        { sessionId: SESSION_ID, updatedAt: Date.now(), visibility: "shared" },
-      );
-      prime(SESSION_ID, config);
+      const mocks = await prepareVisitorSession(state, config);
       const owner = getUserProfileListItem(
         (await ensureCanonicalGatewayOwnerProfile("Existing owner")).id,
       );
@@ -414,6 +420,8 @@ describe("visitor access admitted caller", () => {
       const previousContext = makeContext();
       const resolvePreviousContext = () => previousContext;
       previousContext.resolveGatewayContext = resolvePreviousContext;
+      const previousSdkResources = new LegacyPluginSdkResourceHost();
+      bindLegacyPluginSdkResourceHost(resolvePreviousContext, previousSdkResources);
       const previousGateway = await startVisitorGateway({
         config,
         state,
@@ -433,6 +441,7 @@ describe("visitor access admitted caller", () => {
       } finally {
         closeGatewayDeviceRevocation(previousContext);
         await previousGateway.stop();
+        await previousSdkResources.close();
       }
       await closeOpenClawStateDatabaseAsync();
 
@@ -447,6 +456,8 @@ describe("visitor access admitted caller", () => {
       const context = makeContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
+      const sdkResources = new LegacyPluginSdkResourceHost();
+      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
       const gateway = await startVisitorGateway({
         config: restrictedConfig,
         state,
@@ -455,26 +466,6 @@ describe("visitor access admitted caller", () => {
       });
       try {
         const grants = createVisitorGrantStore(state.env);
-        expect(provider.emails()).toEqual([active.email, retainedGuest.email, unmanaged]);
-        expect(provider.writes).toEqual(["PUT"]);
-        const qualified = expectDefined(
-          await grants.lookup(active.email),
-          "qualified grant missing",
-        );
-        const grantId = z.uuid().parse(qualified.grantId);
-        const qualifiedGuest = expectDefined(
-          await grants.lookup(retainedGuest.email),
-          "retained guest grant missing",
-        );
-        const guestGrantId = z.uuid().parse(qualifiedGuest.grantId);
-        const reopenedGrants = await grants.entries();
-        expect(reopenedGrants.map(({ key, value }) => ({ key, value }))).toEqual(
-          expect.arrayContaining([
-            { key: active.email, value: { ...active, grantId } },
-            { key: retainedGuest.email, value: { ...retainedGuest, grantId: guestGrantId } },
-          ]),
-        );
-        expect(reopenedGrants).toHaveLength(2);
         expect(() =>
           resolveGatewayOperatorAccessAuthority(unassigned.id, restrictedConfig),
         ).toThrow(GatewayOperatorAccessDeniedError);
@@ -487,12 +478,7 @@ describe("visitor access admitted caller", () => {
           ...operatorWriteCliClient([ADMIN_SCOPE]),
           connectionSignal: connection.signal,
           invalidated: false,
-          authenticatedUserProfile: {
-            profileId: reopenedOwner.id,
-            displayName: reopenedOwner.displayName,
-            hasAvatar: reopenedOwner.hasAvatar,
-            updatedAt: reopenedOwner.updatedAt,
-          },
+          authenticatedUserProfile: authenticatedProfile(reopenedOwner),
           internal: { operatorRoleActor: { kind: "system" } },
         };
         const caller = captureGatewayDeviceRevocation(
@@ -539,7 +525,28 @@ describe("visitor access admitted caller", () => {
             }
             return { text: block.text, details: isRecord(output) ? output.details : undefined };
           };
+          // Listing joins the service queue after the background startup sweep.
           const { text: listing, details: listedDetails } = await invoke("visitor_list");
+          expect(provider.emails()).toEqual([active.email, retainedGuest.email, unmanaged]);
+          expect(provider.writes).toEqual(["PUT"]);
+          const qualified = expectDefined(
+            await grants.lookup(active.email),
+            "qualified grant missing",
+          );
+          const grantId = z.uuid().parse(qualified.grantId);
+          const qualifiedGuest = expectDefined(
+            await grants.lookup(retainedGuest.email),
+            "retained guest grant missing",
+          );
+          const guestGrantId = z.uuid().parse(qualifiedGuest.grantId);
+          const reopenedGrants = await grants.entries();
+          expect(reopenedGrants.map(({ key, value }) => ({ key, value }))).toEqual(
+            expect.arrayContaining([
+              { key: active.email, value: { ...active, grantId } },
+              { key: retainedGuest.email, value: { ...retainedGuest, grantId: guestGrantId } },
+            ]),
+          );
+          expect(reopenedGrants).toHaveLength(2);
           const listedGrants = z
             .object({
               grants: z.array(
@@ -632,12 +639,7 @@ describe("visitor access admitted caller", () => {
               await captureGatewayOperatorRunAuthority({
                 client: {
                   ...operatorWriteCliClient([SESSION_WRITE_SCOPE]),
-                  authenticatedUserProfile: {
-                    profileId: profile.id,
-                    displayName: profile.displayName,
-                    hasAvatar: profile.hasAvatar,
-                    updatedAt: profile.updatedAt,
-                  },
+                  authenticatedUserProfile: authenticatedProfile(profile),
                   internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
                 },
                 context,
@@ -695,6 +697,7 @@ describe("visitor access admitted caller", () => {
         }
       } finally {
         await gateway.stop();
+        await sdkResources.close();
       }
     });
   });

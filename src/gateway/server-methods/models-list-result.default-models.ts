@@ -16,16 +16,19 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 export async function resolveDefaultModelsPreview(
   params: UtilityCompletionRuntimeParams,
 ): Promise<NonNullable<ModelsListResult["defaultModels"]>> {
-  const { cfg, metadataSnapshot } = params;
+  const { cfg, metadataSnapshot, snapshot: catalog } = params;
+  const primary = resolveDefaultModelForAgent({
+    cfg,
+    manifestPlugins: metadataSnapshot,
+    allowPluginNormalization: false,
+  });
   const automaticUtilityModel =
     resolveAutomaticUtilityModelRef({
       cfg,
-      primaryProvider: resolveDefaultModelForAgent({
-        cfg,
-        manifestPlugins: metadataSnapshot,
-        allowPluginNormalization: false,
-      }).provider,
+      primaryProvider: primary.provider,
       primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+      primaryModelId: primary.model,
+      catalog,
       metadataSnapshot,
     }) ?? null;
   // The picker shows the defaults for all agents, so report a route only for a sole
@@ -44,7 +47,7 @@ export async function resolveDefaultModelsPreview(
       effective.modelRef !== defaults.modelRef) ||
     (effective.kind === "auto" &&
       (!automaticUtilityModel ||
-        resolveUtilityModelRefForAgent({ cfg, agentId, metadataSnapshot }) !==
+        resolveUtilityModelRefForAgent({ cfg, agentId, catalog, metadataSnapshot }) !==
           automaticUtilityModel))
   ) {
     return { automaticUtilityModel };

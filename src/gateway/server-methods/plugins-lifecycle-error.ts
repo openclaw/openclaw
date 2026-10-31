@@ -10,10 +10,8 @@ import {
   readInstallPolicyWarningErrorDetails,
 } from "../../../packages/gateway-protocol/src/install-policy-warning-error-details.js";
 import {
-  capturePluginRuntimeApplications,
   PluginInstallPersistedError,
   projectPluginRuntimeFailure,
-  type PluginLifecycleRuntimeApply,
   type PluginRuntimeApplication,
 } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
@@ -21,23 +19,6 @@ import {
   OpenClawStateLeaseAcquisitionError,
   OpenClawStateLeaseError,
 } from "../../state/openclaw-state-lease-error.js";
-
-export function captureGatewayPluginRuntimeApplications(
-  applyRuntime: PluginLifecycleRuntimeApply,
-  assertCurrent: () => void,
-) {
-  assertCurrent();
-  return capturePluginRuntimeApplications((change) => {
-    assertCurrent();
-    return applyRuntime({
-      ...change,
-      assertInvokerOwned: () => {
-        assertCurrent();
-        change.assertInvokerOwned?.();
-      },
-    });
-  });
-}
 
 export function pluginLifecycleError(
   caught: unknown,
@@ -59,7 +40,7 @@ export function pluginLifecycleError(
     return errorShape(
       ErrorCodes.UNAVAILABLE,
       "Another plugin or config operation is already running; retry when it completes.",
-      { retryable: true, retryAfterMs: 1_000 },
+      { retryable: true, retryAfterMs: 1_000, details: { mutationAccepted: false } },
     );
   }
   const error =

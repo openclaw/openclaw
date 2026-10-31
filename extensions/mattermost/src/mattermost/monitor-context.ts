@@ -1,15 +1,9 @@
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { countOutboundMedia } from "openclaw/plugin-sdk/reply-payload";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import type { MattermostEventPayload } from "./monitor-websocket.js";
-import {
-  evaluateMattermostNoVisibleReply,
-  formatMattermostNoVisibleReplyLog,
-} from "./no-visible-reply-diagnostic.js";
 import type { MattermostReplyDeliveryOutcome } from "./reply-delivery.js";
 import type { ChatType, ReplyPayload } from "./runtime-api.js";
 
@@ -24,16 +18,6 @@ export function shouldUpdateMattermostDraftToolProgress(
       account.streamingMode,
     )
   );
-}
-
-export function buildMattermostModelPickerSelectMessageSid(params: {
-  postId: string;
-  provider: string;
-  model: string;
-}): string {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const model = normalizeLowercaseStringOrEmpty(params.model);
-  return `interaction:${params.postId}:select:${provider}/${model}`;
 }
 
 export function buildMattermostButtonInteractionMessageSid(params: {
@@ -102,63 +86,41 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   accountId: string;
   agentId: string | undefined;
 }): string | undefined {
-  const violation = evaluateMattermostNoVisibleReply({
-    outcome: params.outcome,
-    payload: params.payload,
-  });
-  if (violation) {
-    return formatMattermostNoVisibleReplyLog({
-      violation,
-      to: params.to,
-      accountId: params.accountId,
-      agentId: params.agentId,
-    });
-  }
   if (params.outcome === "text" || params.outcome === "media") {
     return `delivered reply to ${params.to}`;
   }
+  if (params.outcome === "empty") {
+    // Detect dropped substantive payloads even when the agent run succeeded (#80501).
+    const finalText = params.payload.text?.trim() ?? "";
+    const mediaUrlCount = countOutboundMedia(params.payload);
+    if (finalText.length > 0 || mediaUrlCount > 0) {
+      return (
+        `mattermost no-visible-reply: no-visible-reply-after-final-delivery` +
+        ` to=${params.to}` +
+        ` accountId=${params.accountId}` +
+        ` agentId=${params.agentId ?? "unknown"}` +
+        ` outcome=${params.outcome}` +
+        ` finalTextLength=${finalText.length}` +
+        ` mediaUrlCount=${mediaUrlCount}`
+      );
+    }
+  }
   return undefined;
-}
-
-function resolveMattermostEffectiveReplyToId(params: {
-  kind: ChatType;
-  postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
-  threadRootId?: string | null;
-}): string | undefined {
-  // Flat DMs never thread. Opted-in DMs use the same thread-root logic as rooms;
-  // replyToMode already reflects the effective per-chat-type mode.
-  if (params.kind === "direct" && params.replyToMode === "off") {
-    return undefined;
-  }
-  const threadRootId = normalizeOptionalString(params.threadRootId);
-  if (threadRootId) {
-    return threadRootId;
-  }
-  const postId = normalizeOptionalString(params.postId);
-  if (!postId) {
-    return undefined;
-  }
-  return params.replyToMode === "all" ||
-    params.replyToMode === "first" ||
-    params.replyToMode === "batched"
-    ? postId
-    : undefined;
 }
 
 export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
-  const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
-    kind: params.kind,
-    postId: params.postId,
-    replyToMode: params.replyToMode,
-    threadRootId: params.threadRootId,
-  });
+  // Flat DMs never thread; rooms retain existing roots even when new replies are off.
+  const effectiveReplyToId =
+    params.kind === "direct" && params.replyToMode === "off"
+      ? undefined
+      : (normalizeOptionalString(params.threadRootId) ??
+        (params.replyToMode !== "off" ? normalizeOptionalString(params.postId) : undefined));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,
@@ -172,23 +134,4 @@ export function resolveMattermostThreadSessionContext(params: {
     sessionKey: threadKeys.sessionKey,
     parentSessionKey: threadKeys.parentSessionKey,
   };
-}
-
-export function resolveMattermostPendingHistoryKey(params: {
-  kind: ChatType;
-  sessionKey: string;
-  threadRootId?: string;
-}): string | null {
-  // Flat DMs dispatch immediately. Opted-in threads have an independent session
-  // and need a recoverable context window just like room threads.
-  return params.kind === "direct" && !params.threadRootId ? null : params.sessionKey;
-}
-
-export function resolveMattermostReactionChannelId(
-  payload: Pick<MattermostEventPayload, "broadcast" | "data">,
-): string | undefined {
-  return (
-    normalizeOptionalString(payload.broadcast?.channel_id) ??
-    normalizeOptionalString(payload.data?.channel_id)
-  );
 }

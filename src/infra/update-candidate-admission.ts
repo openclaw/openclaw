@@ -63,6 +63,7 @@ export async function runUpdateCandidateAdmission(params: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   admission?: "auto" | "installed";
+  assertCurrent?: () => void;
 }): Promise<UpdateCandidateAdmissionResult> {
   const sourceEnv = params.env ?? process.env;
   if (params.admission === "installed") {
@@ -80,12 +81,16 @@ export async function runUpdateCandidateAdmission(params: {
     };
   }
   const redaction = { env: sourceEnv, stateDir: resolveStateDir(sourceEnv) };
-  const fallback = (reason: string, diagnostic?: string): UpdateCandidateAdmissionResult => ({
+  const fallback = (
+    reason: string,
+    diagnostic?: string,
+    redactedDetail = "",
+  ): UpdateCandidateAdmissionResult => ({
     owner: "installed",
     fallbackReason: reason,
     warning: {
       code: "update-admission-fallback",
-      message: `Candidate admission did not return a valid verdict (${reason}); the installed updater will check admission.${diagnostic ? ` ${redactSupportDiagnosticLine(diagnostic, redaction)}` : ""}`,
+      message: `Candidate admission did not return a valid verdict (${reason}); the installed updater will check admission.${diagnostic ? ` ${redactSupportDiagnosticLine(diagnostic, redaction)}` : ""}${redactedDetail}`,
     },
   });
   try {
@@ -138,7 +143,8 @@ export async function runUpdateCandidateAdmission(params: {
         const deadline = Date.now() + budget;
         const cleanupBudget = Math.min(2_000, Math.floor(budget / 10));
         const running = launchCanary({
-          entry,
+          assertCurrent: params.assertCurrent,
+          target: { kind: "cli", entryPath: entry },
           args: ["update", "admit", "--context", contextPath],
           root: params.candidateRoot,
           env,
@@ -166,7 +172,14 @@ export async function runUpdateCandidateAdmission(params: {
         try {
           value = JSON.parse(running.stdout());
         } catch {
-          return fallback("malformed-json", diagnostic);
+          // Keep the leading line that broke the verdict; stdout is never captured otherwise.
+          // Redaction sees the whole line before bounding, so a cut credential cannot escape it.
+          const excerpt = redactSupportDiagnosticLine(running.stdout(), redaction, 160);
+          return fallback(
+            "malformed-json",
+            diagnostic,
+            ` Candidate stdout began with: ${JSON.stringify(excerpt)}`,
+          );
         }
         if (isRecord(value) && value.protocol !== UPDATE_ADMISSION_PROTOCOL) {
           return fallback("protocol-mismatch", diagnostic);
@@ -184,16 +197,11 @@ export async function runUpdateCandidateAdmission(params: {
           owner: "candidate",
           verdict: {
             ...verdict,
-            reasons: verdict.reasons.map((reason) => {
-              const redacted: UpdateAdmissionVerdict["reasons"][number] = {
-                code: reason.code,
-                message: safe(reason.message),
-              };
-              if (reason.nextAction) {
-                redacted.nextAction = safe(reason.nextAction);
-              }
-              return redacted;
-            }),
+            reasons: verdict.reasons.map((reason) => ({
+              code: reason.code,
+              message: safe(reason.message),
+              ...(reason.nextAction ? { nextAction: safe(reason.nextAction) } : {}),
+            })),
             warnings: verdict.warnings.map((warning) => ({
               code: warning.code,
               message: safe(warning.message),
@@ -203,16 +211,12 @@ export async function runUpdateCandidateAdmission(params: {
               ...(verdict.facts.nodeEngines !== undefined
                 ? { nodeEngines: safe(verdict.facts.nodeEngines) }
                 : {}),
-              checks: verdict.facts.checks.map((check) => {
-                const redacted: UpdateAdmissionVerdict["facts"]["checks"][number] = {
-                  name: check.name,
-                  status: check.status,
-                };
-                if (check.detail) {
-                  redacted.detail = safe(check.detail);
-                }
-                return redacted;
-              }),
+              checks: verdict.facts.checks.map((check) =>
+                Object.assign(
+                  { name: check.name, status: check.status },
+                  check.detail ? { detail: safe(check.detail) } : {},
+                ),
+              ),
             },
           },
         };

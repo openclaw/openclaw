@@ -105,24 +105,16 @@ export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<s
     return null;
   }
 
-  const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
-  const localUrl = `http://127.0.0.1:${config.serve.port}${config.serve.path}`;
-  const streamRoutes = resolveVoiceCallStreamExposurePaths(config).map(
-    ({ publicPath, localPath }) => ({
-      path: publicPath,
-      localUrl: `http://127.0.0.1:${config.serve.port}${localPath}`,
-    }),
-  );
   return setupTailscaleExposureRoutes({
-    mode,
+    mode: config.tailscale.mode,
     port: config.tailscale.port,
     routes: [
-      {
-        path: config.tailscale.path,
-        localUrl,
-      },
-      ...streamRoutes,
-    ],
+      { publicPath: config.tailscale.path, localPath: config.serve.path },
+      ...resolveVoiceCallStreamExposurePaths(config),
+    ].map(({ publicPath, localPath }) => ({
+      path: publicPath,
+      localUrl: `http://127.0.0.1:${config.serve.port}${localPath}`,
+    })),
   });
 }
 
@@ -131,7 +123,7 @@ export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise
     return;
   }
 
-  const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
+  const mode = config.tailscale.mode;
   await cleanupTailscaleExposureRoute({
     mode,
     port: config.tailscale.port,

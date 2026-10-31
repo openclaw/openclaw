@@ -9,10 +9,10 @@ import {
   loadOriginDeviceTokenReadOnly,
 } from "../infra/device-auth-store.js";
 import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateDeviceIdentityAsync,
+} from "../infra/device-identity-async.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { resolveGatewayAuth } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
@@ -32,6 +32,8 @@ export type GatewayCallDeviceAuthOptions = Pick<
   requireLocalBackendSharedAuth?: boolean;
   /** Reuse local auth-none authority without opening device storage for ordinary CLI RPCs. */
   allowLocalBackendAuthNone?: boolean;
+  /** CLI storage selection is lazy until authentication needs a local identity. */
+  beforeDeviceIdentityLoad?: () => Promise<void>;
 };
 
 export class GatewayCredentialsRequiredError extends Error {
@@ -76,7 +78,9 @@ export async function resolveReadOnlyLocalGatewayAuth(params: {
 }) {
   const { auth, authNone, env } = params;
   const identity =
-    authNone || auth?.token || auth?.password ? null : loadDeviceIdentityIfPresent({ env });
+    authNone || auth?.token || auth?.password
+      ? null
+      : await loadDeviceIdentityIfPresentAsync({ env });
   const preparedDeviceAuth = await loadStoredOperatorDeviceAuthToken(
     identity,
     undefined,
@@ -96,21 +100,22 @@ export async function resolveReadOnlyLocalGatewayAuth(params: {
   };
 }
 
-export function resolveDeviceIdentityForGatewayCall(
+export async function resolveDeviceIdentityForGatewayCall(
   sharedStateMode?: "read-only",
-): DeviceIdentity | null {
+): Promise<DeviceIdentity | null> {
   try {
     return sharedStateMode === "read-only"
-      ? loadDeviceIdentityIfPresent()
-      : loadOrCreateDeviceIdentity();
-  } catch {
-    // Read-only or restricted environments should still be able to call the
-    // gateway with token/password auth without crashing before the RPC.
-    return null;
+      ? await loadDeviceIdentityIfPresentAsync()
+      : await loadOrCreateDeviceIdentityAsync();
+  } catch (cause) {
+    throw new Error(
+      'Cannot load device identity. Check access to your OpenClaw state directory and run "openclaw doctor --fix", then retry.',
+      { cause },
+    );
   }
 }
 
-export function resolveGatewayCallDeviceAuth(params: {
+export async function resolveGatewayCallDeviceAuth(params: {
   opts: GatewayCallDeviceAuthOptions;
   url: string;
   authMode: ReturnType<typeof resolveGatewayAuth>["mode"];
@@ -167,11 +172,14 @@ export function resolveGatewayCallDeviceAuth(params: {
       "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
     );
   }
+  if (opts.deviceIdentity === undefined && !omitDeviceIdentity) {
+    await opts.beforeDeviceIdentityLoad?.();
+  }
   const deviceIdentity =
     opts.deviceIdentity === undefined
       ? omitDeviceIdentity
         ? null
-        : resolveDeviceIdentityForGatewayCall(opts.sharedStateMode)
+        : await resolveDeviceIdentityForGatewayCall(opts.sharedStateMode)
       : opts.deviceIdentity;
   return { clientOptions, omitDeviceIdentity, deviceIdentity };
 }

@@ -4,6 +4,7 @@ import type { SessionTranscriptTargetBinding } from "../../config/sessions/trans
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 
@@ -57,7 +58,9 @@ export async function receiveSessionManagerCommit<Key extends keyof SessionMetad
   }
 }
 
-export function committedTranscriptViewError(payload: unknown): Error {
+export function committedTranscriptViewError(
+  payload: OpenClawStateWorkerErrorPayload | undefined,
+): Error {
   const error = new Error("Committed session transcript view could not be reconstructed");
   if (payload) {
     retainOpenClawStateWorkerErrorPayload(error, payload);
@@ -78,15 +81,4 @@ export class SessionEntryCommittedError extends Error {
     this.name = "SessionEntryCommittedError";
     recordModelFallbackStop(this);
   }
-}
-
-export function isSqliteTranscriptMutationConflict(error: unknown): boolean {
-  let current = error;
-  for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
-    if (current.name === "SqliteTranscriptMutationConflictError") {
-      return true;
-    }
-    current = current.cause;
-  }
-  return false;
 }

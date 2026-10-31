@@ -37,13 +37,9 @@ enum SoundEffectPlayer {
     }()
 
     static func sound(named name: String) -> NSSound? {
-        if let named = NSSound(named: NSSound.Name(name)) {
-            return named
+        NSSound(named: NSSound.Name(name)) ?? self.discoveredSoundMap[name].flatMap {
+            NSSound(contentsOf: $0, byReference: false)
         }
-        if let url = self.discoveredSoundMap[name] {
-            return NSSound(contentsOf: url, byReference: false)
-        }
-        return nil
     }
 
     static func sound(from bookmark: Data) -> NSSound? {

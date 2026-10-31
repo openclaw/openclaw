@@ -1,215 +1,169 @@
+import assert from "node:assert/strict";
+import { hkdfSync } from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { ClientCredentialResult } from "./client-credential-store.js";
 import {
-  loadDeviceIdentityIfPresentAsync,
-  loadOrCreateDeviceIdentityAsync,
-  loadOrCreateProcessDeviceIdentityAsync,
+  loadChatRequestIdentityKeyAsync as loadChatKey,
+  loadDeviceIdentityIfPresentAsync as readIdentity,
+  loadOrCreateDeviceIdentityAsync as createIdentity,
+  loadOrCreateProcessDeviceIdentityAsync as processIdentity,
 } from "./device-identity-async.js";
-import type { DeviceIdentity, DeviceIdentityStoreOptions } from "./device-identity-store.js";
-
-type IdentityCommand = {
-  type: "deviceIdentity.load" | "deviceIdentity.read";
-  input: { identityKey: string };
-};
-type IdentityScope = {
-  execute(command: IdentityCommand): Promise<DeviceIdentity | null>;
-};
-type IdentityOperationOptions = {
-  existingOnly?: boolean;
-  preparation?: { type: "deviceIdentity"; identityKey: string };
-};
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "./device-identity-material.js";
+import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
+import { ed25519PrivateKeyPemFromRaw } from "./ed25519-signature.js";
 
 const boundary = vi.hoisted(() => ({
-  run: vi.fn<
-    (
-      context: OpenClawStateWorkerContext,
-      operation: (scope: IdentityScope) => Promise<DeviceIdentity | null>,
-      options?: IdentityOperationOptions,
-    ) => Promise<DeviceIdentity | null | undefined>
-  >(),
-  legacyPaths: new Set<string>(),
-  unexpectedNative: () => {
-    throw new Error("Native storage is outside this pure async identity control");
-  },
+  run: vi.fn<typeof import("./client-credential-async.js").runClientCredentialOperationAsync>(),
+  warn: vi.fn(),
 }));
-
-// Retain pure path resolution without config/paths' process-wide path initialization.
-vi.mock("../config/paths.js", async () => {
-  const { resolveStateDir } = await import("../config/state-dir.js");
-  return { resolveStateDir };
+vi.mock("./client-credential-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-credential-async.js")>()),
+  runClientCredentialOperationAsync: boundary.run,
+}));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
+      ...actual.createSubsystemLogger(...args),
+      warn: boundary.warn,
+    }),
+  };
 });
-vi.mock("../state/openclaw-state-db.js", () => ({
-  openOpenClawStateDatabase: boundary.unexpectedNative,
-  runOpenClawStateWriteTransaction: boundary.unexpectedNative,
-}));
-vi.mock("../state/openclaw-state-db-readonly.js", () => ({
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: boundary.unexpectedNative,
-}));
-vi.mock("../state/openclaw-state-db-cache.js", () => ({
-  captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
-    databasePath,
-    identity: { key: `path:${databasePath}`, canonicalPath: databasePath },
-    assertCurrent() {},
-  }),
-}));
-vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
-  getOpenClawDatabaseMaintenanceScope: () => undefined,
-}));
-vi.mock("./path-existence.js", () => ({
-  pathMayExistSync: (pathname: string) => boundary.legacyPaths.has(pathname),
-}));
-vi.mock("../state/openclaw-state-worker-store.js", () => ({
-  runOpenClawStateWorkerOperation: boundary.run,
-}));
-
-const identity: DeviceIdentity = {
-  deviceId: "synthetic-device",
-  publicKeyPem: "synthetic-public-key",
-  privateKeyPem: "synthetic-private-key",
-};
-
-function syntheticOptions(name: string): DeviceIdentityStoreOptions {
-  return { env: { OPENCLAW_STATE_DIR: path.resolve("/synthetic", name) } };
-}
 
 beforeEach(() => {
   boundary.run.mockReset();
-  boundary.legacyPaths.clear();
+  boundary.warn.mockReset();
 });
 
-describe("async device identity boundary", () => {
-  it.each([
-    { mode: "create", explicitPath: false },
-    { mode: "read", explicitPath: true },
-  ] as const)(
-    "captures caller scope before delayed $mode dispatch (explicit path: $explicitPath)",
-    async ({ mode, explicitPath }) => {
-      const stateDir = path.resolve("/synthetic/captured-identity");
-      const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_SUPERVISOR_MODE: "external" };
-      const options: DeviceIdentityStoreOptions = { env, identityKey: "captured-key" };
-      if (explicitPath) {
-        options.path = path.resolve("/synthetic/explicit-identity/../captured.sqlite");
-      }
-      const databasePath = options.path ?? path.join(stateDir, "state", "openclaw.sqlite");
-      const dispatch = createDeferredCore();
-      const entered = createDeferredCore();
-      const completion = createDeferredCore<DeviceIdentity>();
-      boundary.run.mockImplementation(async (context, operation, opening) => {
-        await dispatch.promise;
-        expect(context.admission.databasePath).toBe(databasePath);
-        expect(context.environment).toEqual({
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_SUPERVISOR_MODE: "external",
-        });
-        expect(opening).toEqual(
-          mode === "create"
-            ? { preparation: { type: "deviceIdentity", identityKey: "captured-key" } }
-            : { existingOnly: true },
-        );
-        return await operation({
-          execute: async (command) => {
-            expect(command).toEqual({
-              type: mode === "create" ? "deviceIdentity.load" : "deviceIdentity.read",
-              input: { identityKey: "captured-key" },
-            });
-            entered.resolve();
-            return await completion.promise;
-          },
-        });
+function fixture(name: string) {
+  const stored = generateStoredDeviceIdentity();
+  const { createdAtMs: _created, ...identity } = stored;
+  const env = { OPENCLAW_STATE_DIR: path.resolve("/synthetic", name) };
+  const result = {
+    kind: "identity",
+    identity: storedDeviceIdentityToRow("primary", stored),
+  } satisfies ClientCredentialResult;
+  return { identity, env, result };
+}
+
+describe("async local identity boundary", () => {
+  it("rejects unsupported identity paths before dispatching to the credential worker", async () => {
+    const options = { path: path.resolve("/synthetic", "identity.sqlite") };
+    await expect(createIdentity(options)).rejects.toThrow("client/credentials.sqlite");
+    await expect(readIdentity(options)).rejects.toThrow("client/credentials.sqlite");
+    expect(boundary.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps existing-only lookup non-creating", async () => {
+    const { env } = fixture("existing-only");
+    boundary.run.mockResolvedValue({ kind: "identity", identity: null });
+    expect(await readIdentity({ env })).toBeNull();
+    expect(boundary.run).toHaveBeenCalledExactlyOnceWith(env, {
+      kind: "identity.read",
+      identity_key: "primary",
+    });
+  });
+
+  it("returns the owner's persisted winner from atomic identity creation", async () => {
+    const { env, identity, result } = fixture("persisted-winner");
+    boundary.run.mockResolvedValue(result);
+    expect(await createIdentity({ env })).toEqual(identity);
+    expect(boundary.run).toHaveBeenCalledExactlyOnceWith(
+      env,
+      expect.objectContaining({ kind: "identity.create" }),
+    );
+  });
+
+  it.each(["create", "read"] as const)(
+    "captures credential root and identity key before delayed %s dispatch",
+    async (mode) => {
+      const { env, identity, result } = fixture(`captured-${mode}`);
+      const completion = createDeferredCore<ClientCredentialResult>();
+      boundary.run.mockReturnValue(completion.promise);
+      const options: DeviceIdentityStoreOptions = { env, identityKey: "primary" };
+      const loading = mode === "create" ? createIdentity(options) : readIdentity(options);
+      options.env!.OPENCLAW_STATE_DIR = "/synthetic/changed";
+      options.identityKey = "node";
+      options.path = "/synthetic/replaced/client/credentials.sqlite";
+      const [captured] = boundary.run.mock.calls;
+      assert.ok(captured);
+      expect(captured[0]).toEqual({
+        OPENCLAW_STATE_DIR: path.resolve("/synthetic", `captured-${mode}`),
       });
-      const loading =
+      expect(captured[1]).toEqual(
         mode === "create"
-          ? loadOrCreateDeviceIdentityAsync(options)
-          : loadDeviceIdentityIfPresentAsync(options);
-      env.OPENCLAW_STATE_DIR = path.resolve("/synthetic/mutated");
-      env.OPENCLAW_SUPERVISOR_MODE = "internal";
-      options.path = path.resolve("/synthetic/replaced.sqlite");
-      options.identityKey = "changed-key";
-      options.env = { OPENCLAW_STATE_DIR: path.resolve("/synthetic/replaced") };
-      dispatch.resolve();
-      await Promise.race([entered.promise, loading]);
-      await expect(Promise.race([loading, Promise.resolve("pending")])).resolves.toBe("pending");
-      completion.resolve(identity);
-      await expect(loading).resolves.toBe(identity);
+          ? {
+              kind: "identity.create",
+              identity: expect.objectContaining({ identity_key: "primary" }),
+            }
+          : { kind: "identity.read", identity_key: "primary" },
+      );
+      completion.resolve(result);
+      expect(await loading).toEqual(identity);
     },
   );
 
-  it.each([
-    { result: undefined, suffix: undefined },
-    { result: undefined, suffix: ".doctor-importing" },
-    { result: null, suffix: "" },
-  ])(
-    "uses captured primary scope for an existing-only $result (legacy suffix: $suffix)",
-    async ({ result, suffix }) => {
-      const options = syntheticOptions("missing-identity");
-      const stateDir = options.env!.OPENCLAW_STATE_DIR!;
-      const legacyPath = path.join(stateDir, "identity", "device.json");
-      if (suffix !== undefined) {
-        boundary.legacyPaths.add(`${legacyPath}${suffix}`);
-      }
-      const opening = createDeferredCore();
-      boundary.run.mockImplementation(async (_context, operation, admission) => {
-        if (!admission?.existingOnly) {
-          throw new Error("A missing identity read attempted to create shared state");
-        }
-        await opening.promise;
-        return result === null ? operation({ execute: async () => null }) : undefined;
-      });
-      const loading = loadDeviceIdentityIfPresentAsync(options);
-      const outcome =
-        suffix === undefined || result === null
-          ? expect(loading).resolves.toBeNull()
-          : expect(loading).rejects.toThrow(`Legacy device identity exists at ${legacyPath}`);
-      options.env!.OPENCLAW_STATE_DIR = path.resolve("/synthetic/changed-missing");
-      options.path = path.resolve("/synthetic/changed-missing.sqlite");
-      options.identityKey = "non-primary";
-      opening.resolve();
-      await outcome;
-    },
-  );
+  it("derives and caches a chat-only key from persisted raw Ed25519 bytes", async () => {
+    const { env, result } = fixture("chat-cache");
+    const raw = Buffer.alloc(32, 7);
+    result.identity.private_key_pem = ed25519PrivateKeyPemFromRaw(raw);
+    boundary.run.mockResolvedValue(result);
+    const key = await loadChatKey({ env });
+    expect(key).toEqual(
+      Buffer.from(
+        hkdfSync("sha256", raw, "openclaw.device-identity", "openclaw.chat.request.v1", 32),
+      ),
+    );
+    expect(key).not.toEqual(raw);
+    expect(await loadChatKey({ env })).toBe(key);
+    expect(boundary.run).toHaveBeenCalledOnce();
+  });
+
+  it("warns once for missing or unreadable chat identity and retries without creating a replacement", async () => {
+    const { env, result } = fixture("unavailable-chat-key");
+    boundary.run
+      .mockResolvedValueOnce({ kind: "identity", identity: null })
+      .mockRejectedValueOnce(new Error("synthetic identity read failure"))
+      .mockResolvedValueOnce(result);
+    await expect(loadChatKey({ env })).resolves.toBeNull();
+    await expect(loadChatKey({ env })).resolves.toBeNull();
+    await expect(loadChatKey({ env })).resolves.toHaveLength(32);
+    expect(boundary.run.mock.calls.every((call) => call[1].kind === "identity.read")).toBe(true);
+    expect(boundary.warn).toHaveBeenCalledExactlyOnceWith(
+      'Gateway device identity "primary" is missing or unreadable; chat.send will continue without a keyed request fingerprint.',
+    );
+  });
 
   it("converges concurrent process callers on one object and keeps keys independent", async () => {
-    const options: DeviceIdentityStoreOptions = {
-      ...syntheticOptions("process-identity-convergence"),
-      identityKey: "first",
-    };
-    const capturedOptions = { ...options, env: { ...options.env } };
-    const first = createDeferredCore<DeviceIdentity>();
-    const second = createDeferredCore<DeviceIdentity>();
-    boundary.run
-      .mockImplementationOnce(async (_context, operation) =>
-        operation({ execute: async () => first.promise }),
-      )
-      .mockImplementationOnce(async (_context, operation) =>
-        operation({ execute: async () => second.promise }),
-      );
-    const firstLoad = loadOrCreateProcessDeviceIdentityAsync(options);
-    const secondLoad = loadOrCreateProcessDeviceIdentityAsync(options);
-    options.path = path.resolve("/synthetic/changed-process.sqlite");
+    const { env, identity, result } = fixture("process-cache");
+    const options: DeviceIdentityStoreOptions = { env, identityKey: "first" };
+    const capturedOptions = { ...options, env: { ...env } };
+    const cached = (identityKey = "first") => processIdentity({ ...capturedOptions, identityKey });
+    const first = createDeferredCore<ClientCredentialResult>();
+    const second = createDeferredCore<ClientCredentialResult>();
+    boundary.run.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const firstLoad = processIdentity(options);
+    const secondLoad = processIdentity(options);
+    options.path = "/synthetic/changed-process/client/credentials.sqlite";
     options.identityKey = "changed-key";
-    options.env!.OPENCLAW_STATE_DIR = path.resolve("/synthetic/changed-process");
-    const winner = { ...identity };
-    second.resolve(winner);
-    await expect(secondLoad).resolves.toBe(winner);
-    first.resolve({ ...identity });
+    env.OPENCLAW_STATE_DIR = "/synthetic/changed-process";
+    second.resolve(result);
+    const winner = await secondLoad;
+    first.resolve(result);
     await expect(firstLoad).resolves.toBe(winner);
 
-    const other = { ...identity, deviceId: "synthetic-other-device" };
-    boundary.run.mockImplementation(async (_context, operation) =>
-      operation({ execute: async () => other }),
-    );
-    await expect(
-      loadOrCreateProcessDeviceIdentityAsync({ ...capturedOptions, identityKey: "second" }),
-    ).resolves.toBe(other);
-
-    boundary.run.mockImplementation(async () => {
-      throw new Error("The worker is unavailable after the process identities were cached");
-    });
-    await expect(loadOrCreateProcessDeviceIdentityAsync(capturedOptions)).resolves.toBe(winner);
-    await expect(
-      loadOrCreateProcessDeviceIdentityAsync({ ...capturedOptions, identityKey: "second" }),
-    ).resolves.toBe(other);
+    const other = fixture("other-process-key");
+    boundary.run.mockResolvedValue(other.result);
+    expect(await cached("second")).toEqual(other.identity);
+    boundary.run.mockRejectedValue(new Error("The owner is unavailable after caching"));
+    await expect(cached()).resolves.toBe(winner);
+    await expect(cached("second")).resolves.toEqual(other.identity);
+    expect(winner).toEqual(identity);
   });
 });

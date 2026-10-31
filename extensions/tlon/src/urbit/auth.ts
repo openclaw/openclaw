@@ -1,21 +1,13 @@
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
 const MAX_AUTH_BODY_DRAIN_BYTES = 64 * 1024;
 
-type UrbitAuthenticateOptions = {
-  ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  beforeRequest?: () => void;
-};
-
 export async function authenticate(
   url: string,
   code: string,
-  options: UrbitAuthenticateOptions = {},
+  options: Pick<Parameters<typeof urbitFetch>[0], "ssrfPolicy" | "beforeRequest"> = {},
 ): Promise<string> {
   const { response, release } = await urbitFetch({
     baseUrl: url,
@@ -26,8 +18,6 @@ export async function authenticate(
       body: new URLSearchParams({ password: code }).toString(),
     },
     ssrfPolicy: options.ssrfPolicy,
-    lookupFn: options.lookupFn,
-    fetchImpl: options.fetchImpl,
     beforeRequest: options.beforeRequest,
     timeoutMs: 15_000,
     maxRedirects: 3,
@@ -36,14 +26,14 @@ export async function authenticate(
 
   try {
     if (!response.ok) {
-      throw new UrbitAuthError("auth_failed", `Login failed with status ${response.status}`);
+      throw new UrbitAuthError(`Login failed with status ${response.status}`);
     }
 
     // Finish normal login responses for connection reuse, but cancel as soon as the cap is reached.
     await readResponseTextLimited(response, MAX_AUTH_BODY_DRAIN_BYTES).catch(() => undefined);
     const cookie = response.headers.get("set-cookie");
     if (!cookie) {
-      throw new UrbitAuthError("missing_cookie", "No authentication cookie received");
+      throw new UrbitAuthError("No authentication cookie received");
     }
     return cookie;
   } finally {

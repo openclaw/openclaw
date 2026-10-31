@@ -1,11 +1,14 @@
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ConfigFileSnapshot, ConfigMutationIO, OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
+import { createTestConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 const wizardTestMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn<(config: OpenClawConfig) => Promise<void>>();
   return {
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    isTerminalInteractive: vi.fn(),
     clackIntro: vi.fn(),
     clackOutro: vi.fn(),
     clackSelect: vi.fn(),
@@ -15,6 +18,7 @@ const wizardTestMocks = vi.hoisted(() => {
     resolveSearchProviderOptions: vi.fn(),
     resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
+    runMemorySetupFlow: vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(),
     setupPluginConfig:
       vi.fn<typeof import("../wizard/setup.plugin-config.js").configurePluginConfig>(),
     setupSkills: vi.fn<typeof import("./onboard-skills.js").setupSkills>(),
@@ -63,6 +67,19 @@ const wizardTestMocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime },
+  };
+});
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: wizardTestMocks.isTerminalInteractive,
+}));
+
 vi.mock("@clack/prompts", () => ({
   intro: wizardTestMocks.clackIntro,
   outro: wizardTestMocks.clackOutro,
@@ -72,71 +89,58 @@ vi.mock("@clack/prompts", () => ({
   password: wizardTestMocks.clackPassword,
 }));
 
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "~/.openclaw/openclaw.json",
-  createConfigIO: () => ({
-    readConfigFileSnapshotForWrite: async () => ({
-      snapshot: await wizardTestMocks.readConfigFileSnapshot(),
-      writeOptions: {
-        assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
-        expectedConfigPath: "/tmp/openclaw.json",
-        ownedConfigPathForWrite: "/tmp/openclaw.json",
-      },
-    }),
-  }),
-  readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => ({
-    snapshot: await wizardTestMocks.readConfigFileSnapshot(),
-    writeOptions: {
-      assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
-      envSnapshotForRestore: { SECRET: "resolved-secret" },
-      expectedConfigPath: "/tmp/openclaw.json",
-      includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
-      ownedConfigPathForWrite: "/tmp/openclaw.json",
-    },
-  }),
-  resolveConfigWriteAfterWrite: (afterWrite?: { mode: string }) => afterWrite ?? { mode: "auto" },
-  transformConfigFileWithRetry: async (
-    params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
-  ) => {
-    const maxAttempts = params.maxAttempts ?? 5;
-    for (let attempt = 0; ; attempt += 1) {
-      const snapshot = await wizardTestMocks.readConfigFileSnapshot();
-      const previousHash = snapshot.hash ?? null;
-      const config =
-        params.base === "runtime"
-          ? (snapshot.runtimeConfig ?? snapshot.config)
-          : (snapshot.sourceConfig ?? snapshot.config);
-      try {
-        const transformed = await params.transform(config, { snapshot, previousHash, attempt }, {});
-        const committed = await params.commit!({
-          nextConfig: transformed.nextConfig,
-          snapshot,
-          ...(previousHash ? { baseHash: previousHash } : {}),
-          writeOptions: params.writeOptions,
-          afterWrite: { mode: "auto" },
-        });
-        return {
-          ...committedConfigFiles.write(committed.config),
-          result: transformed.result,
-          attempts: attempt + 1,
-        };
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          error.name !== "ConfigMutationConflictError" ||
-          (error as { retryable?: boolean }).retryable === false ||
-          attempt === maxAttempts - 1
-        ) {
-          throw error;
-        }
-      }
-    }
-  },
-  writeConfigFile: wizardTestMocks.writeConfigFile,
-  replaceConfigFile: wizardTestMocks.replaceConfigFile,
-  resolveGatewayPort: wizardTestMocks.resolveGatewayPort,
+vi.mock("../flows/memory-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/memory-setup.js")>()),
+  runMemorySetupFlow: wizardTestMocks.runMemorySetupFlow,
 }));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  const io: ConfigMutationIO = {
+    readConfigFileSnapshotForWrite: async () => {
+      const snapshot: Partial<ConfigFileSnapshot> & Pick<ConfigFileSnapshot, "config"> =
+        await wizardTestMocks.readConfigFileSnapshot();
+      return {
+        snapshot: {
+          ...createTestConfigSnapshot(
+            snapshot.sourceConfig ?? snapshot.config,
+            snapshot.runtimeConfig ?? snapshot.config,
+          ),
+          ...snapshot,
+        },
+        writeOptions: {
+          assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
+          expectedConfigPath: "/tmp/openclaw.json",
+          ownedConfigPathForWrite: "/tmp/openclaw.json",
+        },
+      };
+    },
+    writeConfigFile: wizardTestMocks.writeConfigFile,
+  };
+  return {
+    ...actual,
+    CONFIG_PATH: "~/.openclaw/openclaw.json",
+    createConfigIO: () => io,
+    readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: async () => {
+      const prepared = await io.readConfigFileSnapshotForWrite();
+      return {
+        ...prepared,
+        writeOptions: {
+          ...prepared.writeOptions,
+          envSnapshotForRestore: { SECRET: "resolved-secret" },
+          includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
+        },
+      };
+    },
+    transformConfigFileWithRetry: (
+      params: Parameters<typeof actual.transformConfigFileWithRetry>[0],
+    ) => actual.transformConfigFileWithRetry({ ...params, io }),
+    writeConfigFile: wizardTestMocks.writeConfigFile,
+    replaceConfigFile: wizardTestMocks.replaceConfigFile,
+    resolveGatewayPort: wizardTestMocks.resolveGatewayPort,
+  };
+});
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall: wizardTestMocks.inspectWindowsGatewayFirewall,
@@ -230,6 +234,7 @@ const { runConfigureWizard } = await import("./configure.wizard.js");
 export { runConfigureWizard, wizardTestMocks };
 
 export function setupWizardTestDefaults() {
+  wizardTestMocks.isTerminalInteractive.mockReturnValue(true);
   committedConfigFiles.clear();
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
@@ -266,15 +271,8 @@ export const EMPTY_CONFIG_SNAPSHOT = {
   issues: [],
 };
 
-export function createWizardTestRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
+  wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });
@@ -319,30 +317,4 @@ export function queueWizardTestPrompts(params: {
   wizardTestMocks.clackText.mockResolvedValue(params.text ?? "");
   wizardTestMocks.clackIntro.mockResolvedValue(undefined);
   wizardTestMocks.clackOutro.mockResolvedValue(undefined);
-}
-
-export function createEnabledWebSearchConfig(
-  provider: string,
-  pluginEntry: Record<string, unknown>,
-) {
-  return (cfg: OpenClawConfig) => ({
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      web: {
-        ...cfg.tools?.web,
-        search: {
-          provider,
-          enabled: true,
-        },
-      },
-    },
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        [provider]: pluginEntry,
-      },
-    },
-  });
 }

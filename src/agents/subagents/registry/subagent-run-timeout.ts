@@ -49,6 +49,20 @@ export function resolveSubagentRunDeadlineMs(
     : undefined;
 }
 
+export function resolveCompletionAfterHardRunDeadline(params: {
+  entry: SubagentRunRecord;
+  observedStartedAt?: number;
+  observedEndedAt?: number;
+  now: number;
+}): number | undefined {
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry, params.observedStartedAt);
+  if (deadlineMs === undefined) {
+    return undefined;
+  }
+  const observedEndedAt = asFiniteNumber(params.observedEndedAt) ?? params.now;
+  return observedEndedAt > deadlineMs ? deadlineMs : undefined;
+}
+
 export function resolveSubagentRunEffectiveEndedAt(
   entry: SubagentRunDeadlineRecord,
   endedAt: number,
@@ -63,4 +77,24 @@ export function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeco
     cfg,
     overrideSeconds: runTimeoutSeconds ?? 0,
   });
+}
+
+export function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
+  if (
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number"
+  ) {
+    return false;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
+  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
+    return false;
+  }
+  return (
+    entry.cleanupHandled === true ||
+    typeof entry.cleanupCompletedAt === "number" ||
+    typeof entry.endedHookEmittedAt === "number" ||
+    entry.delivery?.status === "delivered" ||
+    typeof entry.delivery?.announcedAt === "number"
+  );
 }

@@ -9,10 +9,12 @@ const { webSocketCtorCalls, MockWebSocket } = vi.hoisted(() => {
   return { webSocketCtorCalls: calls, MockWebSocket: StubWebSocket };
 });
 
-vi.mock("./ws-runtime.js", () => ({ WebSocket: MockWebSocket }));
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: MockWebSocket,
+}));
 
 import { createClickClackClient } from "./http-client.js";
-import { WebSocket } from "./ws-runtime.js";
 
 describe("createClickClackClient websocket options", () => {
   beforeEach(() => {
@@ -20,7 +22,6 @@ describe("createClickClackClient websocket options", () => {
   });
 
   it("passes a 30-second opening handshake deadline to ws", () => {
-    expect(WebSocket).toBe(MockWebSocket);
     const client = createClickClackClient({
       baseUrl: "https://clickclack.example",
       token: "fake",

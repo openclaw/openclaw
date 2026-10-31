@@ -19,7 +19,7 @@ import androidx.window.layout.DisplayFeature
 internal fun FoldAwareContent(
   features: List<DisplayFeature>,
   modifier: Modifier = Modifier,
-  bookPanesEnabled: Boolean = false,
+  sidebarPanesEnabled: Boolean = false,
   tabletopEnabled: Boolean = false,
   content: @Composable (FoldContentBounds) -> Unit,
 ) {
@@ -34,12 +34,12 @@ internal fun FoldAwareContent(
       // current window offset even when an ancestor moves without changing our constraints.
       val origin = coordinates?.positionInWindow()?.round() ?: IntOffset.Zero
       val host = IntRect(origin, IntSize(width, height))
-      val book = if (bookPanesEnabled) bookPaneBounds(host, features, layoutDirection, density) else null
+      val sidebar = if (sidebarPanesEnabled) sidebarPaneBounds(host, features, layoutDirection, density) else null
       val tabletop = if (tabletopEnabled) tabletopPaneBounds(host, features, layoutDirection) else null
       val fallback = foldSafeRegion(host, features, layoutDirection)
-      val pane = if (book != null || tabletop != null) host else fallback
-      val localBook = book?.let { BookPaneBounds(it.start.translate(-origin), it.end.translate(-origin)) }
-      val bounds = FoldContentBounds(localBook, tabletop, fallback.translate(-origin).takeIf { tabletop != null })
+      val pane = if (sidebar != null || tabletop != null) host else fallback
+      val localSidebar = sidebar?.let { SidebarPaneBounds(it.start.translate(-origin), it.end.translate(-origin)) }
+      val bounds = FoldContentBounds(localSidebar, tabletop, fallback.translate(-origin).takeIf { tabletop != null })
       // One subcomposition keeps the screen alive while deciding its mode from current host bounds.
       subcompose(Unit) {
         Box(Modifier.recalculateWindowInsets().clipToBounds()) { content(bounds) }

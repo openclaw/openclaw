@@ -26,6 +26,8 @@ afterEach(() => {
 
 describe("native Bash execution policy", () => {
   it("rejects native Bash when OpenClaw owns shell execution", async () => {
+    // Worker startup must not expire a policy fixture before the native request.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const { context } = await createExecution({ nativeTools: ["Bash"] });
     context.hostOwnedTools = ["exec", "process"];
     let decision: CliBackendToolPermissionResult | undefined;

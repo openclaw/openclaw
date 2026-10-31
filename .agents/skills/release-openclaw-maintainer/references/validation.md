@@ -7,15 +7,24 @@ waived by success on another surface.
 
 ## Older updater checks
 
-Before freezing a release, refresh `scripts/lib/update-compat-inventory.json`
-from every release in the supported upgrade window. Verify each downloaded npm
-tarball against its published `dist.integrity` before extraction, then run
-`pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
-`--release` for every supported version. Generation replaces the recorded set:
+`scripts/lib/update-compat-inventory.json` is test-fixture maintenance, not a
+packaging or publish gate: npm preflight, prepack, `release-check`, and
+`release:prep` never consult live npm dist-tags, so another release moving
+`latest` or `beta` cannot invalidate a validated candidate. Refresh it on
+`main` (stable closeout or a normal PR) from every release in the supported
+upgrade window with `pnpm update:compat:gen --registry-release <version>`,
+repeating `--registry-release` for every supported version. This mode downloads
+the exact registry tarball URL, verifies its published `dist.integrity`, and
+unpacks it without npm installation or freshness policy. For an already
+downloaded and verified artifact, use
+`--release '<unpacked-dir>=<verified-integrity>'`; both input modes may be mixed.
+Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
-never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
-`latest` and `beta` must be covered. Repeat the generation arguments with
-`--check` for an offline regeneration check.
+never hand-edit recorded origins. `pnpm update:compat:check` remains a manual
+maintainer report of npm `latest`/`beta`/`extended-stable` coverage. Repeat the generation
+arguments with `--check` for a regeneration check. It is offline only when every
+input uses local `--release`; `--registry-release` checks fetch and verify the
+registry artifact again.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
 from the oldest supported release. Native Windows proof must invoke the old
@@ -68,10 +77,14 @@ non-root-skip mode, not permission to skip install proof. Published correction
 versions must prove upgrade from their base stable package. Postpublish use:
 
 ```bash
-OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
-OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ```
+
+Without `OPENCLAW_NPM_EXPECTED_WORKFLOW_REF`/`_SHA`, the verifier derives the
+publish tooling from the attested `release-publish/*` tag and accepts it only
+when GitHub still has that exact lightweight tag at the attested commit and the
+commit is reachable from `main` (requires `gh` auth). Set both variables only to
+pin an explicit identity; a partial override is rejected.
 
 Run it from a checkout of the Release SHA once the registry lists the version
 (see [regular release](regular-release.md#publish-and-verify)).
@@ -112,16 +125,18 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
-FRV `normalCi` Windows Node shards and all other selected failures block. Decide
+FRV `normalCi` Windows Node shards and all other hard-gate failures block. Decide
 blocker or flake for every failure,
 rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
-issue/PR on `main`. Do not re-cut, change tooling, or start another FRV solely
-to clear a flake; the selected job must still pass before publication. See the
+issue/PR on `main`. Do not re-cut solely to clear a flake. Every unwaived selected
+job must pass, and FRV itself must conclude success before publication. See the
 [CI skill](../../release-openclaw-ci/SKILL.md#publication-requirements).
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does
-not itself qualify publication. No lane or soak waiver can bypass failures.
+not itself qualify publication. Exact live-provider/Telegram failures may use
+only the [checked-in release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers),
+evaluated within FRV. Hard gates and soak cannot be waived.
 
 ## Postpublish confidence
 

@@ -20,10 +20,12 @@ export function useTranscriptTestState() {
     vi.useRealTimers();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     dirs.cleanup();
   });
   return () => {
     const stateDir = dirs.make("openclaw-transcripts-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     return {
       stateDir,
       store: new TranscriptsStore(path.join(stateDir, "transcripts"), {

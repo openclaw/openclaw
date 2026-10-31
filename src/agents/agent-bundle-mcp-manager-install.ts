@@ -1,5 +1,5 @@
-/** Session MCP runtime manager install path: static get-or-create + requester resolve/install. */
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type {
   SessionMcpConfigPublication,
   SessionMcpRuntimeManagerLifecycle,
@@ -9,6 +9,7 @@ import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
   resolveSessionMcpRuntimeIdleTtlMs,
+  SessionMcpRuntimeCapacityError,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
@@ -39,6 +40,10 @@ type RequesterRuntimeParams = RuntimeEntryParams & {
   agentAccountId?: string | null;
   messageChannel?: string | null;
   requesterScope: SessionMcpRequesterScope;
+  onCapacityRefusal: (
+    error: SessionMcpRuntimeCapacityError,
+    requesterConnect: RequesterMcpConnect | undefined,
+  ) => SessionMcpRuntime;
 };
 
 const matchesRuntime = (
@@ -66,11 +71,25 @@ export function createSessionMcpRuntimeManagerInstall(
   const { store } = lifecycle;
   const reconcileReusableRetirement = (params: RuntimeEntryParams, runtime: SessionMcpRuntime) => {
     const { sessionId } = params;
+    const owner = sessionMcpRuntimeOwners.get(runtime);
+    if (owner && params.agentId) {
+      owner.agentId = params.agentId;
+    }
     const slot = store.runtimeSlots.get(runtime);
     if (slot) {
       slot.idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(store.configReload?.cfg ?? params.cfg);
     }
     lifecycle.ensureIdleSweepTimer();
+    if (slot && store.liveRuntimeSlots.has(slot)) {
+      lifecycle.catalogs.observeCatalog(runtime, params.runtimeKey, {
+        sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId ?? parseAgentSessionKey(params.sessionKey ?? "")?.agentId,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        configFingerprint: runtime.configFingerprint,
+      });
+    }
     if (store.requiredRetirementSessionIds.has(sessionId)) {
       // Reset/delete retirement deliberately survives late creation and reuse;
       // otherwise a racing run could escape the required session teardown.
@@ -85,14 +104,25 @@ export function createSessionMcpRuntimeManagerInstall(
   /** Install under the runtime-key queue shared by acquisition and disposal. */
   const getOrCreateRuntimeEntry = async (
     params: RuntimeEntryParams,
+    loaded?: Parameters<typeof loadSessionMcpConfig>[0]["loaded"],
   ): Promise<SessionMcpRuntime> => {
-    const config = loadSessionMcpConfig({ ...params, logDiagnostics: false });
+    // Static admission shares its synchronous preparation, never runtime reload inputs.
+    const config = loadSessionMcpConfig({ ...params, loaded, logDiagnostics: false });
     const nextFingerprint = requesterRuntimeFingerprint(
       config.fingerprint,
       params.requesterConnect,
     );
     const hasServers = Object.keys(config.loaded.mcpServers).length > 0;
     const { runtimeKey, configReloadAtAdmission, ...runtimeParams } = params;
+    const catalogBinding = {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId ?? parseAgentSessionKey(params.sessionKey ?? "")?.agentId,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      configFingerprint: nextFingerprint,
+    };
+    lifecycle.catalogs.reconcileCatalog(runtimeKey, catalogBinding);
     const existing = store.runtimesBySessionId.get(runtimeKey);
     const connectionMatches =
       !params.connectionOverrides ||
@@ -103,7 +133,7 @@ export function createSessionMcpRuntimeManagerInstall(
       existing.markUsed();
       return existing;
     }
-    const slot = lifecycle.reserveRuntimeSlot(existing, hasServers);
+    const slot = await lifecycle.reserveRuntimeSlot(runtimeKey, existing, hasServers);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
     let runtime: SessionMcpRuntime | undefined;
     let previousCleanup: Promise<void> | undefined;
@@ -121,7 +151,7 @@ export function createSessionMcpRuntimeManagerInstall(
         store.runtimesBySessionId.set(runtimeKey, runtime);
       }
       if (existing) {
-        previousCleanup = lifecycle.disposeRuntime(existing, false);
+        previousCleanup = lifecycle.disposeRuntime(runtimeKey, existing, false);
         await previousCleanup;
       }
       runtime ??= await store.createRuntime({
@@ -130,16 +160,13 @@ export function createSessionMcpRuntimeManagerInstall(
       });
       store.runtimeSlots.set(runtime, slot);
       store.runtimesBySessionId.set(runtimeKey, runtime);
-      let publication = configReloadAtAdmission;
-      // Keep explicit run snapshots, but fence any publish crossed by acquisition.
-      // Plugin epochs survive subsequent ordinary config publishes.
-      while (store.configReload && store.configReload !== publication) {
-        const next = store.configReload;
+      const next = store.configReload;
+      // Catch up once after creation; published runtimes receive later reloads directly.
+      if (next && next !== configReloadAtAdmission) {
         await sessionMcpRuntimeOwners.get(runtime)?.reload({
           ...next,
-          reloadPlugins: next.pluginGeneration !== (publication?.pluginGeneration ?? 0),
+          reloadPlugins: next.pluginGeneration !== (configReloadAtAdmission?.pluginGeneration ?? 0),
         });
-        publication = next;
       }
       if (!(sessionMcpRuntimeOwners.get(runtime)?.hasServers() ?? hasServers)) {
         await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, runtime);
@@ -151,8 +178,8 @@ export function createSessionMcpRuntimeManagerInstall(
       store.runtimesBySessionId.delete(runtimeKey);
       // A transferred slot covers both owners until every cleanup is confirmed.
       const cleanup = await Promise.allSettled([
-        previousCleanup ?? (existing && lifecycle.disposeRuntime(existing, false)),
-        runtime && lifecycle.disposeRuntime(runtime, false),
+        previousCleanup ?? (existing && lifecycle.disposeRuntime(runtimeKey, existing, false)),
+        runtime && lifecycle.disposeRuntime(runtimeKey, runtime, false),
       ]);
       const failed = cleanup.find((result) => result.status === "rejected");
       if (failed) {
@@ -241,24 +268,32 @@ export function createSessionMcpRuntimeManagerInstall(
       }
       return undefined;
     }
-    return await installRequesterRuntime({
-      runtimeKey: params.runtimeKey,
-      configReloadAtAdmission: params.configReloadAtAdmission,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      cfg: params.cfg,
-      manifestRegistry: params.manifestRegistry,
-      safeServerNamesByServer: params.safeServerNamesByServer,
-      includeServerNames: activeNameSet,
-      requesterConnect,
-      connectionOverrides,
-      redactConnectionServerNames: new Set(params.resolverRequesterServerNames),
-      requesterScope: params.requesterScope,
-      toolOverrides: params.toolOverrides,
-      toolDenylist: params.toolDenylist,
-    });
+    try {
+      return await installRequesterRuntime({
+        runtimeKey: params.runtimeKey,
+        configReloadAtAdmission: params.configReloadAtAdmission,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        cfg: params.cfg,
+        manifestRegistry: params.manifestRegistry,
+        safeServerNamesByServer: params.safeServerNamesByServer,
+        includeServerNames: activeNameSet,
+        requesterConnect,
+        connectionOverrides,
+        redactConnectionServerNames: new Set(params.resolverRequesterServerNames),
+        requesterScope: params.requesterScope,
+        toolOverrides: params.toolOverrides,
+        toolDenylist: params.toolDenylist,
+      });
+    } catch (error) {
+      if (error instanceof SessionMcpRuntimeCapacityError) {
+        return params.onCapacityRefusal(error, requesterConnect);
+      }
+      throw error;
+    }
   };
 
   return {

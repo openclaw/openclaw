@@ -29,6 +29,18 @@ struct ChatInlineMathTests {
         ])
     }
 
+    @Test(arguments: ["literal", #"\)"#])
+    func `code spans after a math candidate stay literal`(_ code: String) {
+        let latex = "a `\(code)` b"
+        let math = "\\(\(latex)\\)"
+        let tail = #" and `\(not math\)`"#
+
+        #expect(ChatInlineMathScanner.pieces(in: math + tail) == [
+            .math(latex: latex, source: math),
+            .markdown(tail),
+        ])
+    }
+
     @Test func `escape parity preserves math and code span boundaries`() {
         let cases: [(String, [ChatInlineMathScanner.Piece])] = [
             (#"\(x\)"#, [.math(latex: "x", source: #"\(x\)"#)]),

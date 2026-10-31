@@ -39,11 +39,6 @@ function parseNameStatusTokens(tokens: readonly string[]): NameStatusEntry[] {
   return entries;
 }
 
-/** Parses `git diff --numstat -z -M`; rename entries put paths in follow-up tokens. */
-export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
-  return parseNumstatTokens(text.split("\0"), 0);
-}
-
 function parseNumstatTokens(tokens: readonly string[], start: number): Map<string, NumstatEntry> {
   const byPath = new Map<string, NumstatEntry>();
   for (let i = start; i < tokens.length; i += 1) {
@@ -77,10 +72,7 @@ function parseNumstatTokens(tokens: readonly string[], start: number): Map<strin
 }
 
 /** Git emits all raw records before the numstat records in `--raw --numstat -z`. */
-export function parseDiffInventoryZ(text: string): {
-  entries: NameStatusEntry[];
-  numstat: Map<string, NumstatEntry>;
-} {
+export function parseDiffInventoryZ(text: string) {
   const tokens = text.split("\0");
   const nameStatus: string[] = [];
   let index = 0;

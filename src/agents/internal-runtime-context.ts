@@ -42,6 +42,33 @@ export type RuntimeContextFragment = {
   text: string;
 };
 
+/** Move only the exact section annotated by its producer; later policy additions survive. */
+export function splitExtraSystemPrompt(params: {
+  extraSystemPrompt?: string;
+  extraSystemPromptTurnContext?: { start: number; text: string };
+}) {
+  const prompt = params.extraSystemPrompt;
+  const context = params.extraSystemPromptTurnContext;
+  if (!prompt || !context?.text || !Number.isInteger(context.start) || context.start < 0) {
+    return { persistent: prompt, turn: undefined };
+  }
+  const end = context.start + context.text.length;
+  if (
+    prompt.slice(context.start, end) !== context.text ||
+    (context.start > 0 && prompt.slice(context.start - 2, context.start) !== "\n\n") ||
+    (end < prompt.length && prompt.slice(end, end + 2) !== "\n\n")
+  ) {
+    return { persistent: prompt, turn: undefined };
+  }
+  return {
+    persistent:
+      context.start === 0
+        ? prompt.slice(end === prompt.length ? end : end + 2)
+        : prompt.slice(0, context.start - 2) + prompt.slice(end),
+    turn: context.text,
+  };
+}
+
 /** Render trusted runtime fragments without promoting quoted data to instructions. */
 export function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): string {
   return fragments
@@ -113,10 +140,12 @@ function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): nu
 
 function stripDelimitedBlocks(
   text: string,
+  format: "protected" | "current",
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
-  const begin = BEGIN_DELIMITER;
-  const end = END_DELIMITER;
+  const nested = format === "protected";
+  const begin = nested ? BEGIN_DELIMITER : CURRENT_RUNTIME_CONTEXT_HEADER;
+  const end = nested ? END_DELIMITER : CURRENT_RUNTIME_CONTEXT_FOOTER;
   let next = text;
   for (;;) {
     const start = findDelimitedTokenIndex(next, begin, 0);
@@ -128,7 +157,7 @@ function stripDelimitedBlocks(
     let depth = 1;
     let finish = -1;
     while (depth > 0) {
-      const nextBegin = findDelimitedTokenIndex(next, begin, cursor);
+      const nextBegin = nested ? findDelimitedTokenIndex(next, begin, cursor) : -1;
       const nextEnd = findDelimitedTokenIndex(next, end, cursor);
       if (nextEnd === -1) {
         break;
@@ -155,6 +184,14 @@ function stripDelimitedBlocks(
     let blockEnd = finish + end.token.length;
     while (next[blockEnd] === " " || next[blockEnd] === "\t") {
       blockEnd += 1;
+    }
+    if (!nested) {
+      if (next[blockEnd] === "\r") {
+        blockEnd += 1;
+      }
+      if (next[blockEnd] === "\n") {
+        blockEnd += 1;
+      }
     }
     const after = options.preserveSurroundingWhitespace
       ? next.slice(blockEnd)
@@ -226,51 +263,6 @@ function stripRuntimeContextPromptPreface(text: string): string {
   return stripped === text ? text : stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function stripCurrentRuntimeContextCarrier(
-  text: string,
-  options: {
-    preserveSurroundingWhitespace?: boolean;
-    separator?: string;
-    streaming?: boolean;
-  } = {},
-): string {
-  let next = text;
-  for (;;) {
-    const headerStart = findDelimitedTokenIndex(next, CURRENT_RUNTIME_CONTEXT_HEADER, 0);
-    if (headerStart === -1) {
-      return next;
-    }
-    const blockStart = options.preserveSurroundingWhitespace
-      ? findDelimitedTokenLinePrefixStart(next, headerStart)
-      : headerStart;
-    const footerStart = findDelimitedTokenIndex(
-      next,
-      CURRENT_RUNTIME_CONTEXT_FOOTER,
-      headerStart + RUNTIME_CONTEXT_HEADER.length,
-    );
-    let blockEnd = footerStart === -1 ? next.length : footerStart + RUNTIME_CONTEXT_FOOTER.length;
-    while (next[blockEnd] === " " || next[blockEnd] === "\t") {
-      blockEnd += 1;
-    }
-    if (next[blockEnd] === "\r") {
-      blockEnd += 1;
-    }
-    if (next[blockEnd] === "\n") {
-      blockEnd += 1;
-    }
-    const before = options.preserveSurroundingWhitespace
-      ? next.slice(0, blockStart)
-      : next.slice(0, blockStart).trimEnd();
-    const after = options.preserveSurroundingWhitespace
-      ? next.slice(blockEnd)
-      : next.slice(blockEnd).trimStart();
-    next =
-      !options.preserveSurroundingWhitespace && before && after
-        ? `${before}${options.separator ?? "\n\n"}${after}`
-        : `${before}${after}`;
-  }
-}
-
 /** Remove protected and legacy runtime-context blocks from text. */
 export function stripInternalRuntimeContext(
   input: string,
@@ -305,14 +297,15 @@ export function stripInternalRuntimeContext(
   ) {
     return text;
   }
-  const withoutDelimitedBlocks = stripDelimitedBlocks(text, options).replace(
+  const withoutDelimitedBlocks = stripDelimitedBlocks(text, "protected", options).replace(
     END_DELIMITER.pattern,
     "",
   );
-  return stripCurrentRuntimeContextCarrier(
+  return stripDelimitedBlocks(
     stripRuntimeContextPromptPreface(
       stripUndelimitedInternalRuntimeContext(withoutDelimitedBlocks),
     ),
+    "current",
     options,
   );
 }
@@ -341,6 +334,15 @@ export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean
       message !== null &&
       Reflect.get(message, "role") === "custom" &&
       Reflect.get(message, "customType") === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
+  );
+}
+
+function isAdditiveRuntimeContextMessage(message: unknown): boolean {
+  return (
+    isOpenClawRuntimeContextCustomMessage(message) &&
+    typeof message === "object" &&
+    message !== null &&
+    Reflect.get(Reflect.get(message, "details") ?? {}, "replay") === "append"
   );
 }
 
@@ -383,7 +385,13 @@ export function resolvePendingRuntimeContextReplay<T>(params: {
     persistedUserIndex,
     replayPersistedCarrier,
     pendingContextMessages: replayPersistedCarrier
-      ? stripRuntimeContextCustomMessages(params.pendingContextMessages)
+      ? params.pendingContextMessages.filter(
+          (message) =>
+            !isOpenClawRuntimeContextCustomMessage(message) ||
+            // Fallback context extends a dispatched turn; ordinary retries reuse
+            // its original carrier instead of refreshing the frozen prefix.
+            isAdditiveRuntimeContextMessage(message),
+        )
       : params.pendingContextMessages,
   };
 }
@@ -434,7 +442,10 @@ export function resolveRuntimeContextPromptOwner(messages: readonly unknown[]) {
 }
 
 /** Keeps the live prompt's context and unretained context immediately before the active user. */
-export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
+export function stripHistoricalRuntimeContextCustomMessages<T>(
+  messages: T[],
+  currentUserIdempotencyKey?: string,
+): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
   }
@@ -442,6 +453,11 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   if (lastUserIndex === -1) {
     return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   }
+  const currentUserIndex = currentUserIdempotencyKey
+    ? messages.findLastIndex(
+        (message) => isUserMessage(message) && message.idempotencyKey === currentUserIdempotencyKey,
+      )
+    : lastUserIndex;
   let currentRuntimeContextStart = lastUserIndex;
   while (
     currentRuntimeContextStart > 0 &&
@@ -463,6 +479,11 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   return messages.filter((message, index) => {
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
+    }
+    // Fallback context follows its canonical user across retries and steering,
+    // but must not become the next independent user's context after a failure.
+    if (isAdditiveRuntimeContextMessage(message)) {
+      return currentUserIndex >= 0 && index > currentUserIndex;
     }
     // An all-mode drain can admit several carrier/user pairs in one request.
     // A settled answer retires earlier pairs; tool loops remain the same turn.

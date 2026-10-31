@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
@@ -84,23 +85,20 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
-function percentile(values, percentileValue) {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].toSorted((left, right) => left - right);
-  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileValue) - 1);
-  return sorted[index];
-}
-
 function summarizeDistribution(values) {
+  const sorted = values.toSorted((left, right) => left - right);
+  const percentile = (fraction) => sorted[Math.ceil(sorted.length * fraction) - 1] ?? null;
   return {
     count: values.length,
     max: values.length === 0 ? null : Math.max(...values),
-    p50: percentile(values, 0.5),
-    p90: percentile(values, 0.9),
-    p95: percentile(values, 0.95),
+    p50: percentile(0.5),
+    p90: percentile(0.9),
+    p95: percentile(0.95),
   };
+}
+
+function summarizeMetric(rows, key) {
+  return summarizeDistribution(rows.map((row) => row[key]).filter((value) => value !== null));
 }
 
 function parseRunList(raw) {
@@ -240,7 +238,7 @@ function listRecentSuccessfulCiRuns(limit) {
       "--limit",
       String(Math.max(limit * 4, limit)),
       "--json",
-      "databaseId,headSha,event,status,conclusion",
+      "databaseId,headSha,event,status,conclusion,createdAt,updatedAt,attempt",
     ],
     { encoding: "utf8" },
   );
@@ -258,7 +256,7 @@ function listRecentSuccessfulCiRuns(limit) {
 function loadRunJobs(runId, runAttempt = null) {
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
   const runPath = runAttempt === null ? `runs/${runId}` : `runs/${runId}/attempts/${runAttempt}`;
-  const pages = [];
+  const jobs = [];
   let totalCount = null;
   let requestCount = 0;
   for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
@@ -273,17 +271,14 @@ function loadRunJobs(runId, runAttempt = null) {
         requestCount += 1;
       },
     );
-    pages.push(payload);
-    const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    const pageJobs = collectRunJobsFromPages([payload]);
+    jobs.push(...pageJobs);
     totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
-    if (
-      jobs.length === 0 ||
-      (totalCount !== null && collectRunJobsFromPages(pages).length >= totalCount)
-    ) {
+    if (pageJobs.length === 0 || (totalCount !== null && jobs.length >= totalCount)) {
       break;
     }
   }
-  return { jobs: collectRunJobsFromPages(pages), requestCount };
+  return { jobs, requestCount };
 }
 
 function loadRun(runId) {
@@ -357,6 +352,7 @@ function summarizeJobs(run) {
     .filter((job) => job.status === "completed" && job.conclusion === "success")
     .map((job) => job.durationSeconds)
     .filter((duration) => duration !== null);
+  const distribution = summarizeDistribution(successfulDurations);
   const firstStart = Math.min(...completedJobs.map((job) => job.started));
   const lastComplete = Math.max(...completedJobs.map((job) => job.completed));
 
@@ -375,10 +371,10 @@ function summarizeJobs(run) {
     firstStartDelaySeconds: Number.isFinite(firstStart)
       ? secondsBetween(created, firstStart)
       : null,
-    jobCount: successfulDurations.length,
-    maxDurationSeconds: successfulDurations.length === 0 ? null : Math.max(...successfulDurations),
-    p90DurationSeconds: percentile(successfulDurations, 0.9),
-    p95DurationSeconds: percentile(successfulDurations, 0.95),
+    jobCount: distribution.count,
+    maxDurationSeconds: distribution.max,
+    p90DurationSeconds: distribution.p90,
+    p95DurationSeconds: distribution.p95,
     wallSeconds: secondsBetween(created, updated),
   };
 }
@@ -527,15 +523,9 @@ function summarizeTrendCohort(runs, runSummaries) {
   return {
     criticalOwners: summarizeCriticalOwners(successfulRuns),
     jobMetrics: {
-      dependencyGatedSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.dependencyGatedSeconds).filter((value) => value !== null),
-      ),
-      executionSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.executionSeconds).filter((value) => value !== null),
-      ),
-      runnerQueueSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.runnerQueueSeconds).filter((value) => value !== null),
-      ),
+      dependencyGatedSeconds: summarizeMetric(jobTimings, "dependencyGatedSeconds"),
+      executionSeconds: summarizeMetric(jobTimings, "executionSeconds"),
+      runnerQueueSeconds: summarizeMetric(jobTimings, "runnerQueueSeconds"),
     },
     outcomes: summarizeOutcomes(runs),
     samples: {
@@ -544,15 +534,9 @@ function summarizeTrendCohort(runs, runSummaries) {
       timedJobs: jobTimings.length,
     },
     runMetrics: {
-      admittedWallSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.admittedWallSeconds).filter((value) => value !== null),
-      ),
-      successfulWallSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.wallSeconds).filter((value) => value !== null),
-      ),
-      workflowAdmissionSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.workflowAdmissionSeconds).filter((value) => value !== null),
-      ),
+      admittedWallSeconds: summarizeMetric(successfulRuns, "admittedWallSeconds"),
+      successfulWallSeconds: summarizeMetric(successfulRuns, "wallSeconds"),
+      workflowAdmissionSeconds: summarizeMetric(successfulRuns, "workflowAdmissionSeconds"),
     },
   };
 }
@@ -589,12 +573,8 @@ function summarizeNamedJobComparison(runSummaries, priorWindow, comparisonWindow
   return [...new Set([...prior.keys(), ...comparison.keys()])]
     .map((name) => {
       const summarize = (timings) => ({
-        executionSeconds: summarizeDistribution(
-          (timings ?? []).map((job) => job.executionSeconds).filter((value) => value !== null),
-        ),
-        runnerQueueSeconds: summarizeDistribution(
-          (timings ?? []).map((job) => job.runnerQueueSeconds).filter((value) => value !== null),
-        ),
+        executionSeconds: summarizeMetric(timings ?? [], "executionSeconds"),
+        runnerQueueSeconds: summarizeMetric(timings ?? [], "runnerQueueSeconds"),
       });
       return {
         comparison: summarize(comparison.get(name)),
@@ -842,16 +822,21 @@ export function parseRunTimingArgs(args) {
     const numericFlag = numericFlags.find(([flag]) => arg === flag || arg.startsWith(`${flag}=`));
     if (numericFlag) {
       const [flag, key] = numericFlag;
-      const parsed = consumePositiveIntFlag(args, index, flag);
-      options[key] = parsed.value;
+      const value =
+        arg === flag ? requireOptionArgument(args, index++, flag) : arg.slice(flag.length + 1);
+      options[key] = parsePositiveInt(value, flag);
       specified.add(flag);
-      index = parsed.nextIndex;
       continue;
     }
-    const outputOption = consumeStringFlag(args, index, "--output");
-    if (outputOption) {
-      options.outputPath = outputOption.value;
-      index = outputOption.nextIndex;
+    if (arg === "--output" || arg.startsWith("--output=")) {
+      const value =
+        arg === "--output"
+          ? requireOptionArgument(args, index++, "--output")
+          : arg.slice("--output=".length);
+      if (!value) {
+        throw new Error("--output requires a value");
+      }
+      options.outputPath = value;
       continue;
     }
     if (arg.startsWith("-")) {
@@ -889,48 +874,6 @@ export function parseRunTimingArgs(args) {
   }
 
   return options;
-}
-
-function consumePositiveIntFlag(args, index, flag) {
-  const arg = args[index];
-  const inlinePrefix = `${flag}=`;
-  if (arg.startsWith(inlinePrefix)) {
-    return {
-      nextIndex: index,
-      value: parsePositiveInt(arg.slice(inlinePrefix.length), flag),
-    };
-  }
-  if (arg !== flag) {
-    return null;
-  }
-  const rawValue = args[index + 1];
-  if (!rawValue || rawValue.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return {
-    nextIndex: index + 1,
-    value: parsePositiveInt(rawValue, flag),
-  };
-}
-
-function consumeStringFlag(args, index, flag) {
-  const arg = args[index];
-  const inlinePrefix = `${flag}=`;
-  if (arg.startsWith(inlinePrefix)) {
-    const value = arg.slice(inlinePrefix.length);
-    if (!value) {
-      throw new Error(`${flag} requires a value`);
-    }
-    return { nextIndex: index, value };
-  }
-  if (arg !== flag) {
-    return null;
-  }
-  const value = args[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return { nextIndex: index + 1, value };
 }
 
 function selectTrendDetailCandidates(runs, generatedAtMs, compareDurationMs, limit) {
@@ -1042,7 +985,11 @@ async function main() {
   }
   if (recentLimit !== null) {
     for (const run of listRecentSuccessfulCiRuns(recentLimit)) {
-      const summary = summarizeJobs(loadRun(run.databaseId));
+      // Keep metadata and jobs on the listed attempt if another rerun starts.
+      const summary = summarizeJobs({
+        ...run,
+        jobs: loadRunJobs(run.databaseId, run.attempt).jobs,
+      });
       console.log(
         [
           `CI run ${run.databaseId}`,

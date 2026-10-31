@@ -1,4 +1,3 @@
-// Systemd lingering setup helpers for gateway install/start flows.
 // Lingering keeps user services alive after logout on Linux hosts.
 
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -25,25 +24,18 @@ async function readGatewayServiceLingerStatus(env: NodeJS.ProcessEnv) {
   return await readSystemdUserLingerStatus({ env, user });
 }
 
-/** Ensures systemd user lingering interactively, prompting before sudo when requested. */
 export async function ensureSystemdUserLingerInteractive(params: {
   runtime: RuntimeEnv;
   prompter?: LingerPrompter;
-  env?: NodeJS.ProcessEnv;
-  title?: string;
   reason?: string;
-  prompt?: boolean;
   requireConfirm?: boolean;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
-  if (params.prompt === false) {
-    return;
-  }
-  const env = params.env ?? process.env;
+  const env = process.env;
   const prompter: LingerPrompter = params.prompter ?? { note };
-  const title = params.title ?? "Systemd";
+  const title = "Systemd";
   if (!(await isSystemdUserServiceAvailable())) {
     await prompter.note("Systemd user services are unavailable. Skipping lingering checks.", title);
     return;
@@ -51,7 +43,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   const status = await readGatewayServiceLingerStatus(env);
   if (!status) {
     await prompter.note(
-      "Unable to read loginctl linger status. Ensure systemd + loginctl are available.",
+      "Unable to read loginctl linger status. Check that systemd + loginctl are available.",
       title,
     );
     return;
@@ -97,15 +89,13 @@ export async function ensureSystemdUserLingerInteractive(params: {
   await prompter.note(`Run manually: sudo loginctl enable-linger ${status.user}`, title);
 }
 
-/** Best-effort non-interactive lingering enablement for install scripts and CI-like flows. */
 export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
-  const env = params.env ?? process.env;
+  const env = process.env;
   if (!(await isSystemdUserServiceAvailable())) {
     return;
   }

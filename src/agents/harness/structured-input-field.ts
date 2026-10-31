@@ -298,20 +298,19 @@ export function normalizeChoices(
       ...(typeof thumbnail === "string" ? { thumbnail } : {}),
     });
   }
-  return validateChoices(choices) ?? choices;
+  return choices.length > 1 ? (validateChoices(choices) ?? choices) : choices;
 }
 
 export function validateChoices(choices: readonly Choice[]): string | undefined {
-  const values = new Set<string>();
-  const labels = new Set<string>();
+  const aliases = new Set<string>();
   for (const choice of choices) {
     const value = choice.value.toLowerCase();
     const label = choice.label.trim().toLowerCase();
-    if (values.has(value) || labels.has(label) || values.has(label) || labels.has(value)) {
+    if (aliases.has(value) || aliases.has(label)) {
       return "contains duplicate choice values or titles.";
     }
-    values.add(value);
-    labels.add(label);
+    aliases.add(value);
+    aliases.add(label);
   }
   return undefined;
 }

@@ -1,6 +1,5 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
-// Imessage plugin module implements channel behavior.
 import {
   createAccountStatusSink,
   resolveOutboundSendDep,
@@ -12,12 +11,11 @@ import {
   resolveIMessageDuplicateSourceOwner,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
-import { monitorIMessageProvider } from "./monitor.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { probeIMessage } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { sendMessageIMessage } from "./send.js";
-export { imessageSetupWizard } from "./setup-surface.js";
 
 type IMessageSendFn = typeof sendMessageIMessage;
 
@@ -54,8 +52,8 @@ export async function sendIMessageOutbound(params: {
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
     maxBytes,
-    accountId: params.accountId ?? undefined,
-    replyToId: params.replyToId ?? undefined,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
     conversationReadOrigin: params.conversationReadOrigin,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     onPlatformSendDispatch: params.onPlatformSendDispatch,

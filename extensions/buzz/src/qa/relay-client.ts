@@ -19,51 +19,6 @@ import type { BuzzQaCredentials } from "./credentials.js";
 
 const OBSERVER_READY_TIMEOUT_MS = 10_000;
 
-type BuzzQaRelayDriver = {
-  assertHealthy(): void;
-  close(): Promise<void>;
-  sendMessage(input: {
-    text: string;
-    mentionSut: boolean;
-    threadId?: string;
-    replyToId?: string;
-  }): Promise<{ eventId: string; timestamp: number }>;
-};
-
-async function loadBuzzQaRoomMembership(params: {
-  relay: Relay;
-  relayPublicKey: string;
-  roomId: string;
-}): Promise<BuzzRoomMembership> {
-  let latest: BuzzRoomMembership | undefined;
-  await queryBuzzRelaySnapshot({
-    relay: params.relay,
-    filters: [
-      {
-        kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
-        authors: [params.relayPublicKey],
-        "#d": [params.roomId],
-        limit: 1,
-      },
-    ],
-    timeoutMessage: `Timed out loading Buzz QA room ${params.roomId} membership.`,
-    abortMessage: "Buzz QA membership query aborted",
-    closeReason: "membership loaded",
-    closeMessage: (reason) => `Buzz QA membership subscription closed: ${reason}`,
-    onEvent: (event) => {
-      const membership = parseBuzzRoomMembershipEvent(event, params.relayPublicKey);
-      if (membership?.roomId === params.roomId && isNewerBuzzRevision(membership, latest)) {
-        latest = membership;
-      }
-    },
-    result: () => {},
-  });
-  if (!latest) {
-    throw new Error(`Buzz QA room ${params.roomId} has no membership roster.`);
-  }
-  return latest;
-}
-
 function assertBuzzQaMembership(membership: BuzzRoomMembership, credentials: BuzzQaCredentials) {
   if (!membership.members.has(credentials.driverPublicKey)) {
     throw new Error(
@@ -83,7 +38,7 @@ function assertBuzzQaMembership(membership: BuzzRoomMembership, credentials: Buz
 export async function createBuzzQaRelayDriver(params: {
   credentials: BuzzQaCredentials;
   onMessage: (message: BuzzInboundMessage) => Promise<void>;
-}): Promise<BuzzQaRelayDriver> {
+}) {
   const credentials = params.credentials;
   const secretKey = decodeBuzzPrivateKey(credentials.driverPrivateKey);
   const lifecycleAbort = new AbortController();
@@ -97,14 +52,34 @@ export async function createBuzzQaRelayDriver(params: {
     signal: lifecycleAbort.signal,
   });
   try {
-    assertBuzzQaMembership(
-      await loadBuzzQaRoomMembership({
-        relay,
-        relayPublicKey,
-        roomId: credentials.roomId,
-      }),
-      credentials,
-    );
+    const roomId = credentials.roomId;
+    let latest: BuzzRoomMembership | undefined;
+    await queryBuzzRelaySnapshot({
+      relay,
+      filters: [
+        {
+          kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
+          authors: [relayPublicKey],
+          "#d": [roomId],
+          limit: 1,
+        },
+      ],
+      timeoutMessage: `Timed out loading Buzz QA room ${roomId} membership.`,
+      abortMessage: "Buzz QA membership query aborted",
+      closeReason: "membership loaded",
+      closeMessage: (reason) => `Buzz QA membership subscription closed: ${reason}`,
+      onEvent: (event) => {
+        const membership = parseBuzzRoomMembershipEvent(event, relayPublicKey);
+        if (membership?.roomId === roomId && isNewerBuzzRevision(membership, latest)) {
+          latest = membership;
+        }
+      },
+      result: () => {},
+    });
+    if (!latest) {
+      throw new Error(`Buzz QA room ${roomId} has no membership roster.`);
+    }
+    assertBuzzQaMembership(latest, credentials);
   } catch (error) {
     lifecycleAbort.abort(error);
     relay.close();
@@ -190,7 +165,12 @@ export async function createBuzzQaRelayDriver(params: {
         throw transportError;
       }
     },
-    async sendMessage(input) {
+    async sendMessage(input: {
+      text: string;
+      mentionSut: boolean;
+      threadId?: string;
+      replyToId?: string;
+    }) {
       if (transportError) {
         throw transportError;
       }

@@ -8,20 +8,23 @@ type LazyColumn = readonly [
 
 // Added after v6 shipped; first-use-only columns stay absent until their feature writes.
 const lazyColumns = [
+  ["agent_deletion_journal", "phase", "TEXT", true],
   ["agent_database_leases", "provenance", "TEXT", true],
+  ["user_profile_identities", "canonical_login", "TEXT"],
   ["user_profile_identities", "authorization_id", "TEXT"],
   ["user_profile_identities", "authorization_basis_json", "TEXT"],
-  ["claw_installs", "bootstrap_content_digest", "TEXT"],
-  ["claw_installs", "bootstrap_source_path", "TEXT"],
+  ["user_profile_identities", "verified_email_json", "TEXT", true],
+  ["template_installs", "bootstrap_content_digest", "TEXT"],
+  ["template_installs", "bootstrap_source_path", "TEXT"],
   ["worker_environments", "desktop_json", "TEXT"],
   ["worker_environments", "bootstrap_install_kind", "TEXT"],
   ["worker_environments", "preparation_purpose", "TEXT"],
-  ["claw_package_refs", "extension_adapter_identity", "TEXT"],
-  ["claw_package_refs", "extension_detected_format", "TEXT"],
-  ["claw_package_refs", "extension_format", "TEXT"],
-  ["claw_package_refs", "extension_id", "TEXT"],
-  ["claw_package_refs", "extension_mapped_json", "TEXT"],
-  ["claw_package_refs", "extension_unavailable_json", "TEXT"],
+  ["template_package_refs", "extension_adapter_identity", "TEXT"],
+  ["template_package_refs", "extension_detected_format", "TEXT"],
+  ["template_package_refs", "extension_format", "TEXT"],
+  ["template_package_refs", "extension_id", "TEXT"],
+  ["template_package_refs", "extension_mapped_json", "TEXT"],
+  ["template_package_refs", "extension_unavailable_json", "TEXT"],
   ["worker_environments", "shared_host", "INTEGER"],
   ["worker_environments", "node_setup_id", "TEXT"],
   ["worker_environments", "node_device_id", "TEXT"],
@@ -63,10 +66,10 @@ export const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefini
 
 // Historical repairs retain these groups at their original backfill boundaries.
 export const ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS = {
-  packageUpdatedAt: [["claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0"]],
+  packageUpdatedAt: [["template_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0"]],
   packageIntegrity: [
     [
-      "claw_package_refs",
+      "template_package_refs",
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     ],
   ],

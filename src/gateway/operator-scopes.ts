@@ -1,8 +1,7 @@
-// Gateway operator scope constants.
-// Defines the closed set accepted by connection auth and method policy.
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
 export const WRITE_SCOPE = "operator.write" as const;
+export const CRON_SCOPE = "operator.cron" as const;
 export const SESSION_READ_SCOPE = "operator.sessions.read" as const;
 export const SESSION_WRITE_SCOPE = "operator.sessions.write" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
@@ -15,6 +14,7 @@ const KNOWN_OPERATOR_SCOPE_VALUES = [
   ADMIN_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
+  CRON_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,
@@ -24,7 +24,6 @@ const KNOWN_OPERATOR_SCOPE_VALUES = [
   TALK_SECRETS_SCOPE,
 ] as const;
 
-/** Operator privileges advertised by gateway auth and checked by method policy. */
 export type OperatorScope = (typeof KNOWN_OPERATOR_SCOPE_VALUES)[number];
 
 const KNOWN_OPERATOR_SCOPES: ReadonlySet<string> = new Set(KNOWN_OPERATOR_SCOPE_VALUES);
@@ -32,8 +31,7 @@ const KNOWN_OPERATOR_SCOPES: ReadonlySet<string> = new Set(KNOWN_OPERATOR_SCOPE_
 export function hasGatewayAdminScope(
   client: { connect?: { scopes?: readonly string[] } } | null | undefined,
 ): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
+  return client?.connect?.scopes?.includes(ADMIN_SCOPE) ?? false;
 }
 
 /** Narrows untrusted auth-token scope entries to the gateway's closed scope set. */
@@ -41,7 +39,6 @@ export function isOperatorScope(value: unknown): value is OperatorScope {
   return typeof value === "string" && KNOWN_OPERATOR_SCOPES.has(value);
 }
 
-/** Filters unknown strings down to unique operator scopes; undefined stays undefined. */
 export function normalizeOperatorScopeList(
   scopes: string[] | undefined,
 ): OperatorScope[] | undefined {

@@ -1,4 +1,3 @@
-// Defines command approval configuration types from the canonical schema.
 import type { z } from "zod";
 import type {
   ApprovalsSchema,

@@ -1,148 +1,54 @@
-// Memory Wiki tests cover synchronous guidance and async compiled prompt preparation.
-import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../api.js";
-import {
-  activateMemoryWikiCompiledCacheOwner,
-  configureMemoryWikiCompiledCacheStore,
-  resolveMemoryWikiCompiledCacheGeneration,
-  writeMemoryWikiCompiledCache,
-  type MemoryWikiCompiledCacheSnapshot,
-  type MemoryWikiCompiledDigestClaim,
-  type MemoryWikiCompiledDigestPage,
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  MemoryWikiCompiledDigestClaim,
+  MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
-import {
-  resolveMemoryWikiAgentConfig,
-  resolveMemoryWikiConfig,
-  type ResolvedMemoryWikiConfig,
-} from "./config.js";
-import {
-  appendMemoryWikiLog,
-  ensureMemoryWikiVaultGeneration,
-  loadMemoryWikiValidatedVaultIdentity,
-  loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
-} from "./log.js";
+import { resolveMemoryWikiAgentConfig, type ResolvedMemoryWikiConfig } from "./config.js";
 import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
 } from "./prompt-section.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import {
+  createCompiledDigestPage,
+  createCompiledSnapshot,
+  createMemoryWikiTestHarness,
+  publishCompiledSnapshot,
+} from "./test-helpers.js";
+import { initializeMemoryWikiVault } from "./vault.js";
 
-const { configureCompiledCacheStore } = createMemoryWikiTestHarness();
-let suiteRoot = "";
+const { createVault } = createMemoryWikiTestHarness();
+afterEach(() => vi.restoreAllMocks());
 
-beforeAll(async () => {
-  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-prompt-suite-"));
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  configureMemoryWikiCompiledCacheStore(undefined);
-});
-
-afterAll(async () => {
-  if (suiteRoot) {
-    await fs.rm(suiteRoot, { recursive: true, force: true });
-  }
-});
-
-type PromptPageFixture = Pick<MemoryWikiCompiledDigestPage, "title" | "kind" | "claimCount"> &
-  Omit<Partial<MemoryWikiCompiledDigestPage>, "topClaims"> & {
-    topClaims?: Array<Partial<MemoryWikiCompiledDigestClaim> & { text: string }>;
-  };
-
-async function seedCompiledDigest(params: {
-  config: ResolvedMemoryWikiConfig;
-  claimCount: number;
-  contradictionCount?: number;
-  pages: PromptPageFixture[];
-}): Promise<void> {
-  configureCompiledCacheStore();
-  await fs.mkdir(path.join(params.config.vault.path, ".openclaw-wiki"), { recursive: true });
-  await Promise.all([
-    fs.writeFile(path.join(params.config.vault.path, "WIKI.md"), "# Memory Wiki\n", "utf8"),
-    fs.writeFile(path.join(params.config.vault.path, ".openclaw-wiki", "log.jsonl"), "", "utf8"),
-  ]);
-  activateMemoryWikiCompiledCacheOwner(
-    params.config,
-    await ensureMemoryWikiVaultGeneration(params.config.vault.path),
-  );
-  const snapshot: MemoryWikiCompiledCacheSnapshot = {
-    digest: {
-      claimCount: params.claimCount,
-      contradictionCount: params.contradictionCount ?? 0,
-      pages: params.pages.map((page, index) => ({
-        ...page,
-        path: page.path ?? `entities/page-${index}.md`,
-        aliases: page.aliases ?? [],
-        sourceIds: page.sourceIds ?? [],
-        questions: page.questions ?? [],
-        contradictions: page.contradictions ?? [],
-        bestUsedFor: page.bestUsedFor ?? [],
-        notEnoughFor: page.notEnoughFor ?? [],
-        relationshipCount: page.relationshipCount ?? 0,
-        topRelationships: page.topRelationships ?? [],
-        topClaims: (page.topClaims ?? []).map((claim) =>
-          Object.assign({ status: "supported", freshnessLevel: "unknown" }, claim),
-        ),
-      })),
-    },
-    claims: [],
-    dashboards: {
-      importInsights: {
-        sourceType: "chatgpt",
-        totalItems: 0,
-        totalClusters: 0,
-        clusters: [],
-        truncated: false,
-      },
-      overview: {
-        totalItems: 0,
-        totalPages: 0,
-        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
-        totalClaims: 0,
-        totalQuestions: 0,
-        totalContradictions: 0,
-        clusters: [],
-        truncated: false,
-      },
-    },
-  };
-  const publicationId = randomUUID();
-  const reservationId = randomUUID();
-  const parentPublicationId = (await loadMemoryWikiVaultIdentity(params.config.vault.path))
-    .compiledCachePublicationId;
-  await appendMemoryWikiLog(params.config.vault.path, {
-    type: "compile",
-    timestamp: "2026-07-17T00:00:00.000Z",
-    details: { compiledCacheReservationId: reservationId },
+function digestPage(
+  title: string,
+  claims: Array<Partial<MemoryWikiCompiledDigestClaim> & { text: string }> = [],
+  overrides: Partial<MemoryWikiCompiledDigestPage> = {},
+) {
+  return createCompiledDigestPage({
+    title,
+    claimCount: Math.max(1, claims.length),
+    topClaims: claims.map((claim) =>
+      Object.assign({ status: "supported", freshnessLevel: "unknown" }, claim),
+    ),
+    ...overrides,
   });
-  const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(params.config.vault.path);
-  await appendMemoryWikiLog(params.config.vault.path, {
-    type: "compile",
-    timestamp: "2026-07-17T00:00:00.000Z",
-    details: {
-      compiledCachePublicationId: publicationId,
-      compiledCacheParentPublicationId: parentPublicationId,
-      compiledCacheReservationId: reservationId,
-      compiledCacheSourceGeneration: sourceGeneration,
-    },
-  });
-  await writeMemoryWikiCompiledCache(
-    params.config,
-    snapshot,
-    resolveMemoryWikiCompiledCacheGeneration(snapshot),
-    publicationId,
-    parentPublicationId,
-    async () => {},
-    async () => {},
-    () => loadMemoryWikiValidatedVaultIdentity(params.config.vault.path),
+}
+
+async function seedCompiledDigest(
+  config: ResolvedMemoryWikiConfig,
+  pages: MemoryWikiCompiledDigestPage[],
+  claimCount = 1,
+  contradictionCount = 0,
+) {
+  await initializeMemoryWikiVault(config);
+  await publishCompiledSnapshot(
+    config,
+    createCompiledSnapshot({
+      claimCount,
+      contradictionCount,
+      pages: pages.map((page, index) => ({ ...page, path: `entities/page-${index}.md` })),
+    }),
   );
 }
 
@@ -154,145 +60,86 @@ describe("Memory Wiki prompt section", () => {
   const buildGuidance = createWikiPromptSectionBuilder();
 
   it("prefers shared memory corpus guidance when memory tools are available", () => {
-    const lines = buildGuidance({
+    const prompt = buildGuidance({
       availableTools: new Set(["memory_search", "memory_get", "wiki_search", "wiki_get"]),
-    });
-
-    expect(lines.join("\n")).toContain("`memory_search` with `corpus=all`");
-    expect(lines.join("\n")).toContain("`memory_get` with `corpus=wiki` or `corpus=all`");
-    expect(lines.join("\n")).toContain("wiki-specific ranking or provenance details");
-  });
-
-  it("prepares a compact compiled digest from SQLite", async () => {
-    const config = resolveMemoryWikiConfig({
-      vault: { path: path.join(suiteRoot, "digest-enabled") },
-      context: { includeCompiledDigestPrompt: true },
-    });
-    await seedCompiledDigest({
-      config,
-      claimCount: 8,
-      contradictionCount: 1,
-      pages: [
-        {
-          title: "Alpha",
-          kind: "entity",
-          claimCount: 3,
-          questions: ["Still active?"],
-          contradictions: ["Conflicts with source.beta"],
-          topClaims: [
-            {
-              text: "Alpha uses PostgreSQL for production writes.",
-              confidence: 0.91,
-              freshnessLevel: "fresh",
-            },
-          ],
-        },
-      ],
-    });
-
-    const lines = await createStaticPreparer(config)({ availableTools: new Set() });
-
-    expect(lines.join("\n")).toContain("## Compiled Wiki Snapshot");
-    expect(lines.join("\n")).toContain(
-      "Alpha: entity, 3 claims, 1 open questions, 1 contradiction notes",
-    );
-    expect(lines.join("\n")).toContain("Alpha uses PostgreSQL for production writes.");
+    }).join("\n");
+    for (const text of [
+      "`memory_search` with `corpus=all`",
+      "`memory_get` with `corpus=wiki` or `corpus=all`",
+      "wiki-specific ranking or provenance details",
+    ]) {
+      expect(prompt).toContain(text);
+    }
   });
 
   it.each([
     {
       name: "oversized structured claims without splitting UTF-16 surrogate pairs",
-      pages: [
-        {
-          title: "Alpha",
-          kind: "entity" as const,
-          claimCount: 1,
-          topClaims: [{ text: `${"c".repeat(699)}🤖${"c".repeat(20_000)}` }],
-        },
-      ],
+      pages: [digestPage("Alpha", [{ text: `${"c".repeat(699)}🤖${"c".repeat(20_000)}` }])],
       retained: "c".repeat(699),
       omitted: "🤖",
     },
     {
       name: "oversized page titles without splitting UTF-16 surrogate pairs",
       pages: [
-        {
-          title: `${"t".repeat(159)}🤖${"t".repeat(20_000)}`,
-          kind: "entity" as const,
-          claimCount: 1,
-          topClaims: [{ text: "The claim remains visible after its page title." }],
-        },
+        digestPage(`${"t".repeat(159)}🤖${"t".repeat(20_000)}`, [
+          { text: "The claim remains visible after its page title." },
+        ]),
       ],
       retained: "The claim remains visible after its page title.",
       omitted: "🤖",
     },
     {
       name: "the complete digest across multiple independently bounded claims",
-      pages: Array.from({ length: 4 }, (_, pageIndex) => ({
-        title: `Page ${pageIndex}`,
-        kind: "entity" as const,
-        claimCount: 2,
-        topClaims: Array.from({ length: 2 }, (_claim, claimIndex) => ({
-          text: `claim ${pageIndex}-${claimIndex} ${"x".repeat(680)}`,
-        })),
-      })),
+      pages: Array.from({ length: 4 }, (_, pageIndex) =>
+        digestPage(
+          `Page ${pageIndex}`,
+          Array.from({ length: 2 }, (_claim, claimIndex) => ({
+            text: `claim ${pageIndex}-${claimIndex} ${"x".repeat(680)}`,
+          })),
+        ),
+      ),
       retained: "claim 0-0",
       omitted: "claim 3-1",
     },
-  ])(
-    "hard-bounds $name before model-context injection",
-    async ({ name, pages, retained, omitted }) => {
-      const config = resolveMemoryWikiConfig({
-        vault: { path: path.join(suiteRoot, `digest-bounded-${name.replaceAll(" ", "-")}`) },
-        context: { includeCompiledDigestPrompt: true },
-      });
-      await seedCompiledDigest({ config, claimCount: pages.length * 2, pages });
+  ])("hard-bounds $name before model-context injection", async ({ pages, retained, omitted }) => {
+    const { config } = await createVault({
+      config: { context: { includeCompiledDigestPrompt: true } },
+    });
+    await seedCompiledDigest(config, pages, pages.length * 2);
 
-      const lines = await createStaticPreparer(config)({ availableTools: new Set() });
-      const prompt = lines.join("\n");
+    const lines = await createStaticPreparer(config)({ availableTools: new Set() });
+    const prompt = lines.join("\n");
 
-      expect(prompt).toContain("## Compiled Wiki Snapshot");
-      expect(prompt).toContain(retained);
-      expect(prompt).not.toContain(omitted);
-      expect(prompt.length).toBeLessThanOrEqual(2_800);
-      expect(prompt).not.toMatch(
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
-      );
-    },
-  );
+    expect(prompt).toContain("## Compiled Wiki Snapshot");
+    expect(prompt).toContain(retained);
+    expect(prompt).not.toContain(omitted);
+    expect(prompt.length).toBeLessThanOrEqual(2_800);
+    expect(prompt).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+  });
 
   it("keeps the digest disabled by default", async () => {
-    const config = resolveMemoryWikiConfig({
-      vault: { path: path.join(suiteRoot, "digest-disabled") },
-    });
-    await seedCompiledDigest({
-      config,
-      claimCount: 1,
-      pages: [{ title: "Alpha", kind: "entity", claimCount: 1 }],
-    });
+    const { config } = await createVault();
+    await seedCompiledDigest(config, [digestPage("Alpha")]);
 
     await expect(createStaticPreparer(config)({ availableTools: new Set() })).resolves.toEqual([]);
   });
 
   it("stabilizes digest ordering for prompt-cache-friendly output", async () => {
-    const config = resolveMemoryWikiConfig({
-      vault: { path: path.join(suiteRoot, "digest-stable") },
-      context: { includeCompiledDigestPrompt: true },
+    const { config } = await createVault({
+      config: { context: { includeCompiledDigestPrompt: true } },
     });
-    const pages: PromptPageFixture[] = [
-      {
-        title: "Zulu",
-        kind: "concept",
-        claimCount: 2,
-        topClaims: [{ text: "Zulu fallback note.", confidence: 0.3, freshnessLevel: "stale" }],
-      },
-      {
-        title: "Alpha",
-        kind: "entity",
-        claimCount: 4,
-        questions: ["Still active?"],
-        contradictions: ["Conflicts with source.beta"],
-        topClaims: [
+    const pages = [
+      digestPage(
+        "Zulu",
+        [{ text: "Zulu fallback note.", confidence: 0.3, freshnessLevel: "stale" }],
+        { kind: "concept", claimCount: 2 },
+      ),
+      digestPage(
+        "Alpha",
+        [
           { text: "Alpha was renamed in 2026.", confidence: 0.42, freshnessLevel: "aging" },
           {
             text: "Alpha uses PostgreSQL for production writes.",
@@ -300,18 +147,22 @@ describe("Memory Wiki prompt section", () => {
             freshnessLevel: "fresh",
           },
         ],
-      },
-    ];
-    await seedCompiledDigest({ config, claimCount: 6, contradictionCount: 1, pages });
+        {
+          claimCount: 4,
+          questions: ["Still active?"],
+          contradictions: ["Conflicts with source.beta"],
+        },
+      ),
+    ] as const;
+    await seedCompiledDigest(config, [...pages], 6, 1);
     const firstLines = await createStaticPreparer(config)({ availableTools: new Set() });
-    const firstPage = expectDefined(pages[0], "first Memory Wiki digest page");
-    const secondPage = expectDefined(pages[1], "second Memory Wiki digest page");
-    await seedCompiledDigest({
+    const [firstPage, secondPage] = pages;
+    await seedCompiledDigest(
       config,
-      claimCount: 6,
-      contradictionCount: 1,
-      pages: [{ ...secondPage, topClaims: secondPage.topClaims?.toReversed() }, firstPage],
-    });
+      [{ ...secondPage, topClaims: secondPage.topClaims?.toReversed() }, firstPage],
+      6,
+      1,
+    );
     const secondLines = await createStaticPreparer(config)({ availableTools: new Set() });
 
     expect(firstLines).toEqual(secondLines);
@@ -328,31 +179,21 @@ describe("Memory Wiki prompt section", () => {
   });
 
   it("prepares only the invoking agent's compiled digest", async () => {
-    const rootDir = path.join(suiteRoot, "agent-digests");
     const appConfig = {
       agents: { entries: { support: {}, marketing: {} } },
-    } as OpenClawConfig;
-    const config = resolveMemoryWikiConfig({
-      vault: { scope: "agent", path: rootDir },
-      context: { includeCompiledDigestPrompt: true },
+    };
+    const { config } = await createVault({
+      config: {
+        vault: { scope: "agent" },
+        context: { includeCompiledDigestPrompt: true },
+      },
     });
     for (const [agentId, marker] of [
       ["support", "SUPPORT_SENTINEL"],
       ["marketing", "MARKETING_SENTINEL"],
     ] as const) {
       const agentConfig = resolveMemoryWikiAgentConfig({ config, appConfig, agentId });
-      await seedCompiledDigest({
-        config: agentConfig,
-        claimCount: 1,
-        pages: [
-          {
-            title: agentId,
-            kind: "entity",
-            claimCount: 1,
-            topClaims: [{ text: marker }],
-          },
-        ],
-      });
+      await seedCompiledDigest(agentConfig, [digestPage(agentId, [{ text: marker }])]);
     }
     const prepare = createWikiPromptSectionPreparer({
       config,

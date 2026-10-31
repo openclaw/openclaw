@@ -1,4 +1,5 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerRouteSubtitlesEnglish } from "./en-route-subtitles.ts";
 import { en } from "./en.ts";
 
 // Devices-page and pairing-dialog copy follows those lazy consumers, rather
@@ -91,7 +92,9 @@ const enDevices = {
       commands: "Commands",
       offline: "offline",
       approve: "Approve",
+      approveName: "Approve {name}",
       reject: "Reject",
+      rejectName: "Reject {name}",
       remove: "Remove",
       removePromptTitle: "Remove {name}?",
       removePromptBody: "This device must pair again before it can reconnect.",
@@ -146,6 +149,10 @@ const enDevices = {
       on: "on",
       target: "Target",
       targetHint: "Gateway edits local approvals; node edits the selected node.",
+      discardPromptTitle: "Discard unsaved approval changes?",
+      discardPromptBody:
+        "Switching targets clears the exec approvals draft for the current target. Unsaved changes cannot be recovered.",
+      discardConfirm: "Discard changes",
       host: "Host",
       gateway: "Gateway",
       node: "Node",
@@ -267,6 +274,7 @@ const enDevices = {
 
 export const registerDevicesEnglish = Object.assign(
   () => {
+    registerRouteSubtitlesEnglish();
     const { pairing, ...pageCopy } = enDevices.devices;
     Object.assign(en.devices, pageCopy);
     Object.assign(en.devices.pairing, pairing);

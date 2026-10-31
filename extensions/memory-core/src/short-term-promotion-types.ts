@@ -12,6 +12,7 @@ import type {
   ShortTermDreamingStatsEntry,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT;
@@ -103,28 +104,28 @@ export type RepairShortTermPromotionArtifactsResult = Omit<
   "removedOverflowEntries"
 > & { removedOverflowEntries: number };
 
-export type RankShortTermPromotionOptions = {
-  workspaceDir: string;
-  limit?: number;
+export type PromotionThresholdOptions = {
   minScore?: number;
   minRecallCount?: number;
   minUniqueQueries?: number;
   maxAgeDays?: number;
+};
+
+export type RankShortTermPromotionOptions = PromotionThresholdOptions & {
+  workspaceDir: string;
+  limit?: number;
   includePromoted?: boolean;
   recencyHalfLifeDays?: number;
   nowMs?: number;
 };
 
-export type ApplyShortTermPromotionsOptions = {
+export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
   agentId?: string;
   workspaceAgentIds?: readonly string[];
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   candidates: PromotionCandidate[];
   limit?: number;
-  minScore?: number;
-  minRecallCount?: number;
-  minUniqueQueries?: number;
-  maxAgeDays?: number;
   nowMs?: number;
   timezone?: string;
   /**
@@ -148,6 +149,7 @@ export type ApplyShortTermPromotionsOptions = {
   consolidation?: {
     subagent?: import("./dreaming-narrative.js").DreamingCompletion;
     model?: string;
+    timeoutMs?: number;
     logger: {
       info: (message: string) => void;
       warn: (message: string) => void;

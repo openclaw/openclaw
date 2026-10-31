@@ -1,6 +1,9 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexModel, createClientFactory } from "./bounded-turn.test-harness.js";
+import * as shared from "./shared-client.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 vi.mock("./auth-bridge.js", () => ({
   resolveCodexAppServerPreparedAuthHandoff: vi.fn(async () => ({ nativeAuthProfile: true })),
@@ -50,9 +53,8 @@ describe("Codex isolated completion native boundary", () => {
         ],
       });
 
-      await runCodexIsolatedCompletion(createParams({ thinkLevel }), {
-        clientFactory: fake.factory,
-      });
+      vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(fake.factory);
+      await runCodexIsolatedCompletion(createParams({ thinkLevel }), {});
 
       const turn = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
       expect(turn).toMatchObject({ effort: expected });
@@ -63,9 +65,8 @@ describe("Codex isolated completion native boundary", () => {
     "applies output policy %s to a successful native turn without an answer",
     async (outputTextPolicy) => {
       const fake = createClientFactory({ emptyAnswer: true });
-      const completion = runCodexIsolatedCompletion(createParams({ outputTextPolicy }), {
-        clientFactory: fake.factory,
-      });
+      vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(fake.factory);
+      const completion = runCodexIsolatedCompletion(createParams({ outputTextPolicy }), {});
 
       if (outputTextPolicy === "strict-visible") {
         await expect(completion).resolves.toMatchObject({

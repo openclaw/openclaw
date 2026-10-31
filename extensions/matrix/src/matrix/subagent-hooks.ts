@@ -4,41 +4,16 @@ import {
   getMatrixThreadBindingManager,
   listAllBindings,
   listBindingsForAccount,
-  removeBindingRecord,
   resolveBindingKey,
 } from "./thread-bindings-shared.js";
 
-type MatrixSubagentEndedEvent = {
+export async function handleMatrixSubagentEnded(event: {
   targetSessionKey: string;
   targetKind: string;
   accountId?: string;
   reason?: string;
   sendFarewell?: boolean;
-};
-
-type MatrixSubagentDeliveryTargetEvent = {
-  childSessionKey: string;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-  expectsCompletionMessage: boolean;
-};
-
-type MatrixDeliveryOrigin = {
-  channel: "matrix";
-  accountId: string;
-  to: string;
-  threadId?: string;
-};
-
-type DeliveryTargetResult = {
-  origin: MatrixDeliveryOrigin;
-};
-
-export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent): Promise<void> {
+}): Promise<void> {
   const accountId = normalizeOptionalString(event.accountId) || undefined;
   // Use the targeted account list when available; fall back to a full scan
   // so bindings are cleaned up even when accountId is absent.
@@ -63,25 +38,29 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
     }
   }
 
-  const affectedAccountIds = new Set<string>();
+  const pendingByAccount = new Map<string, typeof matching>();
   for (const binding of matching) {
-    if (removedBindingKeys.has(resolveBindingKey(binding))) {
-      continue;
-    }
-    if (removeBindingRecord(binding)) {
-      affectedAccountIds.add(binding.accountId);
+    if (!removedBindingKeys.has(resolveBindingKey(binding))) {
+      const pending = pendingByAccount.get(binding.accountId) ?? [];
+      pending.push(binding);
+      pendingByAccount.set(binding.accountId, pending);
     }
   }
-  // Flush each affected account's manager so removals are persisted to disk.
-  for (const acctId of affectedAccountIds) {
-    const manager = getMatrixThreadBindingManager(acctId);
-    await manager?.persist();
+  for (const [bindingAccountId, pending] of pendingByAccount) {
+    await getMatrixThreadBindingManager(bindingAccountId)?.removeBindingsAsync(pending);
   }
 }
 
-export function handleMatrixSubagentDeliveryTarget(
-  event: MatrixSubagentDeliveryTargetEvent,
-): DeliveryTargetResult | undefined {
+export function handleMatrixSubagentDeliveryTarget(event: {
+  childSessionKey: string;
+  requesterOrigin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  expectsCompletionMessage: boolean;
+}) {
   if (!event.expectsCompletionMessage) {
     return undefined;
   }
@@ -96,7 +75,6 @@ export function handleMatrixSubagentDeliveryTarget(
       ? String(event.requesterOrigin.threadId).trim()
       : "";
 
-  // Search the targeted account when available; otherwise scan all accounts.
   const candidates = requesterAccountId
     ? listBindingsForAccount(requesterAccountId)
     : listAllBindings();
@@ -130,7 +108,7 @@ export function handleMatrixSubagentDeliveryTarget(
 
   return {
     origin: {
-      channel: "matrix",
+      channel: "matrix" as const,
       accountId: binding.accountId,
       to: `room:${roomId}`,
       ...(threadId ? { threadId } : {}),

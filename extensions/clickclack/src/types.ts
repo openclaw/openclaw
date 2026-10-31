@@ -14,14 +14,12 @@ export type ClickClackAccountConfig = Omit<
   token?: unknown;
 };
 
-type ClickClackConfig = Omit<ClickClackConfigInput, "token" | "accounts"> & {
-  token?: unknown;
-  accounts?: Record<string, Partial<ClickClackAccountConfig>>;
-};
-
 export type CoreConfig = OpenClawConfig & {
   channels?: OpenClawConfig["channels"] & {
-    clickclack?: ClickClackConfig;
+    clickclack?: Omit<ClickClackConfigInput, "token" | "accounts"> & {
+      token?: unknown;
+      accounts?: Record<string, Partial<ClickClackAccountConfig>>;
+    };
   };
 };
 
@@ -87,29 +85,6 @@ export type ClickClackBotCommand = {
   args_hint: string;
   created_at: string;
   updated_at: string;
-};
-
-/** One-time bot token and installer context returned by setup-code claim. */
-export type ClickClackSetupCodeClaim = {
-  contract_version?: 1;
-  api_base_url?: string;
-  token: string;
-  bot: {
-    id: string;
-    handle: string;
-    display_name: string;
-  };
-  workspace: {
-    id: string;
-    route_id: string;
-    slug: string;
-    name: string;
-  };
-  defaults: {
-    defaultTo?: string;
-    allowFrom?: string[];
-    agentActivity?: boolean;
-  };
 };
 
 export type ClickClackWorkspace = {

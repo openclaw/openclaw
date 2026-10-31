@@ -14,6 +14,14 @@ openclaw-systems-page {
   overflow: hidden;
   background: var(--bg);
 }
+/* Systems renders in the full-bleed chat content column: supply the page top inset
+   other pages get from content padding, and inset the title to the toolbar heading.
+   The selector outranks the shared hub-header insets. */
+.systems-workspace > .content-header.hub-page-header.systems-page-header {
+  flex: 0 0 auto;
+  margin-top: var(--space-4);
+  padding-inline: 18px;
+}
 .systems-toolbar {
   display: flex;
   align-items: center;
@@ -26,7 +34,7 @@ openclaw-systems-page {
   flex: 1;
   min-width: 0;
 }
-.systems-heading h1 {
+.systems-heading h2 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
@@ -69,12 +77,22 @@ openclaw-systems-page {
   width: 17px;
   height: 17px;
 }
+/* Telemetry and backups settle independently. Their shared viewport keeps those
+   arrivals, or a selected worker removing Gateway backups, above a stable desktop. */
+.systems-overview {
+  flex: 0 0 225px;
+  max-height: 40%;
+  overflow: auto;
+}
+.systems-overview--compact {
+  flex-basis: 90px;
+}
+.systems-overview__telemetry {
+  min-height: 150px;
+}
 .systems-metrics {
   padding: 12px 18px 8px;
   border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
-  max-height: 50%;
-  overflow-y: auto;
 }
 .systems-vitals {
   display: grid;
@@ -135,9 +153,6 @@ openclaw-systems-page {
   border-bottom: 1px solid var(--border);
 }
 .systems-backups {
-  flex: 0 1 auto;
-  max-height: 36%;
-  overflow: auto;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   font-size: 11px;
@@ -343,8 +358,6 @@ openclaw-systems-page {
 .systems-details .systems-metrics {
   padding: 0;
   border: 0;
-  max-height: none;
-  overflow: visible;
 }
 .systems-details .systems-vitals {
   grid-template-columns: minmax(0, 1fr);
@@ -426,6 +439,25 @@ openclaw-systems-page {
   min-height: var(--sidebar-session-row-min-height, 30px);
   margin-bottom: 4px;
   color: var(--muted);
+}
+
+.systems-filter-menu {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.systems-filter-menu .oc-menu {
+  --oc-overlay-distance: 0px;
+
+  width: min(220px, calc(100dvw - 16px));
+}
+
+.systems-filter-menu .oc-menu-item__check {
+  display: none;
+}
+
+.systems-filter__sort > .oc-menu-item__label {
+  display: flex;
 }
 .systems-filter > span {
   display: inline-flex;
@@ -602,6 +634,7 @@ openclaw-systems-page {
   height: 14px;
 }
 .systems-sidebar__empty {
+  margin: 0;
   padding: 8px var(--sidebar-inset, 8px);
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale, 1));
@@ -621,6 +654,9 @@ openclaw-systems-page {
     display: block;
     flex: 1;
     max-width: none;
+  }
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    padding-inline: 10px;
   }
   .systems-toolbar {
     padding: 10px;
@@ -659,5 +695,15 @@ openclaw-systems-page {
   .systems-vital .sparkline-tile__value {
     font-size: 14px;
     white-space: nowrap;
+  }
+}
+@media (max-width: 640px) {
+  /* Keep the persistent outlet at the chat inset; pad only this page's content. */
+  .systems-workspace {
+    padding: 8px 8px 16px;
+  }
+
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    margin-top: 0;
   }
 }

@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -8,67 +14,68 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { registerRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import {
+  prepareUserProfileCatalog,
+  readResidentUserProfileId,
+} from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail, resolveUserProfileId } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { registerChatAbortController } from "../chat-abort.js";
+import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { createChatAbortMarker } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
-import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   prepareChatSendRetryComparison,
-  resolveChatSendRequestConflict,
   respondChatSendRetry,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
 
+const submittedInput = vi.hoisted(() =>
+  vi.fn<() => Promise<Awaited<ReturnType<typeof readSessionSubmittedInput>>>>(),
+);
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  readSessionSubmittedInput: vi.fn(),
+  readSessionSubmittedInput: vi.fn(
+    async (_scope: unknown, _key: string, options?: { includeSource: true }) => {
+      const message = await submittedInput();
+      return message && options?.includeSource
+        ? { message, source: "transcript" as const }
+        : message;
+    },
+  ),
 }));
-vi.mock("./chat-restart-recovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./chat-restart-recovery.js")>()),
-  resolveDurableChatClaim: vi.fn(),
-}));
-
 type RetryParams = Parameters<typeof respondChatSendRetry>[0];
 
-function retryFixture(runId: string) {
-  const request: RetryParams["request"] = {
-    rawMessage: "Hi @Bob",
-    requestIdentity: "original-bob-selection",
-    mentions: [{ profileId: "bob", start: 3, end: 7 }],
-  };
-  const session: RetryParams["session"] = {
-    clientRunId: runId,
-    pendingChatSendKey: pendingChatSendDedupeKey(runId),
-    entry: { sessionId: "mention-session", updatedAt: 100 },
-    agentId: "main",
-    sessionKey: "agent:main:mentions",
-    storePath: "/tmp/chat-retry-fixture.sqlite",
-    restartSafeRequest: undefined,
-  };
-  return { request, session, context: createDirectChatContext(), respond: vi.fn() };
-}
-
-function preAdmissionFixture(runId: string) {
-  const fixture = retryFixture(runId);
-  const { session } = fixture;
+function createFixture() {
+  const runId = "mention-run";
+  const sessionKey = "agent:main:mentions";
+  const rawMessage = "Hi @Bob";
+  const respond = vi.fn();
   const params: Parameters<typeof runChatSendPreAdmission>[0] = {
-    ...fixture,
+    context: createDirectChatContext(),
+    respond,
     client: null,
     request: {
-      ...fixture.request,
-      p: {
-        sessionKey: session.sessionKey,
-        idempotencyKey: session.clientRunId,
-        message: fixture.request.rawMessage,
-      },
+      rawMessage,
+      requestIdentity: "original-bob-selection",
+      mentions: [{ profileId: "bob", start: 3, end: 7 }],
+      p: { sessionKey, idempotencyKey: runId, message: rawMessage },
       chatSendReceivedAtMs: 100,
       supportsTaskSuggestions: false,
-      inboundMessage: fixture.request.rawMessage,
+      inboundMessage: rawMessage,
       suppressCommandInterpretation: false,
       stopCommand: false,
       turnKind: "main",
@@ -76,10 +83,15 @@ function preAdmissionFixture(runId: string) {
       reconnectResumeRequested: false,
     },
     session: {
-      ...session,
+      clientRunId: runId,
+      pendingChatSendKey: pendingChatSendDedupeKey(runId),
+      entry: { sessionId: "mention-session", updatedAt: 100 },
+      agentId: "main",
+      sessionKey,
+      storePath: "/tmp/chat-retry-fixture.sqlite",
       cfg: {},
-      rawSessionKey: session.sessionKey,
-      sessionLoadKey: session.sessionKey,
+      rawSessionKey: sessionKey,
+      sessionLoadKey: sessionKey,
       sessionLoadOptions: { agentId: "main" },
       sessionLoadMs: 0,
       legacyKey: undefined,
@@ -96,167 +108,355 @@ function preAdmissionFixture(runId: string) {
       now: 100,
     },
   };
-  return { fixture, params };
+  return { ...params, respond };
+}
+
+function cacheSuccess(params: RetryParams, ts = 100, requestIdentity?: string) {
+  const { clientRunId } = params.session;
+  params.context.dedupe.set(`chat:${clientRunId}`, {
+    ts,
+    ok: true,
+    payload: { runId: clientRunId, status: "ok" },
+    ...(requestIdentity === undefined ? {} : { requestIdentity }),
+  });
+}
+
+function submittedMessage(params: RetryParams) {
+  return {
+    role: "user" as const,
+    timestamp: 100,
+    content: params.request.rawMessage,
+    __openclaw: { humanMentions: params.request.mentions },
+  };
+}
+
+function expectFailure(respond: RetryParams["respond"], fields: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
+}
+
+function expectCached(payload: unknown, metadata: Record<string, unknown> = { cached: true }) {
+  expect(params.respond).toHaveBeenCalledWith(true, payload, undefined, metadata);
 }
 
 function expectConflict(respond: RetryParams["respond"]) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "INVALID_REQUEST",
-      details: { reason: "chat-request-conflict" },
-    }),
-  );
+  expectFailure(respond, {
+    code: "INVALID_REQUEST",
+    details: { reason: "chat-request-conflict" },
+  });
 }
 
+async function retry(params: RetryParams) {
+  return respondChatSendRetry(params, await prepareChatSendRetryComparison(params));
+}
+
+async function expectRetryConflict(params: RetryParams) {
+  expect(await retry(params)).toBe(true);
+  expectConflict(params.respond);
+}
+
+let params: ReturnType<typeof createFixture>;
 beforeEach(() => {
-  vi.mocked(readSessionSubmittedInput).mockReset().mockResolvedValue(undefined);
-  vi.mocked(resolveDurableChatClaim).mockReset();
+  vi.mocked(readSessionSubmittedInput).mockClear();
+  submittedInput.mockReset().mockResolvedValue(undefined);
+  params = createFixture();
 });
 
-describe("chat send stop ownership", () => {
-  it("stops selected-agent work without cancelling the compatibility owner's run", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { fixture, params } = preAdmissionFixture("stop-selected-agent");
-      const cfg: OpenClawConfig = {
-        session: {
-          scope: "global",
-          store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite"),
-        },
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      };
-      await state.writeConfig(cfg);
-      fixture.context.getRuntimeConfig = () => cfg;
-      params.request.stopCommand = true;
-      params.request.p = {
-        sessionKey: "global",
-        agentId: "research",
-        idempotencyKey: "stop-selected-agent",
-        message: "/stop",
-      };
-      Object.assign(params.session, {
-        cfg,
-        sessionKey: "global",
-        rawSessionKey: "global",
-        sessionLoadKey: "global",
-        sessionLoadOptions: { agentId: "research" },
-        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "research" }),
-        agentId: "research",
-        requestedAgentId: "research",
-        selectedAgent: { ok: true, agentId: "research" },
-        backingSessionId: undefined,
-        entry: undefined,
-      });
-      for (const [runId, agentId] of [
-        ["selected", "research"],
-        ["compatibility", undefined],
-      ]) {
-        fixture.context.dedupe.set(`agent:${runId}`, {
-          ts: 100,
-          ok: true,
-          payload: { runId, sessionKey: "global", agentId, status: "accepted" },
-        });
-      }
-
+it("stops admitted session work while preserving a detached producer", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = {
+      session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite") },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    params.context.getRuntimeConfig = () => cfg;
+    params.request.stopCommand = true;
+    params.request.p.message = "/stop";
+    params.session.cfg = cfg;
+    params.session.storePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: "main",
+    });
+    const { sessionKey, entry, storePath } = params.session;
+    await upsertSessionEntryCore({ agentId: "main", storePath, sessionKey }, entry!);
+    const before = loadSessionEntry({ agentId: "main", storePath, sessionKey });
+    const embeddedAbort = vi.fn();
+    const handle = createEmbeddedRunHandle({ runId: "embedded-producer", abort: embeddedAbort });
+    attachActiveEmbeddedRun(entry!.sessionId, handle);
+    const controller = new AbortController();
+    const admittedInterrupt = vi.fn((reason?: Error) => {
+      controller.abort(reason);
+      return { runId: "admitted-producer" };
+    });
+    const admission = await beginSessionEffect({
+      scope: storePath,
+      identities: [sessionKey, entry!.sessionId],
+      run: {
+        runId: "admitted-producer",
+        sessionKey,
+        sessionId: entry!.sessionId,
+        agentId: "main",
+        controlUiVisible: true,
+      },
+      onInterrupt: admittedInterrupt,
+      assertAllowed: () => {},
+    });
+    try {
       expect(await runChatSendPreAdmission(params)).toBe(false);
-      expect(fixture.respond).toHaveBeenCalledWith(true, {
+      expect(params.respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        aborted: true,
+        runIds: ["admitted-producer"],
+      });
+      expect(embeddedAbort).not.toHaveBeenCalled();
+      expect(admittedInterrupt).toHaveBeenCalledOnce();
+      expect(controller.signal.aborted).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(before);
+    } finally {
+      admission.release();
+      detachActiveEmbeddedRun(entry!.sessionId, handle);
+    }
+  }));
+
+it("stops selected-agent work without cancelling the compatibility owner's run", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = {
+      session: {
+        scope: "global",
+        store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite"),
+      },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    params.context.getRuntimeConfig = () => cfg;
+    params.request.stopCommand = true;
+    params.request.p = {
+      sessionKey: "global",
+      agentId: "research",
+      idempotencyKey: params.session.clientRunId,
+      message: "/stop",
+    };
+    Object.assign(params.session, {
+      cfg,
+      sessionKey: "global",
+      rawSessionKey: "global",
+      sessionLoadKey: "global",
+      sessionLoadOptions: { agentId: "research" },
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "research" }),
+      agentId: "research",
+      requestedAgentId: "research",
+      selectedAgent: { ok: true, agentId: "research" },
+      backingSessionId: undefined,
+      entry: undefined,
+    });
+    for (const [runId, agentId] of [
+      ["selected", "research"],
+      ["compatibility", undefined],
+    ]) {
+      params.context.dedupe.set(`agent:${runId}`, {
+        ts: 100,
+        ok: true,
+        payload: { runId, sessionKey: "global", agentId, status: "accepted" },
+      });
+    }
+    const registrations = [
+      ["selected", "research"],
+      ["compatibility", "ops"],
+    ] as const;
+    const sourceRegistrations = registrations.map(([runId, agentId]) => {
+      const sessionId = `${runId}-session`;
+      return registerChatAbortController({
+        target: captureSessionTarget({
+          storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+          sessionKey: "global",
+          incarnation: sessionId,
+          agentId,
+        }),
+        runId,
+        sessionId,
+        sessionKey: "global",
+        agentId,
+        kind: "agent",
+        timeoutMs: 1_000,
+      });
+    });
+    try {
+      expect(await runChatSendPreAdmission(params)).toBe(false);
+      expect(params.respond).toHaveBeenCalledWith(true, {
         ok: true,
         aborted: true,
         runIds: ["selected"],
       });
-      expect(fixture.context.dedupe.get("agent:selected")?.payload).toMatchObject({
-        status: "timeout",
-        summary: "aborted",
-      });
-      expect(fixture.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
+      expect(sourceRegistrations[0]?.entry?.input.abortSignal.aborted).toBe(true);
+      expect(sourceRegistrations[1]?.entry?.input.abortSignal.aborted).toBe(false);
+      expect(rpcSourceTesting.has("selected")).toBe(false);
+      expect(rpcSourceTesting.has("compatibility")).toBe(true);
+      expect(params.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
         status: "accepted",
       });
-    });
-  });
-});
-
-describe("chat send retry identity", () => {
-  it.each(["pending", "active", "queued", "terminal"] as const)(
-    "rejects changed mention recipients before a %s acknowledgement",
-    async (state) => {
-      const params = retryFixture(`changed-recipient-${state}`);
-      const { clientRunId, pendingChatSendKey, sessionKey } = params.session;
-      params.context.dedupe.set(state === "pending" ? pendingChatSendKey : `chat:${clientRunId}`, {
-        ts: 100,
-        ok: true,
-        requestIdentity: params.request.requestIdentity,
-        ...(state === "pending" || state === "terminal"
-          ? {
-              payload: {
-                runId: clientRunId,
-                sessionKey,
-                status: state === "pending" ? "accepted" : "ok",
-              },
-            }
-          : {}),
-      });
-      const controller = {
-        controller: new AbortController(),
-        sessionKey,
-        sessionId: "mention-session",
-      };
-      if (state === "active") {
-        params.context.chatAbortControllers.set(clientRunId, {
-          ...controller,
-          startedAtMs: 100,
-          expiresAtMs: 200,
-        });
-      } else if (state === "queued") {
-        params.context.chatQueuedTurns.set(clientRunId, controller);
+    } finally {
+      for (const registration of sourceRegistrations) {
+        registration.cleanup();
       }
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-      expect(params.respond).toHaveBeenCalledWith(
-        true,
+    }
+  }));
+
+it.each(["pending", "active", "accepted", "terminal", "metadata"] as const)(
+  "requires accepted custody and rejects changed mention recipients for a %s retry",
+  async (state) => {
+    const { clientRunId, pendingChatSendKey, sessionKey } = params.session;
+    params.context.dedupe.set(state === "pending" ? pendingChatSendKey : `chat:${clientRunId}`, {
+      ts: 100,
+      ok: true,
+      requestIdentity: params.request.requestIdentity,
+      ...(state === "accepted" ? { effectAccepted: true } : {}),
+      ...(state === "pending" || state === "terminal"
+        ? {
+            payload: {
+              runId: clientRunId,
+              sessionKey,
+              status: state === "pending" ? "accepted" : "ok",
+            },
+          }
+        : {}),
+    });
+    if (state === "active") {
+      const source = createRpcSourceForTest(
+        {},
+        {
+          storeScope: params.session.storePath,
+          runId: clientRunId,
+          sessionKey,
+          sessionId: "mention-session",
+          agentId: "main",
+          phase: "preparing",
+        },
+      );
+      registerRpcSource(clientRunId, source);
+      await claimRpcSourceForTest(source);
+    }
+    expect(await retry(params)).toBe(state !== "metadata");
+    if (state === "pending" || state === "active") {
+      expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
+    } else if (state === "metadata") {
+      expect(params.respond).not.toHaveBeenCalled();
+    } else {
+      expectCached(
         expect.objectContaining({
           runId: clientRunId,
           status: state === "terminal" ? "ok" : "in_flight",
         }),
-        undefined,
         expect.objectContaining({ cached: true }),
       );
+    }
 
-      params.respond.mockClear();
-      params.request.requestIdentity = "changed-carol-selection";
-      params.request.mentions = [{ profileId: "carol", start: 3, end: 7 }];
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-      expectConflict(params.respond);
-      expect(readSessionSubmittedInput).not.toHaveBeenCalled();
-    },
-  );
+    params.respond.mockClear();
+    params.request.requestIdentity = "changed-carol-selection";
+    params.request.mentions = [{ profileId: "carol", start: 3, end: 7 }];
+    await expectRetryConflict(params);
+  },
+);
 
-  it("keeps a transient preparation failure retryable without treating identity metadata as an ACK", async () => {
-    const params = retryFixture("metadata-only-retry");
-    params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-      ts: 100,
-      ok: true,
-      requestIdentity: params.request.requestIdentity,
-    });
-    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(false);
-    expect(params.respond).not.toHaveBeenCalled();
-
-    setGatewayDedupeEntry({
-      dedupe: params.context.dedupe,
-      key: `chat:${params.session.clientRunId}`,
-      entry: { ts: 200, ok: true, payload: { runId: params.session.clientRunId, status: "ok" } },
-    });
-    params.request.requestIdentity = "changed-after-terminal";
-    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-    expectConflict(params.respond);
+it("replays explicit cancellation before a retained accepted input marker", async () => {
+  const { clientRunId } = params.session;
+  params.context.dedupe.set(`chat:${clientRunId}`, {
+    ts: 100,
+    ok: true,
+    requestIdentity: params.request.requestIdentity,
+    effectAccepted: true,
   });
+  params.context.chatRunState.getOrCreate(clientRunId).abortMarker = createChatAbortMarker(200);
 
-  it("transfers the pending input identity when an abort precedes active registration", async () => {
-    const params = retryFixture("early-abort-retry");
-    params.context.dedupe.set(params.session.pendingChatSendKey, {
+  expect(await retry(params)).toBe(true);
+  expectCached(
+    { runId: clientRunId, status: "timeout", summary: "aborted", endedAt: 200 },
+    { cached: true, runId: clientRunId },
+  );
+});
+
+it("readmits a retained queued input only from its admitted physical store", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = {};
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const { session } = params;
+    const logicalStorePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    await upsertSessionEntryCore(
+      { agentId: session.agentId, storePath: logicalStorePath, sessionKey: session.sessionKey },
+      session.entry!,
+    );
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg,
+      key: session.sessionKey,
+      agentId: session.agentId,
+      env: state.env,
+      readOnly: true,
+      exactRead: true,
+    });
+    if (!loaded.entry || !loaded.readSource) {
+      throw new Error("Queued input fixture did not prepare its physical session source");
+    }
+    expect(loaded.storePath).toBe(logicalStorePath);
+    expect(loaded.readSource.path).not.toBe(logicalStorePath);
+    Object.assign(session, {
+      cfg,
+      entry: loaded.entry,
+      storePath: loaded.storePath,
+      readSource: loaded.readSource,
+    });
+    const foreignStorePath = state.statePath("foreign.sqlite");
+    await upsertSessionEntryCore(
+      { agentId: session.agentId, storePath: foreignStorePath, sessionKey: session.sessionKey },
+      loaded.entry,
+    );
+    const message = submittedMessage(params);
+    const comparison = {
+      agentId: session.agentId,
+      storePath: session.storePath,
+      sessionKey: session.sessionKey,
+      sessionId: loaded.entry.sessionId,
+      lifecycleRevision: loaded.entry.lifecycleRevision,
+      clientRunId: session.clientRunId,
+      submitted: message,
+      source: "pending" as const,
+    };
+    for (const storePath of [loaded.readSource.path, foreignStorePath]) {
+      params.respond.mockClear();
+      const handled = queuedChatInputAdmission.run(
+        {
+          target: {
+            agentId: session.agentId,
+            storePath,
+            sessionKey: session.sessionKey,
+            sessionId: loaded.entry.sessionId,
+            runId: session.clientRunId,
+            message,
+            requestHash: "retained-queued-input",
+          },
+          requestFingerprint: params.request.requestIdentity!,
+        },
+        () => respondChatSendRetry(params, comparison),
+      );
+      if (storePath === loaded.readSource.path) {
+        expect(handled).toBe(false);
+        expect(params.respond).not.toHaveBeenCalled();
+      } else {
+        expect(handled).toBe(true);
+        expectCached(
+          { runId: session.clientRunId, status: "ok" },
+          { cached: true, runId: session.clientRunId },
+        );
+      }
+    }
+  }));
+
+it.each(["pending", "evicted", "superseded"] as const)(
+  "settles only the original input when aborting a %s reservation",
+  async (reservation) => {
+    const pending = {
       ts: 100,
       ok: true,
       requestIdentity: params.request.requestIdentity,
@@ -264,305 +464,204 @@ describe("chat send retry identity", () => {
         runId: params.session.clientRunId,
         status: "accepted",
         sessionKey: params.session.sessionKey,
-        attemptId: "attempt",
+        attemptId: reservation === "superseded" ? "successor" : "attempt",
       },
-    });
-    writePreRegisteredChatAbort({
+    };
+    if (reservation !== "evicted") {
+      params.context.dedupe.set(params.session.pendingChatSendKey, pending);
+    }
+    const written = writePreRegisteredChatAbort({
       context: params.context,
       runId: params.session.clientRunId,
       stopReason: "rpc",
       attemptId: "attempt",
-      endedAt: 200,
+      requestIdentity: params.request.requestIdentity,
     });
+    if (reservation === "superseded") {
+      expect(written).toBe(false);
+      expect(params.context.chatRunState.hasAbortMarker(params.session.clientRunId)).toBe(false);
+      expect(params.context.dedupe.get(params.session.pendingChatSendKey)).toBe(pending);
+      expect(params.context.dedupe.has(`chat:${params.session.clientRunId}`)).toBe(false);
+      return;
+    }
+    expect(written).toBe(true);
+    expect(params.context.chatRunState.hasAbortMarker(params.session.clientRunId)).toBe(true);
     params.request.requestIdentity = "changed-after-abort";
-    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-    expectConflict(params.respond);
+    await expectRetryConflict(params);
     expect(params.context.dedupe.has(params.session.pendingChatSendKey)).toBe(false);
-  });
+  },
+);
 
-  it.each(["different", undefined])(
-    "rejects a durable source retry with fingerprint %s",
-    (fingerprint) => {
-      const params = retryFixture(`durable-fingerprint-${fingerprint ?? "unavailable"}`);
-      params.session.entry = {
-        sessionId: "mention-session",
-        updatedAt: 100,
-        restartRecoveryDeliverySourceRunId: params.session.clientRunId,
-        restartRecoveryDeliveryRequestFingerprint: "original",
-      };
-      params.session.restartSafeRequest = fingerprint ? { fingerprint } : undefined;
-      expect(resolveChatSendRequestConflict(params)).toMatchObject({
-        details: { reason: "chat-request-conflict" },
-      });
-      params.session.restartSafeRequest = { fingerprint: "original" };
-      expect(resolveChatSendRequestConflict(params)).toBeUndefined();
-      expect(readSessionSubmittedInput).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["unchanged", "removed", "replaced"] as const)(
-    "compares %s selections to the original source after RAM identity expires",
-    async (selection) => {
-      const params = retryFixture(`source-${selection}`);
-      const original = {
-        role: "user" as const,
-        timestamp: 100,
-        content: params.request.rawMessage,
-        __openclaw: { humanMentions: params.request.mentions },
-      };
-      vi.mocked(readSessionSubmittedInput).mockResolvedValue(original);
-      params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-        ts: 200,
-        ok: true,
-        payload: { runId: params.session.clientRunId, status: "ok" },
-      });
-      params.request.mentions =
-        selection === "removed"
-          ? undefined
-          : selection === "replaced"
-            ? [{ profileId: "carol", start: 3, end: 7 }]
-            : params.request.mentions;
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-      if (selection === "unchanged") {
-        expect(params.respond).toHaveBeenCalledWith(
-          true,
-          { runId: params.session.clientRunId, status: "ok" },
-          undefined,
-          { cached: true },
-        );
-      } else {
-        expectConflict(params.respond);
-      }
-      expect(readSessionSubmittedInput).toHaveBeenCalledWith(
-        {
-          agentId: "main",
-          sessionId: "mention-session",
-          sessionKey: params.session.sessionKey,
-          storePath: params.session.storePath,
-        },
-        `${params.session.clientRunId}:user`,
-      );
-    },
-  );
-
-  it.each(["missing", "redacted"] as const)(
-    "does not acknowledge an unverifiable %s mention source",
-    async (source) => {
-      const params = retryFixture(`unverifiable-${source}`);
-      params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-        ts: 200,
-        ok: true,
-        payload: { runId: params.session.clientRunId, status: "ok" },
-      });
-      if (source === "redacted") {
-        vi.mocked(readSessionSubmittedInput).mockResolvedValue({
-          role: "user",
-          timestamp: 100,
-          content: "[REDACTED]",
-        });
-      }
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
+it.each(["unchanged", "removed"] as const)(
+  "compares %s selections to the original source after RAM identity expires",
+  async (selection) => {
+    cacheSuccess(params, 200);
+    submittedInput.mockResolvedValue(submittedMessage(params));
+    if (selection === "removed") {
+      params.request.mentions = undefined;
+    }
+    expect(await retry(params)).toBe(true);
+    if (selection === "unchanged") {
+      expectCached({ runId: params.session.clientRunId, status: "ok" });
+    } else {
       expectConflict(params.respond);
-      if (source === "missing") {
-        expect(params.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringContaining("Check the conversation history"),
-          }),
-        );
-      }
-    },
-  );
+    }
+  },
+);
 
-  it("rejects annotation removal from a terminal tombstone after the entire RAM cache is gone", async () => {
-    const params = retryFixture("terminal-source-without-cache");
-    params.session.entry = {
-      sessionId: "mention-session",
-      updatedAt: 100,
-      restartRecoveryTerminalRunIds: [params.session.clientRunId],
-    };
-    vi.mocked(readSessionSubmittedInput).mockResolvedValue({
-      role: "user",
-      timestamp: 100,
-      content: params.request.rawMessage,
-      __openclaw: { humanMentions: params.request.mentions },
-    });
-    params.request.mentions = undefined;
-    expect(
-      resolveChatSendRequestConflict(params, await prepareChatSendRetryComparison(params)),
-    ).toMatchObject({
-      details: { reason: "chat-request-conflict" },
-    });
-  });
-
-  it("refuses stale projection evidence before replaying a cached response", async () => {
-    const { params } = preAdmissionFixture("stale-submitted-source");
-    params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-      ts: 100,
-      ok: true,
-      payload: { runId: params.session.clientRunId, status: "ok" },
-    });
-    vi.mocked(readSessionSubmittedInput).mockRejectedValue(
-      new SessionTranscriptProjectionUnavailableError(params.session.entry!.sessionId),
-    );
-    expect(await runChatSendPreAdmission(params)).toBe(false);
-    expect(params.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-    );
-  });
-
-  it("rejects a competing identity published while submitted comparison yields", async () => {
-    const { params } = preAdmissionFixture("submitted-comparison-race");
-    const key = `chat:${params.session.clientRunId}`;
-    params.context.dedupe.set(key, {
-      ts: 100,
-      ok: true,
-      payload: { runId: params.session.clientRunId, status: "ok" },
-    });
-    const read = createDeferred<Awaited<ReturnType<typeof readSessionSubmittedInput>>>();
-    vi.mocked(readSessionSubmittedInput).mockReturnValue(read.promise);
-    const pending = runChatSendPreAdmission(params);
-    params.context.dedupe.set(key, {
-      ts: 200,
-      ok: true,
-      requestIdentity: "competing-input",
-      payload: { runId: params.session.clientRunId, status: "ok" },
-    });
-    read.resolve({
-      role: "user",
-      timestamp: 100,
-      content: params.request.rawMessage,
-      __openclaw: { humanMentions: params.request.mentions },
-    });
-    expect(await pending).toBe(false);
-    expectConflict(params.respond);
-  });
-
-  it("rechecks a competing request admitted while durable recovery yields", async () => {
-    const { fixture, params } = preAdmissionFixture("recovery-race");
-    const { session } = fixture;
-    const deferred = createDeferred<Awaited<ReturnType<typeof resolveDurableChatClaim>>>();
-    const entered = createDeferred();
-    vi.mocked(resolveDurableChatClaim).mockImplementation(() => {
-      entered.resolve();
-      return deferred.promise;
-    });
-    const pending = runChatSendPreAdmission(params);
-    await entered.promise;
-    expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
-    fixture.context.dedupe.set(`chat:${session.clientRunId}`, {
-      ts: 200,
-      ok: true,
-      requestIdentity: "competing-input",
-      payload: { runId: session.clientRunId, status: "ok" },
-    });
-    deferred.resolve({ kind: "continue", entry: session.entry });
-    expect(await pending).toBe(false);
-    expectConflict(fixture.respond);
-  });
-
-  it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as const)(
-    "rechecks the canonical profile after real recovery without changing %s outcomes",
-    async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const { fixture, params } = preAdmissionFixture(`profile-recovery-${outcome}`);
-        const sourceEmail = "recovery-source@example.test";
-        const source = ensureProfileForEmail(sourceEmail);
-        const target = ensureProfileForEmail("recovery-target@example.test");
-        const scope = { agentId: params.session.agentId, sessionKey: params.session.sessionKey };
-        await upsertSessionEntryCore(scope, { sessionId: "mention-session", updatedAt: 100 });
-        const originalEntry = loadSessionEntry(scope);
-        expect(originalEntry).toBeDefined();
-        params.session.entry = originalEntry;
-        params.session.storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const client: NonNullable<Parameters<typeof runChatSendPreAdmission>[0]["client"]> = {
-          connId: "profile-recovery",
-          authenticatedUserProfile: {
-            profileId: source.id,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: source.updatedAt,
-          },
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: { id: "test", version: "1", platform: "test", mode: "test" },
-          },
-        };
-        params.client = client;
-        const mismatch = new SessionMutationAuthorizationChangedError({
-          code: "INVALID_REQUEST",
-          message: "Selected account changed; select the account again.",
-          details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
-        });
-        // Keep the selected ID exact: resolving both sides would silently follow a merge.
-        params.assertCurrent = () => {
-          if (resolveUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
-            throw mismatch;
-          }
-        };
-        params.assertCurrent();
-        const actualRecovery = await vi.importActual<typeof import("./chat-restart-recovery.js")>(
-          "./chat-restart-recovery.js",
-        );
-        const entered = createDeferred();
-        const release = createDeferred();
-        let recoveryCompleted = false;
-        vi.mocked(resolveDurableChatClaim).mockImplementationOnce(async (request) => {
-          entered.resolve();
-          await release.promise;
-          const result = await actualRecovery.resolveDurableChatClaim(request);
-          recoveryCompleted = true;
-          return result;
-        });
-        const pending = runChatSendPreAdmission(params);
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
-          if (outcome !== "unchanged") {
-            linkEmail(sourceEmail, target.id);
-            expect(resolveUserProfileId(source.id)).toBe(target.id);
-            expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
-          }
-          if (outcome === "cached-success" || outcome === "cached-error") {
-            fixture.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-              ts: 200,
-              ok: outcome === "cached-success",
-              requestIdentity: params.request.requestIdentity,
-              ...(outcome === "cached-success"
-                ? { payload: { runId: params.session.clientRunId, status: "ok" } }
-                : { error: { code: "UNAVAILABLE", message: "Recorded run failure." } }),
-            });
-          }
-          const originalReceipts = structuredClone([...fixture.context.dedupe]);
-          release.resolve();
-          const settled = await pending.then(
-            (value) => ({ value, error: undefined }),
-            (error: unknown) => ({ value: undefined, error }),
-          );
-
-          expect(recoveryCompleted).toBe(true);
-          expect(loadSessionEntry(scope)).toEqual(originalEntry);
-          expect([...fixture.context.dedupe]).toEqual(originalReceipts);
-          expect(fixture.context.chatAbortControllers.size).toBe(0);
-          expect(fixture.context.chatQueuedTurns?.size ?? 0).toBe(0);
-          expect(client).not.toHaveProperty("invalidated", true);
-          if (outcome === "unchanged") {
-            expect(settled).toEqual({ value: true, error: undefined });
-          } else {
-            expect(settled).toEqual({ value: undefined, error: mismatch });
-          }
-          expect(fixture.respond).not.toHaveBeenCalled();
-        } finally {
-          release.resolve();
-          await pending.catch(() => undefined);
-        }
+it.each(["missing", "work context", "redacted"] as const)(
+  "does not acknowledge an unverifiable %s source without RAM fingerprints",
+  async (source) => {
+    params.request.requestIdentity = undefined;
+    if (source === "work context") {
+      params.request.mentions = undefined;
+      params.request.workContext = {
+        snapshot: { page: "chat" },
+        text: params.request.rawMessage,
+      };
+    }
+    cacheSuccess(params, 200);
+    if (source === "redacted") {
+      submittedInput.mockResolvedValue({
+        role: "user",
+        timestamp: 100,
+        content: "[REDACTED]",
       });
-    },
+    }
+    await expectRetryConflict(params);
+    if (source === "missing") {
+      expectFailure(params.respond, {
+        message: expect.stringContaining("Check the conversation history"),
+      });
+    }
+  },
+);
+
+it("refuses stale projection evidence before replaying a cached response", async () => {
+  cacheSuccess(params, 100);
+  submittedInput.mockRejectedValue(
+    new SessionTranscriptProjectionUnavailableError(params.session.entry!.sessionId),
   );
+  expect(await runChatSendPreAdmission(params)).toBe(false);
+  expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
 });
+
+it("rejects a competing identity published while submitted comparison yields", async () => {
+  cacheSuccess(params, 100);
+  const read = createDeferred<Awaited<ReturnType<typeof readSessionSubmittedInput>>>();
+  submittedInput.mockReturnValue(read.promise);
+  const pending = runChatSendPreAdmission(params);
+  cacheSuccess(params, 200, "competing-input");
+  read.resolve(submittedMessage(params));
+  expect(await pending).toBe(false);
+  expectConflict(params.respond);
+});
+
+it.each(["ready", "routing changed", "archived"] as const)(
+  "revalidates new-input policy after the indexed receipt read (%s)",
+  async (outcome) => {
+    if (outcome === "archived") {
+      params.session.entry!.archivedAt = 100;
+    }
+    let consuming = false;
+    params.assertCurrent = () => {
+      expect(consuming).toBe(true);
+    };
+    params.session.sessionRoutingChanged = () => {
+      params.assertCurrent?.();
+      return outcome === "routing changed";
+    };
+    params.withCurrent = async (consume) => {
+      consuming = true;
+      try {
+        return consume();
+      } finally {
+        consuming = false;
+      }
+    };
+
+    expect(await runChatSendPreAdmission(params)).toBe(outcome === "ready");
+    if (outcome === "ready") {
+      expect(params.respond).not.toHaveBeenCalled();
+    } else {
+      expectFailure(params.respond, { code: "INVALID_REQUEST" });
+    }
+  },
+);
+
+it.each(["unchanged", "profile merged"] as const)(
+  "rechecks the canonical profile after submitted-input comparison (%s)",
+  async (outcome) => {
+    const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
+    await withOpenClawTestState(stateOptions, async () => {
+      setRuntimeConfigSnapshot({});
+      const { session, context, respond } = params;
+      const sourceEmail = "recovery-source@example.test";
+      const source = ensureProfileForEmail(sourceEmail);
+      const target = ensureProfileForEmail("recovery-target@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const scope = { agentId: session.agentId, sessionKey: session.sessionKey };
+      await upsertSessionEntryCore(scope, { sessionId: "mention-session", updatedAt: 100 });
+      const originalEntry = loadSessionEntry(scope);
+      expect(originalEntry).toBeDefined();
+      session.entry = originalEntry;
+      session.storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const client: NonNullable<Parameters<typeof runChatSendPreAdmission>[0]["client"]> = {
+        connId: "profile-recovery",
+        authenticatedUserProfile: gatewayProfile(source.id, null, source.updatedAt),
+        connect: gatewayConnect(["operator.admin"], { id: "test", version: "1", mode: "test" }),
+      };
+      params.client = client;
+      const mismatch = new SessionMutationAuthorizationChangedError({
+        code: "INVALID_REQUEST",
+        message: "Selected account changed; select the account again.",
+        details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+      });
+      // Keep the selected ID exact: resolving both sides would silently follow a merge.
+      params.assertCurrent = () => {
+        if (readResidentUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
+          throw mismatch;
+        }
+      };
+      params.assertCurrent();
+      const entered = createDeferred();
+      const release = createDeferred();
+      cacheSuccess(params, 200);
+      let comparisonCompleted = false;
+      submittedInput.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        comparisonCompleted = true;
+        return submittedMessage(params);
+      });
+      const pending = runChatSendPreAdmission(params);
+      try {
+        await Promise.race([entered.promise, pending]);
+        if (outcome !== "unchanged") {
+          linkEmail(sourceEmail, target.id);
+          expect(readResidentUserProfileId(source.id)).toBe(target.id);
+          expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
+        }
+        const originalReceipts = structuredClone([...context.dedupe]);
+        release.resolve();
+        if (outcome === "unchanged") {
+          await expect(pending).resolves.toBe(false);
+        } else {
+          await expect(pending).rejects.toBe(mismatch);
+        }
+
+        expect(comparisonCompleted).toBe(true);
+        expect(loadSessionEntry(scope)).toEqual(originalEntry);
+        expect([...context.dedupe]).toEqual(originalReceipts);
+        expect(rpcSourceTesting.size).toBe(0);
+        expect(client).not.toHaveProperty("invalidated", true);
+        if (outcome !== "unchanged") {
+          expect(respond).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await pending.catch(() => undefined);
+      }
+    });
+  },
+);

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type TelegramMessageProcessingResult =
@@ -45,6 +46,24 @@ export type TelegramSpooledReplaySettlementHold = {
 const telegramUpdateProcessingFrames = new AsyncLocalStorage<TelegramUpdateProcessingFrame>();
 const telegramSpooledReplayFrames = new AsyncLocalStorage<TelegramSpooledReplayFrame>();
 const telegramSpooledReplayUpdates = new WeakSet<object>();
+const telegramUpdateReceivedAtMs = new WeakMap<object, number>();
+
+/** Records the durable spool receipt time so replayed updates keep their original arrival time. */
+export function recordTelegramUpdateReceivedAt(update: object, receivedAtMs: number): void {
+  telegramUpdateReceivedAtMs.set(update, receivedAtMs);
+}
+
+/**
+ * Unix seconds when OpenClaw received the update. Telegram callback queries carry no
+ * timestamp of their own, so this approximates the tap time for callback-built messages.
+ */
+export function resolveTelegramUpdateReceivedAtSeconds(update: unknown): number {
+  const receivedAtMs =
+    typeof update === "object" && update !== null
+      ? telegramUpdateReceivedAtMs.get(update)
+      : undefined;
+  return Math.floor((receivedAtMs ?? Date.now()) / 1000);
+}
 
 export class TelegramSpooledReplayProcessingError extends Error {
   override readonly cause: unknown;
@@ -114,10 +133,7 @@ export function createTelegramSpooledReplayParticipant(
   let ownerAbortedWhilePending = ownerAbortSignal?.aborted === true;
   let settlementHeld = false;
   let pendingSettlement: TelegramMessageProcessingResult | undefined;
-  let resolveTask: (result: TelegramMessageProcessingResult) => void = () => {};
-  const task = new Promise<TelegramMessageProcessingResult>((resolve) => {
-    resolveTask = resolve;
-  });
+  const { promise: task, resolve: resolveTask } = createDeferred<TelegramMessageProcessingResult>();
   const onOwnerAbort = () => {
     if (!settled) {
       ownerAbortedWhilePending = true;

@@ -3,6 +3,8 @@ import {
   INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
   pathForRoute,
+  pathForPluginCatalogEntry,
+  pluginCatalogIdFromPath,
   restoreBridgedRouteLocation,
 } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -38,10 +40,16 @@ export function canonicalPluginsRouteLocation(
   const search = searchParams.toString();
   const isLegacyDiscoverPath = location.pathname === `${settingsPath}/discover`;
   const legacyDiscover = isLegacyDiscoverPath || legacyTab === "discover";
+  const catalogId = pluginCatalogIdFromPath(location.pathname, basePath);
+  const pathname = legacyDiscover
+    ? pathForRoute("plugins", basePath)
+    : catalogId
+      ? pathForPluginCatalogEntry(catalogId, basePath)
+      : location.pathname;
   const canonical: RouteLocation = {
-    pathname: legacyDiscover ? pathForRoute("plugins", basePath) : location.pathname,
+    pathname,
     search: search ? `?${search}` : "",
     hash: location.hash,
   };
-  return hadLegacyTab || isLegacyDiscoverPath ? canonical : null;
+  return hadLegacyTab || pathname !== location.pathname ? canonical : null;
 }

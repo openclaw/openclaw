@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { Worker, MessagePort } from "node:worker_threads";
 import {
   createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
   resolveRuntimeWorkerArgv,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -27,20 +28,16 @@ export class OpenAIQuicksilverWorkerSocket extends EventEmitter implements Quick
     media: Parameters<QuicksilverMediaSocketFactory>[2],
     callbacks: QuicksilverSocketCallbacks,
   ): OpenAIQuicksilverWorkerSocket {
-    const workerUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "realtime-quicksilver-socket.worker",
-      distWorkerPath: "extensions/openai/realtime-quicksilver-socket.worker.js",
-      package: {
-        name: "@openclaw/openai-provider",
-        distWorkerPath: "realtime-quicksilver-socket.worker.js",
-      },
-    });
+    const workerUrl = resolveRuntimeWorkerUrl(
+      createPluginRuntimeProcessEntrypoint("openAiRealtimeSocket", import.meta.url),
+    );
     const worker = createCpuTrackedWorker(workerUrl, {
       workerData: {
         url,
         options: { headers: options.headers, maxPayload: options.maxPayload },
         ...media,
+        // Plugin-scoped requests carry invocation proxies; workers need a plain format record.
+        audioFormat: media.audioFormat ? { ...media.audioFormat } : undefined,
       },
       execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
     });

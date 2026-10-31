@@ -1,20 +1,24 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { isPathInside } from "@openclaw/fs-safe/path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
 import { resolveUserPath } from "../../utils.js";
+import {
+  CronSessionLifecycleClaimError,
+  resolveCronSessionWorkspaceOwnershipError,
+} from "../run-authority.js";
+import { prepareCronSessionWorktree, type CronWorkspaceLease } from "../run-workspace.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
-import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
+import type { MutableCronSession } from "./run-session-state.js";
 import { ensureAgentWorkspace } from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
-export type CronWorkspaceLease = { release: () => Promise<void> };
+type CronParentWorkspaceBinding = Readonly<{ sessionKey: string; entry: SessionEntry }>;
 
 /** Keep workspace selection, provisioning, and failed-preparation lease cleanup together. */
 export async function prepareCronSessionWorkspace(params: {
@@ -25,15 +29,21 @@ export async function prepareCronSessionWorkspace(params: {
   sessionKey: string;
   cronSession: MutableCronSession;
   defaultWorkspaceDir: string;
-  sessionWorkAdmission: SessionWorkAdmissionLease;
+  sessionPreparationEffect: SessionEffectRef;
   isFastTestEnv: boolean;
+  /** A child run's parent; its persisted binding replaces the run session's. */
+  childParent?: ScheduledOccurrence["childParent"];
 }) {
-  const { sessionWorkAdmission, sessionKey } = params;
+  const { sessionKey } = params;
   const abortSignal = params.input.abortSignal ?? params.input.signal;
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();
-    if (!sessionWorkAdmission.isActive()) {
+    if (!params.sessionPreparationEffect.isActive()) {
       throw new CronSessionLifecycleClaimError(sessionKey);
+    }
+    // Workspace access inherited from the parent ends when the parent resets.
+    if (params.childParent?.binding) {
+      params.childParent.assertCurrent();
     }
   };
   const selected = await resolveCronSessionWorkspace({
@@ -45,7 +55,7 @@ export async function prepareCronSessionWorkspace(params: {
     sessionKey: params.sessionKey,
     entry: params.cronSession.initialSessionEntry,
     defaultWorkspaceDir: params.defaultWorkspaceDir,
-    executionRoot: params.input.executionRoot,
+    parentBinding: params.childParent?.binding,
     assertCurrent,
   });
   try {
@@ -85,12 +95,59 @@ async function resolveCronSessionWorkspace(params: {
   sessionKey: string;
   entry?: SessionEntry;
   defaultWorkspaceDir: string;
-  executionRoot?: string;
+  parentBinding?: CronParentWorkspaceBinding;
   assertCurrent: () => void;
 }): Promise<{ workspaceDir: string; cwd?: string; lease?: CronWorkspaceLease }> {
+  const bound = params.parentBinding ?? resolveTargetBinding(params);
+  if (!bound) {
+    return { workspaceDir: params.defaultWorkspaceDir };
+  }
+  const { sessionKey: bindingKey, entry } = bound;
+  // A new custom session still starts in the configured agent workspace. Only
+  // existing persisted bindings can select another root.
+  if (!entry) {
+    return { workspaceDir: params.defaultWorkspaceDir };
+  }
+  const override = resolveIngressWorkspaceOverrideForSessionRun({
+    spawnedBy: entry.spawnedBy,
+    workspaceDir: entry.spawnedWorkspaceDir,
+    cwd: entry.spawnedCwd,
+  });
+  const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
+  const ownershipError = resolveCronSessionWorkspaceOwnershipError({
+    ...params,
+    sessionKey: bindingKey,
+    ownerSessionKey: params.ownerSessionKey,
+    hasWorkspaceBinding: Boolean(override || requestedCwd || entry.worktree),
+  });
+  if (ownershipError) {
+    throw new CronSessionLifecycleClaimError(params.sessionKey, ownershipError);
+  }
+  const workspaceDir = override
+    ? await fs.realpath(resolveUserPath(override))
+    : params.defaultWorkspaceDir;
+  const cwd = requestedCwd ? await fs.realpath(resolveUserPath(requestedCwd)) : undefined;
+  params.assertCurrent();
+  return await prepareCronSessionWorktree({
+    sessionKey: bindingKey,
+    entry,
+    workspaceDir,
+    cwd,
+    assertCurrent: params.assertCurrent,
+  });
+}
+
+/** The in-session target's own row; it must be the session this run executes in. */
+function resolveTargetBinding(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionTarget: string;
+  sessionKey: string;
+  entry?: SessionEntry;
+}): { sessionKey: string; entry?: SessionEntry } | undefined {
   const target = resolveCronSessionTargetSessionKey(params.sessionTarget);
   if (!target) {
-    return { workspaceDir: params.defaultWorkspaceDir };
+    return undefined;
   }
   const expectedKey = resolveCronAgentSessionKey({
     sessionKey: target,
@@ -104,99 +161,5 @@ async function resolveCronSessionWorkspace(params: {
       "Bound automation session is mismatched.",
     );
   }
-  const entry = params.entry;
-  // A new custom session still starts in the configured agent workspace. Only
-  // existing persisted bindings can select another root.
-  if (!entry) {
-    return { workspaceDir: params.defaultWorkspaceDir };
-  }
-  const override = resolveIngressWorkspaceOverrideForSessionRun({
-    spawnedBy: entry.spawnedBy,
-    workspaceDir: entry.spawnedWorkspaceDir,
-    cwd: entry.spawnedCwd,
-  });
-  const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
-  if (
-    params.admissionSource === "requester-schedule" &&
-    (override || requestedCwd || entry.worktree)
-  ) {
-    const ownerSessionKey = normalizeOptionalString(params.ownerSessionKey);
-    if (
-      !ownerSessionKey ||
-      resolveCronAgentSessionKey({
-        sessionKey: ownerSessionKey,
-        agentId: params.agentId,
-        cfg: params.cfg,
-        mainKey: params.cfg.session?.mainKey,
-      }) !== params.sessionKey
-    ) {
-      throw new CronSessionLifecycleClaimError(
-        params.sessionKey,
-        "Requester-scoped automation can only use its owning conversation’s workspace.",
-      );
-    }
-  }
-  const workspaceDir = override
-    ? await fs.realpath(resolveUserPath(override))
-    : params.defaultWorkspaceDir;
-  const cwd = requestedCwd ? await fs.realpath(resolveUserPath(requestedCwd)) : undefined;
-  params.assertCurrent();
-  // A configured fallback is not a saved binding: host-rooted custom sessions
-  // must keep the same root on their first and subsequent runs.
-  if (
-    params.executionRoot &&
-    (override || requestedCwd || entry.worktree) &&
-    path.resolve(params.executionRoot) !== path.resolve(workspaceDir)
-  ) {
-    throw new CronSessionLifecycleClaimError(
-      params.sessionKey,
-      "Bound automation workspace conflicts with its execution root.",
-    );
-  }
-  const binding = entry.worktree;
-  if (!binding) {
-    return { workspaceDir, cwd };
-  }
-  const { captureOpenClawStateWorkerContext } =
-    await import("../../state/openclaw-state-worker-context.js");
-  const { readRegistryWorktree } = await import("../../agents/worktrees/registry-read.js");
-  const { acquireWorktreeRunLease } = await import("../../agents/worktrees/run-lease.js");
-  params.assertCurrent();
-  const state = captureOpenClawStateWorkerContext();
-  const validateWorktree = async () => {
-    const record = await readRegistryWorktree(state, binding.id);
-    params.assertCurrent();
-    if (
-      !record ||
-      record.id !== binding.id ||
-      record.ownerKind !== "session" ||
-      record.ownerId !== params.sessionKey ||
-      record.removedAt !== undefined ||
-      record.branch !== binding.branch ||
-      path.resolve(record.repoRoot) !== path.resolve(binding.repoRoot)
-    ) {
-      throw new CronSessionLifecycleClaimError(
-        params.sessionKey,
-        "Bound automation worktree is missing, retired, or mismatched.",
-      );
-    }
-    const root = await fs.realpath(record.path);
-    params.assertCurrent();
-    if (!isPathInside(root, workspaceDir) || !isPathInside(root, cwd ?? workspaceDir)) {
-      throw new CronSessionLifecycleClaimError(
-        params.sessionKey,
-        "Bound automation workspace does not match its managed worktree.",
-      );
-    }
-  };
-  await validateWorktree();
-  const lease = await acquireWorktreeRunLease(binding.id);
-  try {
-    // Admission fences removal; re-read the binding after acquiring its owner-held lease.
-    await validateWorktree();
-    return { workspaceDir, cwd, lease };
-  } catch (error) {
-    await lease.release();
-    throw error;
-  }
+  return { sessionKey: params.sessionKey, entry: params.entry };
 }

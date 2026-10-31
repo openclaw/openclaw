@@ -1,8 +1,10 @@
 import { once } from "node:events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { nextEventLoopTurn } from "../../../test/helpers/promise.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("spawn broker stdin handoff", () => {
   let host: SpawnBrokerHost;
@@ -33,9 +35,7 @@ describe.skipIf(skipBrokerTests)("spawn broker stdin handoff", () => {
       void result.catch(() => {});
       return result;
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     const resumeAt = performance.now() + 200;
     while (performance.now() < resumeAt) {
       // Children can exit while the Gateway delays descriptor acknowledgments.

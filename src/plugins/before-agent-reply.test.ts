@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
@@ -15,12 +16,16 @@ vi.mock("./hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
 }));
 
-function runHook(runId: string) {
+function runHook(
+  runId: string,
+  overrides: Partial<Parameters<typeof runBeforeAgentReplyForTurn>[0]> = {},
+) {
   return runBeforeAgentReplyForTurn({
     runId,
     trigger: "user",
     event: { cleanedBody: runId },
     context: { runId, trigger: "user" },
+    ...overrides,
   });
 }
 
@@ -30,38 +35,86 @@ describe("before_agent_reply runner boundary", () => {
     hookRunner.runBeforeAgentReply.mockReset().mockResolvedValue(undefined);
   });
 
+  it.each(["settled", "failed", "revoked"] as const)(
+    "settles attribution before observer or reply-claim effects (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      const authority = new AbortController();
+      const beforeDispatch = vi.fn(async () => undefined);
+      const afterDispatch = vi.fn(async (result) => result);
+      const pending = withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () =>
+        runHook(`attribution-${outcome}`, {
+          awaitSessionDiffBaseline: async () => {
+            entered.resolve();
+            await baseline.promise;
+          },
+          assertCurrent: () => authority.signal.throwIfAborted(),
+        }),
+      );
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "attribution bypass");
+        expect(beforeDispatch).not.toHaveBeenCalled();
+        expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+        const error = outcome === "failed" ? "attribution failed" : "reply authority ended";
+        if (outcome === "failed") {
+          baseline.reject(new Error(error));
+        } else {
+          if (outcome === "revoked") {
+            authority.abort(new Error("reply authority ended"));
+          }
+          baseline.resolve();
+        }
+        await (outcome === "settled" ? pending : expect(pending).rejects.toThrow(error));
+        const dispatches = outcome === "settled" ? 1 : 0;
+        expect(beforeDispatch).toHaveBeenCalledTimes(dispatches);
+        expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(dispatches);
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each([
+    { name: "no reply-claim hook", trigger: "user", hasHooks: false },
+    { name: "an internal trigger", trigger: "manual", hasHooks: true },
+  ])("does not dispatch or wait for attribution with $name", async ({ trigger, hasHooks }) => {
+    hookRunner.hasHooks.mockReturnValue(hasHooks);
+    const awaitSessionDiffBaseline = vi.fn(async () => {});
+    await expect(
+      runHook(`no-dispatch-${trigger}`, {
+        trigger,
+        context: { trigger },
+        awaitSessionDiffBaseline,
+      }),
+    ).resolves.toBeUndefined();
+    expect(awaitSessionDiffBaseline).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+  });
+
   it("keeps authority through observer finalization and rejects revoked effects", async () => {
-    let current = true;
+    const authority = new AbortController();
     let finalAuthority: (() => void) | undefined;
     const effect = vi.fn();
     hookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true });
+    const afterDispatch = async () => {
+      finalAuthority = captureGuardedFetchRequestAuthority();
+      expect(finalAuthority).toBeTypeOf("function");
+      finalAuthority?.();
+      authority.abort(new Error("root reassigned"));
+      await Promise.resolve();
+      finalAuthority?.();
+      effect();
+      return { handled: true };
+    };
     await expect(
-      withBeforeAgentReplyObserver(
-        {
-          beforeDispatch: async () => undefined,
-          afterDispatch: async (result) => {
-            finalAuthority = captureGuardedFetchRequestAuthority();
-            expect(finalAuthority).toBeTypeOf("function");
-            finalAuthority?.();
-            current = false;
-            await Promise.resolve();
-            finalAuthority?.();
-            effect();
-            return result;
-          },
-        },
-        () =>
-          runBeforeAgentReplyForTurn({
-            runId: "finalization-authority",
-            trigger: "cron",
-            event: { cleanedBody: "hello" },
-            context: { trigger: "cron" },
-            assertCurrent: () => {
-              if (!current) {
-                throw new Error("root reassigned");
-              }
-            },
-          }),
+      withBeforeAgentReplyObserver({ beforeDispatch: async () => undefined, afterDispatch }, () =>
+        runHook("finalization-authority", {
+          trigger: "cron",
+          context: { trigger: "cron" },
+          assertCurrent: () => authority.signal.throwIfAborted(),
+        }),
       ),
     ).rejects.toThrow("root reassigned");
     expect(effect).not.toHaveBeenCalled();
@@ -82,34 +135,12 @@ describe("before_agent_reply runner boundary", () => {
   it("uses the validated turn trigger when context disagrees", async () => {
     const runId = "mismatch";
     const context = { runId, trigger: "heartbeat" };
-    await runBeforeAgentReplyForTurn({
-      runId,
-      trigger: "user",
-      event: { cleanedBody: runId },
-      context,
-    });
+    await runHook(runId, { context });
 
-    const expectedContext = { ...context, trigger: "user" };
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("before_agent_reply", expectedContext);
     expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledWith(
       { cleanedBody: runId },
-      expectedContext,
+      { ...context, trigger: "user" },
     );
-  });
-
-  it("does not dispatch for internal triggers", async () => {
-    const trigger = "manual";
-    await expect(
-      runBeforeAgentReplyForTurn({
-        runId: trigger,
-        trigger,
-        event: { cleanedBody: trigger },
-        context: { runId: trigger, trigger },
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(hookRunner.hasHooks).not.toHaveBeenCalled();
-    expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
   });
 
   it("keeps a nested run from checkpointing its parent admission", async () => {

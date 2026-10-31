@@ -1,4 +1,3 @@
-// Creates private temporary workspaces for downloads.
 import path from "node:path";
 import {
   buildRandomTempFilePath as buildRandomTempFilePathBase,
@@ -27,11 +26,6 @@ function resolveTempRoot(tmpDir?: string): string {
   return tmpDir ?? resolvePreferredOpenClawTmpDir();
 }
 
-function sanitizeTempPrefix(prefix: string): string {
-  const normalized = prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return normalized || "tmp";
-}
-
 /** Build a stable temp path shape while keeping caller-controlled text filename-safe. */
 export function buildRandomTempFilePath(params: {
   prefix: string;
@@ -56,7 +50,7 @@ export async function createTempDownloadTarget(params: {
 }): Promise<TempDownloadTarget> {
   const workspace = await tempWorkspace({
     rootDir: resolveTempRoot(params.tmpDir),
-    prefix: sanitizeTempPrefix(params.prefix),
+    prefix: params.prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "tmp",
   });
   const fileName = params.fileName;
   const file = (nextName?: string) =>

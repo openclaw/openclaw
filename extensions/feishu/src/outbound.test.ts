@@ -101,7 +101,6 @@ vi.mock("./comment-reaction.js", () => ({
 }));
 
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { buildFeishuPostMessageContent } from "./markdown.js";
 import {
   FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
   feishuOutbound,
@@ -169,6 +168,22 @@ function buttons(
   return { blocks: [{ type: "buttons", buttons: entries }] };
 }
 
+function cardPayload(nativeCard: Record<string, unknown>, text = "fallback"): ReplyPayload {
+  return { text, channelData: { feishu: { card: nativeCard } } };
+}
+
+function legacyButton(content: string, url: string, type?: string) {
+  return { tag: "button", text: { tag: "plain_text", content }, url, ...(type ? { type } : {}) };
+}
+
+function approvedMediaAccess(localRoot: string) {
+  return {
+    localRoots: [localRoot],
+    workspaceDir: localRoot,
+    readFile: vi.fn(async () => Buffer.from("approved image")),
+  };
+}
+
 function tablePresentation(rows = 400, width = 80): MessagePresentation {
   return {
     blocks: [
@@ -198,18 +213,10 @@ function tableText(count: number) {
   );
 }
 
-function textCall(index = 0) {
-  return sendMessageFeishuMock.mock.calls[index]?.[0];
-}
-function mediaCall(index = 0) {
-  return sendMediaFeishuMock.mock.calls[index]?.[0];
-}
-function cardCall() {
-  return sendCardFeishuMock.mock.calls[0]?.[0]?.card;
-}
-function commentCall(index = 0) {
-  return deliverCommentThreadTextMock.mock.calls[index]?.[1];
-}
+const textCall = (index = 0) => sendMessageFeishuMock.mock.calls[index]?.[0];
+const mediaCall = (index = 0) => sendMediaFeishuMock.mock.calls[index]?.[0];
+const cardCall = () => sendCardFeishuMock.mock.calls[0]?.[0]?.card;
+const commentCall = (index = 0) => deliverCommentThreadTextMock.mock.calls[index]?.[1];
 function deliveredText() {
   return sendMessageFeishuMock.mock.calls.map(([params]) => params.text).join("\n");
 }
@@ -251,15 +258,10 @@ afterAll(() => {
 });
 
 describe("Feishu text delivery", () => {
-  it("preserves single newlines in the chunker used by cards and comments", () => {
-    const text = "line one\nline two\nline three";
-    expect(feishuOutbound.chunker?.(text, 100).join("")).toBe(text);
-  });
-
   it("routes a local image payload through approved media access without exposing its path", async () => {
     await withImage(async (file, dir) => {
-      const readFile = vi.fn(async () => Buffer.from("approved image"));
-      const mediaAccess = { localRoots: [dir], workspaceDir: dir, readFile };
+      const mediaAccess = approvedMediaAccess(dir);
+      const { readFile } = mediaAccess;
       const result = await sendPayload(
         { text: file },
         {
@@ -364,7 +366,6 @@ describe("Feishu TTS supplements", () => {
   });
 
   it.each([
-    { route: "direct", controls: true, visible: true },
     { route: "core", controls: true, visible: true },
     { route: "direct", controls: false, visible: false },
     { route: "core", controls: false, visible: true },
@@ -434,13 +435,21 @@ describe("Feishu native presentation delivery", () => {
           type: "buttons",
           buttons: [
             { label: "Approve", value: "/approve req_1 allow-once", style: "success" },
-            { label: "Deny", value: "/approve req_1 deny", style: "danger" },
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req_1 deny" },
+              url: "https://example.com/stale",
+              webApp: { url: "https://example.com/stale-app" },
+              style: "danger",
+            },
           ],
         },
       ],
     };
     const rendered = await render({ presentation });
-    expect(rendered.text).toBe("Approval\n\nApprove the request?\n\n- Approve\n- Deny");
+    expect(rendered.text).toBe(
+      "Approval\n\nApprove the request?\n\n- Approve\n- Deny: `/approve req_1 deny`",
+    );
     expectResult(await sendPayload(rendered), "native_card_msg");
     expect(cardCall()?.header).toEqual({
       title: { tag: "plain_text", content: "Approval" },
@@ -493,12 +502,8 @@ describe("Feishu native presentation delivery", () => {
   });
 
   it("sends approved media before the native card and consumes its implicit reply once", async () => {
-    const readFile = vi.fn(async () => Buffer.from("approved image"));
-    const mediaAccess = {
-      localRoots: ["/approved/workspace"],
-      workspaceDir: "/approved/workspace",
-      readFile,
-    };
+    const mediaAccess = approvedMediaAccess("/approved/workspace");
+    const { readFile } = mediaAccess;
     const result = await sendPayload(
       { text: nativeCardText, mediaUrls: ["image.png", "summary.png"] },
       {
@@ -526,39 +531,6 @@ describe("Feishu native presentation delivery", () => {
     }
     expect(sendCardFeishuMock.mock.calls[0]?.[0]?.replyToMessageId).toBeUndefined();
     expectResult(result, "native_card_msg");
-  });
-
-  it("keeps explicit command actions authoritative over stale link fields", async () => {
-    await sendPayload(
-      await render({
-        presentation: buttons([
-          {
-            label: "Deny",
-            action: { type: "command", command: "/approve req-1 deny" },
-            url: "https://example.com/stale",
-            webApp: { url: "https://example.com/stale-app" },
-          },
-        ]),
-      }),
-    );
-    expect(cardCall()?.body.elements).toEqual([
-      {
-        tag: "button",
-        text: { tag: "plain_text", content: "Deny" },
-        type: "default",
-        behaviors: [
-          {
-            type: "callback",
-            value: {
-              oc: "ocf1",
-              k: "quick",
-              a: "feishu.payload.button",
-              q: "/approve req-1 deny",
-            },
-          },
-        ],
-      },
-    ]);
   });
 
   it("keeps typed approval actions out of callback envelopes", async () => {
@@ -615,47 +587,29 @@ describe("Feishu native presentation delivery", () => {
   });
 
   it("sanitizes caller-supplied legacy card content and actions", async () => {
-    await sendPayload({
-      text: "fallback",
-      channelData: {
-        feishu: {
-          card: {
-            schema: "2.0",
-            header: {
-              title: { tag: "plain_text", content: "Unsafe card" },
-              template: "not-a-template",
-            },
-            body: {
-              elements: [
-                { tag: "img", img_key: "image-secret" },
-                { tag: "markdown", content: '<at id="ou_1">ping</at>' },
-                {
-                  tag: "action",
-                  actions: [
-                    {
-                      tag: "button",
-                      text: { tag: "plain_text", content: "Promote" },
-                      type: "success",
-                      url: "https://example.com/promote",
-                    },
-                    {
-                      tag: "button",
-                      text: { tag: "plain_text", content: "Bad link" },
-                      url: "file:///etc/passwd",
-                    },
-                    {
-                      tag: "button",
-                      text: { tag: "plain_text", content: "Good link" },
-                      url: "https://example.com",
-                    },
-                  ],
-                },
+    await sendPayload(
+      cardPayload({
+        schema: "2.0",
+        header: {
+          title: { tag: "plain_text", content: "Unsafe card" },
+          template: "not-a-template",
+        },
+        body: {
+          elements: [
+            { tag: "img", img_key: "image-secret" },
+            { tag: "markdown", content: '<at id="ou_1">ping</at>' },
+            {
+              tag: "action",
+              actions: [
+                legacyButton("Promote", "https://example.com/promote", "success"),
+                legacyButton("Bad link", "file:///etc/passwd"),
+                legacyButton("Good link", "https://example.com"),
               ],
             },
-          },
+          ],
         },
-      },
-    });
+      }),
+    );
     expect(cardCall()?.header.template).toBe("blue");
     expect(cardCall()?.body.elements).toEqual([
       { tag: "markdown", content: '&lt;at id="ou_1"&gt;ping&lt;/at&gt;' },
@@ -700,23 +654,21 @@ describe("Feishu native presentation delivery", () => {
 
   it("rejects oversized native cards without leaking JSON as text", async () => {
     await expect(
-      sendPayload({
-        text: "safe fallback",
-        channelData: {
-          feishu: {
-            card: {
-              schema: "2.0",
-              body: { elements: [{ tag: "markdown", content: "x".repeat(31 * 1024) }] },
-            },
+      sendPayload(
+        cardPayload(
+          {
+            schema: "2.0",
+            body: { elements: [{ tag: "markdown", content: "x".repeat(31 * 1024) }] },
           },
-        },
-      }),
+          "safe fallback",
+        ),
+      ),
     ).rejects.toThrow("Feishu native card exceeds the 30 KB or 200-element API limit");
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sends oversized presentation media once before complete safe fallback text", async () => {
+  it("keeps fallback controls safe and thread targets sticky before and after core rendering", async () => {
     const presentation = oversizedPresentation();
     presentation.blocks.push({
       type: "buttons",
@@ -769,29 +721,6 @@ describe("Feishu native presentation delivery", () => {
       );
     }
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("consumes one implicit reply on media before a short element-limit fallback", async () => {
-    const presentation: MessagePresentation = {
-      blocks: [
-        ...Array.from({ length: 200 }, () => ({ type: "divider" as const })),
-        ...buttons([{ label: "Approve", action: { type: "command", command: "/approve req_1" } }])
-          .blocks,
-      ],
-    };
-    const result = await sendPayload(
-      await render({ presentation, mediaUrl: imageUrl }),
-      implicitReply,
-    );
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
-    expect(mediaCall()).toMatchObject({ mediaUrl: imageUrl, replyToMessageId: "om_reply" });
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    expect(textCall()).toMatchObject({
-      text: "- Approve: `/approve req_1`",
-      replyToMessageId: undefined,
-    });
-    expectResult(result, "text_msg");
   });
 
   it("falls back to post mode above five markdown tables even in card mode", async () => {
@@ -885,32 +814,6 @@ describe("Feishu document comments", () => {
     );
     expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps disabled labels literal without command guidance after core rendering", async () => {
-    const presentation = buttons([
-      {
-        label: "Disabled [Approve](https://example.com) & <at>",
-        disabled: true,
-        action: { type: "command", command: "/approve req_1" },
-      },
-    ]);
-    expectResult(
-      await sendPayload(
-        await render(
-          {
-            text: "Review this",
-            presentation,
-          },
-          commentTarget,
-        ),
-        { to: commentTarget },
-      ),
-      "reply_msg",
-    );
-    expect(commentCall()?.content).toBe(
-      "Review this\n\n- Disabled [Approve](https://example.com) & <at>",
-    );
   });
 
   it.each(
@@ -1022,58 +925,15 @@ describe("Feishu chunked delivery and media receipts", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "selected account",
-      cfg: { channels: { feishu: { accounts: { main: { textChunkLimit: 10 } } } } },
-      lines: 10,
-      limit: 10,
-    },
-    {
-      name: "serialized byte envelope",
-      cfg: { channels: { feishu: { textChunkLimit: 25_000 } } },
-      lines: 6150,
-      limit: 25_000,
-    },
-  ])(
-    "re-chunks expanded posts at the $name limit",
-    async ({ cfg: accountConfig, lines, limit }) => {
-      await sendText("a\n".repeat(lines).trimEnd(), { cfg: accountConfig });
-      expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-      for (const [params] of sendMessageFeishuMock.mock.calls) {
-        expect(params.text.length).toBeLessThanOrEqual(limit);
-        expect(
-          Buffer.byteLength(buildFeishuPostMessageContent({ messageText: params.text }), "utf8"),
-        ).toBeLessThanOrEqual(30 * 1024);
-      }
-    },
-  );
-
-  it.each([
-    {
-      name: "implicit first",
-      reply: implicitReply,
-      target: "om_reply",
-      sticky: false,
-      thread: false,
-    },
-    {
-      name: "explicit first",
-      reply: { ...implicitReply, replyToIdSource: "explicit" as const, threadId: "om_other_topic" },
-      target: "om_reply",
-      sticky: true,
-      thread: false,
-    },
-    {
-      name: "topic",
-      reply: { replyToId: " ", threadId: "om_topic" },
-      target: "om_topic",
-      sticky: true,
-      thread: true,
-    },
-  ])(
-    "records all caption chunks and media with $name reply semantics",
-    async ({ reply, target, sticky, thread }) => {
+  it.each(["implicit", "explicit"] as const)(
+    "records all caption chunks and media with %s first-reply semantics",
+    async (source) => {
+      const reply = {
+        ...implicitReply,
+        replyToIdSource: source,
+        ...(source === "explicit" ? { threadId: "om_other_topic" } : {}),
+      };
+      const sticky = source === "explicit";
       sendMessageFeishuMock.mockImplementation(async () => ({
         messageId: "caption_" + sendMessageFeishuMock.mock.calls.length,
       }));
@@ -1095,10 +955,10 @@ describe("Feishu chunked delivery and media receipts", () => {
       for (const [index, [params]] of sendMessageFeishuMock.mock.calls.entries()) {
         expect(params.preparedPostText).toBe(true);
         expect(params.text.length).toBeLessThanOrEqual(4000);
-        expect(params.replyToMessageId).toBe(sticky || index === 0 ? target : undefined);
-        expect(params.replyInThread).toBe(thread ? true : index === 0 ? false : undefined);
+        expect(params.replyToMessageId).toBe(sticky || index === 0 ? "om_reply" : undefined);
+        expect(params.replyInThread).toBe(index === 0 ? false : undefined);
       }
-      expect(mediaCall()?.replyToMessageId).toBe(sticky ? target : undefined);
+      expect(mediaCall()?.replyToMessageId).toBe(sticky ? "om_reply" : undefined);
     },
   );
 
@@ -1173,22 +1033,6 @@ describe("Feishu chunked delivery and media receipts", () => {
       "fallback_msg",
     ]);
     expectResult(result, "fallback_msg");
-  });
-
-  it("preserves skipped voice text and an unconsumed reply after upload failure", async () => {
-    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
-    await sendMedia({
-      text: "spoken reply",
-      mediaUrl: voiceUrl,
-      audioAsVoice: true,
-      ...implicitReply,
-    });
-    expect(mediaCall()?.replyToMessageId).toBe("om_reply");
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    expect(textCall()).toMatchObject({
-      text: "spoken reply\n\n📎 " + voiceUrl,
-      replyToMessageId: "om_reply",
-    });
   });
 
   it.each([

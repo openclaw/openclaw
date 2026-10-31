@@ -1,101 +1,81 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import "./elapsed-time.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
+import { ElapsedTime } from "./elapsed-time.tsx";
 
-type ElapsedTimeElement = HTMLElement & {
-  startMs: number | null;
-  endMs: number | null;
-  minimumUnit: "second" | "minute";
-  singleUnit: boolean;
-  updateComplete: Promise<boolean>;
-  render: () => unknown;
-};
-
+type Props = Parameters<typeof ElapsedTime>[0];
 const NOW = 2_000_000_000;
-
-describe("openclaw-elapsed-time", () => {
-  let element: ElapsedTimeElement;
-  let visibility: DocumentVisibilityState;
-
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-    vi.useFakeTimers({ now: NOW });
-    visibility = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-    element = document.createElement("openclaw-elapsed-time") as ElapsedTimeElement;
-    element.startMs = NOW;
-    document.body.appendChild(element);
-  });
-
-  afterEach(() => {
-    element.remove();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  it.each([
-    ["minute", false, 65_000, 54_000, "1m", "1m", "2m", 0],
-    ["second", true, 61_000, 28_000, "1m", "1m", "2m", 0],
-    ["second", false, 3_600_000, 1_000, "1h", "1h 1s", "1h 2s", 1],
-  ] as const)(
-    "updates %s labels only when their displayed duration changes (single unit: %s, elapsed: %i)",
-    async (minimumUnit, singleUnit, elapsedMs, advanceMs, initial, first, second, renders) => {
-      element.minimumUnit = minimumUnit;
-      element.singleUnit = singleUnit;
-      element.startMs = NOW - elapsedMs;
-      await element.updateComplete;
-      expect(element.textContent?.trim()).toBe(initial);
-      const render = vi.spyOn(element, "render");
-      await vi.advanceTimersByTimeAsync(advanceMs);
-      expect(render).toHaveBeenCalledTimes(renders);
-      expect(element.textContent?.trim()).toBe(first);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(render).toHaveBeenCalledTimes(renders + 1);
-      expect(element.textContent?.trim()).toBe(second);
-    },
-  );
-
-  it("applies timing and format property changes even when the current label is unchanged", async () => {
-    element.minimumUnit = "minute";
-    element.startMs = NOW - 65_000;
-    await element.updateComplete;
-    element.endMs = NOW;
-    await element.updateComplete;
-    const render = vi.spyOn(element, "render");
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(render).not.toHaveBeenCalled();
-    expect(element.textContent?.trim()).toBe("1m");
-
-    element.endMs = null;
-    await element.updateComplete;
-    expect(element.textContent?.trim()).toBe("2m");
-    element.minimumUnit = "second";
-    await element.updateComplete;
-    expect(element.textContent?.trim()).toBe("2m 5s");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(element.textContent?.trim()).toBe("2m 6s");
-  });
-
-  it("pauses hidden polling, catches up on return, and stops after removal", async () => {
-    await element.updateComplete;
-    const render = vi.spyOn(element, "render");
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(render).not.toHaveBeenCalled();
-    expect(element.textContent?.trim()).toBe("1s");
-
-    visibility = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await element.updateComplete;
-    expect(render).toHaveBeenCalledOnce();
-    expect(element.textContent?.trim()).toBe("1m");
-
-    element.remove();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(render).toHaveBeenCalledOnce();
-  });
+beforeEach(async () => {
+  await i18n.setLocale("en");
+  vi.useFakeTimers({ now: NOW });
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 });
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+function mount(initial: Props) {
+  let props = initial;
+  const view = mountSolid(
+    ElapsedTime,
+    props,
+    document.body.appendChild(document.createElement("div")),
+  );
+  onTestFinished(() => {
+    view.dispose();
+    view.container.remove();
+  });
+  return {
+    element: view.container,
+    label: () => view.container.textContent?.trim(),
+    update(changes: Partial<Props>) {
+      props = { ...props, ...changes };
+      view.update(props);
+    },
+  };
+}
+
+it("changes minute labels only at their boundary and applies timing changes with an unchanged label", async () => {
+  const view = mount({ minimumUnit: "minute", startMs: NOW - 65_000 });
+  expect(view.label()).toBe("1m");
+  const changed = vi.fn();
+  const observer = new MutationObserver(changed);
+  observer.observe(view.element, { characterData: true, childList: true, subtree: true });
+  onTestFinished(() => observer.disconnect());
+  await vi.advanceTimersByTimeAsync(54_000);
+  expect(view.label()).toBe("1m");
+  expect(changed).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(view.label()).toBe("2m");
+  expect(changed).toHaveBeenCalledOnce();
+
+  view.update({ endMs: Date.now() });
+  changed.mockClear();
+  await vi.advanceTimersByTimeAsync(61_000);
+  expect(changed).not.toHaveBeenCalled();
+  expect(view.label()).toBe("2m");
+  view.update({ endMs: null });
+  expect(view.label()).toBe("3m");
+  view.update({ minimumUnit: "second" });
+  expect(view.label()).toBe("3m 1s");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(view.label()).toBe("3m 2s");
+});
+
+it.each([
+  [{ startMs: NOW - 60_000 }, "1m", "1m 0s"],
+  [{ startMs: NOW - 3_665_000 }, "1h 1m", "1h 1m 5s"],
+  [{ startMs: NOW - 61_000, singleUnit: true }, "1m", "1m"],
+] satisfies [Props, string, string][])(
+  "reacts to seconds formatting with %j",
+  (props, compact, seconds) => {
+    const view = mount({ ...props, endMs: NOW });
+    expect(view.label()).toBe(compact);
+    view.update({ includeSeconds: true });
+    expect(view.label()).toBe(seconds);
+    view.update({ includeSeconds: false });
+    expect(view.label()).toBe(compact);
+  },
+);

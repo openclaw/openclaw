@@ -39,25 +39,19 @@ export function findMatchingAuthProfile(
   if (credential.kind === "oauth" && !subject) {
     return undefined;
   }
-  for (const [profileId, existing] of Object.entries(store.profiles)) {
+  return Object.entries(store.profiles).find(([, existing]) => {
     if (existing.provider !== provider) {
-      continue;
+      return false;
     }
-    if (
-      credential.kind === "api_key" &&
-      existing.type === "api_key" &&
-      existing.key === credential.key
-    ) {
-      return profileId;
+    if (credential.kind === "api_key") {
+      return existing.type === "api_key" && existing.key === credential.key;
     }
     if (subject && existing.type === "oauth") {
       const previous = oauthSubject(existing);
-      if (previous?.accountId === subject.accountId && previous.userId === subject.userId) {
-        return profileId;
-      }
+      return previous?.accountId === subject.accountId && previous.userId === subject.userId;
     }
-  }
-  return undefined;
+    return false;
+  })?.[0];
 }
 
 function oauthSubject(credential: OAuthCredential) {

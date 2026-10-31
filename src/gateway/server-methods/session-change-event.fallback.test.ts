@@ -5,32 +5,82 @@ import {
   sessionsResult,
 } from "../../../ui/src/lib/sessions/session-capability.test-support.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import type { SerializedGatewayFrame } from "../serialized-json.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createGatewayConnectionState } from "../server-connection-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
+import { createInertGatewayTestSocket } from "../server/inert-socket.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { emitSessionsChanged, flushPendingSessionsChangedEvents } from "./session-change-event.js";
 
-afterEach(() => {
+function pluginNotices(pluginId: string) {
+  const lease = createPluginRuntimeCapabilityLease(pluginId);
+  const notices = vi.fn();
+  createPluginServiceGatewayEvents({ pluginId, broadcast: vi.fn(), lease })!.onSessionsChanged(
+    notices,
+  );
+  return { lease, notices };
+}
+
+function expectFrame(frames: unknown[], payload: unknown) {
+  expect(frames).toEqual([expect.objectContaining({ event: "sessions.changed", payload })]);
+}
+
+afterEach(async () => {
+  await flushPendingSessionsChangedEvents();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
+it("coalesces prepared keyless refreshes without repeating prepared facts", async () => {
+  const context = {
+    getRuntimeConfig: () => ({}),
+    getSessionEventSubscriberConnIds: () => new Set(["listener"]),
+    broadcastToConnIds: vi.fn(),
+  } satisfies Parameters<typeof emitSessionsChanged>[0];
+  const facts = vi.fn();
+  const unsubscribe = sessionChanges.subscribeFacts(facts);
+  const accessRevision = readGatewayAccessRevision();
+  try {
+    for (let index = 0; index < 3; index += 1) {
+      emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
+    }
+    expect(context.broadcastToConnIds.mock.calls.length).toBeLessThan(3);
+    expect(facts).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(accessRevision + 3);
+
+    await flushPendingSessionsChangedEvents(context);
+    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(context.broadcastToConnIds).toHaveBeenLastCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ reason: "delete" }),
+      new Set(["listener"]),
+      expect.any(Object),
+    );
+  } finally {
+    unsubscribe();
+  }
+});
+
+it.each(["ready", "preparation"] as const)(
   "publishes private repository facts or refreshes subscribers after %s preparation",
   async (failure) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const cfg = { agents: { entries: { main: {} } } };
       const sessionKey = "agent:main:dashboard:incognito-fallback";
       const repository = await getSessionRepositoryWorkspaceStore().create({
@@ -40,7 +90,7 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
         branch: "private-event",
         assertCurrent: () => {},
       });
-      replaceSessionEntrySync(
+      await replaceSessionEntry(
         { agentId: "main", sessionKey },
         {
           sessionId: "private-session",
@@ -61,7 +111,7 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
       const client = createTestGatewayClient(request);
       const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
       const frames: unknown[] = [];
-      const send = vi.fn((frame: string | Buffer) => {
+      const send = vi.fn((frame: string | Buffer | SerializedGatewayFrame) => {
         const decoded = JSON.parse(frame.toString());
         frames.push(decoded);
         emitEvent(decoded);
@@ -69,23 +119,8 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
       const recipient = {
         connId: "conn-1",
         usesSharedGatewayAuth: false,
-        connect: {
-          minProtocol: 4,
-          maxProtocol: 4,
-          client: { id: "test", mode: "test", version: "1", platform: "test" },
-          role: "operator",
-          scopes: ["operator.admin"],
-        },
-        socket: {
-          readyState: 1,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
+        connect: gatewayConnect(["operator.admin"], { id: "test", mode: "test", version: "1" }, 4),
+        socket: createInertGatewayTestSocket(send),
       } satisfies GatewayWsClient;
       connection.clients.add(recipient);
       const noRead = vi.fn();
@@ -95,13 +130,7 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
         connect: { ...recipient.connect, scopes: [] },
         socket: { ...recipient.socket, send: noRead },
       });
-      const lease = createPluginRuntimeCapabilityLease("fallback-proof");
-      const notices = vi.fn();
-      createPluginServiceGatewayEvents({
-        pluginId: "fallback-proof",
-        broadcast: vi.fn(),
-        lease,
-      })!.onSessionsChanged(notices);
+      const { lease, notices } = pluginNotices("fallback-proof");
       const reads: { describe: number; snapshot: number; sql: number }[] = [];
       const describe = vi.spyOn(projection, "describe");
       const snapshot = vi.spyOn(projection, "snapshot");
@@ -125,31 +154,16 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
       const context = {
         ...bindSessionRowProjection({}, () => projection),
         broadcastToConnIds: broadcast,
-        chatAbortControllers: connection.chatAbortControllers,
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1", "no-read"]),
       };
       try {
         await sessions.refresh({ agentId: "main", force: true });
         const initialReads = request.mock.calls.length;
-        if (failure === "capture") {
-          vi.spyOn(projection, "capture").mockImplementationOnce(() => {
-            throw new Error("synthetic capture failure");
-          });
-        } else if (failure === "preparation") {
+        if (failure === "preparation") {
           vi.spyOn(projection, "withPreparedExactRows").mockRejectedValueOnce(
             new Error("synthetic preparation failure"),
           );
-        } else if (failure === "canonical deferral") {
-          vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-            kind: "pending",
-            database: {
-              agentId: "main",
-              path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-            },
-          });
-        }
-        if (failure !== "ready") {
           vi.useFakeTimers();
         }
         emitSessionsChanged(context, {
@@ -161,25 +175,18 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
         });
         await flushPendingSessionsChangedEvents(context);
         if (failure === "ready") {
-          expect(
-            reads.map(({ describe: describeCount, snapshot: snapshotCount }) => ({
-              describe: describeCount,
-              snapshot: snapshotCount,
-            })),
-          ).toEqual([{ describe: 0, snapshot: 0 }]);
-          expect(frames).toEqual([
+          expect(reads).toMatchObject([{ describe: 0, snapshot: 0 }]);
+          expectFrame(
+            frames,
             expect.objectContaining({
-              event: "sessions.changed",
-              payload: expect.objectContaining({
-                sessionKey,
-                reason: "patch",
-                session: expect.objectContaining({
-                  sessionId: "private-session",
-                  repository: { url: repository.url, branch: repository.branch },
-                }),
+              sessionKey,
+              reason: "patch",
+              session: expect.objectContaining({
+                sessionId: "private-session",
+                repository: { url: repository.url, branch: repository.branch },
               }),
             }),
-          ]);
+          );
           expect(noRead).not.toHaveBeenCalled();
           expect(projection.selectEntries()).toEqual([]);
           return;
@@ -194,17 +201,12 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
           agentId: "main",
           reason: "patch",
         });
-        expect(frames).toEqual([
-          expect.objectContaining({
-            event: "sessions.changed",
-            payload: {
-              reason: "update",
-              agentId: "main",
-              catalogChanged: true,
-              ts: expect.any(Number),
-            },
-          }),
-        ]);
+        expectFrame(frames, {
+          reason: "update",
+          agentId: "main",
+          catalogChanged: true,
+          ts: expect.any(Number),
+        });
         expect(noRead).not.toHaveBeenCalled();
         expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set());
         expect(broadcast.mock.calls[1]?.[2]).toEqual(new Set(["conn-1", "no-read"]));
@@ -220,60 +222,42 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
         detach();
         await connection.mentionInbox.dispose();
         projection.dispose();
+        memorySessionActorOwners.closeDatabase({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+        });
         vi.useRealTimers();
       }
     });
   },
 );
 
-const ownerCases: {
-  name: string;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  canonicalKey: string;
-}[] = [
-  {
-    name: "configured main alias",
-    cfg: { session: { mainKey: "inbox" }, agents: { entries: { ops: {} } } },
-    sessionKey: "main",
-    canonicalKey: "agent:ops:inbox",
-  },
-  {
-    name: "fixed-store global owner",
-    cfg: {
-      session: { scope: "global", store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    },
-    sessionKey: "global",
-    canonicalKey: "global",
-  },
-];
-
-it.each(ownerCases)(
-  "keeps fallback plugin notices bound to the $name",
-  async ({ cfg, sessionKey, canonicalKey }) => {
+it.each(["main", "global"])(
+  "keeps fallback plugin notices bound to the configured %s owner",
+  async (sessionKey) => {
+    const canonicalKey = sessionKey === "main" ? "agent:ops:inbox" : "global";
+    const cfg: OpenClawConfig =
+      sessionKey === "main"
+        ? { session: { mainKey: "inbox" }, agents: { entries: { ops: {} } } }
+        : {
+            session: { scope: "global", store: "/stores/shared.sqlite" },
+            agents: {
+              ownership: "explicit",
+              defaults: { sessionStore: { agentId: "ops" } },
+              entries: { ops: {}, research: {} },
+            },
+          };
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const projection = createSessionRowProjectionFixture({ cfg, agentId: "ops", store: {} });
-      vi.spyOn(projection, "capture").mockImplementation(() => {
-        throw new Error("synthetic capture failure");
-      });
+      vi.spyOn(projection, "withPreparedExactRows").mockRejectedValue(
+        new Error("synthetic preparation failure"),
+      );
       const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
       const broadcast = vi.fn(broadcaster.broadcastToConnIds);
-      const lease = createPluginRuntimeCapabilityLease("fallback-scope");
-      const notices = vi.fn();
-      createPluginServiceGatewayEvents({
-        pluginId: "fallback-scope",
-        broadcast: vi.fn(),
-        lease,
-      })!.onSessionsChanged(notices);
+      const { lease, notices } = pluginNotices("fallback-scope");
       const context = {
         ...bindSessionRowProjection({}, () => projection),
         broadcastToConnIds: broadcast,
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       };

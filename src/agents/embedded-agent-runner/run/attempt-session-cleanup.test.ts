@@ -32,7 +32,7 @@ const attempt = {
 
 function createInput(overrides: Record<string, unknown> = {}) {
   const transcriptLifecycle = {
-    beginCleanup: vi.fn(async () => undefined),
+    beginCleanup: vi.fn(async (onDrained?: () => void) => onDrained?.()),
     dispose: vi.fn(async () => undefined),
   };
   const emitDiagnosticRunCompleted = vi.fn();
@@ -47,7 +47,6 @@ function createInput(overrides: Record<string, unknown> = {}) {
   return {
     attempt,
     transcriptLifecycle,
-    sessionAgentId: "main",
     toolSearchCatalogRef: {},
     buildAbortSettlePromise: () => null,
     trajectoryRecorder,
@@ -66,7 +65,11 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
   });
 
   it("records the terminal event before transcript-safe resource cleanup", async () => {
-    const input = createInput();
+    const clearTranscriptRunCallbacks = vi.fn();
+    const input = createInput({ sessionManager: { clearTranscriptRunCallbacks } });
+    hoisted.cleanupEmbeddedAttemptResources.mockImplementation(async () => {
+      expect(clearTranscriptRunCallbacks).toHaveBeenCalledOnce();
+    });
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 

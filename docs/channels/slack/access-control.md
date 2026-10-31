@@ -20,7 +20,7 @@ never establish identity, and sender IDs derived from app-controlled message
 metadata remain asserted.
 
 For ordinary messages and app mentions from a verified Slack sender linked to an
-active user profile, OpenClaw includes that profile's canonical ID and current
+active user profile, OpenClaw includes that profile's primary ID and current
 display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
 "Assign this session to me"; the agent uses that profile ID with the `sessions`
 tool's `assign_owner` action for sessions visible to that administrator, including
@@ -41,15 +41,16 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group      | Default  |
+| ---------- | -------- |
+| channels   | disabled |
+| messages   | enabled  |
+| reactions  | enabled  |
+| pins       | enabled  |
+| memberInfo | enabled  |
+| emojiList  | enabled  |
 
-Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `channel-create`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `channel-create` creates a public workspace channel with Slack's `conversations.create` API. It is disabled until `channels.slack.actions.channels: true` is set (or set on the selected account). It requires the `channels:manage` OAuth scope; adding the requester to the created channel requires `channels:write.invites`. Add these scopes to the Slack app and reinstall or reauthorize existing installations before using this action. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
 
@@ -97,7 +98,7 @@ restart the Slack monitor. The Gateway remains running.
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the canonical DM allowlist.
+    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
@@ -148,6 +149,8 @@ restart the Slack monitor. The Gateway remains running.
     - channel allowlist entries and DM allowlist entries are resolved at startup and when a new policy snapshot is first used, when token access allows
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
+
+    Per-channel `tools`/`toolsBySender`/`requireMention` follow the same rule: resolved names bind to channel IDs, so a renamed channel never inherits another channel's name entry unless direct name matching is explicitly enabled.
 
     <Warning>
     Name-based keys (`#channel-name` or `channel-name`) depend on successful Slack lookup to resolve a stable channel ID. Under `groupPolicy: "allowlist"`, unresolved names are denied unless `dangerouslyAllowNameMatching` explicitly enables direct name matching.
@@ -209,8 +212,10 @@ restart the Slack monitor. The Gateway remains running.
     - `skills`
     - `systemPrompt`
     - `tools`, `toolsBySender`
-    - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
-      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries)
+    - `toolsBySender` key format: `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
+      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries; prefer
+      `id:` keys when granting extra tools because `username:` and `name:` match mutable sender
+      attributes)
 
     <a id="bot-created-threads" />
     `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.

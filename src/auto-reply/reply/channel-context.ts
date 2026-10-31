@@ -1,4 +1,3 @@
-/** Resolves channel and account context for command handlers. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

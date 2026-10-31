@@ -15,10 +15,13 @@ const log = createSubsystemLogger("gateway");
 
 export async function prewarmGatewaySessionHistory(
   config: OpenClawConfig,
-  options: { onlyIfCold?: boolean; isCancelled?: () => boolean } = {},
+  options: {
+    isCancelled?: () => boolean;
+  } = {},
 ): Promise<void> {
   try {
-    if (options.onlyIfCold && !isSessionHistoryWorkerCold()) {
+    // Recovery already starts fully prepared history workers; warming again can spawn a sibling.
+    if (!isSessionHistoryWorkerCold()) {
       return;
     }
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {

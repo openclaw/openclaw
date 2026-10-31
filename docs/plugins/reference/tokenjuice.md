@@ -15,11 +15,21 @@ Compacts exec and bash tool results with tokenjuice reducers.
 ## Distribution
 
 - Package: `@openclaw/tokenjuice`
-- Install route: npm or ClawHub: `clawhub:@openclaw/tokenjuice`
+- Install route: npm or ClawHub: `@openclaw/tokenjuice`
 
 ## Surface
 
 - Contracts: `agentToolResultMiddleware`
+
+<!-- openclaw-plugin-reference:manual-start -->
+
+## Compaction scope
+
+Tokenjuice compacts OpenClaw `exec` and `bash` results in embedded runs and
+OpenClaw dynamic tools in the Codex app-server harness. Native codex-rs shell
+results returned to the model stay unchanged.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 

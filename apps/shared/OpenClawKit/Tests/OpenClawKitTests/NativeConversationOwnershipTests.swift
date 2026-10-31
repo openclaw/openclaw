@@ -19,7 +19,7 @@ struct NativeConversationOwnershipTests {
         }
     }
 
-    @Test func `structural case aliases preserve distinct opaque Signal and Matrix identifiers`() {
+    @Test func `structural case aliases preserve distinct opaque channel and catalog identifiers`() {
         for (webKey, aliasKey, distinctKey) in [
             (
                 "agent:research:signal:group:AbC123=:thread:xyz",
@@ -41,6 +41,10 @@ struct NativeConversationOwnershipTests {
                 "agent:research:matrix:channel:!Room:Example.Org:Signal:Group: AbC :thread:$Event:Signal:Group: XyZ",
                 "Agent:Research:Matrix:Channel:!Room:Example.Org:Signal:Group: AbC :THREAD:$Event:Signal:Group: XyZ",
                 "agent:research:matrix:channel:!Room:Example.Org:signal:group: abc :thread:$Event:signal:group: xyz"),
+            (
+                "agent:research:catalog:Claude:Host:AbC",
+                "Agent:Research:catalog:Claude:Host:AbC",
+                "agent:research:catalog:Claude:Host:abc"),
         ] {
             let ownership = OpenClawChatSendOwnership()
             let web = OpenClawChatSendOwnership.Scope(sessionKey: webKey, agentID: nil)
@@ -61,11 +65,17 @@ struct NativeConversationOwnershipTests {
             for alias in ["MAIN", "Workspace", "Agent:Research:Main", "AGENT:Research:Workspace"] {
                 let ownership = OpenClawChatSendOwnership()
                 let web = OpenClawChatSendOwnership.Scope(
-                    sessionKey: canonical, agentID: "research", scope: routingScope,
-                    mainKey: "workspace", defaultAgentID: "main")
+                    sessionKey: canonical,
+                    agentID: "research",
+                    scope: routingScope,
+                    mainKey: "workspace",
+                    defaultAgentID: "main")
                 let native = OpenClawChatSendOwnership.Scope(
-                    sessionKey: alias, agentID: "research", scope: routingScope,
-                    mainKey: "workspace", defaultAgentID: "main")
+                    sessionKey: alias,
+                    agentID: "research",
+                    scope: routingScope,
+                    mainKey: "workspace",
+                    defaultAgentID: "main")
                 let window = UUID()
                 #expect(ownership.beginWeb(web, owner: window))
                 #expect(!ownership.beginNative(native))
@@ -78,16 +88,28 @@ struct NativeConversationOwnershipTests {
         let ownership = OpenClawChatSendOwnership()
         let window = UUID()
         let global = OpenClawChatSendOwnership.Scope(
-            sessionKey: "global", agentID: "research", scope: "global", mainKey: "workspace",
+            sessionKey: "global",
+            agentID: "research",
+            scope: "global",
+            mainKey: "workspace",
             defaultAgentID: "research")
         let defaultMain = OpenClawChatSendOwnership.Scope(
-            sessionKey: "main", agentID: nil, scope: "global", mainKey: "workspace",
+            sessionKey: "main",
+            agentID: nil,
+            scope: "global",
+            mainKey: "workspace",
             defaultAgentID: "research")
         let qualifiedGlobal = OpenClawChatSendOwnership.Scope(
-            sessionKey: "agent:research:global", agentID: nil, scope: "global", mainKey: "workspace",
+            sessionKey: "agent:research:global",
+            agentID: nil,
+            scope: "global",
+            mainKey: "workspace",
             defaultAgentID: "research")
         let otherAgent = OpenClawChatSendOwnership.Scope(
-            sessionKey: "agent:main:workspace", agentID: nil, scope: "global", mainKey: "workspace",
+            sessionKey: "agent:main:workspace",
+            agentID: nil,
+            scope: "global",
+            mainKey: "workspace",
             defaultAgentID: "research")
         #expect(ownership.beginWeb(global, owner: window))
         #expect(!ownership.beginNative(defaultMain))
@@ -102,10 +124,16 @@ struct NativeConversationOwnershipTests {
         for sentinel in ["global", "unknown"] {
             let ownership = OpenClawChatSendOwnership()
             let web = OpenClawChatSendOwnership.Scope(
-                sessionKey: sentinel, agentID: "research", scope: "per-sender", mainKey: sentinel,
+                sessionKey: sentinel,
+                agentID: "research",
+                scope: "per-sender",
+                mainKey: sentinel,
                 defaultAgentID: "main")
             let qualified = OpenClawChatSendOwnership.Scope(
-                sessionKey: "agent:research:\(sentinel)", agentID: nil, scope: "per-sender", mainKey: sentinel,
+                sessionKey: "agent:research:\(sentinel)",
+                agentID: nil,
+                scope: "per-sender",
+                mainKey: sentinel,
                 defaultAgentID: "main")
             let window = UUID()
             #expect(ownership.beginWeb(web, owner: window))

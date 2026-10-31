@@ -1,4 +1,4 @@
-import type { ConversationKind } from "./conversation-identity.js";
+import type { ChatType as ConversationKind } from "../../channels/chat-type.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 
 export type ConversationRecord = {
@@ -28,7 +28,9 @@ export type ConversationRecord = {
 
 export type ConversationReadQuery = {
   channel?: string;
+  deliveryAddress?: { accountId: string; target: string; threadId?: string };
   conversationRef?: string;
+  conversationRefs?: readonly string[];
   limit?: number;
   primarySession?: { sessionId: string; sessionKey: string };
   currentBindingOnly?: boolean;

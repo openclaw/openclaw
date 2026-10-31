@@ -141,7 +141,14 @@ struct GatewayConnectionControlUIAuthTests {
                 case "password": ["password": "accepted-password"]
                 default: [String: String]()
                 }
-                #expect(configuration.auth.legacyCredentials == expectedLegacy)
+                let credentials: [String: String]? = if case let .nativeDevice(_, _, _, credentials) = configuration
+                    .auth
+                {
+                    credentials
+                } else {
+                    nil
+                }
+                #expect(credentials == expectedLegacy)
                 let provider = try #require(configuration.nativeAuthProvider)
                 let originalLease = try #require(await connection.captureServerLease())
                 let original = try await provider("original-challenge", 123)

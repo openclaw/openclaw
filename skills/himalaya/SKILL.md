@@ -66,8 +66,8 @@ Use MML for attachments and rich messages; read `references/message-composition.
 ## Organize
 
 ```bash
-himalaya message copy <id> <folder>
-himalaya message move <id> <folder>
+himalaya message copy <id> --to <folder>
+himalaya message move <id> --to <folder>
 himalaya message delete <id>
 himalaya flag add <id> --flag seen
 himalaya flag remove <id> --flag seen

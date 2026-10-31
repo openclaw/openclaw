@@ -3,8 +3,12 @@
    shared settings design language. */
 
 /* Compact refresh actions should not retain the spacing reserved for settings
-   headers with full-size controls. */
-.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+   headers with full-size controls. Actions are direct children or have one tooltip/form
+   wrapper; bounded child paths avoid scanning large section lists. */
+.settings-section:has(
+  > * > .settings-section__actions > .btn--xs.btn--icon,
+  > * > .settings-section__actions > * > .btn--xs.btn--icon
+) {
   gap: var(--space-2);
 }
 
@@ -23,7 +27,6 @@
   text-align: left;
 }
 
-/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
 .channels-tile {
   display: grid;
   width: var(--channels-art-size, 44px);
@@ -53,7 +56,6 @@
   text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
 }
 
-/* Wide cover art used by the detail overlay header. */
 .channels-cover {
   display: grid;
   width: 100%;
@@ -90,8 +92,10 @@
 }
 
 .channels-detail {
-  width: min(680px, calc(100vw - 48px));
-  max-height: min(85dvh, 860px);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: min(85dvh, 860px, var(--openclaw-modal-height-limit));
 }
 
 .channels-detail__header {
@@ -126,8 +130,15 @@
 
 .channels-detail__body {
   display: grid;
+  min-height: 0;
+  overflow-y: auto;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-5);
+}
+
+.channels-detail__footer {
+  padding: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 .channels-pairing-filters {
@@ -215,13 +226,6 @@
   margin-top: 3px;
 }
 
-.channels-pairing-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
 @media (max-width: 640px) {
   .channels-pairing-request__main {
     align-items: stretch;
@@ -292,7 +296,6 @@
   background: var(--bg-elevated);
 }
 
-.channels-wizard__note--code,
 .channels-wizard__output--code {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -302,20 +305,6 @@
   color: var(--text-strong);
   font-weight: 620;
   line-height: 1.4;
-}
-
-.channels-wizard__text,
-.channels-wizard__secret {
-  width: 100%;
-  margin-top: 10px;
-}
-
-.channels-wizard__text {
-  display: flex;
-}
-
-.channels-wizard__text > .input {
-  min-height: 44px;
 }
 
 .channels-wizard__options {
@@ -345,9 +334,7 @@
   background: var(--bg-elevated);
 }
 
-.channels-wizard__option[aria-pressed="true"],
-.channels-wizard__option[checked],
-.channels-wizard__option:state(checked) {
+.channels-wizard__option[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: var(--accent-subtle);
 }
@@ -357,7 +344,8 @@
   font-weight: 620;
 }
 
-.channels-wizard__option-hint {
+.channels-wizard__option-hint,
+.channels-wizard__spinner {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -366,14 +354,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.channels-wizard__footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  flex-wrap: wrap;
 }
 
 .channels-wizard__error {
@@ -399,11 +379,6 @@
   padding: var(--space-2);
 }
 
-.channels-wizard__spinner {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 /* Text/tile area of an available row doubles as the detail opener. */
 .channels-item__detail {
   display: flex;
@@ -411,17 +386,4 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.channels-item__detail:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }

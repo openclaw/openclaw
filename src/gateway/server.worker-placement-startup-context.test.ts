@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   connectOk,
@@ -25,6 +26,7 @@ test(
       try {
         // A Vitest timeout leaves acquisition running; teardown must join and close its late result.
         signal.throwIfAborted();
+        await waitForGatewayStartup(harness.port);
         const { ws } = await harness.openClient();
         const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
           agentId: "main",
@@ -69,6 +71,7 @@ test("an ordinary token client keeps issuing requests across an unrelated config
     try {
       signal.throwIfAborted();
       await gateway.server.startupSettled;
+      await waitForGatewayStartup(gateway.port);
       const ws = await gateway.openWs();
       await connectOk(ws, { token, scopes: ["operator.admin"] });
       expect(await rpcReq(ws, "agents.list", {})).toMatchObject({ ok: true });

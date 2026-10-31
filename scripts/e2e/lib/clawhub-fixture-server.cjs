@@ -51,14 +51,17 @@ async function assertPrepublishRequests(
   const requests = await readRequests(baseUrl);
   const packagePath = `/api/v1/packages/${encodeURIComponent(requestedPackage)}`;
   const versionPath = `${packagePath}/versions/${encodeURIComponent(version)}`;
+  // Installation concludes with a best-effort package detail read. This fixture
+  // intentionally returns 404 for that endpoint but still fences the exact request.
   const expected = [
     `GET ${packagePath}`,
     `GET ${versionPath}/artifact`,
     ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
+    `GET ${packagePath}/detail`,
   ];
   // Multi-command upgrade recovery can stage an artifact in several convergence
-  // phases. Every request must still belong to a complete authorized audit sequence.
+  // phases. Every request must still belong to a complete authorized install sequence.
   const count = attempts === "complete" ? requests.length / expected.length : Number(attempts);
   if (!Number.isInteger(count) || count < minimumCount || count > 16) {
     throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
@@ -83,6 +86,19 @@ async function assertNoRequests(baseUrl) {
 function json(response, value, status = 200) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(`${JSON.stringify(value)}\n`);
+}
+
+function listen(server) {
+  server.listen(0, "127.0.0.1", () => {
+    fs.writeFileSync(portFile, String(server.address().port));
+    process.send?.({ port: server.address().port });
+  });
+}
+
+/** @param {unknown} error */
+function fail(error) {
+  console.error(error);
+  process.exit(1);
 }
 
 function startPrepublishArtifactServer() {
@@ -210,6 +226,7 @@ function startPrepublishArtifactServer() {
           createdAt: 0,
         },
         overview: "No security concerns found in the fixture release.",
+        verdict: "clean",
         securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
         trust: {
           scanStatus: "clean",
@@ -240,20 +257,16 @@ function startPrepublishArtifactServer() {
       response.end(entry.archive);
     }
   });
-  server.listen(0, "127.0.0.1", () => {
-    fs.writeFileSync(portFile, String(server.address().port));
-    process.send?.({ port: server.address().port });
-  });
+  listen(server);
 }
 
-const buildArtifactSummary = ({
+const buildArchiveSummary = ({
   clawpackSha256,
   clawpackSize,
   npmIntegrity,
   npmShasum,
   npmTarballName,
 }) => ({
-  kind: "npm-pack",
   format: "tgz",
   sha256: clawpackSha256,
   size: clawpackSize,
@@ -262,21 +275,13 @@ const buildArtifactSummary = ({
   npmTarballName,
 });
 
-const buildClawPackSummary = ({
-  clawpackSha256,
-  clawpackSize,
-  npmIntegrity,
-  npmShasum,
-  npmTarballName,
-}) => ({
-  available: true,
-  format: "tgz",
-  sha256: clawpackSha256,
-  size: clawpackSize,
-  npmIntegrity,
-  npmShasum,
-  npmTarballName,
-});
+function fixtureFiles(fixture) {
+  return [
+    ["package.json", `${JSON.stringify(fixture.packageJson, null, 2)}\n`],
+    ["index.js", fixture.indexJs],
+    ["openclaw.plugin.json", `${JSON.stringify(fixture.manifest, null, 2)}\n`],
+  ];
+}
 
 async function buildNpmPackArtifact(fixture) {
   const tar = requireFromApp("tar");
@@ -284,15 +289,9 @@ async function buildNpmPackArtifact(fixture) {
   try {
     const packageDir = path.join(packRoot, "package");
     await fs.promises.mkdir(packageDir, { recursive: true });
-    await fs.promises.writeFile(
-      path.join(packageDir, "package.json"),
-      `${JSON.stringify(fixture.packageJson, null, 2)}\n`,
-    );
-    await fs.promises.writeFile(path.join(packageDir, "index.js"), fixture.indexJs);
-    await fs.promises.writeFile(
-      path.join(packageDir, "openclaw.plugin.json"),
-      `${JSON.stringify(fixture.manifest, null, 2)}\n`,
-    );
+    for (const [name, content] of fixtureFiles(fixture)) {
+      await fs.promises.writeFile(path.join(packageDir, name), content);
+    }
     const npmTarballName = `${packageName.replace(/^@/, "").replace("/", "-")}-${fixture.version}.tgz`;
     const archivePath = path.join(packRoot, npmTarballName);
     await tar.c(
@@ -445,8 +444,9 @@ export default definePluginEntry({
       },
     },
     packageDetail(artifact) {
-      const clawpack = buildClawPackSummary(artifact);
-      const packageArtifact = buildArtifactSummary(artifact);
+      const summary = buildArchiveSummary(artifact);
+      const clawpack = { available: true, ...summary };
+      const packageArtifact = { kind: "npm-pack", ...summary };
       const packageDetail = {
         package: {
           name: packageName,
@@ -559,8 +559,9 @@ export default definePluginEntry({
         pluginApiRange: ">=2026.4.26",
         minGatewayVersion: "2026.4.26",
       };
-      const clawpack = buildClawPackSummary(artifact);
-      const packageArtifact = buildArtifactSummary(artifact);
+      const summary = buildArchiveSummary(artifact);
+      const clawpack = { available: true, ...summary };
+      const packageArtifact = { kind: "npm-pack", ...summary };
       return {
         packageDetail: {
           package: {
@@ -682,22 +683,12 @@ if (profile === "assert-prepublish-requests") {
     process.argv[6],
     process.argv[7],
     process.argv[8],
-  ).catch(
-    /** @param {unknown} error */ (error) => {
-      console.error(error);
-      process.exit(1);
-    },
-  );
+  ).catch(fail);
   return;
 }
 
 if (profile === "assert-no-requests") {
-  assertNoRequests(portFile).catch(
-    /** @param {unknown} error */ (error) => {
-      console.error(error);
-      process.exit(1);
-    },
-  );
+  assertNoRequests(portFile).catch(fail);
   return;
 }
 
@@ -716,12 +707,9 @@ if (!fixture || !portFile) {
 async function main() {
   const JSZip = requireFromApp("jszip");
   const zip = new JSZip();
-  zip.file("package/package.json", `${JSON.stringify(fixture.packageJson, null, 2)}\n`, {
-    date: new Date(0),
-  });
-  zip.file("package/index.js", fixture.indexJs, { date: new Date(0) });
-  const manifestJson = `${JSON.stringify(fixture.manifest, null, 2)}\n`;
-  zip.file("package/openclaw.plugin.json", manifestJson, { date: new Date(0) });
+  for (const [name, content] of fixtureFiles(fixture)) {
+    zip.file(`package/${name}`, content, { date: new Date(0) });
+  }
 
   const archive = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   const sha256hash = crypto.createHash("sha256").update(archive).digest("hex");
@@ -753,6 +741,7 @@ async function main() {
     release: {
       version: fixture.version,
     },
+    verdict: "clean",
     trust: {
       scanStatus: "clean",
       moderationState: null,
@@ -763,6 +752,13 @@ async function main() {
     },
   };
   const requestLog = [];
+  const packagePath = `/api/v1/packages/${encodeURIComponent(packageName)}`;
+  const versionPath = `${packagePath}/versions/${fixture.version}`;
+  const details = new Map([
+    [packagePath, packageDetail],
+    [versionPath, versionDetail],
+    [`${versionPath}/artifact`, artifactResolverDetail],
+  ]);
 
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -792,28 +788,11 @@ async function main() {
       json(response, { results });
       return;
     }
-    if (url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}`) {
-      json(response, packageDetail);
+    if (details.has(url.pathname)) {
+      json(response, details.get(url.pathname));
       return;
     }
-    if (
-      url.pathname ===
-      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}`
-    ) {
-      json(response, versionDetail);
-      return;
-    }
-    if (
-      url.pathname ===
-      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/artifact`
-    ) {
-      json(response, artifactResolverDetail);
-      return;
-    }
-    if (
-      url.pathname ===
-      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/security`
-    ) {
+    if (url.pathname === `${versionPath}/security`) {
       json(response, {
         ...securityDetail,
         overview: "No security concerns found in the fixture release.",
@@ -821,14 +800,11 @@ async function main() {
       });
       return;
     }
-    if (
-      betaStatus !== undefined &&
-      url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}/versions/beta`
-    ) {
+    if (betaStatus !== undefined && url.pathname === `${packagePath}/versions/beta`) {
       json(response, { error: "version not found" }, betaStatus ?? 404);
       return;
     }
-    if (url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}/download`) {
+    if (url.pathname === `${packagePath}/download`) {
       response.writeHead(200, {
         "content-type": "application/zip",
         "content-length": String(archive.length),
@@ -836,10 +812,7 @@ async function main() {
       response.end(archive);
       return;
     }
-    if (
-      url.pathname ===
-      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/artifact/download`
-    ) {
+    if (url.pathname === `${versionPath}/artifact/download`) {
       response.writeHead(200, {
         "content-type": "application/octet-stream",
         "content-length": String(clawpack.archive.length),
@@ -855,15 +828,7 @@ async function main() {
     response.end(`not found: ${url.pathname}`);
   });
 
-  server.listen(0, "127.0.0.1", () => {
-    fs.writeFileSync(portFile, String(server.address().port));
-    process.send?.({ port: server.address().port });
-  });
+  listen(server);
 }
 
-main().catch(
-  /** @param {unknown} error */ (error) => {
-    console.error(error);
-    process.exit(1);
-  },
-);
+main().catch(fail);

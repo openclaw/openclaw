@@ -17,6 +17,7 @@ import {
 } from "../../infra/update-failure-facts.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
@@ -28,6 +29,7 @@ import {
   recordUpdateRunRepairContinuation,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   UPDATE_RUN_HEARTBEAT_MS,
@@ -69,6 +71,7 @@ type Outcome = "completed" | "failed" | "warning" | "skipped" | "deferred";
 export type UpdateFinalizationPhase = {
   signal: AbortSignal;
   assertCurrent: () => void;
+  deadlineAtMs?: number;
 };
 
 export class UpdateFinalizationLifecycle {
@@ -84,8 +87,9 @@ export class UpdateFinalizationLifecycle {
   handoff?: ManagedHandoffRepair;
   private runId?: string;
   private driver?: UpdateRunDriver;
-  private ledgerOptions?: { env: NodeJS.ProcessEnv };
+  private ledgerOptions?: { env: NodeJS.ProcessEnv; busyTimeoutMs: number };
   private ownsRun = false;
+  private ownsRepairRun = false;
   private warnedHeartbeat = false;
   private deferredExitWatch?: () => void;
   completed = false;
@@ -94,6 +98,8 @@ export class UpdateFinalizationLifecycle {
   private reportTimeout?: () => void;
   private failureObservation?: UpdateRunResult;
   private failureReason?: string;
+  private unrecordedPhaseFailure?: { step: UpdateRunStep; reason: string };
+  private readonly recordedWarningCounts = new Map<"doctor" | "plugins", number>();
 
   constructor(
     private readonly json: boolean,
@@ -105,26 +111,30 @@ export class UpdateFinalizationLifecycle {
     return this.ownsRun;
   }
 
-  attachLedger(repair = false): string {
+  get ownsUpdateRepairRun(): boolean {
+    return this.ownsRepairRun;
+  }
+
+  attachLedger(repair = false, reportResult = false): string {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
-    this.ledgerOptions = { env: { ...process.env } };
-    const admissionOptions = { ...this.ledgerOptions, busyTimeoutMs: this.budget("preflight") };
+    this.ledgerOptions = { env: { ...process.env }, busyTimeoutMs: this.budget("preflight") };
     this.runId = createUpdateRun(
-      { runId: inherited || undefined, trigger: "cli" },
-      admissionOptions,
+      { runId: inherited || undefined, trigger: "cli", reportResult },
+      this.ledgerOptions,
     ).runId;
     this.ownsRun = !inherited;
-    adoptUpdateRun(this.runId, admissionOptions);
+    adoptUpdateRun(this.runId, this.ledgerOptions);
     this.handoff?.bindRun(this.runId);
-    if (repair && this.ownsRun) {
-      recordUpdateRunRepairContinuation(this.runId, this.runId, admissionOptions);
+    this.ownsRepairRun = repair && this.ownsRun;
+    if (this.ownsRepairRun) {
+      recordUpdateRunRepairContinuation(this.runId, this.runId, this.ledgerOptions);
     }
     if (this.active) {
       recordUpdateRunStep(
         this.runId,
         { step: this.active.step, status: "in_progress", startedAtMs: this.active.startedAtMs },
-        admissionOptions,
+        this.ledgerOptions,
       );
     }
     return this.runId;
@@ -134,7 +144,7 @@ export class UpdateFinalizationLifecycle {
     if (this.runId && this.ownsRun && installKind !== "unknown") {
       recordUpdateRunPhase(
         this.runId,
-        "requested",
+        this.ownsRepairRun ? "repairing" : "requested",
         {
           target: { kind: installKind, ...(version ? { version } : {}) },
           ...(version ? { after: { version } } : {}),
@@ -161,6 +171,7 @@ export class UpdateFinalizationLifecycle {
     detail?: string,
     failureFacts?: UpdateFailureFact[],
     exitCode?: number | null,
+    startedAtMs?: number,
   ): void {
     const failureReason = failureFacts?.find(
       (fact) => fact.code.trim() && fact.code !== "finalization-failed",
@@ -173,6 +184,7 @@ export class UpdateFinalizationLifecycle {
       ...(exitCode !== undefined ? { exitCode } : {}),
       ...(status === "failed" ? { reason: failureReason ?? name } : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
+      ...(startedAtMs !== undefined ? { startedAtMs } : {}),
     };
     const message = `[update finalize] ${JSON.stringify(step)}`;
     if (status === "failed") {
@@ -187,16 +199,57 @@ export class UpdateFinalizationLifecycle {
     if (this.runId) {
       try {
         recordUpdateRunStep(this.runId, step, this.ledgerOptions);
+        if (this.unrecordedPhaseFailure?.step.step === name) {
+          this.unrecordedPhaseFailure = undefined;
+        }
       } catch {
+        if (status === "failed" && name === this.active?.step) {
+          // Doctor may still own state; terminal persistence follows process settlement.
+          this.unrecordedPhaseFailure = {
+            reason: failureReason ?? name,
+            step: {
+              step: name,
+              status,
+              detail,
+              failureFacts,
+              exitCode,
+              startedAtMs: this.active.startedAtMs,
+              endedAtMs: at,
+            },
+          };
+        }
         defaultRuntime.error("[update finalize] Could not persist phase diagnostic.");
       }
     }
   }
 
+  /** Records the phase's complete current warning list, retiring rows a shorter list drops. */
   recordWarnings(warnings: readonly string[], phase: "doctor" | "plugins" = "doctor"): void {
     warnings.forEach((detail, index) => {
       this.record(`warning:finalize:${phase}:${index}`, "completed", Date.now(), detail);
     });
+    const recorded = this.recordedWarningCounts.get(phase) ?? 0;
+    this.recordedWarningCounts.set(phase, warnings.length);
+    if (!this.runId) {
+      return;
+    }
+    // Reports render only completed warning rows; retired rows stay as bounded history.
+    for (let index = warnings.length; index < recorded; index += 1) {
+      try {
+        recordUpdateRunStep(
+          this.runId,
+          {
+            step: `warning:finalize:${phase}:${index}`,
+            status: "skipped",
+            endedAtMs: Date.now(),
+            detail: "Settled or superseded later in this update.",
+          },
+          this.ledgerOptions,
+        );
+      } catch {
+        defaultRuntime.error("[update finalize] Could not retire a settled warning.");
+      }
+    }
   }
 
   recordDoctorStep(step: UpdateStepResult): void {
@@ -209,6 +262,7 @@ export class UpdateFinalizationLifecycle {
         row.detail,
         row.failureFacts,
         row.exitCode,
+        Math.max(0, endedAtMs - step.durationMs),
       );
     }
   }
@@ -232,7 +286,10 @@ export class UpdateFinalizationLifecycle {
     phase: Phase,
     run: (phase: UpdateFinalizationPhase) => Promise<T>,
     outcome?: (result: T) => Outcome | { outcome: Outcome; failureFacts?: UpdateFailureFact[] },
-    custody?: { enter?: () => Promise<void>; restore?: (result: T) => Promise<void> },
+    custody?: {
+      enter?: (deadlineAtMs: number | undefined) => Promise<void>;
+      restore?: (result: T) => Promise<void>;
+    },
   ): Promise<T> {
     // Keep unresponsive source metadata inside the existing bounded worker.
     this.stateBudgetMs ??=
@@ -253,6 +310,7 @@ export class UpdateFinalizationLifecycle {
     const active = { step: `finalize:${phase}`, startedAtMs };
     this.active = active;
     this.record(active.step, "in_progress", startedAtMs);
+    const monotonicDeadline = budgetMs === undefined ? undefined : startedAt + budgetMs;
     const output = new UpdateFinalizationOutput();
     // Doctor holds the state-lifecycle coordinator while repairing shared state.
     // Keep its parent out of that database; recorded driver liveness still
@@ -340,6 +398,11 @@ export class UpdateFinalizationLifecycle {
       },
     );
     const scope: UpdateFinalizationPhase = {
+      get deadlineAtMs() {
+        return monotonicDeadline === undefined
+          ? undefined
+          : Date.now() + Math.max(0, monotonicDeadline - performance.now());
+      },
       signal: resolveCommandProcessSignal(deadline.signal) ?? deadline.signal,
       assertCurrent: () => {
         this.handoff?.assertCurrent();
@@ -351,7 +414,7 @@ export class UpdateFinalizationLifecycle {
       // Service custody must be acquired before cancellation, and restored outside it.
       await withCommandProcessScope(async () => {
         this.handoff?.assertCurrent();
-        await custody?.enter?.();
+        await custody?.enter?.(scope.deadlineAtMs);
       });
       // Borrowed invocations do not take over their host's lifetime.
       if (budgetMs !== undefined && hasCliProcessScope()) {
@@ -364,18 +427,31 @@ export class UpdateFinalizationLifecycle {
           durationMs: Math.round(performance.now() - this.startedAt),
         });
         failure.message = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
-        deadline.start(failure, budgetMs);
+        deadline.start(failure, budgetMs, monotonicDeadline);
       }
-      const result = await deadline.run(() =>
-        withCommandProcessScope(async (stop) => {
-          stopPhaseChildren = stop;
-          scope.assertCurrent();
-          return await output.run(() => run(scope));
-        }, scope.signal),
+      const result = await deadline.run(
+        () =>
+          withCommandProcessScope(async (stop) => {
+            stopPhaseChildren = stop;
+            scope.assertCurrent();
+            return await output.run(() => run(scope));
+          }, scope.signal),
+        // Optional cache failure can settle during cancellation; unjoined work
+        // and cleanup errors still refuse finalization in the deadline owner.
+        phase === "completionCache" ? (cacheResult) => cacheResult === "failed" : undefined,
       );
       await withCommandProcessScope(async () => {
         await custody?.restore?.(result);
       });
+      if (deadline.failure) {
+        this.record(
+          `warning:finalize:${phase}:deadline`,
+          "completed",
+          Date.now(),
+          deadline.failure.message,
+        );
+        this.reportTimeout = undefined;
+      }
       const completed = outcome?.(result) ?? "completed";
       end(
         typeof completed === "string" ? completed : completed.outcome,
@@ -391,21 +467,16 @@ export class UpdateFinalizationLifecycle {
       const doctorFailure = collectNestedErrorCandidates(error).find(
         (cause): cause is UpdateDoctorError => cause instanceof UpdateDoctorError,
       );
-      const facts = failure
-        ? [
-            createUpdateFailureFact({
-              check: phase,
-              code: "finalization-timeout",
-              message: failure.message,
-            }),
-          ]
-        : doctorFailure
+      const facts =
+        !failure && doctorFailure
           ? collectUpdateDoctorFailureFacts(error)
           : [
               createUpdateFailureFact({
                 check: phase,
-                code: extractErrorCode(error) ?? "finalization-failed",
-                message: formatErrorMessage(error),
+                code: failure
+                  ? "finalization-timeout"
+                  : (extractErrorCode(error) ?? "finalization-failed"),
+                message: failure ? failure.message : formatErrorMessage(error),
               }),
             ];
       const deferred =
@@ -446,14 +517,14 @@ export class UpdateFinalizationLifecycle {
             failure: { cause: error },
             durationMs: Math.round(performance.now() - this.startedAt),
           });
-    if (result.reason === "update-failed" && this.failureReason) {
-      result.reason = this.failureReason;
+    if (result.reason === "update-failed") {
+      result.reason = this.failureReason ?? (this.ownsRepairRun ? "repair-failed" : result.reason);
     }
     try {
       this.failureObservation = await verifyUpdateFailureRecovery({
         result,
         root: this.root,
-        opts: { json: this.json, run: { runId: this.runId, env } },
+        opts: { json: this.json, run: { runId: this.runId, ...this.ledgerOptions } },
         env,
         timeoutMs: this.timeoutMs,
         serviceUpdateVerdict: this.serviceUpdateVerdict,
@@ -471,17 +542,29 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
-  private finishLedger(exitCode: number): void {
+  private finishLedger(exitCode: number, deferredMaintenance?: string): void {
     if (this.runId && this.ownsRun) {
       try {
         finishUpdateRun(
           this.runId,
           {
-            status: exitCode ? "failed" : "succeeded",
-            diagnostics: this.failureObservation,
+            status: exitCode ? "failed" : deferredMaintenance ? "skipped" : "succeeded",
+            reason: deferredMaintenance
+              ? "doctor-maintenance-pending"
+              : this.failureObservation?.reason === "repair-failed"
+                ? "repair-failed"
+                : exitCode
+                  ? this.unrecordedPhaseFailure?.reason
+                  : undefined,
+            nextAction: deferredMaintenance,
+            diagnostics: this.unrecordedPhaseFailure
+              ? { ...this.failureObservation, failure: this.unrecordedPhaseFailure.step }
+              : this.failureObservation,
           },
           this.ledgerOptions,
+          (payload) => void sendUpdateResultTelemetry(payload, { env: this.ledgerOptions?.env }),
         );
+        this.unrecordedPhaseFailure = undefined;
       } catch {
         defaultRuntime.error("[update finalize] Could not persist final outcome.");
       }
@@ -513,31 +596,37 @@ export class UpdateFinalizationLifecycle {
     watch?.();
   }
 
-  complete(exitCode: number): void {
+  complete(exitCode: number, deferredMaintenance?: string): void {
     if (this.completed) {
       return;
     }
     this.completed = true;
-    this.finishLedger(exitCode);
+    this.finishLedger(exitCode, deferredMaintenance);
     this.reportTimeout?.();
     if (!hasCliProcessScope()) {
       return;
     }
-    // Recovery may still await diagnostics after terminal output; arm the watchdog
-    // from finishRecovery before unwinding resource cleanup.
+    // Recovery may still await diagnostics after terminal output. Once it has
+    // settled, the watchdog diagnoses stalls and cancels only this owner's children;
+    // the CLI finalizer still joins their cleanup before recording the exit code.
     this.deferredExitWatch = () =>
-      watchCliExitAfterOutput(exitCode, () => {
-        const diagnostic = JSON.stringify({
-          activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
-          unsettledDisposers: getPendingCliDisposers(),
-          ...inspectUpdateFinalizationChildren(),
-        });
-        writeSync(
-          2,
-          `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
-        );
-        this.recordDiagnostic(diagnostic);
-        this.stopChildren();
+      watchCliExitAfterOutput(() => {
+        try {
+          const diagnostic = JSON.stringify({
+            activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
+            unsettledDisposers: getPendingCliDisposers(),
+            ...inspectUpdateFinalizationChildren(),
+          });
+          writeSync(
+            2,
+            `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
+          );
+          this.recordDiagnostic(diagnostic);
+        } catch {
+          // A broken diagnostic sink cannot interrupt owner cancellation or cleanup.
+        } finally {
+          this.stopChildren();
+        }
       });
   }
 }

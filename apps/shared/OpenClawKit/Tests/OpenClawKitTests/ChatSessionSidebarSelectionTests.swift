@@ -1,12 +1,15 @@
 #if os(macOS)
 import Foundation
+import Observation
 import SwiftUI
+import Synchronization
 import Testing
 @testable import OpenClawChatUI
 
 @MainActor
 struct ChatSessionSidebarSelectionTests {
-    @Test func `group siblings expose separate row tags that activate batch selection`() throws {
+    @Test(arguments: [false, true])
+    func `group rows reuse their projection and expose separate batch selection tags`(multiple: Bool) throws {
         let suite = "ChatSessionSidebarSelectionTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         let group = "Research \(UUID().uuidString)"
@@ -48,14 +51,22 @@ struct ChatSessionSidebarSelectionTests {
         let section = try #require(sidebar.interactionSections(now: now).first { $0.id == "group:\(group)" })
         #expect(section.nodes.count == 2)
         #expect(section.nodes.first { $0.session.key == rows[0].key }?.children.map(\.id) == [rows[2].key])
-        let content = sidebar.sessionSection(
-            section,
-            now: now,
-            ownership: sidebar.ownership(for: rows),
-            previewRequest: .init(viewModel: model, sessions: rows))
+        let visibleRows = sidebar.visibleInteractionRows([section])
+        let expected = Set(rows.prefix(2).map(OpenClawChatSessionSidebarData.identity))
+        if multiple { sidebar.batch.selection.keys = expected }
+        let context = sidebar.rowContext(now: now, projectedRows: rows, visibleRows: visibleRows)
+        let rosterInvalidated = Mutex(false)
+        withObservationTracking {
+            for node in section.nodes {
+                _ = sidebar.row(for: node, isChild: false, context: context)
+            }
+        } onChange: {
+            rosterInvalidated.withLock { $0 = true }
+        }
+        let content = sidebar.sessionSection(section, context: context)
         var renderedTags: [[String?]] = []
-        /// Resolve the real section's direct children without creating an AppKit host or rendering controls.
-        /// An OutlineGroup around the entire section exposes one child, so a selection-helper test misses it.
+        // Resolve the real section's direct children without creating an AppKit host or rendering controls.
+        // An OutlineGroup around the entire section exposes one child, so a selection-helper test misses it.
         func capture(_ sections: SectionCollection) -> some View {
             renderedTags = sections.map { $0.content.map { $0.containerValues.tag(for: String.self) } }
             return Color.clear.frame(width: 1, height: 1)
@@ -67,13 +78,17 @@ struct ChatSessionSidebarSelectionTests {
         #expect(tags.count == 2)
         #expect(tags.allSatisfy { $0 != nil })
         let identities = Set(tags.compactMap(\.self))
-        let expected = Set(rows.prefix(2).map(OpenClawChatSessionSidebarData.identity))
         #expect(identities == expected)
 
-        sidebar.batchSelectionBinding.wrappedValue = identities
+        model.sessions.append(.init(key: "agent:selection:unrelated"))
+        #expect(!rosterInvalidated.withLock { $0 })
+        let binding = sidebar.batchSelectionBinding(
+            visibleRows: visibleRows, renderedRows: sidebar.renderedInteractionRows(rows))
+        binding.wrappedValue = identities
         #expect(sidebar.batch.selection.active)
-        #expect(sidebar.batchSelectionBinding.wrappedValue == expected)
-        #expect(Set(sidebar.selectedBatchRows.map(\.key)) == Set(rows.prefix(2).map(\.key)))
+        #expect(binding.wrappedValue == expected)
+        #expect(Set(sidebar.rowContext(now: now, projectedRows: rows, visibleRows: visibleRows)
+                .selectedRows.map(\.key)) == Set(rows.prefix(2).map(\.key)))
         #expect(model.sessionKey == rows[0].key)
     }
 }

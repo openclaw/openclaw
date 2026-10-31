@@ -1,6 +1,6 @@
 import type { Readable } from "node:stream";
 
-type VoiceCaptureEntry = {
+export type VoiceCaptureEntry = {
   stream?: Readable;
   stopInput?: () => void;
   startRecording?: () => void;
@@ -53,16 +53,6 @@ export async function waitForVoiceCaptureAdmission(params: {
   return params.isRecordingCurrent() || (await params.conversationAuthorized);
 }
 
-export function beginVoiceCapture(
-  state: VoiceCaptureState,
-  userId: string,
-  stream?: Readable,
-): VoiceCaptureEntry {
-  const capture = { stream };
-  state.set(userId, capture);
-  return capture;
-}
-
 export function finishVoiceCapture(
   state: VoiceCaptureState,
   userId: string,
@@ -81,11 +71,11 @@ export function scheduleVoiceCaptureFinalize(params: {
   state: VoiceCaptureState;
   userId: string;
   delayMs: number;
-}): boolean {
+}): void {
   const { state, userId, delayMs } = params;
   const capture = state.get(userId);
   if (!capture) {
-    return false;
+    return;
   }
   clearVoiceCaptureFinalizeTimer(capture);
   capture.finalizeTimer = setTimeout(() => {
@@ -94,5 +84,4 @@ export function scheduleVoiceCaptureFinalize(params: {
     }
     capture.stream?.destroy();
   }, delayMs);
-  return true;
 }

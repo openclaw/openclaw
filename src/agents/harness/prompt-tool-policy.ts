@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
+import { buildCodeModeCatalogPrompt } from "../code-mode.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -19,7 +20,7 @@ import type { AnyAgentTool } from "../tools/common.js";
 
 type NamedTool = { name: string };
 
-function isAgentTool(tool: NamedTool): tool is AnyAgentTool {
+function isAgentTool<T extends NamedTool>(tool: T): tool is T & AnyAgentTool {
   return "execute" in tool && typeof tool.execute === "function";
 }
 
@@ -39,7 +40,13 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
   catalogRef?: ToolSearchCatalogRef;
   catalogEntries?: readonly ToolSearchCatalogEntry[];
   codeModeControlsEnabled: boolean;
-  toolSearchPrompt?: { config?: OpenClawConfig; contextTokenBudget?: number };
+  catalogPrompt?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    contextTokenBudget?: number;
+    toolSearchDirectoryLean?: boolean;
+  };
 }) {
   const baselineTools = [...params.tools];
   const currentCatalog = params.catalogRef?.current;
@@ -61,13 +68,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       });
       const allowedTools = filterTools(baselineTools, toolsAllow);
       if (!catalog) {
-        const executableTools: AnyAgentTool[] = [];
-        for (const tool of allowedTools) {
-          if (isAgentTool(tool)) {
-            executableTools.push(tool);
-          }
-        }
-        finalizeAgentToolAvailability(executableTools);
+        finalizeAgentToolAvailability(allowedTools.filter(isAgentTool));
         return {
           tools: allowedTools,
           toolSchemaDirectoryPrompt: undefined,
@@ -80,7 +81,8 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       const catalogCount = restrictToolSearchCatalog({
         catalogRef: catalog.ref,
         allowedToolNames: new Set(allowedEntries.map((entry) => entry.name)),
-        baselineEntries: catalog.entries,
+        allowedDirectToolNames: new Set(allowedTools.map((tool) => tool.name)),
+        baselineEntries: allowedEntries,
       });
       const allowedNames = new Set(allowedTools.map((tool) => normalizeToolPolicyName(tool.name)));
       const tools = baselineTools.filter((tool) => {
@@ -98,11 +100,19 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       return {
         tools,
         toolSchemaDirectoryPrompt:
-          catalogReachable && params.toolSearchPrompt
-            ? buildToolSchemaDirectoryPrompt(
-                { config: params.toolSearchPrompt.config, catalogRef: catalog.ref },
-                { contextTokenBudget: params.toolSearchPrompt.contextTokenBudget },
-              )
+          catalogReachable && params.catalogPrompt
+            ? params.codeModeControlsEnabled
+              ? buildCodeModeCatalogPrompt(
+                  { ...params.catalogPrompt, catalogRef: catalog.ref },
+                  catalog.ref.current?.entries ?? [],
+                )
+              : buildToolSchemaDirectoryPrompt(
+                  { ...params.catalogPrompt, catalogRef: catalog.ref },
+                  {
+                    contextTokenBudget: params.catalogPrompt.contextTokenBudget,
+                    toolSearchDirectoryLean: params.catalogPrompt.toolSearchDirectoryLean,
+                  },
+                )
             : undefined,
         callableToolNames: normalizeUniqueStringEntries([
           ...tools.map((tool) => tool.name),

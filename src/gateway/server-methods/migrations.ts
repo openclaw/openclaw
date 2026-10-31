@@ -22,6 +22,7 @@ import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -43,15 +44,6 @@ type InFlightMemoryApply = {
 };
 
 const inFlightMemoryApplies = new WeakMap<object, Map<string, InFlightMemoryApply>>();
-
-function memoryApplyInflightMap(dedupe: object): Map<string, InFlightMemoryApply> {
-  let active = inFlightMemoryApplies.get(dedupe);
-  if (!active) {
-    active = new Map();
-    inFlightMemoryApplies.set(dedupe, active);
-  }
-  return active;
-}
 
 function isCachedMemoryApply(value: unknown): value is CachedMemoryApply {
   if (!value || typeof value !== "object") {
@@ -131,12 +123,7 @@ async function planMemoryProvider(params: {
     ...(params.provider.description ? { description: params.provider.description } : {}),
   };
   try {
-    const { detection, plan } = await planProviderMemoryImport({
-      provider: params.provider,
-      config: params.config,
-      agentId: params.agentId,
-      overwrite: params.overwrite,
-    });
+    const { detection, plan } = await planProviderMemoryImport(params);
     if (detection && !detection.found) {
       return {
         ...base,
@@ -236,8 +223,12 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       });
       const dedupeKey = `${MEMORY_APPLY_DEDUPE_PREFIX}${params.idempotencyKey}`;
       const cached = context.dedupe.get(dedupeKey);
-      if (cached && isCachedMemoryApply(cached.payload)) {
-        if (cached.payload.requestFingerprint !== requestFingerprint) {
+      const previous =
+        cached && isCachedMemoryApply(cached.payload)
+          ? cached.payload
+          : getOrCreateWeakOwnerMap(inFlightMemoryApplies, context.dedupe).get(dedupeKey);
+      if (previous) {
+        if (previous.requestFingerprint !== requestFingerprint) {
           respond(
             false,
             undefined,
@@ -245,23 +236,11 @@ export const migrationsHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        respondMemoryApply(cached.payload.outcome, respond, true);
+        const outcome = "outcome" in previous ? previous.outcome : await previous.completion;
+        respondMemoryApply(outcome, respond, true);
         return;
       }
-      const inFlightMap = memoryApplyInflightMap(context.dedupe);
-      const inFlight = inFlightMap.get(dedupeKey);
-      if (inFlight) {
-        if (inFlight.requestFingerprint !== requestFingerprint) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "memory import idempotency key was reused"),
-          );
-          return;
-        }
-        respondMemoryApply(await inFlight.completion, respond, true);
-        return;
-      }
+      const inFlightMap = getOrCreateWeakOwnerMap(inFlightMemoryApplies, context.dedupe);
       const completion = createDeferredCore<MemoryApplyOutcome>();
       // Reserve before acquisition. Once apply completes, even an unreadable result is terminal.
       inFlightMap.set(dedupeKey, { requestFingerprint, completion: completion.promise });

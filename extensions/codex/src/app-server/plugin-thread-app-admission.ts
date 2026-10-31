@@ -3,22 +3,17 @@ import { codexAppIdentityKey } from "./app-identity.js";
 import {
   serializeCodexAppInventoryError,
   type CodexAppInventoryCache,
-  type CodexAppInventoryRequest,
   type CodexAppInventorySnapshot,
 } from "./app-inventory-cache.js";
 import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
-import type {
-  CodexPluginInventory,
-  CodexPluginOwnedApp,
-  CodexPluginRuntimeRequest,
-} from "./plugin-inventory.js";
 import {
-  type CodexAppServerRequestResult,
-  isJsonObject,
-  type JsonObject,
-  type v2,
-} from "./protocol.js";
+  createCodexAppInventoryRequest,
+  type CodexPluginInventory,
+  type CodexPluginOwnedApp,
+  type CodexPluginRuntimeRequest,
+} from "./plugin-inventory.js";
+import { isJsonObject, type JsonObject, type v2 } from "./protocol.js";
 
 export type CodexPluginThreadAppAdmissionDiagnostic = {
   code: "account_app_inventory_unavailable" | "account_app_config_unavailable";
@@ -48,16 +43,6 @@ export function resolveCodexPluginThreadAppCacheKey(params: {
     : params.appCacheKey;
 }
 
-function createCodexPluginThreadAppInventoryRequest(
-  params: CodexPluginThreadAppAdmissionParams,
-): CodexAppInventoryRequest {
-  return async (method, requestParams) =>
-    (await params.request(
-      method,
-      params.threadId ? { ...requestParams, threadId: params.threadId } : requestParams,
-    )) as CodexAppServerRequestResult<typeof method>;
-}
-
 export async function refreshCodexPluginAppInventory(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
@@ -66,7 +51,7 @@ export async function refreshCodexPluginAppInventory(
   if (!params.appCacheKey) {
     return undefined;
   }
-  const request = createCodexPluginThreadAppInventoryRequest(params);
+  const request = createCodexAppInventoryRequest(params);
   try {
     return await appCache.refreshNow({
       key: resolveCodexPluginThreadAppCacheKey(params),
@@ -137,12 +122,11 @@ export async function readCodexThreadAdmissibleAccountApps(
   appCache: CodexAppInventoryCache,
 ): Promise<{
   apps: CodexAppInventorySnapshot["apps"];
-  installedApps: CodexAppInventorySnapshot["installedApps"];
   diagnostic?: CodexPluginThreadAppAdmissionDiagnostic;
 }> {
   // Account-wide policy must use a complete snapshot; a targeted plugin read
   // cannot establish which other account apps are authorized for this thread.
-  const request = createCodexPluginThreadAppInventoryRequest(params);
+  const request = createCodexAppInventoryRequest(params);
   const cachedInventory = appCache.read({
     key: resolveCodexPluginThreadAppCacheKey(params),
     request,
@@ -153,14 +137,14 @@ export async function readCodexThreadAdmissibleAccountApps(
     cachedInventory.state === "fresh" && !cachedInventory.snapshot?.targetAppIds?.length
       ? cachedInventory.snapshot
       : await refreshCodexPluginAppInventory(params, appCache, {
-          forceRefetch: false,
+          // Account-only admission has no plugin readiness repair. Keep the
+          // default cold refresh so an empty native snapshot can be populated.
           reason: "account_apps_all",
           targetAppIds: [],
         });
   if (!snapshot) {
     return {
       apps: [],
-      installedApps: [],
       diagnostic: {
         code: "account_app_inventory_unavailable",
         message: "Codex account app inventory was unavailable; account apps were not exposed.",
@@ -172,7 +156,6 @@ export async function readCodexThreadAdmissibleAccountApps(
     apps: snapshot.apps
       .filter((app) => isCodexInstalledAppThreadAdmissible(installedAppsById.get(app.id)))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
-    installedApps: snapshot.installedApps,
   };
 }
 
@@ -181,7 +164,7 @@ export function isCodexPluginAppThreadAdmissible(
   inventory: CodexPluginInventory,
 ): boolean {
   const snapshot = inventory.appInventory?.snapshot;
-  if (!app.accessible || app.needsAuth || !snapshot) {
+  if (!app.accessible || !snapshot) {
     return false;
   }
   return isCodexInstalledAppThreadAdmissible(
@@ -244,7 +227,6 @@ export async function readCodexConfigForAppAdmission(
     };
   } catch (error) {
     const details = serializeCodexAppInventoryError(error);
-    embeddedAgentLog.warn("codex plugin app admission config read failed", { error: details });
     throw new Error(
       `Could not verify the Codex app allowlist: ${String(details.message)}. No native thread was started; resolve the native configuration error and retry.`,
       { cause: error },
