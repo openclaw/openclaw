@@ -6,7 +6,7 @@ describe("sanitizeAndNormalizeEmbedding", () => {
     { name: "unit length", input: [3, 4], expected: [0.6, 0.8] },
     {
       name: "nonfinite coordinates and signed zero",
-      input: [NaN, Infinity, -Infinity, 3, -4, -0],
+      input: [Number.NaN, Infinity, -Infinity, 3, -4, -0],
       expected: [0, 0, 0, 0.6, -0.8, -0],
     },
     { name: "empty vector", input: [], expected: [] },
@@ -28,7 +28,7 @@ describe("sanitizeAndNormalizeEmbedding", () => {
   });
 
   it("preserves sparse coordinates without filling holes or changing the input", () => {
-    const input = new Array<number>(4);
+    const input: number[] = [];
     input[1] = 3;
     input[3] = 4;
     const before = input.slice();
