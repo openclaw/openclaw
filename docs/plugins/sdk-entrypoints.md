@@ -75,6 +75,50 @@ the typed public Plugin SDK. Bundled backend authors should follow the
 - [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
 - [Decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1) - `openclaw/plugin-sdk/decisions` and the typed decision provider contract
 
+## Offline worker runtime artifacts
+
+Image-preparation tools can import `openclaw/runtime-artifacts` to export the
+canonical node runtime and worker archives from a built OpenClaw installation:
+
+```ts
+import {
+  prepareWorkerRuntimeArtifacts,
+  qualifyWorkerRuntimePlugins,
+  resolveNodeBootstrapPlugins,
+  workerBundleArchiveRelativePath,
+} from "openclaw/runtime-artifacts";
+
+const selection = await qualifyWorkerRuntimePlugins({ packageRoot, config });
+const artifacts = await prepareWorkerRuntimeArtifacts({
+  packageRoot,
+  runningBuildId,
+  plugins: resolveNodeBootstrapPlugins(selection),
+  outputDirectory,
+});
+const workerPath = workerBundleArchiveRelativePath(artifacts.workerBundle.tarballSha256);
+```
+
+Qualification inspects only this installation's bundled plugins, prefers their
+built entrypoints, and releases its inspection registry without publishing it
+to a Gateway. Configured external plugin paths are not loaded, and inspection
+cannot mutate the configuration.
+
+The output directory must not exist, its parent must exist, and it must be
+outside the installed package. The result records the build, selected plugins,
+platform, architecture, archive paths, sizes, and SHA-256 digests. Both archive
+producers settle before failure cleanup removes the owned output. A successful
+export belongs to the caller; keep it until transfer finishes. This API always
+exports a preassembled dependency bundle, not an npm-install archive.
+
+The Crabbox plugin's lazy `cli-runtime-api` artifact exposes
+`createCrabboxOfflineRuntimeSetup`. Pass the transferred archives' absolute local
+paths with their expected sizes, digests, build and manifest identity, plus
+`workerPath` as the worker archive's `packageRelativePath`. Execute the returned
+command as the intended runtime user on a matching prepared platform. It checks
+the local archives before installing them and returns no forwarded credentials.
+It does not allocate a machine, enroll a node, create a logical lease, or grant
+execution authority. Node and archive extraction tools must already be present.
+
 ## Code Mode executor runtime
 
 Use `openclaw/plugin-sdk/code-mode-executor-runtime` to implement the `quickjs`

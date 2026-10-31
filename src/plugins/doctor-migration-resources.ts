@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -25,6 +26,7 @@ export type PluginDoctorMigrationResourceCollectionParams = {
   warnings: PluginDoctorMigrationBackupWarning[];
   requireLocalResources?: boolean;
   manifestRegistry?: PluginManifestRegistry;
+  signal?: AbortSignal;
 };
 
 /** Select one whole-plugin data scope for both rehearsal inventory and execution. */
@@ -37,12 +39,14 @@ export async function preparePluginDoctorMigrationResources(
   const notices: string[] = [];
   const pluginResources = new Map<string, Set<string>>();
   for (const { pluginId, migration } of entries) {
+    params.signal?.throwIfAborted();
     const notice = sqliteOnlyMigrationNotice(migration, params.config);
     if (notice) {
       notices.push(notice);
       continue;
     }
-    if (migration.collectBackupResources === undefined) {
+    const collectBackupResources = migration.collectBackupResources;
+    if (collectBackupResources === undefined) {
       if (!params.warnings.some((warning) => warning.pluginId === pluginId)) {
         params.warnings.push({
           kind: "undeclared-migration-resources",
@@ -52,15 +56,31 @@ export async function preparePluginDoctorMigrationResources(
       }
       continue;
     }
-    const resolved: unknown = await migration.collectBackupResources({
-      config: params.config,
-      env: params.env,
-      stateDir: params.stateDir,
-      serviceWorkspaceDir:
-        tryResolveConfiguredAgentWorkspaceDir(params.config, params.env) ??
-        resolveDefaultAgentWorkspaceDir(params.env),
-      ...(params.requireLocalResources ? { requireLocalResources: true } : {}),
-    });
+    if (typeof collectBackupResources !== "function") {
+      throw new Error(`Invalid collectBackupResources from ${pluginId}/${migration.id}`);
+    }
+    // Inventory is read-only by contract. Stop observing a hung callback on
+    // cancellation, then let the enclosing snapshot owner close its readers.
+    // Never race a migration or the capture's filesystem writes this way.
+    const resolved: unknown = await racePromiseWithAbortSignal(
+      async () =>
+        collectBackupResources.call(migration, {
+          config: params.config,
+          env: params.env,
+          stateDir: params.stateDir,
+          serviceWorkspaceDir:
+            tryResolveConfiguredAgentWorkspaceDir(params.config, params.env) ??
+            resolveDefaultAgentWorkspaceDir(params.env),
+          ...(params.requireLocalResources ? { requireLocalResources: true } : {}),
+        }),
+      params.signal,
+      (signal) =>
+        new Error(
+          `Migration backup inventory cancelled for ${pluginId}/${migration.id}: ${signal.reason instanceof Error ? signal.reason.message : String(signal.reason)}`,
+          { cause: signal.reason },
+        ),
+    );
+    params.signal?.throwIfAborted();
     if (!Array.isArray(resolved)) {
       throw new Error(`Invalid migration backup inventory from ${pluginId}/${migration.id}`);
     }

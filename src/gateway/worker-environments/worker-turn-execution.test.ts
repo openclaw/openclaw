@@ -409,7 +409,7 @@ describe("worker turn execution", () => {
   );
 
   it.each([false, true])(
-    "preserves prepared context and limits launch authority to supervisor tools (declared: %s)",
+    "preserves recorded workspace context and limits launch authority to supervisor tools (declared: %s)",
     async (declared) => {
       await seedActivePlacement();
       const launchToolNames = resolveNodeWorkerLaunchToolNames({
@@ -446,7 +446,7 @@ describe("worker turn execution", () => {
         writeFile(path.join(agentWorkspace, "USER.md"), "Canonical user context."),
         writeFile(path.join(agentWorkspace, "TOOLS.md"), "Canonical tool instructions."),
         writeFile(path.join(root, "AGENTS.md"), "Selected execution project instructions."),
-        writeFile(path.join(root, "SOUL.md"), "Unselected execution identity must stay private."),
+        writeFile(path.join(root, "SOUL.md"), "Selected session identity."),
       ]);
       try {
         await expect(
@@ -469,12 +469,12 @@ describe("worker turn execution", () => {
         const request = launchTurn.mock.calls[0]![0];
         const { systemPrompt, prompt, runtimeContext } = request.plan.assignment;
         expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
-        expect(systemPrompt).toContain("Canonical agent instructions.");
-        expect(systemPrompt).toContain("Canonical agent identity.");
-        expect(systemPrompt).toContain("Canonical user context.");
+        expect(systemPrompt).not.toContain("Canonical agent instructions.");
+        expect(systemPrompt).not.toContain("Canonical agent identity.");
+        expect(systemPrompt).not.toContain("Canonical user context.");
         expect(systemPrompt).not.toContain("Canonical tool instructions.");
         expect(systemPrompt).toContain("Selected execution project instructions.");
-        expect(systemPrompt).not.toContain("Unselected execution identity must stay private.");
+        expect(systemPrompt).toContain("Selected session identity.");
         expect(systemPrompt).toContain("Working directory: /worker/workspace");
         expect(prompt).toMatch(
           /^\[[^\]]+\d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] Inspect this workspace$/u,

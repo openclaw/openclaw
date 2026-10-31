@@ -13,7 +13,7 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
-import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type ChatSessionSharingProps,
@@ -26,7 +26,7 @@ import {
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
-registerEnglishCatalog(registerChatSessionOptionalEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 export function useChatSessionSharingMenu(
   props: ChatSessionSharingProps,

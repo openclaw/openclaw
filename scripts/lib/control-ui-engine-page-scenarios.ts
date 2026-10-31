@@ -246,7 +246,9 @@ const configPage = (): PageDefinition => ({
       const option = select.locator("option:not(:checked):not(:disabled)").first();
       const value = await option.getAttribute("value");
       assert(value !== null, "Settings page has no interactive field");
-      await select.selectOption(value);
+      const label = (await option.textContent())?.trim();
+      assert(label, "Settings option has no keyboard-selectable label");
+      await select.pressSequentially(label);
       assert.equal(await select.inputValue(), value);
       await frames(page);
       return { selected: true };
@@ -667,7 +669,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       run: async (page) => {
         const before = await page.locator(".sw-row").first().textContent();
         const select = page.locator(".sw-sort select");
-        await select.selectOption("name");
+        await select.press("n");
         assert.equal(await select.inputValue(), "name");
         await page.waitForFunction(() =>
           document.querySelector(".sw-row")?.textContent?.includes("census-0000"),

@@ -25,7 +25,10 @@ import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.
 import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
 import { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
-import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
+import {
+  prepareWorkerProviderProject,
+  type WorkerProviderRepositorySource,
+} from "./provider-project-preparation.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import { createWorkerRuntimeRefresher } from "./provider-runtime-refresh.js";
 import {
@@ -157,6 +160,7 @@ export function createWorkerProviderLifecycle(
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
     nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity,
     beforeProvision?: () => void,
+    repositorySource?: WorkerProviderRepositorySource,
   ) => {
     let record = initialRecord;
     let lease: WorkerLease;
@@ -212,32 +216,6 @@ export function createWorkerProviderLifecycle(
         nodeRuntimeIdentity,
         beforeProvision,
       );
-      const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
-      if (project) {
-        if (
-          !provider.supportsProjectPreparation?.(profile, machineClass, os) ||
-          !options.projectNamespace
-        ) {
-          throw new Error("Worker provider cannot resume its prepared project contract");
-        }
-        const requireProjectOwner = () => {
-          cancellation?.assertActive();
-          beforeProvision?.();
-          const current = requireCurrentOwner(record);
-          if (options.isStopping() || current.destroyRequestedAtMs !== null) {
-            throw new Error("Worker project preparation owner is no longer current");
-          }
-        };
-        projectOperation = await prepareWorkerProviderProject({
-          project,
-          preparation,
-          record,
-          namespace: options.projectNamespace,
-          getConfig: options.getConfig,
-          requireCurrent: requireProjectOwner,
-          signal: workSignal,
-        });
-      }
       const assertCurrent = () => {
         cancellation?.assertActive();
         if (!attemptOpen || options.isStopping()) {
@@ -250,6 +228,25 @@ export function createWorkerProviderLifecycle(
         }
         return current;
       };
+      const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
+      if (project) {
+        if (
+          !provider.supportsProjectPreparation?.(profile, machineClass, os) ||
+          !options.projectNamespace
+        ) {
+          throw new Error("Worker provider cannot resume its prepared project contract");
+        }
+        projectOperation = await prepareWorkerProviderProject({
+          project,
+          preparation,
+          record,
+          namespace: options.projectNamespace,
+          getConfig: options.getConfig,
+          requireCurrent: assertCurrent,
+          signal: workSignal,
+          repositorySource,
+        });
+      }
       const provisionOptions = {
         nodeBootstrapTimeoutMs,
         profileId: record.profileId,
@@ -429,6 +426,7 @@ export function createWorkerProviderLifecycle(
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
     beforeProvision?: () => void,
+    repositorySource?: WorkerProviderRepositorySource,
   ) => {
     const workSignal = signal
       ? AbortSignal.any([options.ownerSignal, signal])
@@ -485,6 +483,7 @@ export function createWorkerProviderLifecycle(
         cancellation,
         preparedNode?.identity,
         beforeProvision,
+        repositorySource,
       );
     } finally {
       await cancellation?.close();

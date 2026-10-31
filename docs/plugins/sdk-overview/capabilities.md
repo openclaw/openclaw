@@ -96,6 +96,39 @@ namespacing, encryption, and health classification; consumers own retention.
 Providers must not create or interpret location markers or expose credentials in
 `displayTarget` or errors. See [Storage locations](/concepts/storage-locations).
 
+### Repository preparation integrations
+
+A deployment can select an optional repository policy with
+`gateway.repositoryIntegration`. The plugin declares
+`contracts.repositoryIntegrations: ["repository"]` and calls
+`api.registerRepositoryIntegration(...)` with the version 1
+`RepositoryIntegration` contract from `openclaw/plugin-sdk/plugin-entry`.
+Registration alone does not select it. A selected owner that is missing,
+disabled, unloaded, or disposed blocks admission rather than falling back.
+
+The integration interprets authenticated connection metadata and admits source
+access for worker repository preparation with native, GitHub App, and managed
+OAuth or PAT credentials. Selecting a managed profile does not bypass policy:
+admission runs before refresh or profile lookup, while the native managed-profile
+owner retains credential reading and rotation. Policy admission does not request
+a native bearer for a managed profile. Its `withIdentity` callback
+receives the original caller, exact session and request binding, current profile
+reader, and a live `assertCurrent` guard. Check that guard after awaited policy
+work and immediately before effects. The native issuer retains signing keys;
+policy receives only public App selection facts. Returned credential callbacks
+remain bound to the plugin instance and stop working after its disposal.
+
+Dispatch carries this admission through cold provisioning, prepared-workspace
+binding, and repository checkout. A fresh authenticated chat can supply a new
+admission for redispatch; previous dispatch callbacks cannot be reused after the
+request finishes. Credentials and callbacks are never stored in environment
+snapshots or sent over RPC. The dispatch owner revokes temporary App credentials
+on success or failure. The `preparedCapacity` descriptor is `"image"` or
+`"repository"`; native preparation and capacity accounting remain host-owned.
+This contract does not replace publication policy or enable a standing reserve.
+Without a selected integration, native credential and trusted-proxy behavior is
+unchanged.
+
 ### Worker providers
 
 `destroy({ leaseId, profile, signal?, onCleanupAccepted? })` must resolve only after physical teardown is proven. A provider can set `supportsCleanupAcceptance: true` and call the optional `onCleanupAccepted()` notification once cleanup is accepted and no longer needs the session, or once a provider-owned teardown capture is claimed. The Gateway shuts down session work before supplying this callback, then may complete reclaim while the environment remains `destroying`. The existing lifecycle owner retains the destroy operation, its deadline, and restart recovery. Later rejection records a visible, retryable cleanup failure; it must not be swallowed. The callback is only a notification for this invocation, not authorization for later work. Providers without the capability keep their existing blocking teardown path. Direct environment destruction still waits for confirmation.
