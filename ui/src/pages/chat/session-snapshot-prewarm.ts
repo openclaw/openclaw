@@ -102,10 +102,11 @@ subscribeSnapshotInvalidation((invalidation) => {
     const key = sidebarSnapshotScopeKey(entry.scope);
     const deleted = sidebarSnapshotDeletedSessionKey(key, invalidation);
     if (deleted) {
-      entry.snapshot = Promise.all([
-        entry.snapshot,
-        import("../../components/sidebar-snapshot-data.ts"),
-      ]).then(([model, data]) => model && data.removeSidebarSnapshotSession(model, deleted));
+      entry.snapshot = entry.snapshot.then(async (model) => {
+        const { removeSidebarSnapshotSession } =
+          await import("../../components/sidebar-snapshot-data.ts");
+        return model && removeSidebarSnapshotSession(model, deleted);
+      });
     } else if (sidebarSnapshotInvalidationMatches(key, invalidation)) {
       sidebarScopes.delete(gateway);
     }

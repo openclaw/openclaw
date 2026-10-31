@@ -184,10 +184,23 @@ export async function deleteSessionSnapshotEntries(
   }
   try {
     // Load the deletion-only model before opening the transaction.
-    const sidebar =
-      !byPrefix && reason !== "cache-eviction"
-        ? await import("../../components/sidebar-snapshot-data.ts")
-        : null;
+    let pruneSidebar: ((cursor: IDBCursorWithValue, sessionKey: string) => void) | undefined;
+    if (!byPrefix && reason !== "cache-eviction") {
+      const { parseSidebarSnapshot, removeSidebarSnapshotSession } =
+        await import("../../components/sidebar-snapshot-data.ts");
+      pruneSidebar = (cursor, sessionKey) => {
+        const record = asOptionalRecord(cursor.value);
+        const model = parseSidebarSnapshot(record?.model);
+        if (!model) {
+          cursor.delete();
+        } else {
+          const next = removeSidebarSnapshotSession(model, sessionKey);
+          if (next !== model) {
+            cursor.update({ ...record, model: next });
+          }
+        }
+      };
+    }
     await new Promise<void>((resolve, reject) => {
       const names = [
         CHAT_SNAPSHOT_STORE_NAME,
@@ -216,17 +229,8 @@ export async function deleteSessionSnapshotEntries(
               typeof cursor.primaryKey === "string"
                 ? sidebarSnapshotDeletedSessionKey(cursor.primaryKey, invalidation)
                 : undefined;
-            if (deletedSession && sidebar) {
-              const record = asOptionalRecord(cursor.value);
-              const model = sidebar.parseSidebarSnapshot(record?.model);
-              if (!model) {
-                cursor.delete();
-              } else {
-                const next = sidebar.removeSidebarSnapshotSession(model, deletedSession);
-                if (next !== model) {
-                  cursor.update({ ...record, model: next });
-                }
-              }
+            if (deletedSession) {
+              pruneSidebar?.(cursor, deletedSession);
             }
             if (
               typeof cursor.primaryKey === "string" &&
