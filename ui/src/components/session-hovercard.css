@@ -59,13 +59,9 @@
   overflow-wrap: anywhere;
 }
 
-/* Clip rather than hide: a hidden box still scrolls to a link focused past the clamp. */
+/* The Markdown owner supplies only the retained preview, including its ellipsis. */
 .session-hovercard__commentary {
-  display: -webkit-box;
   overflow: clip;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
 }
 
 .session-hovercard__excerpt {
