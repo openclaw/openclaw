@@ -146,6 +146,18 @@ update their owned settings while preserving the header, `[*]` defaults,
 comments, and additional options on retained models. Embedding-only setup uses
 a fresh preset.
 
+Gemma models use sliding-window attention, which keeps only recent cache entries.
+Without a full-size cache, llama.cpp reprocesses the whole prompt whenever an earlier
+part changes, such as reasoning dropped from the previous turn or a new session, so
+every reply waits for the full system prompt and tool catalog again. When setup
+recommends a Gemma model and the host has at least 8 GiB of memory beyond the
+model's budget, it stores `params.swaFull: true` on the model entry and the managed
+preset sets `swa-full = true` for it. The full cache can use several more GiB at the
+default context. An explicit `swa-full` in the model section, `[*]`, or the managed
+service's arguments or environment stays authoritative. To opt in on an existing
+setup, set `params.swaFull: true` on the model entry and restart the Gateway; set it
+to `false` or remove it to return to the smaller cache.
+
 Managed embeddings default to one server slot (`parallel = 1`), a 2,048-token
 context, and a 2,048-token physical batch (`ubatch-size`). Memory indexing reserves
 four positions for tokenizer overhead and the server's context boundary. These defaults also apply to custom
