@@ -27,6 +27,7 @@ import {
   planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
+  rehomeCronSessionHistoryForRepair,
 } from "./store/run-history.kernel.js";
 import type {
   CronJsonValue,
@@ -278,6 +279,100 @@ it("retains history across worker reads, isolates stores, and recovers only an e
     ]);
     await expectResult(result);
   }));
+
+it("rehomes retained cron links without changing run facts or other session histories", () =>
+  withHistoryState(async (storeKey) => {
+    const fromSessionKey = "agent:main:global";
+    const toSessionKey = "agent:main:global-review-recorded-generation";
+    runOpenClawStateWriteTransaction(({ db }) => {
+      recordCronRunInDatabase(db, {
+        ...outcome(storeKey, "recovered"),
+        sessionKey: fromSessionKey,
+        status: "failed",
+        error: "Stopped before completion",
+        summary: "Retained outcome",
+        detail: outcomeDetail(storeKey, {
+          status: "error",
+          sessionId: "recorded-generation",
+          runId: "recovered",
+          runAtMs: 10,
+          durationMs: 10,
+        }),
+      });
+      for (const [receipt, agentId, sessionKey] of [
+        ["raw", "main", "global"],
+        ["named", "main", "agent:main:release"],
+        ["other-agent", "work", fromSessionKey],
+      ] as const) {
+        recordCronRunInDatabase(db, { ...outcome(storeKey, receipt), agentId, sessionKey });
+      }
+      const stored = () => db.prepare("SELECT * FROM task_runs ORDER BY task_id").all();
+      const before = stored();
+      const params = {
+        agentId: "main",
+        fromSessionKey,
+        toSessionKey,
+        sessionIds: ["recorded-generation"],
+        apply: false,
+      };
+      expect(rehomeCronSessionHistoryForRepair(db, params)).toBe(1);
+      expect(stored()).toEqual(before);
+      expect(rehomeCronSessionHistoryForRepair(db, { ...params, apply: true })).toBe(1);
+      const expected = before.map((row) =>
+        row.run_id === "cron:job:10:recovered"
+          ? Object.assign({}, row, { child_session_key: toSessionKey })
+          : row,
+      );
+      expect(stored()).toEqual(expected);
+      expect(rehomeCronSessionHistoryForRepair(db, { ...params, apply: true })).toBe(0);
+      expect(stored()).toEqual(expected);
+    });
+    const history = await readCronRunHistoryPage({ storeKey, runId: "recovered" });
+    expect(history.entries).toMatchObject([
+      {
+        runId: "recovered",
+        sessionId: "recorded-generation",
+        sessionKey: toSessionKey,
+        ts: 20,
+        status: "error",
+      },
+    ]);
+  }));
+
+it.each<{ name: string; fields: Record<string, CronJsonValue>; status: string }>([
+  { name: "missing SID", fields: { sessionId: null }, status: "failed" },
+  { name: "different SID", fields: { sessionId: "unpreserved-generation" }, status: "failed" },
+  { name: "unknown detail", fields: { kind: "unknown" }, status: "failed" },
+  { name: "missing store", fields: { storeKey: null }, status: "failed" },
+  { name: "queued run", fields: {}, status: "queued" },
+  { name: "running run", fields: {}, status: "running" },
+  { name: "unknown status", fields: {}, status: "unknown" },
+])("refuses $name before changing any cron reference", ({ fields, status }) =>
+  withHistoryDatabase((db, storeKey) => {
+    const fromSessionKey = "agent:main:global";
+    recordCronRunInDatabase(db, { ...outcome(storeKey, "valid"), sessionKey: fromSessionKey });
+    recordCronRunInDatabase(db, {
+      ...outcome(storeKey, "unattributable"),
+      sessionKey: fromSessionKey,
+      status,
+      detail: runDetail(storeKey, { sessionId: "recorded-generation", ...fields }),
+    });
+    const stored = () => db.prepare("SELECT * FROM task_runs ORDER BY task_id").all();
+    const before = stored();
+    for (const apply of [false, true]) {
+      expect(() =>
+        rehomeCronSessionHistoryForRepair(db, {
+          agentId: "main",
+          fromSessionKey,
+          toSessionKey: "agent:main:global-review-recorded-generation",
+          sessionIds: ["recorded-generation"],
+          apply,
+        }),
+      ).toThrow("terminal session identity is unavailable");
+      expect(stored()).toEqual(before);
+    }
+  }),
+);
 
 it("pages large history without reading off-page payloads or changing completion order", () =>
   withHistoryState(async (storeKey) => {

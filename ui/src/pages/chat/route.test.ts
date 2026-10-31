@@ -94,6 +94,34 @@ async function mountedSession(reference: string, user?: string) {
 }
 
 describe("loadChatRoute", () => {
+  it.each(["present", "missing", "main alias"] as const)(
+    "checks the stored literal-global address when it is %s",
+    async (state) => {
+      const key = "agent:main:global";
+      const { context, request } = contextFor(
+        state === "missing" ? { ok: false } : resolvedRow(state === "present" ? key : "global"),
+      );
+      context.sessions.state.result = sessionsResult([row({ key })], 1);
+      const result = await loadRoute(context, "/chat/main/~key/global");
+      expect(result).toMatchObject(
+        state === "present" ? { kind: "session", sessionKey: key } : { kind: "missing-session" },
+      );
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.resolve",
+        expect.objectContaining({ reference: { key }, agentId: "main" }),
+      );
+    },
+  );
+
+  it("keeps the ordinary configured-global main alias navigable", async () => {
+    const { context, request } = contextFor({ ok: false }, "global");
+    expect(await loadRoute(context, "/chat/main/global")).toMatchObject({
+      kind: "session",
+      canonicalLocation: locationFor("/chat/main"),
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it.each(["connection", "profile"])(
     "does not carry an established key into a new %s scope",
     async (replacement) => {

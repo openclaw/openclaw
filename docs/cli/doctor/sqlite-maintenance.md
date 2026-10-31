@@ -45,6 +45,37 @@ Inspect the service status and journal, and have the process owner stop the
 remaining children before retrying. A root-owned child may require administrator
 help even when the Gateway itself runs as a user service.
 
+## Overlapping global chats
+
+If an older store contains both `global` and `agent:<agentId>:global` with
+different session IDs, Doctor can recover both conversations. Stop the Gateway
+and run `openclaw doctor --fix`.
+
+Doctor completes ordinary key normalization before repairing an overlap. The
+read-only preview uses the stored identities to show a proposed ordinary address;
+applying the repair checks the history and linked-work preconditions.
+
+The repair keeps the ongoing `global` chat in place and preserves the recovered
+chat's original session ID, title, retained history, owner, members and workspace.
+Files stay in their existing location. Attributable terminal cron history links
+follow the recovered chat; job definitions and enabled states do not change.
+The moved chat must not own a cloud repository workspace or a persisted worker
+placement. Doctor leaves those bindings untouched and refuses the repair; their
+recovery is not supported by this operation. An unrelated binding on the ongoing
+chat does not prevent repair.
+Pending input, linked work, an occupied destination or uncertain history identity
+prevents repair instead of selecting or overwriting another conversation.
+
+Reopen the recovered chat from **Sessions** after restarting. Its old literal
+URL is no longer its address; the Control UI requires explicit reopening instead
+of silently continuing in the ongoing global chat. Ordinary global aliases keep
+their existing meaning.
+
+If repair is interrupted after moving the chat, rerun `openclaw doctor --fix`
+while the Gateway is stopped. The existing destination and original session ID
+allow the historical reference step to finish without creating another chat.
+No schema change, transcript copy or permanent alias registry is involved.
+
 ## Shared state SQLite compaction
 
 See [Database schemas](/reference/database-schemas) for schema versioning, integrity checks, and downgrade recovery.

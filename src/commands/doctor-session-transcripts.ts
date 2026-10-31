@@ -247,7 +247,10 @@ export async function noteSessionTranscriptHealth(options?: {
       env: params.env,
       integrityCheck: params.integrityCheck,
     };
-    const canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
+    const canonicalKeyReport = await repairCanonicalSessionKeys({
+      ...repairParams,
+      authority: maintenanceAuthority,
+    });
     // Preview reuses its read-only inventory; import and key repair can create stores.
     const rowRepairParams = {
       ...repairParams,
@@ -445,6 +448,14 @@ export async function noteSessionTranscriptHealth(options?: {
       ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
       : `- Found ${canonicalKeyReport.foundGroups} outdated or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and update the rows to use the current keys.`,
   );
+  for (const repair of canonicalKeyReport.globalSessionRepairs ?? []) {
+    note(
+      repair.applied
+        ? `Recovered overlapping chat ${repair.from} as ${repair.to}. Its session ID, history and files are preserved; the ongoing global chat is unchanged. Reopen the recovered chat from Sessions; old review views must not be reused.`
+        : `Found overlapping chat ${repair.from}; planned review address: ${repair.to}. Stop the Gateway, then run "openclaw doctor --fix" to check its repair preconditions and preserve both chats.`,
+      "Global chat recovery",
+    );
+  }
   noteRepair(deliveryReport.found, "Session SQLite", () =>
     params.shouldRepair
       ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`

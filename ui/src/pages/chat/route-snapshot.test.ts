@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createApplicationRouter, startApplicationRouter } from "../../app-routes.ts";
 import { loadChatRoute } from "./route-loader.ts";
@@ -227,5 +228,58 @@ it.each([false, true])(
       deleted ? { kind: "missing-session" } : { kind: "session", sessionKey: sessionRouteKey },
     );
     expect(request).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["missing", "main alias"])(
+  "revalidates a literal-global view after reconnect when it becomes %s",
+  async (replacement) => {
+    const key = "agent:roboclaw:global";
+    const { context, request, publishGateway } = await setup(key);
+    let resolution: SessionsResolveResult = { ok: true, key, agentId: "roboclaw" };
+    request.mockImplementation(async (method) => {
+      if (method === "sessions.resolve") {
+        return resolution;
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "sessions.list") {
+        return sessionRouteListResult([]);
+      }
+      throw new Error(`Unexpected gateway request: ${method}`);
+    });
+    const router = createApplicationRouter();
+    context.router = router;
+    onTestFinished(() => router.stop());
+    vi.spyOn(router.getRoute("chat")!, "component").mockResolvedValue({ renderSolid: () => null });
+    const location = { pathname: "/chat/roboclaw/~key/global", search: "", hash: "" };
+    await startApplicationRouter(
+      router,
+      { location: () => location, push: () => {}, replace: () => {}, listen: () => () => {} },
+      "",
+      context,
+    );
+    expect(router.getState().matches[0]?.data).toMatchObject({ kind: "session", sessionKey: key });
+    publishGateway({ phase: "reconnecting" });
+    resolution =
+      replacement === "missing" ? { ok: false } : { ok: true, key: "global", agentId: "roboclaw" };
+    publishGateway({ phase: "connected" });
+    await vi.waitFor(() =>
+      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" }),
+    );
+    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual([
+      "sessions.list",
+      "sessions.resolve",
+      "sessions.resolve",
+      "sessions.subscribe",
+    ]);
+    for (const [, params] of request.mock.calls.filter(
+      ([method]) => method === "sessions.resolve",
+    )) {
+      expect(params).toMatchObject({ reference: { key }, agentId: "roboclaw" });
+    }
+    expect(context.sessions.eventSubscriptionError).toBeNull();
+    expect(router.getState().matches[0]?.location.pathname).toBe(location.pathname);
   },
 );

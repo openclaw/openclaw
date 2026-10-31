@@ -1286,6 +1286,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-maintenance.worker.test.ts",
   "src/commands/doctor-maintenance.session-workers.test.ts",
   "src/commands/doctor-session-canonical-keys.completions.test.ts",
+  "src/commands/doctor-session-canonical-keys.global.test.ts",
   "src/commands/doctor-session-canonical-keys.test.ts",
   "src/commands/doctor-lint.crabbox.test.ts",
   "src/node-host/config.test.ts",

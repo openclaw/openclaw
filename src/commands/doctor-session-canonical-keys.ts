@@ -47,6 +47,11 @@ import {
   type CanonicalSessionCandidate,
   type CanonicalSessionCandidateFact,
 } from "./doctor-session-canonical-candidates.js";
+import {
+  repairOverlappingGlobalSessionKeys,
+  type GlobalSessionKeyRepair,
+} from "./doctor-session-global-key-repair.js";
+import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
 function createCanonicalRepairRemoval(
   candidate: CanonicalSessionCandidate,
@@ -79,6 +84,7 @@ export type CanonicalSessionKeyRepairReport = {
   removedRows: number;
   repairedGroups: number;
   scannedStores: number;
+  globalSessionRepairs?: GlobalSessionKeyRepair[];
 };
 
 const CANONICAL_SESSION_REPAIR_BATCH_GROUP_LIMIT = 64;
@@ -508,6 +514,7 @@ export async function repairCanonicalSessionKeys(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  authority?: DoctorSqliteMaintenanceAuthority;
 }): Promise<CanonicalSessionKeyRepairReport> {
   const env = params.env ?? process.env;
   const stores = projectExistingAgentDatabaseTargets(
@@ -588,6 +595,8 @@ export async function repairCanonicalSessionKeys(params: {
       repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
     }
   }
+  // Canonical normalization owns legacy metadata before the overlap repair reads full entries.
+  const globalSessionRepairs = await repairOverlappingGlobalSessionKeys({ ...params, env, stores });
   return {
     archivedTranscriptDirectories: [...archivedTranscriptDirectories].toSorted(),
     foundGroups,
@@ -595,5 +604,6 @@ export async function repairCanonicalSessionKeys(params: {
     removedRows,
     repairedGroups,
     scannedStores: stores.length,
+    ...(globalSessionRepairs.length ? { globalSessionRepairs } : {}),
   };
 }

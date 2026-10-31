@@ -9,13 +9,16 @@ import { bootstrapApplication } from "./bootstrap.ts";
 
 setupSidebarTest();
 
-it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reconnect) => {
+const cases = [false, true, "literal"] as const;
+it.each(cases)("recovers deleted Chat once (mode: %s)", async (mode) => {
   vi.stubGlobal("requestIdleCallback", vi.fn());
   const application = bootstrapApplication();
   const { context } = application;
   const mainKey = "agent:main:main";
-  const deletedKey = "agent:main:deleted-thread";
-  let location = { pathname: "/chat/main/deleted-thread", search: "", hash: "" };
+  const literal = mode === "literal";
+  const deletedKey = literal ? "agent:main:global" : "agent:main:deleted-thread";
+  const deletedPath = literal ? "/chat/main/~key/global" : "/chat/main/deleted-thread";
+  let location = { pathname: deletedPath, search: "", hash: "" };
   const history: RouterHistory = {
     location: () => location,
     push: (next) => {
@@ -30,16 +33,20 @@ it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reco
     {
       id: "chat",
       path: "/chat/main",
-      aliases: ["/chat/main/deleted-thread"],
+      aliases: [deletedPath],
       loaderDeps: chatPages[0].loaderDeps,
       component: () => ({ renderSolid: () => null }),
-      loader: (_context, options) => ({
-        kind: "session",
-        sessionKey: options.location.pathname === "/chat/main" ? mainKey : deletedKey,
-      }),
+      loader: (routeContext, options) =>
+        literal && routeContext.sessions.deletionState(deletedKey) === "confirmed"
+          ? chatPages[0].loader!(routeContext, options)
+          : {
+              kind: "session",
+              sessionKey: options.location.pathname === "/chat/main" ? mainKey : deletedKey,
+            },
     },
   ];
   const router = createRouter({ routes });
+  Object.assign(context, { router });
   const subscribe = router.subscribe.bind(router);
   let notifyRoute = () => {};
   vi.spyOn(router, "subscribe").mockImplementation((listener) => {
@@ -60,6 +67,11 @@ it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reco
     );
     void recovery.catch((error: unknown) => errors.push(error));
   });
+  const revalidate = vi.spyOn(context, "revalidate").mockImplementation((routeId) => {
+    recovery = router.revalidate(context, routeId);
+    void recovery.catch((error: unknown) => errors.push(error));
+    return recovery;
+  });
   const deletion = vi.spyOn(context.sessions, "deletionState");
   const shell = createShellOwner();
   shell.runtime = { ...application, router };
@@ -67,11 +79,11 @@ it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reco
     await router.start(history, "", context);
     shell.connect();
     expect(shell.activeSessionKey).toBe(deletedKey);
-    if (reconnect) {
+    if (mode === true) {
       shell.disconnect();
       shell.connect();
     }
-    expect(shell.lastWorkspaceLocation?.pathname).toBe("/chat/main/deleted-thread");
+    expect(shell.lastWorkspaceLocation?.pathname).toBe(deletedPath);
     const invalidate = vi.spyOn(shell, "invalidate");
     notifyRoute();
     expect(invalidate).not.toHaveBeenCalled();
@@ -81,6 +93,16 @@ it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reco
     await recovery;
 
     expect(errors).toEqual([]);
+    if (literal) {
+      shell.shellNavigation.recoverDeletedActiveSession();
+      expect(revalidate).toHaveBeenCalledExactlyOnceWith("chat");
+      expect(replace).not.toHaveBeenCalled();
+      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
+      expect(location.pathname).toBe(deletedPath);
+      expect(shell.activeSessionKey).toBe(deletedKey);
+      expect(context.gateway.snapshot.sessionKey).toBe(deletedKey);
+      return;
+    }
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
     expect(location.pathname).toBe("/chat/main");
     expect(shell.activeSessionKey).toBe(mainKey);

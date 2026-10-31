@@ -14,7 +14,7 @@ export async function repairCanonicalSessionKeys(params: Parameters<typeof repai
   return withDoctorSqliteMaintenanceLock({
     env: params.env,
     operation: "session SQLite import",
-    run: () => repairSessionKeys(params),
+    run: (authority) => repairSessionKeys({ ...params, authority }),
   });
 }
 

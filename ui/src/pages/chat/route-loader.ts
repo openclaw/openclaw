@@ -392,11 +392,18 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "literal") {
+    const qualifiedGlobal =
+      parseAgentSessionKey(target.sessionKey)?.rest === "global" &&
+      routeLocation.pathname.split("/").filter(Boolean).at(-2) === "~key";
+    if (qualifiedGlobal && context.sessions.deletionState(target.sessionKey) === "confirmed") {
+      return missingSessionRouteData(context, face, target.agentId);
+    }
     let defaultsKnown =
       defaultsUsable ||
       context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
       (context.gateway.snapshot.phase === "connected" && hasConfiguredMainKey(context));
-    const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
+    const needsGatewayResolution =
+      qualifiedGlobal || preferenceDerived || Boolean(target.slugCandidate);
     if (!defaultsKnown && needsGatewayResolution) {
       await waitForGatewayClient(context.gateway, signal);
       defaultsKnown = hasConfiguredMainKey(context);
@@ -407,7 +414,7 @@ export async function loadChatRoute(
     if (needsGatewayResolution) {
       // Exact keys win over names; warm names use the same scoped lookup as short links.
       const cachedRow =
-        defaultsKnown && !revalidation
+        !qualifiedGlobal && defaultsKnown && !revalidation
           ? (findUiSessionRow(context, target.sessionKey, target.agentId) ??
             (context.sessions.state.resultCached && !preferenceDerived
               ? findLocalSessionReference(
@@ -422,6 +429,15 @@ export async function loadChatRoute(
         (cachedRow
           ? ({ kind: "unique", session: cachedRow } as const)
           : await resolveReference(target.sessionKey, target.slugCandidate));
+      if (qualifiedGlobal) {
+        if (resolution === null) {
+          throw new Error("The Gateway connection changed while resolving the session.");
+        }
+        // A repaired literal address must not reopen a main alias or create a replacement chat.
+        if (resolution?.kind !== "unique" || resolution.session.key !== target.sessionKey) {
+          return missingSessionRouteData(context, face, target.agentId);
+        }
+      }
       if (resolution?.kind === "unique") {
         const resolved = resolvedSessionRouteData({
           ...presentation,
@@ -663,9 +679,19 @@ export async function verifyChatSessionRoute(
   if (!current() || data?.kind !== "session") {
     return;
   }
-  const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
+  const referenceLocation = sessionRouteTargetFromLocation(context, target.location);
+  const reference = referenceLocation?.target;
   // Warm Home can render before hello reveals that its access needs confirmation.
   if (reference?.kind === "main" && context.gateway.snapshot.hello?.auth?.sessionCap === "none") {
+    await revalidate();
+    return;
+  }
+  if (
+    verifySession &&
+    reference?.kind === "literal" &&
+    parseAgentSessionKey(reference.sessionKey)?.rest === "global" &&
+    referenceLocation?.location.pathname.split("/").filter(Boolean).at(-2) === "~key"
+  ) {
     await revalidate();
     return;
   }

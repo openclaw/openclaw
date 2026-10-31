@@ -1,6 +1,8 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import {
+  INTERNAL_SESSION_PATH_PARAM,
   isSessionRouteId,
+  pathForRoute,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   sameRouteLocation,
@@ -129,6 +131,34 @@ export class ShellNavigationOwner {
       return true;
     }
     const sessionWasDeleted = context.sessions.deletionState(sessionKey);
+    const location = this.host.routeState.location;
+    const pathname =
+      location &&
+      (location.pathname === pathForRoute(face, context.basePath)
+        ? (new URLSearchParams(location.search).get(INTERNAL_SESSION_PATH_PARAM) ??
+          location.pathname)
+        : location.pathname);
+    const target = pathname ? sessionRefFromPath(pathname, context.basePath) : null;
+    if (
+      sessionWasDeleted &&
+      target?.kind === "literal" &&
+      target.sessionKey === sessionKey &&
+      parseAgentSessionKey(sessionKey)?.rest === "global" &&
+      pathname?.split("/").filter(Boolean).at(-2) === "~key"
+    ) {
+      const state = context.router.getState();
+      const match = state.matches.find((entry) => entry.routeId === face);
+      // Retire the old view in place; opening another chat remains an explicit user action.
+      if (
+        sessionWasDeleted === "confirmed" &&
+        state.pendingMatches.length === 0 &&
+        match?.isFetching !== "loader" &&
+        this.host.routeState.committedSessionKey === sessionKey
+      ) {
+        void context.revalidate(face).catch(() => undefined);
+      }
+      return true;
+    }
     // Session lists are filtered and windowed. Only a failed route for this
     // active key, or an authoritative deletion, proves it needs replacement.
     const activeSessionRow = findUiSessionRow(context, sessionKey);

@@ -177,6 +177,86 @@ export function readCronRunRecordsInDatabase(
   });
 }
 
+/** Read only terminal reference identities for Doctor's selected source binding. */
+export function readCronSessionHistoryForRepair(
+  db: EngineConnection,
+  params: {
+    agentId: string;
+    fromSessionKey: string;
+  },
+): { taskId: string; sessionId: string }[] {
+  const rows = executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("task_runs")
+      .select((eb) => [
+        "task_id",
+        "status",
+        /* kysely-allow-raw: Repair reads identity metadata without loading retained payloads. */
+        sql<string | null>`CASE WHEN ${jsonValid(db, eb.ref("detail_json"))}
+          THEN ${jsonPickObject(db, eb.ref("detail_json"), ["kind", "storeKey", "sessionId"])} END`.as(
+          "detail_json",
+        ),
+      ])
+      .where("runtime", "=", "cron")
+      .where("agent_id", "=", params.agentId)
+      .where("child_session_key", "=", params.fromSessionKey),
+  ).rows;
+  return rows.map((row) => {
+    const detail = row.detail_json === null ? undefined : parseCronRunDetailJson(row.detail_json);
+    if (
+      !["succeeded", "failed", "timed_out", "cancelled", "lost"].includes(row.status) ||
+      !isRecord(detail) ||
+      detail.kind !== "cron-run" ||
+      typeof detail.storeKey !== "string" ||
+      !detail.storeKey.trim() ||
+      typeof detail.sessionId !== "string" ||
+      !detail.sessionId.trim()
+    ) {
+      throw new Error(
+        `Cannot rehome cron history ${row.task_id}: terminal session identity is unavailable.`,
+      );
+    }
+    return { taskId: row.task_id, sessionId: detail.sessionId };
+  });
+}
+
+/** Doctor owns exclusive maintenance custody and, when applying, the shared-state transaction. */
+export function rehomeCronSessionHistoryForRepair(
+  db: EngineConnection,
+  params: {
+    agentId: string;
+    fromSessionKey: string;
+    toSessionKey: string;
+    sessionIds: readonly string[];
+    apply: boolean;
+  },
+): number {
+  const rows = readCronSessionHistoryForRepair(db, params);
+  const sessionIds = new Set(params.sessionIds);
+  // Validate the complete set before changing any reference; agent rehome may already be committed.
+  for (const row of rows) {
+    if (!sessionIds.has(row.sessionId)) {
+      throw new Error(
+        `Cannot rehome cron history ${row.taskId}: terminal session identity is unavailable.`,
+      );
+    }
+  }
+  if (params.apply && rows.length > 0) {
+    executeSqliteQuerySync(
+      db,
+      query(db)
+        .updateTable("task_runs")
+        .set({ child_session_key: params.toSessionKey })
+        .where("runtime", "=", "cron")
+        .where("agent_id", "=", params.agentId)
+        .where("child_session_key", "=", params.fromSessionKey),
+    );
+    publishCronRunHistoryChange(db);
+  }
+  return rows.length;
+}
+
 /** Caller owns the exact transaction. History never authorizes execution or receipt adoption. */
 export function recordCronRunInDatabase(db: EngineConnection, input: CronRunHistoryWrite): void {
   const existing = readCronRunRecordsInDatabase(db, input.jobId, input.runId).find(

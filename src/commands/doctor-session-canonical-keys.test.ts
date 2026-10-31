@@ -162,6 +162,7 @@ describe("doctor canonical session-key repair", () => {
           "ops",
         );
 
+        await expectRepair({ foundGroups: 1, repairedGroups: 0 }, false);
         await expectRepair({ foundGroups: 1, repairedGroups: 1 });
         expect(load("global")?.entry.sessionId).toBe("main-global");
         const opsGlobal = load("global", "ops")?.entry;

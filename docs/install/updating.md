@@ -140,6 +140,15 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Candidate Doctor can recover overlapping global chat bindings during its existing
+offline maintenance phase. It keeps the ongoing global chat and gives the other
+original conversation an ordinary address, preserving its SID, history and files.
+The installed updater needs no new marker or schema change. Interrupted reference
+repair is repeatable; uncertain ownership, linked work, or a repository workspace
+or worker placement owned by the moved chat refuses the repair.
+Reopen the recovered chat as described in
+[overlapping global chats](/cli/doctor/sqlite-maintenance#overlapping-global-chats).
+
 Candidate Doctor imports historical image-project snapshots as non-repository
 runtime preparation while retaining the original serialized snapshot as evidence.
 Historical shared-schema-21 placements retain their existing preparation evidence

@@ -66,6 +66,12 @@ With `session.scope: "global"`, the selected agent still owns its session.
 The shared key `global` does not merge different agents' conversations:
 commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
+Older stores can contain an accidentally created `agent:<agentId>:global`
+conversation alongside the ongoing `global` chat. With the Gateway stopped,
+Doctor can give the review conversation an ordinary address while keeping both
+original session IDs, histories and files. The ongoing global address stays the
+same. Reopen the recovered chat from Sessions; do not reuse its old literal link.
+See [overlapping global chats](/cli/doctor/sqlite-maintenance#overlapping-global-chats).
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
 In the Sessions page, enabling **Unknown** includes authorized unknown sessions

@@ -1,6 +1,7 @@
 import { EarlyGateway } from "../api/gateway-boot.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { chatHistoryRequestParams } from "../pages/chat/chat-history-request-params.ts";
 import type { prepareApplicationStartup } from "./bootstrap-connection.ts";
@@ -19,12 +20,15 @@ export function startEarlyApplicationGateway(
   // Short references, native handoffs, and confirmation-required endpoints keep
   // their startup owner. A name-shaped literal is a guess: if route resolution
   // changes the target, the bounded handoff falls back to ordinary startup.
+  // Qualified-global literals must first prove that their stored address still exists.
   if (
     !initial.ownsWarmBoot ||
     initial.hasPendingGateway ||
     startup.nativeClient ||
     route?.kind !== "literal" ||
-    route.namespace !== "chat"
+    route.namespace !== "chat" ||
+    (parseAgentSessionKey(route.sessionKey)?.rest === "global" &&
+      applicationLocation.pathname.split("/").filter(Boolean).at(-2) === "~key")
   ) {
     return undefined;
   }
