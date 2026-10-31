@@ -104,6 +104,8 @@ export function createPluginGenerationFileCapture({
   sourceLinks,
   deferExternalLinks,
   nativeAdmission,
+  sourceOnly = false,
+  retainedSnapshotSource = false,
   receipt,
   retained,
   sourceFacts,
@@ -122,6 +124,8 @@ export function createPluginGenerationFileCapture({
   sourceLinks: ReturnType<typeof createPluginSourceLinkCapture>;
   deferExternalLinks: boolean;
   nativeAdmission: ReturnType<typeof createPluginNativeAdmission>;
+  sourceOnly?: boolean;
+  retainedSnapshotSource?: boolean;
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
   retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
   sourceFacts?: Map<string, PluginCapturedSourceFact>;
@@ -219,14 +223,22 @@ export function createPluginGenerationFileCapture({
       additions.add(target);
       const retainedFile = retained?.files.get(path.relative(directory, target));
       const retainedReference = retained?.source.native?.references.has(target);
-      if (metrics && !prepared && !captured && (!retainedFile || retainedReference)) {
+      if (
+        metrics &&
+        !retainedSnapshotSource &&
+        !prepared &&
+        !captured &&
+        (!retainedFile || retainedReference)
+      ) {
         metrics.originalBytes += Number(stat.size);
       }
       if (retainedReference) {
         // The fork owns this validated reference; the new lease must admit its own native owner.
         fs.unlinkSync(target);
       }
-      const native = nativeAdmission.materialize(real, inputBoundary, target, stat, source);
+      const native = sourceOnly
+        ? undefined
+        : nativeAdmission.materialize(real, inputBoundary, target, stat, source);
       let copiedContent: PluginCapturedSourceFact | undefined;
       if (!native && retainedFile && !retainedReference) {
         // The receipt verifies the private copy against these retained content facts.
@@ -254,7 +266,10 @@ export function createPluginGenerationFileCapture({
           prepared: native?.content ?? copiedContent,
           onContent: (content) => {
             native?.record(content);
-            sourceFacts?.set(path.relative(directory, target), content);
+            sourceFacts?.set(path.relative(directory, target), {
+              ...content,
+              mode: 0o600 | Number(stat.mode & 0o100n),
+            });
           },
         },
         openFile,

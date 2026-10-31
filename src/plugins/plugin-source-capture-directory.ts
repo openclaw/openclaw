@@ -29,6 +29,7 @@ import {
   isLegacyPluginSourceCaptureName,
   mkdtempPluginCaptureSync,
   PLUGIN_SOURCE_CAPTURE_PREFIX,
+  PLUGIN_SOURCE_SNAPSHOT_PREFIX,
   resolvePluginSourceCaptureFallbackPrefix,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
@@ -162,6 +163,7 @@ async function reclaimInstances(
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
+      entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) ||
       (legacy && !isLegacyPluginSourceCaptureName(entry.name)) ||
       (fallbackPrefix && !entry.name.startsWith(fallbackPrefix))
     ) {
@@ -233,7 +235,11 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
       continue;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || (prefix && !entry.name.startsWith(prefix))) {
+      if (
+        !entry.isDirectory() ||
+        entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) ||
+        (prefix && !entry.name.startsWith(prefix))
+      ) {
         continue;
       }
       try {

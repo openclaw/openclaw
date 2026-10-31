@@ -8,6 +8,7 @@ export const pluginProcessRuntimeEntrypoints = {
   lifecycleLease: entrypoint("plugin-lifecycle-lease"),
   installedPluginIndex: entrypoint("installed-plugin-index-store"),
   installedPluginIndexWrite: entrypoint("installed-plugin-index-store-write"),
+  sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
   directoryInventory: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/directory-walk",
