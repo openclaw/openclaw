@@ -54,6 +54,7 @@ import {
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { createMSTeamsWebhookHandler } from "./webhook-handler.js";
 import {
+  resolveMSTeamsLegacyMessagesOwner,
   resolveMSTeamsLegacyWebhook,
   resolveMSTeamsWebhookPathIssue,
   resolveMSTeamsWebhookCollisionIssue,
@@ -572,13 +573,23 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
         log: (message) => log.warn?.(message),
       }),
     );
-    if (accountId === DEFAULT_ACCOUNT_ID && configuredPath !== "/api/messages") {
+    // Only the Gateway alias yields: compatibility listeners still reach the forwarder above.
+    const legacyMessagesOwner = resolveMSTeamsLegacyMessagesOwner(accountPolicyCfg);
+    if (
+      accountId === DEFAULT_ACCOUNT_ID &&
+      legacyMessagesOwner &&
+      legacyMessagesOwner !== accountId
+    ) {
+      log.info(`Gateway route /api/messages is configured for account ${legacyMessagesOwner}`);
+    }
+    if (accountId === DEFAULT_ACCOUNT_ID && !legacyMessagesOwner) {
       unregisterRoutes.push(
         registerPluginHttpRoute({
           path: "/api/messages",
           auth: "plugin",
           pluginId: "msteams",
-          source: "msteams-webhook-alias",
+          // Same owner as primary routes, so reload handoffs pass between alias and primary.
+          source: "msteams-webhook",
           accountId,
           handler: webhook.handler,
           log: (message) => log.warn?.(message),

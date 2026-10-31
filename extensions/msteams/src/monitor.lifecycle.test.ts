@@ -187,6 +187,55 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(routeState.routes).toHaveLength(0);
   });
 
+  it.each([
+    { supportPath: "/api/messages", supportEnabled: true, defaultAlias: false },
+    { supportPath: "/api/messages", supportEnabled: false, defaultAlias: true },
+    { supportPath: undefined, supportEnabled: true, defaultAlias: true },
+  ])(
+    "serves the default /api/messages alias=$defaultAlias beside support path=$supportPath enabled=$supportEnabled",
+    async ({ supportPath, supportEnabled, defaultAlias }) => {
+      const cfg = configured({
+        webhook: { path: "/teams/default" },
+        accounts: {
+          support: {
+            enabled: supportEnabled,
+            appId: "support-app",
+            appPassword: "support-secret",
+            ...(supportPath ? { webhook: { path: supportPath } } : {}),
+          },
+        },
+      });
+      const accountIds = supportEnabled ? ["default", "support"] : ["default"];
+      const controllers = accountIds.map(() => new AbortController());
+      const tasks: Array<ReturnType<typeof runProvider>> = [];
+      try {
+        for (const [index, accountId] of accountIds.entries()) {
+          routeState.ready = createDeferred<void>();
+          tasks.push(runProvider(controllers[index]!, cfg, { accountId }));
+          await Promise.race([routeState.ready.promise, tasks[index]]);
+        }
+        const supportRoute = {
+          accountId: "support",
+          path: supportPath ?? "/teams/default/support",
+        };
+        expect(routeState.routes.map(({ accountId, path }) => ({ accountId, path }))).toEqual([
+          { accountId: "default", path: "/teams/default" },
+          ...(defaultAlias ? [{ accountId: "default", path: "/api/messages" }] : []),
+          ...(supportEnabled ? [supportRoute] : []),
+        ]);
+        // One route owner lets reload handoffs pass between alias and primary routes.
+        expect(
+          new Set(
+            routeState.routes.map(({ pluginId, source, auth }) => `${pluginId}:${source}:${auth}`),
+          ),
+        ).toEqual(new Set(["msteams:msteams-webhook:plugin"]));
+      } finally {
+        controllers.forEach((controller) => controller.abort());
+        await Promise.all(tasks);
+      }
+    },
+  );
+
   it.each([12, undefined])("resolves media limits with Teams override=%s", async (mediaMaxMb) => {
     const cfg = configured({ mediaMaxMb });
     cfg.agents = { defaults: { mediaMaxMb: 3 } };
@@ -765,5 +814,33 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
         await unregistered.text();
       }
     }, cfg);
+  });
+
+  it("forwards compatibility-listener /api/messages beside a named account on /api/messages", async () => {
+    const cfg = configured({
+      webhook: { path: "/teams/events" },
+      legacyWebhook: { port: 44978, host: "127.0.0.1" },
+      accounts: {
+        support: {
+          appId: "support-app",
+          appPassword: "support-secret",
+          webhook: { path: "/api/messages" },
+        },
+      },
+    });
+    const abort = new AbortController();
+    const task = runProvider(abort, cfg);
+    try {
+      await Promise.race([routeState.ready.promise, task]);
+      expect(routeState.routes.map(({ path }) => path)).toEqual(["/teams/events"]);
+      // A compatibility listener hands unmatched paths to the primary route's handler.
+      routeState.routes = [{ ...routeState.routes[0]!, path: "/api/messages" }];
+      const response = await post();
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ url: "/teams/events" });
+    } finally {
+      abort.abort();
+      await task;
+    }
   });
 });
