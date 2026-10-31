@@ -27,6 +27,7 @@ export type FakeStep = {
   stderr?: string;
   exit?: number;
   times?: number;
+  delayMs?: number;
   verifyLock?: boolean;
   request?: {
     kind?: string;
@@ -302,6 +303,9 @@ if (!expected || expected.bin !== bin || !expected.match.every((word, index) => 
 if ((expected.times ?? 1) > 1) expected.times -= 1;
 else script.shift();
 writeFileSync(root + '/script.json', JSON.stringify(script));
+if (expected.delayMs) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, expected.delayMs);
+}
 if (expected.verifyLock) {
   const locks = readdirSync(root + '/release').filter((name) => name.endsWith('.lock'));
   const lock = JSON.parse(readFileSync(root + '/release/state.lock', 'utf8'));
@@ -349,7 +353,7 @@ process.exit(expected.exit ?? 0);
     readState(): ReleaseState {
       return JSON.parse(readFileSync(join(stateDir, "state.json"), "utf8"));
     },
-    run(script: FakeStep[], args: string[] = []) {
+    run(script: FakeStep[], args: string[] = [], env: Record<string, string> = {}) {
       writeFileSync(join(root, "script.json"), JSON.stringify(script));
       const result = spawnSync(
         node,
@@ -375,6 +379,7 @@ process.exit(expected.exit ?? 0);
             TSX_DISABLE_CACHE: "1",
             OPENCLAW_RELEASE_STABLE_POLL_MS: "1",
             OPENCLAW_RELEASE_STABLE_BACKOFF_MS: "1",
+            ...env,
           },
         },
       );
