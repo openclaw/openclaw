@@ -15,21 +15,25 @@ const mocks = vi.hoisted(() => ({
   alive: vi.fn(),
   start: vi.fn(),
 }));
-// mock-isolation: fixed external RPC/config/process observations; the production
-// lease owner, timers, filesystem witness and linked cancellation run unchanged.
+// mock-isolation: drive suspension replies and failures without contacting a real Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.rpc }));
+// mock-isolation: select synthetic shared auth without resolving operator credentials.
 vi.mock("../gateway/auth-resolve.js", () => ({ resolveGatewayAuthForConfig: mocks.auth }));
+// mock-isolation: supply local/remote config observations without loading operator state.
 vi.mock("../config/io.js", () => ({
   createConfigIO: () => ({ readConfigFileSnapshot: mocks.config }),
 }));
+// mock-isolation: discover only the fixture owner and locks, never the host Gateway.
 vi.mock("../infra/gateway-lock.js", () => ({
   readActiveGatewayLockIdentity: mocks.discover,
   readLockPayloadSync: mocks.readLock,
   resolveGatewayLockPaths: mocks.paths,
 }));
+// mock-isolation: model recycled PID identity independently of the host process table.
 vi.mock("../infra/gateway-lock-process.js", () => ({
   readGatewayLockProcessStartTime: mocks.start,
 }));
+// mock-isolation: the synthetic owner PID must not probe or depend on a host process.
 vi.mock("../shared/pid-alive.js", () => ({ isPidAlive: mocks.alive }));
 
 import { withGatewayMigrationQuiescence } from "./database-migration-quiescence.js";

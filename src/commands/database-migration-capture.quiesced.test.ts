@@ -12,8 +12,7 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDatabaseMigrationCapture } from "./database-migration-capture.js";
 
-// The lease/RPC owner has its own focused boundary tests. This integration proof
-// exercises the real archive and exact snapshot producers under that admission.
+// mock-isolation: enter foreign-owner capture without discovering or acquiring host Gateway locks.
 vi.mock("../cli/local-state-owner.js", () => ({
   runWithLocalStateOwner: async (options: {
     onForeignOwner: (scope: {
@@ -28,6 +27,7 @@ vi.mock("../cli/local-state-owner.js", () => ({
       assertCurrent() {},
     }),
 }));
+// mock-isolation: archive/snapshot proof fixes admission; the real lease owner is tested separately.
 vi.mock("./database-migration-quiescence.js", () => ({
   withGatewayMigrationQuiescence: async (options: {
     run: (scope: {
