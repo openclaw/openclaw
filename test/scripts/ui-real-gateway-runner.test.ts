@@ -77,10 +77,15 @@ beforeEach(() => {
       preset: parent ? (parent.preset ?? "full") : (preset ?? "full"),
     },
     prepare: prepareWorkers,
-    async borrow<T>(child: ChildProcess, completion: Promise<T>) {
-      const joined = borrowWorkers(child);
+    borrow() {
+      throw new Error("The coordinator must use a joined worker invocation");
+    },
+    async withBorrower<T>(run: (onReady: (child: ChildProcess) => void) => Promise<T>) {
+      let joined: Promise<void> | undefined;
       try {
-        return await completion;
+        return await run((child) => {
+          joined = borrowWorkers(child);
+        });
       } finally {
         await joined;
       }
