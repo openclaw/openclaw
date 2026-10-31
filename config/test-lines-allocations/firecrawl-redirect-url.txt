@@ -1,0 +1,2 @@
+43
+# Real HTTP fetch-provider regression: resolved Firecrawl redirect URL and missing/unsafe field fallbacks.
