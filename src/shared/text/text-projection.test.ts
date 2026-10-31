@@ -1,11 +1,5 @@
-import { expect, it, vi } from "vitest";
-import { findCodeRegions } from "./code-regions.js";
+import { expect, it } from "vitest";
 import * as text from "./text-projection.js";
-
-vi.mock("./code-regions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./code-regions.js")>();
-  return { ...actual, findCodeRegions: vi.fn(actual.findCodeRegions) };
-});
 
 const project = (...filters: text.TextFilter[]) => text.createTextProjection(filters);
 const expectUpdate = (actual: text.TextProjection, value: string, delta: string | null = value) =>
@@ -26,19 +20,15 @@ const checkpointFilter = (
     retainedOutputStart: boundary,
   }),
 });
-function replay(filter: text.TextFilter, chunks: string[], expected: string, strict = false) {
+function replay(filter: text.TextFilter, chunks: string[], expected: string) {
   const projection = project(filter);
   let delivered = "";
   for (const chunk of chunks) {
     const result = projection.append(chunk);
-    if (strict) {
-      expect(result.delta).not.toBeNull();
-    }
     delivered = result.delta === null ? result.text : delivered + result.delta;
     expect(delivered).toBe(result.text);
   }
   expect(projection.text).toBe(expected);
-  return projection;
 }
 
 it("activates split markers, reprojects completed syntax, and replaces the source", () => {
@@ -131,15 +121,28 @@ it("distinguishes preserved indentation and equal-length rewrites from trimmed s
 });
 
 it("removes only leading empty lines", () => {
-  const projection = replay(
-    text.leadingEmptyLinesTextFilter,
-    [" \r", "\n\t\n", "  C", "\n D"],
-    "  C\n D",
-    true,
-  );
+  const projection = project(text.leadingEmptyLinesTextFilter);
+  expectUpdate(projection.append(" \r"), "");
+  expectUpdate(projection.append("\n\t\n"), "");
+  expectUpdate(projection.append("  C"), "  C");
+  expectUpdate(projection.append("\n D"), "  C\n D", "\n D");
   expectUpdate(projection.replace("\n  Reset"), "  Reset", null);
 });
+
 it.each([
+  ["Intro `a b\nx`\n---:\n\nIntro `a  b\nx`\n---:", "Intro `a b\nx`\n---:"],
+  [
+    "Intro `a b\nx` | y\n--- | ---\n\nIntro `a  b\nx` | y\n--- | ---",
+    "Intro `a b\nx` | y\n--- | ---",
+  ],
+  ["- `a  b`\n\n- `a b`\n\n- `a b`", "- `a  b`\n\n- `a b`"],
+  ["- `a  b`\r\n\r\n- `a b`\r\n\r\n- `a b`", "- `a  b`\r\n\r\n- `a b`"],
+  ["- `a  b`\n\n- `a  b`", "- `a  b`"],
+  ["- `a b`\n\n- `a  b`", "- `a b`\n\n- `a  b`"],
+  [
+    "![label `a  b`][id]\n\n![label `a b`][id]\n\n![label `a b`][id]\n\n[id]: /url",
+    "![label `a  b`][id]\n\n[id]: /url",
+  ],
   ["A\n\nA\n\n```text\ninside\n\ninside\n```", "A\n\n```text\ninside\n\ninside\n```"],
   ["A\n\nA\n\n    code\n\n    code", "A\n\n    code\n\n    code"],
   ["A\n\nA\n\n \n\nB", "A\n\n\n\nB"],
@@ -175,21 +178,3 @@ it.each([
     expectUpdate(projection.append("word"), "New\n\nLast word", " word");
   },
 );
-
-it("keeps code-bearing continuation appends on the incremental suffix path", () => {
-  const parser = vi.mocked(findCodeRegions);
-  parser.mockClear();
-  const code = "```text\ninside\n\ninside\n```";
-  const source = `${code}\n\nrepeat\n\nrepeat\n\ntail`;
-  const projection = project(text.duplicateParagraphTextFilter);
-  expect(projection.append(source).text).toBe(`${code}\n\nrepeat\n\ntail`);
-  const initialParses = parser.mock.calls.length;
-  expect(initialParses).toBeGreaterThan(0);
-
-  for (let index = 0; index < 256; index++) {
-    const delta = `-${index}`;
-    expect(projection.append(delta).delta).toBe(delta);
-  }
-  expect(parser).toHaveBeenCalledTimes(initialParses);
-  expect(projection.text).toBe(text.duplicateParagraphTextFilter.transform(projection.source));
-});

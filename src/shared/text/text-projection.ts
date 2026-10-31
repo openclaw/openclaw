@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { escapeRegExp } from "../regexp.js";
 import {
   canReuseMarkdownOwnership,
-  findCodeOwnership,
+  canReuseMarkdownOwnershipForAppend,
+  createCodeOwnershipResolver,
   findCodeRegions,
   findTextCheckpoint,
 } from "./code-regions.js";
@@ -100,45 +100,7 @@ function createCheckpointTransform(project: CheckpointTransform) {
   const definitions = new Set<string>();
   let previousVisible: string | undefined;
   let previousReset = false;
-  let ownershipSource = "";
-  let openBlock = false;
-  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
-  const resolveOwnership = (text: string) => {
-    const last = ownership?.regions.at(-1);
-    // A new line can advance settlement even when code ranges stay unchanged.
-    if (
-      ownership &&
-      !text.includes("\n", ownershipSource.length) &&
-      !text.includes("\r", ownershipSource.length) &&
-      (!last?.block || last.end !== ownershipSource.length || openBlock) &&
-      canReuseMarkdownOwnership(ownershipSource, text, ownership)
-    ) {
-      if (openBlock && last) {
-        ownership = {
-          ...ownership,
-          regions: [...ownership.regions.slice(0, -1), { ...last, end: text.length }],
-        };
-      }
-      ownershipSource = text;
-      return ownership;
-    }
-    ownership = findCodeOwnership(text);
-    ownershipSource = text;
-    const tail = ownership.regions.at(-1);
-    const lineStart = tail
-      ? Math.max(text.lastIndexOf("\n", tail.start - 1), text.lastIndexOf("\r", tail.start - 1)) + 1
-      : 0;
-    const topLevel = tail && /^ {0,3}$/u.test(text.slice(lineStart, tail.start));
-    openBlock = Boolean(
-      tail?.block &&
-      tail.end === text.length &&
-      ((topLevel && scanFenceSpans(text.slice(tail.start)).state.open) ||
-        /^(?: {4}|\t)/u.test(
-          text.slice(Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1),
-        )),
-    );
-    return ownership;
-  };
+  const resolveOwnership = createCodeOwnershipResolver();
   const projector = (
     source: string,
     inputDelta: string | null,
@@ -555,6 +517,17 @@ function collapseDuplicateParagraphs(
   );
 }
 
+function normalizeDuplicateParagraph(text: string): string {
+  let normalized = "";
+  let cursor = 0;
+  for (const region of text.includes("`") ? findCodeRegions(text) : []) {
+    normalized += text.slice(cursor, region.start).replace(/\s+/g, " ");
+    normalized += text.slice(region.start, region.end);
+    cursor = region.end;
+  }
+  return normalized + text.slice(cursor).replace(/\s+/g, " ");
+}
+
 function createDuplicateParagraphProjector(protectCode = true): TextProjector {
   let sourceTail = "";
   let activationTail = "";
@@ -572,6 +545,8 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
   let wasCollapsed = false;
   let wasDuplicate = false;
   let codeProtectionRequired = false;
+  let nonlocalMarkersSeen = false;
+  let backticksSeen = false;
   let codeProbeTail: string | undefined;
   return (input) => {
     let appended = input.delta ?? input.text;
@@ -597,15 +572,18 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
         if (newlines < 2 && newlines + part[0].length >= 2) {
           // One append can leave and re-enter duplicate state across this boundary.
           completedParagraph = true;
+          const normalized = protectCode
+            ? normalizeDuplicateParagraph(paragraph)
+            : paragraph.replace(/\s+/g, " ");
           if (!paragraph) {
             if (lastNormalized !== null) {
               pendingEmpty++;
             }
-          } else if (equal && normalizedLength === lastNormalized?.length) {
+          } else if (normalized === lastNormalized) {
             hasDuplicate = true;
           } else {
             completed += (completed ? separator : "") + paragraph;
-            lastNormalized = paragraph.replace(/\s+/g, " ");
+            lastNormalized = normalized;
           }
           paragraph = "";
           pending = "";
@@ -639,9 +617,14 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
         }
         added += completed ? empty + separator : "";
       }
+      const changesCode = protectCode && !canReuseMarkdownOwnershipForAppend(paragraph, piece);
       paragraph += piece;
       added += piece;
-      if (equal) {
+      if (changesCode) {
+        const normalized = normalizeDuplicateParagraph(paragraph);
+        equal = lastNormalized?.startsWith(normalized) === true;
+        normalizedLength = normalized.length;
+      } else if (equal) {
         const normalized = piece.replace(/\s+/g, " ");
         equal = lastNormalized?.startsWith(normalized, normalizedLength) === true;
         normalizedLength += normalized.length;
@@ -649,15 +632,25 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
     }
     const duplicate = Boolean(paragraph) && equal && normalizedLength === lastNormalized?.length;
     const collapsed = hasDuplicate || duplicate;
-    if (protectCode && !codeProtectionRequired && (collapsed || codeProbeTail !== undefined)) {
-      // An empty Markdown prefix has no code; retain split four-space indentation.
-      // Once syntax is ambiguous, the canonical transform keeps ownership of it.
+    if (protectCode) {
+      // Inline code is compared byte-for-byte; block and nonlocal Markdown
+      // ownership still use the canonical whole-source correction path.
       const probe = codeProbeTail === undefined ? input.text : codeProbeTail + appended;
-      codeProtectionRequired = !canReuseMarkdownOwnership("", probe);
+      nonlocalMarkersSeen ||= probe.includes("[") || probe.includes("]");
+      backticksSeen ||= probe.includes("`");
+      codeProtectionRequired ||=
+        (nonlocalMarkersSeen && backticksSeen) ||
+        /`{3,}/.test(probe) ||
+        !canReuseMarkdownOwnership("", probe.replaceAll("`", ""));
       codeProbeTail = probe.slice(-3);
     }
     let delta = input.delta;
-    if (collapsed) {
+    if (nonlocalMarkersSeen && backticksSeen) {
+      const projected = collapseDuplicateParagraphs(input.text);
+      delta =
+        input.delta !== null && projected.startsWith(text) ? projected.slice(text.length) : null;
+      text = projected;
+    } else if (collapsed) {
       // Code can expose pending whitespace; the plain suffix cannot safely append across it.
       delta =
         input.delta === null ||
