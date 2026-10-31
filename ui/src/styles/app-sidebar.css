@@ -61,3 +61,52 @@
     display: inline;
   }
 }
+
+/* Each person pays only for what it shows: the menu holds the edge axis and the counts
+   sit against it, so a row without a running count gives that width to its name. */
+.shell--mobile-nav {
+  .sidebar-online__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar-online__row {
+    --sidebar-online-menu-size: 44px;
+    grid-template-columns: minmax(0, 1fr) var(--sidebar-online-menu-size);
+    padding-inline-end: 0;
+  }
+
+  .sidebar-online__menu {
+    grid-area: 1 / 2;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-online__menu-trigger.oc-menu-trigger {
+    width: var(--sidebar-online-menu-size);
+    height: var(--sidebar-online-menu-size);
+  }
+
+  .sidebar-online__person {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: var(--sidebar-online-menu-size);
+    margin-inline-end: 0;
+    padding-block: 10px;
+    padding-inline-end: 8px;
+  }
+
+  .sidebar-online__row:has(> .sidebar-online__menu) > .sidebar-online__person {
+    padding-inline-end: var(--sidebar-online-menu-size);
+  }
+
+  .sidebar-online__avatar,
+  .sidebar-online__counts {
+    flex: none;
+  }
+
+  .sidebar-online__person-name {
+    flex: 1 1 0;
+    text-align: start;
+  }
+}
