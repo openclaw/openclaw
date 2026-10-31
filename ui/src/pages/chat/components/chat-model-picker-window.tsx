@@ -9,6 +9,7 @@ import {
 } from "@tanstack/virtual-core";
 import { createMemo, createProjection, createSignal, onSettled, Show } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
+import { measureObservedRow, revealVirtualRow } from "../../../lib/virtual-row-geometry.ts";
 
 export type ModelPickerRowRenderer = (key: string, render: () => JSX.Element) => JSX.Element;
 
@@ -33,6 +34,7 @@ export function createModelPickerWindow(
     count: 0,
     getScrollElement: () => viewport,
     estimateSize: () => 32,
+    measureElement: measureObservedRow,
     observeElementRect,
     observeElementOffset,
     scrollToFn: elementScroll,
@@ -108,7 +110,7 @@ export function createModelPickerWindow(
     reveal(key: string) {
       const index = rows().indexOf(key);
       if (index >= 0) {
-        virtualizer.scrollToIndex(index, { align: "auto" });
+        revealVirtualRow(virtualizer, index);
         publish();
       }
     },
