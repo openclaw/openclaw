@@ -329,6 +329,7 @@ function JobsTable(
 function JobRows(props: CronProps & { rows: CronJob[] }) {
   let list: HTMLDivElement;
   let scroller: HTMLElement | null = null;
+  let synchronizeScrollOffset: (() => void) | undefined;
   let focusedId: string | undefined;
   let current: CronJob[] = [];
   const elements = new Set<HTMLDivElement>();
@@ -352,7 +353,11 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
     getScrollElement: () => scroller,
     estimateSize: () => 80,
     observeElementRect,
-    observeElementOffset,
+    observeElementOffset: (instance, notify) => {
+      synchronizeScrollOffset = () =>
+        notify(instance.scrollElement?.scrollTop ?? 0, instance.isScrolling);
+      return observeElementOffset(instance, notify);
+    },
     scrollToFn: elementScroll,
     overscan: 3,
     useAnimationFrameWithResizeObserver: true,
@@ -454,8 +459,13 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         count={props.rows.length}
         rowRef={(node) => (element = node)}
         onFocus={() => {
+          if (focusedId === row.job.id) {
+            return;
+          }
           focusedId = row.job.id;
           if (windowed()) {
+            // Native focus can scroll before the browser delivers its scroll event.
+            synchronizeScrollOffset?.();
             pinFocus();
             publish();
             // Keep the native target visible as estimated mobile rows measure.
