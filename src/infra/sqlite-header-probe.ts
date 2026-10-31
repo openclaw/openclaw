@@ -1,4 +1,6 @@
 import childProcess from "node:child_process";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { describeLockedBackupSource } from "./backup-locked-source.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -28,6 +30,11 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
       if (result.error) {
         throw result.error;
       }
+      if (result.status === 3) {
+        throw Object.assign(new Error("Header probe could not read a source"), {
+          ...asOptionalRecord(JSON.parse(result.stderr)),
+        });
+      }
       if (result.status !== 0) {
         throw new Error(
           `Header probe exited with status ${result.status}: ${result.stderr.trim()}`,
@@ -47,9 +54,12 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
     }
     return results;
   } catch (cause) {
+    const hint = describeLockedBackupSource(cause);
     throw new Error(
-      "Could not determine whether backup files are SQLite databases. " +
-        "Check that the backup worker can run and the source files are readable, then retry the backup.",
+      hint
+        ? `Could not determine whether backup files are SQLite databases.${hint}`
+        : "Could not determine whether backup files are SQLite databases. " +
+            "Check that the backup worker can run and the source files are readable, then retry the backup.",
       { cause },
     );
   }
