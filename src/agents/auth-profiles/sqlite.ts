@@ -257,31 +257,26 @@ function readAuthProfileDatabaseReadOnly<T>(
     unavailable: (inspection: PersistedAuthProfileStoreInspection) => T;
   },
 ): T {
-  if (databaseTarget.kind === "shared-state") {
+  const readRows = (db: EngineConnection, kind: AuthProfileDatabaseTarget["kind"]): T => {
     try {
-      return (
-        withExistingOpenClawStateDatabaseReadOnly(({ db }) => reader.read(db, "shared-state"), {
-          path: databaseTarget.path,
-          ...(databaseTarget.env ? { env: databaseTarget.env } : {}),
-        }) ?? reader.unavailable({ status: "missing", reason: "database" })
-      );
-    } catch {
-      return reader.unavailable(
-        isMissingDatabasePath(databaseTarget.path)
-          ? { status: "missing", reason: "database" }
-          : { status: "unreadable" },
-      );
-    }
-  }
-  if (getDatabaseEngineInput("agent")) {
-    try {
-      return (
-        readSelectedAgentAuthDatabase(databaseTarget, (db) => reader.read(db, "agent"))?.value ??
-        reader.unavailable({ status: "missing", reason: "database" })
-      );
+      return reader.read(db, kind);
     } catch {
       return reader.unavailable({ status: "unreadable" });
     }
+  };
+  if (databaseTarget.kind === "shared-state") {
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(({ db }) => readRows(db, "shared-state"), {
+        path: databaseTarget.path,
+        ...(databaseTarget.env ? { env: databaseTarget.env } : {}),
+      }) ?? reader.unavailable({ status: "missing", reason: "database" })
+    );
+  }
+  if (getDatabaseEngineInput("agent")) {
+    return (
+      readSelectedAgentAuthDatabase(databaseTarget, (db) => readRows(db, "agent"))?.value ??
+      reader.unavailable({ status: "missing", reason: "database" })
+    );
   }
   return reader.readNativeAgent(databaseTarget.path);
 }
