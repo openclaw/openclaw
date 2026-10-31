@@ -33,15 +33,18 @@ Its failed CI remains failed; no current-head CI success is claimed.
 
 ## Current qualification
 
-Pinned main `028723cde216`: retire two unused private test API publications.
-The external-auth override was superseded by the live hoisted fixture and
-factory injection; Swarm reset callers migrated to observed native shutdown.
-Remove their exact retirement-map entries and regenerate the two now-unused
-cast allowances. Preserve every test declaration/assertion, all nine auth
-consumers, and Swarm native close/lifecycle/Gateway keepers. Independent
-preservation review found no assertions to carry and no separate retirement
-responsibility. Native untouched baseline, candidate proof, all removal scans,
-fresh review and PR CI are pending.
+[189460](https://github.com/openclaw/openclaw/pull/189460), pinned main
+`028723cde216`: retire two unused private test API publications. External auth
+already uses the live hoisted fixture and factory injection; Swarm tests use
+observed native shutdown. Remove the global override/reset hooks and their exact
+retirement-map rows. Independent preservation review found no assertions to
+transfer or separate retirement responsibility. All14 test files and both live
+fixtures match the untouched baseline byte for byte; baseline and candidate
+pass195 tests/14 suites. Typed lint, scoped TypeScript and source format pass.
+−38 net production LOC and two map rows; no declarations or assertions removed.
+The owner generator removes exactly two count1 cast allowances and sorts eight
+unchanged existing rows. All baseline removal phases passed; the PR carries
+final scan, review and CI evidence.
 
 ## Completed source review
 
