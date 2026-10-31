@@ -470,6 +470,11 @@ export async function handleOpenAiHttpRequest(
     sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
     return true;
   }
+  // Echo header-safe keys so callers can continue this conversation by sending
+  // the value back as `x-openclaw-session-key` on a later request.
+  if (/^[\t\x20-\x7e\x80-\xff]*$/u.test(sessionKey)) {
+    res.setHeader("x-openclaw-session-key", sessionKey);
+  }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
