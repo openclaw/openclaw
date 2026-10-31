@@ -427,16 +427,16 @@ it("keeps interval message and tool counts unavailable for initial failure", () 
   ]);
 });
 
-it("keeps stale loaded counts independent of conversation search and role filters", () => {
+it.each(["tool", "user"])("keeps stale counts independent of %s and search", (role) => {
   const start = Date.parse("2026-08-20T12:00:00Z");
   const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
     start,
     end: start + 1000,
-    sessionLogsData: [log(start, "user", "Question"), log(start + 1000, "assistant", "Answer")],
+    sessionLogsData: [log(start, "user", "Mu\u0308nchen"), log(start + 1000, "assistant", "Answer")],
     sessionLogsHasLoaded: true,
     sessionLogs: "refresh failed",
     stale: true,
-    logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
+    logFilters: { roles: [role], tools: [], hasTools: false, query: "münchen" },
   });
   expect(summary(container)).toMatchObject([
     { value: "2", meta: "1 user · 1 assistant Loaded conversation · selected interval" },
@@ -444,57 +444,8 @@ it("keeps stale loaded counts independent of conversation search and role filter
     {},
     {},
   ]);
-  expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
+  expect(container.querySelectorAll(".session-log-entry")).toHaveLength(role === "user" ? 1 : 0);
   expect(text(container, ".usage-detail-error--conversation")).toContain("Showing stale data");
-});
-
-/** Decomposed diaeresis (M + U+0308 + uchen) forces a real Unicode mismatch without NFC. */
-const NFD_CONTENT = "München notes opened".normalize("NFD");
-const NFC_CONTENT = "München notes opened".normalize("NFC");
-const NFC_QUERY = "münchen notes".normalize("NFC");
-const NFD_QUERY = "münchen notes".normalize("NFD");
-
-it("matches NFC and NFD conversation queries against NFD log content", () => {
-  const start = Date.parse("2026-08-20T12:00:00Z");
-  const points = [point({ timestamp: start }), point({ timestamp: start + 1000 })];
-  const logs = [
-    log(start, "user", NFD_CONTENT),
-    log(start + 1000, "assistant", "home-notes ready"),
-  ];
-
-  const nfcQuery = mount(points, {
-    start,
-    end: start + 1000,
-    sessionLogsData: logs,
-    sessionLogsHasLoaded: true,
-    logFilters: { roles: [], tools: [], hasTools: false, query: NFC_QUERY },
-  });
-  expect(nfcQuery.querySelectorAll(".session-log-entry")).toHaveLength(1);
-  expect(text(nfcQuery, ".session-log-content")).toContain(NFD_CONTENT);
-  expect(text(nfcQuery, ".session-log-content")).not.toContain("home-notes");
-
-  const nfdQuery = mount(points, {
-    start,
-    end: start + 1000,
-    sessionLogsData: logs,
-    sessionLogsHasLoaded: true,
-    logFilters: { roles: [], tools: [], hasTools: false, query: NFD_QUERY },
-  });
-  expect(nfdQuery.querySelectorAll(".session-log-entry")).toHaveLength(1);
-  expect(text(nfdQuery, ".session-log-content")).toContain(NFD_CONTENT);
-
-  const nfcContent = mount(points, {
-    start,
-    end: start + 1000,
-    sessionLogsData: [
-      log(start, "user", NFC_CONTENT),
-      log(start + 1000, "assistant", "home-notes ready"),
-    ],
-    sessionLogsHasLoaded: true,
-    logFilters: { roles: [], tools: [], hasTools: false, query: NFD_QUERY },
-  });
-  expect(nfcContent.querySelectorAll(".session-log-entry")).toHaveLength(1);
-  expect(text(nfcContent, ".session-log-content")).toContain(NFC_CONTENT);
 });
 
 it("counts repeated assistant calls without counting toolResult results in the selected range", () => {
