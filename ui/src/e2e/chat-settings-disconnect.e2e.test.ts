@@ -1,8 +1,6 @@
-import { writeFile } from "node:fs/promises";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -46,10 +44,6 @@ suite.define(() => {
         await expectBrowser(composer).toBeEnabled();
         const send = main.locator("button.chat-send-btn--send");
         await expectBrowser(send).toBeVisible();
-        const frame = await takeControlUiScreenshotFrame(page, main, [composer], {
-          animations: "disabled",
-        });
-        await writeFile(suite.artifactDir + "/settings-reconnect.png", frame.png);
         await expectBrowser(page.getByText("Applying chat settings", { exact: true })).toHaveCount(
           0,
         );
