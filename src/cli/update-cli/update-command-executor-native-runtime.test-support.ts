@@ -16,6 +16,7 @@ export const updateExecutorNativeEntrypoints = {
   gatewayLock: entry("../../infra/gateway-lock"),
   databaseGenerations: entry("../../infra/update-physical-database-generations"),
   postUpdate: entry("update-command-post-update"),
+  resultOutput: entry("../update-result-output.test-support"),
   terminal: entry("update-command-terminal"),
   packageSwapFixture: entry("../../infra/package-update-swap.test-support"),
   packageSwap: entry("../../infra/package-update-swap"),

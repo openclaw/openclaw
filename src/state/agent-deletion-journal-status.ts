@@ -76,7 +76,7 @@ export function updateAgentDeletionDiscovery(
 function statusKey(agentId: string): SqliteDatabaseAdmissionKey<AgentDeletionJournalStatus | null> {
   return {
     name: `agent.deletion-status:${normalizeAgentId(agentId)}`,
-    schemaDependent: true,
+    // Journal writers own this row fact; unrelated first-use DDL cannot revoke an agent.
     read: (value) =>
       value === "absent" || value === "pending" || value === "complete" ? value : undefined,
   };

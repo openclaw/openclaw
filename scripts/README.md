@@ -354,6 +354,9 @@ are a longest task of 50 ms at 1x or 200 ms at 4x, zero CLS, and WebKit ready ti
 at most 1.3x Chromium. Redirects, native-only actions, and resource execution
 outside the selected flow are recorded explicitly in the coverage manifest.
 
+The opt-in [`chat-actions` census](bench-control-ui-chat-actions.md) covers command
+and mention menus, message actions, attachments, transcript search, and side panels.
+
 Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
 for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
 `--control-bundle-dir` add candidate and A/A control builds. Repeat the control
