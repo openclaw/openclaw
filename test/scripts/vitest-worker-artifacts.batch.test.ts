@@ -28,7 +28,6 @@ const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
 const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
 const gatewaySubscriptions = "src/gateway/server-runtime-subscriptions.test.ts";
-const gatewayRuntimeConfig = "src/gateway/server-runtime-config.test.ts";
 const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
@@ -118,7 +117,7 @@ subprocess.for([
             : mode === "capture"
               ? [discordCapture, e2eConfig]
               : mode === "gateway-runtime-config"
-                ? [gatewayRuntimeConfig, gatewayServerConfig]
+                ? ["src/gateway/server-runtime-config.test.ts", gatewayServerConfig]
                 : [coreWorker, infraConfig];
         const compiled = path.join(directory, "compiled.jsonl");
         const launched = path.join(directory, "launched.json");

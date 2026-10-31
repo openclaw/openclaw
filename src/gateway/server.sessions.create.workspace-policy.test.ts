@@ -89,7 +89,7 @@ async function openWorkspaceClient(root: string, scope = "operator.admin", name 
 }
 
 async function setupResetWorktree(prefix: string, model?: { primary: string }) {
-  // Direct handlers share the suite Gateway's state; this fixture only owns a workspace.
+  // Keep the live suite Gateway and direct handlers on the same state root.
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, tempDirs.make(prefix));
   testState.agentConfig = { workspace, ...(model ? { model } : {}) };
   testState.sessionConfig = { dmScope: "main" };
