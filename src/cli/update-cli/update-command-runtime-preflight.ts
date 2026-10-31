@@ -14,6 +14,7 @@ import {
   resolveNodeRuntimeInfo,
 } from "../../daemon/runtime-paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { resolveExecutableFromPathEnv } from "../../infra/executable-path.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
@@ -36,7 +37,7 @@ import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { resolveNodeRunner } from "./shared.js";
 import { minimumSupportedNodeVersion } from "./update-command-node-engine.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import type { ManagedGatewayRuntimeObservation } from "./update-command-service-context-types.js";
 import { resolveServiceRecoveryContext } from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
@@ -63,7 +64,7 @@ export async function resolvePackageRuntimePreflight(params: {
   root?: string;
   shouldRestart?: boolean;
   alreadyCurrent?: boolean;
-  service?: PreManagedServiceStop;
+  service?: ManagedGatewayRuntimeObservation;
   invocationCwd?: string;
   /** An already-current source checkout retains its launcher across a global-prefix switch. */
   sourceRoot?: string;
@@ -80,7 +81,7 @@ export async function resolvePackageRuntimePreflight(params: {
     const nodeRunner = normalizeOptionalString(
       params.alreadyCurrent && !(verdict?.kind === "owned" && verdict.requiresInstallRootRefresh)
         ? (params.service?.serviceNodeRunner ?? params.nodeRunner)
-        : params.nodeRunner,
+        : (params.nodeRunner ?? params.service?.serviceNodeRunner),
     );
     let nodeSecurityWarning: string | null = null;
     const unchanged = (): PackageRuntimePreflight => ({
@@ -186,29 +187,54 @@ export async function resolvePackageRuntimePreflight(params: {
     }
     const canRefreshCurrentService =
       params.service?.running && verdict?.kind === "owned" && verdict.refreshDefinition;
-    const fallbackNodeRunner = params.engineOnly
-      ? undefined
-      : (params.fallbackNodeRunner ??
-        (params.shouldRestart &&
-        !process.versions.bun &&
-        nodeRunner &&
-        (params.alreadyCurrent
+    const canRefreshService = verdict?.kind === "owned" && verdict.refreshDefinition;
+    const fallbackNodeRunner =
+      params.fallbackNodeRunner ??
+      (params.shouldRestart &&
+      !process.versions.bun &&
+      nodeRunner &&
+      (params.engineOnly
+        ? canRefreshService
+        : params.alreadyCurrent
           ? canRefreshCurrentService
           : await gatewayServiceCommandUsesRoot({ root: params.root }))
-          ? resolveNodeRunner()
-          : undefined));
-    if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
-      const fallbackActivationRuntime = captureRuntime(fallbackNodeRunner);
+        ? resolveNodeRunner()
+        : undefined);
+    // Initialization may prepend the updater's runtime to its own PATH. Keep
+    // discovery on the inspected service environment captured before that change.
+    const pathEnv = params.service?.serviceEnv ?? process.env;
+    const pathNodeRunner = params.engineOnly
+      ? resolveExecutableFromPathEnv("node", pathEnv.PATH ?? "", pathEnv, {
+          useCache: false,
+        })
+      : undefined;
+    let pathRuntime = pathNodeRunner === runtime.nodeRunner ? runtime : undefined;
+    // Early admission may select an existing runtime, but never provisions one.
+    // A pinned service is replaceable only when this update will refresh its definition.
+    const fallbacks = new Set([
+      fallbackNodeRunner,
+      ...(params.engineOnly && params.shouldRestart && (!nodeRunner || canRefreshService)
+        ? [pathNodeRunner]
+        : []),
+    ]);
+    for (const fallback of fallbacks) {
+      if (!fallback || fallback === selected) {
+        continue;
+      }
+      const fallbackActivationRuntime = captureRuntime(fallback);
       const fallbackRuntime = await resolvePackageRuntimeForPreflight({
-        nodeRunner: fallbackActivationRuntime?.path ?? fallbackNodeRunner,
+        nodeRunner: fallbackActivationRuntime?.path ?? fallback,
         timeoutMs: params.timeoutMs,
       });
+      if (fallback === pathNodeRunner) {
+        pathRuntime = fallbackRuntime;
+      }
       const fallbackSatisfies = fallbackRuntime.failure
         ? false
         : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
       if (fallbackSatisfies === true) {
         nodeSecurityWarning = formatNodeSecurityWarning(fallbackRuntime.version);
-        return runtimeResult(fallbackActivationRuntime, fallbackNodeRunner, nodeRunner);
+        return runtimeResult(fallbackActivationRuntime, fallback, nodeRunner);
       }
     }
     if (satisfies !== false) {
@@ -305,6 +331,20 @@ export async function resolvePackageRuntimePreflight(params: {
       params.engineOnly && nodeRunner
         ? `Gateway service Node ${runtime.version ?? "unknown"} at ${runtimePath} requires ${target.nodeEngine}. Install ${recommendation ? `Node ${recommendation}` : "a compatible Node runtime"} and update that service definition, then retry; changing the shell's Node alone does not update the service.`
         : undefined;
+    if (pathNodeRunner && !pathRuntime) {
+      pathRuntime = await resolvePackageRuntimeForPreflight({
+        nodeRunner: pathNodeRunner,
+        timeoutMs: params.timeoutMs,
+      });
+    }
+    const runtimeHints = params.engineOnly
+      ? [
+          `Updater Node ${process.versions.node} at ${process.execPath}.`,
+          pathNodeRunner
+            ? `PATH Node ${pathRuntime?.version ?? "unknown"} at ${pathNodeRunner}.`
+            : "PATH Node: not found.",
+        ]
+      : [];
     const diagnostics = createUpdatePreflightDiagnostics({
       check: "node-runtime",
       code: "node-runtime-preflight",
@@ -317,7 +357,7 @@ export async function resolvePackageRuntimePreflight(params: {
         verdict?.kind === "owned" || verdict?.kind === "unresolved"
           ? await tryRealpathOrResolve(verdict.root)
           : undefined,
-      remedy: [runtime.failure, upgrade, serviceHint].filter(Boolean).join("\n"),
+      remedy: [runtime.failure, upgrade, serviceHint, ...runtimeHints].filter(Boolean).join("\n"),
     });
     return {
       ...(recoverySteps ? { recoverySteps } : {}),
