@@ -261,3 +261,40 @@ it("treats unavailable persistence as a cache miss and stops work after disconne
   await expect(write(unavailable)).resolves.toBe(false);
   expect(await read(unavailable)).toBeNull();
 });
+
+it("keeps the sidebar and unrelated chats when a deleted session is pruned from every display copy", async () => {
+  const store = createStore();
+  const [removed, retained] = snapshotSessions(
+    ["cedar", "retained"].map((name) =>
+      projectSidebarSession({ key: `agent:main:${name}`, label: name }),
+    ),
+  );
+  assert(removed && retained);
+  const saved = {
+    ...sidebarSnapshot,
+    pinnedSessions: [
+      removed,
+      { ...retained, childLoadParentKeys: [removed.key], children: [removed] },
+    ],
+    pages: [removed, retained],
+    entries: [`session:${removed.key}`, `session:${retained.key}`, "route:usage"],
+  };
+  await store.writeSidebar(key(scope), saved, parseSidebarSnapshot);
+  await store.writeSidebar(key(otherAccount), saved, parseSidebarSnapshot);
+  const transcript = {
+    messages: ["retained"],
+    pagination: { hasMore: false as const },
+    sessionId: "retained",
+  };
+  writeSnapshotFixture(store, `${accountPrefix}${retained.key}`, transcript);
+  await store.flush();
+  await deleteStoredChatSnapshot(sessionKey);
+  const restored = await store.readSidebar(key(scope), parseSidebarSnapshot);
+  assert(restored, "deleting one session must retain the sidebar");
+  expect(restored.pages.map(({ key }) => key)).toEqual([retained.key]);
+  expect(restored.pinnedSessions.map(({ key }) => key)).toEqual([retained.key]);
+  expect(restored.pinnedSessions[0]?.children).toEqual([]);
+  expect(restored.entries).toEqual([`session:${retained.key}`, "route:usage"]);
+  expect(await store.readSidebar(key(otherAccount), parseSidebarSnapshot)).toEqual(saved);
+  expect(await store.read(`${accountPrefix}${retained.key}`)).toEqual(transcript);
+});
