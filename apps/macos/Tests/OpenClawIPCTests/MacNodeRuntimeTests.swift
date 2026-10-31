@@ -581,6 +581,39 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    @Test(arguments: [
+        (OpenClawCameraCommand.snap.rawValue, #"{"delayMs":"500"}"#),
+        (OpenClawCameraCommand.clip.rawValue, #"{"includeAudio":"no"}"#),
+        (OpenClawLocationCommand.get.rawValue, #"{"timeoutMs":"5000"}"#),
+        (OpenClawScreenCommand.record.rawValue, #"{"format":"mov","fps":"x"}"#),
+    ])
+    func `malformed device params are rejected before permissions or capture`(
+        command: String,
+        paramsJSON: String) async
+    {
+        await TestIsolation.withUserDefaultsValues([
+            cameraEnabledKey: true,
+            locationModeKey: OpenClawLocationMode.always.rawValue,
+        ]) {
+            let services = await MainActor.run {
+                let services = MainActorServicesProbe()
+                services.permissionStates = [.camera: .denied, .microphone: .denied]
+                return services
+            }
+            let runtime = await MacNodeRuntime(
+                desktopAvailability: services.desktopAvailability,
+                makeMainActorServices: { services })
+
+            let response = await self.invoke(runtime, "req-malformed-params", command, paramsJSON)
+
+            #expect(response.ok == false)
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message == "INVALID_REQUEST: invalid \(command) params")
+            let recordingPaths = await MainActor.run { services.recordingPaths }
+            #expect(recordingPaths.isEmpty)
+        }
+    }
+
     @Test func `handle invoke screen record uses injected services`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = await MacNodeRuntime(
