@@ -49,6 +49,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Reserve host CPU for screenshots
+        if: ${{ !inputs.startup_probe }}
         timeout-minutes: 2
         run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
 
