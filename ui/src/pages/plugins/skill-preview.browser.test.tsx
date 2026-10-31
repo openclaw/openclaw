@@ -8,8 +8,9 @@ import { createApplicationGateway } from "../../test-helpers/solid-application-c
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createPluginPreview, PluginSkillPreview } from "./skill-preview.tsx";
 import "../../styles.css";
+import "../../styles/settings.css";
 
-it("keeps a pending preview modal dismissible and retains focus when its code arrives", async () => {
+it("keeps a pending preview modal dismissible and localizes unavailable files when its code arrives", async () => {
   const moduleGate = Promise.withResolvers<void>();
   vi.doMock("../../components/file-preview-modal.tsx", (original) => ({
     FilePreviewModal: lazy(
@@ -28,7 +29,7 @@ it("keeps a pending preview modal dismissible and retains focus when its code ar
     entryPath: "SKILL.md",
     directories: [],
     inventoryComplete: true,
-    files: [{ path: "SKILL.md", sizeBytes: 18, status: "ready", content: "Full instructions." }],
+    files: [{ path: "SKILL.md", sizeBytes: 0, status: "unavailable" }],
   });
   const { gateway, publish } = createApplicationGateway();
   publish({ ...gateway.snapshot, client, phase: "connected" });
@@ -61,6 +62,7 @@ it("keeps a pending preview modal dismissible and retains focus when its code ar
   const dialog = page.getByRole("dialog", { name: "guide", exact: true });
   await trigger.click();
   await expect.element(dialog).toHaveFocus();
+  await expect.element(page.getByRole("status", { name: "Loading…" })).toBeVisible();
   await userEvent.keyboard("{Escape}");
   await expect.element(trigger).toHaveFocus();
   expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull();
@@ -68,7 +70,14 @@ it("keeps a pending preview modal dismissible and retains focus when its code ar
   await trigger.click();
   await expect.element(dialog).toHaveFocus();
   moduleGate.resolve();
-  await expect.element(page.getByText("Full instructions.", { exact: true })).toBeVisible();
+  await expect
+    .element(
+      page.getByText(
+        "This file could not be read safely or is unavailable. Close and reopen the skill to try again.",
+        { exact: true },
+      ),
+    )
+    .toBeVisible();
   await waitForSolid(() => {
     const preview = view.container.querySelector("openclaw-file-preview-modal");
     expect(preview?.contains(document.activeElement)).toBe(true);

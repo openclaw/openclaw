@@ -6,7 +6,6 @@ import type {
 import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
-import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -16,7 +15,6 @@ import { renderPluginCapabilitySection as PluginCapabilitySection } from "./over
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 import "./skill-preview.css";
 
-registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
 
 const FilePreviewModal = lazy(() => import("../../components/file-preview-modal.tsx"), {
@@ -200,24 +198,28 @@ export function PluginSkillPreview(props: {
             ? t(`filePreview.bundle.${file.status}`)
             : undefined,
       })) ?? [],
+    { lazy: true },
   );
   const readInventory = createMemo(() => state()?.inventoryRequest ?? null);
   const fileRequest = () => {
     const current = state();
     return current?.fileRequests.get(current.activePath)?.promise ?? current?.inventoryRequest;
   };
-  const readFile = createMemo(() => {
-    const current = state();
-    const request = current?.fileRequests.get(current.activePath)?.promise;
-    if (request) {
-      return request;
-    }
-    const file = current?.result?.files.find((entry) => entry.path === current.activePath);
-    if (file?.status === "unavailable") {
-      throw new UserFacingError(t("filePreview.bundle.unavailable"));
-    }
-    return current?.inventoryRequest ?? null;
-  });
+  const readFile = createMemo(
+    () => {
+      const current = state();
+      const request = current?.fileRequests.get(current.activePath)?.promise;
+      if (request) {
+        return request;
+      }
+      const file = current?.result?.files.find((entry) => entry.path === current.activePath);
+      if (file?.status === "unavailable") {
+        throw new UserFacingError(t("filePreview.bundle.unavailable"));
+      }
+      return current?.inventoryRequest ?? null;
+    },
+    { lazy: true },
+  );
   const incomplete = createMemo(() => {
     const result = state()?.result;
     return (
