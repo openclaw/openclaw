@@ -5,8 +5,10 @@ import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
+import { requireWorkerLeaseStatus, requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export type WorkerRuntimeRefreshInFlight = {
@@ -35,11 +37,16 @@ type WorkerRuntimeRefreshOptions = Pick<
   | "ensureNodeWorkerBundle"
   | "bootstrapWorker"
   | "credentialBroker"
+  | "callProvider"
+  | "withLock"
 > &
   Pick<
     ReturnType<typeof createWorkerProviderOwnerLifecycle>,
     "requireCurrentOwner" | "stopOwner" | "identityResolverFor"
-  >;
+  > & {
+    ownerSignal: AbortSignal;
+    providerFor: (providerId: string) => WorkerProvider;
+  };
 
 export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOptions) {
   const { store, callBootstrap, requireCurrentOwner, stopOwner, identityResolverFor } = options;
@@ -156,5 +163,75 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       settled.resolve();
     }
   };
-  return { refresh, read: (environmentId: string) => inFlight.get(environmentId) };
+  const resumeNode = (
+    environmentId: string,
+    request: { signal: AbortSignal; assertCurrent: () => void },
+  ) =>
+    options.withLock(environmentId, async () => {
+      request.assertCurrent();
+      const record = store.get(environmentId);
+      if (!record) {
+        throw serviceError("invalid_state", "Worker environment is unavailable");
+      }
+      const provider = options.providerFor(record.providerId);
+      const preparation = readWorkerPreparation(record.profileSnapshot);
+      const resume = provider.resumeNode;
+      const deviceId = record.nodeDeviceId;
+      if (!resume || !preparation || !deviceId || !record.leaseId) {
+        return;
+      }
+      const signal = AbortSignal.any([request.signal, options.ownerSignal]);
+      let open = true;
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        request.assertCurrent();
+        const current = requireCurrentOwner(record);
+        if (
+          !open ||
+          options.isStopping() ||
+          current.state !== "attached" ||
+          current.sharedHost !== false ||
+          current.destroyRequestedAtMs !== null ||
+          current.attachedSessionIds.length !== 1 ||
+          current.attachedSessionIds[0] !== record.attachedSessionIds[0]
+        ) {
+          throw serviceError("invalid_state", "Worker node recovery owner changed");
+        }
+      };
+      const lease = {
+        leaseId: record.leaseId,
+        profile: requireWorkerProfile(record.profileSnapshot.settings),
+        signal,
+      };
+      try {
+        assertCurrent();
+        await options.callProvider(environmentId, "resume-node", async () => {
+          assertCurrent();
+          // A persisted isolation default cannot authorize a process launch. This
+          // observation qualifies recovery only; ordinary turn admission owns loss.
+          const inspection = await provider.inspect(lease);
+          requireWorkerLeaseStatus(inspection);
+          assertCurrent();
+          if (inspection.status !== "active" || inspection.sharedHost !== false) {
+            throw serviceError(
+              "invalid_state",
+              "Worker node recovery requires an active dedicated lease",
+            );
+          }
+          await resume({
+            ...lease,
+            deviceId,
+            nodeBootstrapSha256: preparation.artifacts.nodeBootstrapSha256,
+            openclawVersion: preparation.artifacts.openclawVersion,
+            platform: preparation.target.platform,
+            assertCurrent,
+          });
+          assertCurrent();
+        });
+      } finally {
+        // Timeout closes this invocation, while callProvider retains unsettled work.
+        open = false;
+      }
+    });
+  return { refresh, resumeNode, read: (environmentId: string) => inFlight.get(environmentId) };
 }

@@ -19,6 +19,7 @@ import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { testState } from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { gitInit } from "./workspace-recovery.test-support.js";
 
 describe("worker environment runtime upgrades", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -343,6 +344,8 @@ describe("worker environment runtime upgrades", () => {
   it.each(["unchanged build", "same-version build"] as const)(
     "recovers published Gateway Stop state after restart with %s",
     async (change) => {
+      // Recovery inspects local refs; do not inherit Git metadata from the temp parent.
+      await gitInit(testState.root);
       // v2026.9.6 placement-reclaim persists these shapes; current admission owns the schema.
       const releasedReceipt = {
         ...currentReceipt,

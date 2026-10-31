@@ -314,6 +314,51 @@ describe("runNodeHost", () => {
       expect(mocks.configureNodeHost).not.toHaveBeenCalled();
     });
 
+    it("resumes only the saved device and configuration without shared authentication", async () => {
+      mocks.loadDeviceIdentityIfPresent.mockResolvedValue(deviceIdentity);
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "synthetic-shared-token");
+      await expectStartupTimeout({ ...runOptions, resumeDeviceId: deviceIdentity.deviceId });
+      expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+      expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+      expect(lastCapturedOptions()).toMatchObject({
+        deviceIdentity,
+        token: undefined,
+        password: undefined,
+      });
+    });
+
+    it.each(["identity", "config", "token"])(
+      "refuses resume with missing %s before connecting or rewriting state",
+      async (missing) => {
+        mocks.loadDeviceIdentityIfPresent.mockResolvedValue(
+          missing === "identity" ? null : deviceIdentity,
+        );
+        if (missing === "config") {
+          mocks.loadNodeHostConfig.mockResolvedValue(null);
+        }
+        if (missing === "token") {
+          mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
+        }
+        await expect(
+          runNodeHost({ ...runOptions, resumeDeviceId: deviceIdentity.deviceId }),
+        ).rejects.toThrow("Saved node pairing");
+        expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+        expect(mocks.capturedGatewayClients).toHaveLength(0);
+      },
+    );
+
+    it("refuses a different enrolled device before changing configuration", async () => {
+      mocks.loadDeviceIdentityIfPresent.mockResolvedValue({
+        ...deviceIdentity,
+        deviceId: "other-device",
+      });
+      await expect(
+        runNodeHost({ ...runOptions, resumeDeviceId: deviceIdentity.deviceId }),
+      ).rejects.toThrow("Saved node pairing");
+      expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+      expect(mocks.capturedGatewayClients).toHaveLength(0);
+    });
+
     describe("expired fallback setup codes", () => {
       const expiredOptions = {
         ...runOptions,

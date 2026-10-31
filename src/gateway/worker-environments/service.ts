@@ -562,6 +562,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     readPreparedPoolSummary: preparedPool.summary,
     readReadyWorkerTarget: preparedPool.target,
     readRuntimeRefresh: providerLifecycle.readRuntimeRefresh,
+    resumeNode: providerLifecycle.resumeNode,
     supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];

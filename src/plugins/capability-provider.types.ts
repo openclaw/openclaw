@@ -454,6 +454,23 @@ export type WorkerProvider = {
     },
   ) => Promise<SpawnResult | undefined>;
   /**
+   * Restart only the same enrolled node on this dedicated lease after proving its
+   * process is absent. A live process owns reconnect. Never allocate, install, pair,
+   * change repository contents, or replay input. Settle commands on cancellation.
+   */
+  resumeNode?: (request: {
+    leaseId: string;
+    profile: WorkerProfile;
+    deviceId: string;
+    nodeBootstrapSha256: string;
+    openclawVersion: string;
+    /** Saved preparation target, not the profile's current default. */
+    platform: string;
+    signal: AbortSignal;
+    /** Required live owner authority; call after awaits and immediately before effects. */
+    assertCurrent: () => void;
+  }) => Promise<void>;
+  /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
    * returned operation carries prepared facts; core records allocation intent before calling it.
    * Replay preparation cannot attest that an earlier operation allocated nothing.

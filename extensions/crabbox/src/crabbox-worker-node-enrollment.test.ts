@@ -27,11 +27,15 @@ import {
 import {
   createNodeBootstrapFixture,
   createNodePackageFixture,
+  expectAbsent,
+  expectFailure,
+  expectPrivate,
   expectSetupPhases,
   readLaunch,
   runtimeManifestSha256,
   type DesktopFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
+import { createCrabboxNodeResumeScript } from "./crabbox-worker-node-process.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
@@ -75,27 +79,6 @@ const desktopEnvironment = (runtimeDir = "/run/fixture") => ({
   DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
   ...(runtimeDir ? { XDG_RUNTIME_DIR: runtimeDir } : {}),
 });
-function expectFailure(
-  result: { code: number | null; output: string },
-  diagnosis: string | RegExp,
-) {
-  expect(result).toMatchObject({
-    code: 1,
-    output:
-      typeof diagnosis === "string"
-        ? expect.stringContaining(diagnosis)
-        : expect.stringMatching(diagnosis),
-  });
-}
-function expectAbsent(...files: string[]) {
-  for (const file of files) {
-    expect(fs.existsSync(file), file).toBe(false);
-  }
-}
-function expectPrivate(launch: object) {
-  expect(launch).not.toHaveProperty("token");
-  expect(launch).not.toHaveProperty("setupCode");
-}
 
 const packageFixture = (build: string, postinstall = "") =>
   createNodePackageFixture((prefix) => tempDirs.make(prefix), build, receipts, postinstall);
@@ -274,6 +257,14 @@ echo 123
     hooks,
     `require("node:timers/promises").setTimeout = async () => {};
 const childProcess = require("node:child_process");
+const spawnSync = childProcess.spawnSync;
+// The desktop OS fixture must precede even a system-wide Node directory (such as /usr/bin).
+childProcess.spawnSync = (command, args, options) => {
+  if (${JSON.stringify(Boolean(desktop))} && command === "bash" && args[0] === "-c") {
+    options = { ...options, env: { ...options.env, PATH: ${JSON.stringify(bin)} + require("node:path").delimiter + options.env.PATH } };
+  }
+  return spawnSync(command, args, options);
+};
 const spawn = childProcess.spawn;
 childProcess.spawn = (command, args, options) => {
   if (command === "npm") require("node:fs").appendFileSync(${JSON.stringify(path.join(home, "npm-calls"))}, args[0] + "\\n");
@@ -327,6 +318,74 @@ childProcess.spawn = (command, args, options) => {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it.skipIf(process.platform !== "linux")(
+    "resumes only a dead enrolled process without changing its runtime or workspace",
+    async ({ signal }) => {
+      const { home, stateDir, stop } = testHome();
+      const { nodeBootstrap, authorizations } = await servePackage("same-node-resume");
+      await expectSetupPhases(enroll(home, nodeBootstrap));
+      await readLaunch(stateDir, receipts, signal);
+      const request = {
+        leaseId,
+        deviceId: "device-test",
+        nodeBootstrapSha256: nodeBootstrap.sha256,
+        openclawVersion: nodeBootstrap.openclawVersion,
+        platform: "linux",
+        profile: {},
+        signal,
+        assertCurrent() {},
+      };
+      const resume = (overrides: Partial<typeof request> = {}) =>
+        spawnSync("/bin/sh", [], {
+          input: createCrabboxNodeResumeScript({ ...request, ...overrides }),
+          env: { HOME: home, PATH: process.env.PATH },
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+      const pidFile = path.join(stateDir, "node.pid");
+      const initialPid = readText(pidFile);
+      const activation = readText(stateDir, "activation.jsonl");
+      const installed = readText(runtimePackage(home, nodeBootstrap.sha256), "installed.json");
+      const requests = authorizations.length;
+      fs.writeFileSync(path.join(stateDir, "workspace-sentinel"), "private work stays here");
+      expect(resume().status).toBe(0);
+      expect(readText(pidFile)).toBe(initialPid);
+      await stop();
+      expect(resume().status).toBe(0);
+      const launch = await readLaunch(stateDir, receipts, signal);
+      expect(readText(pidFile)).not.toBe(initialPid);
+      expect(launch.args).toEqual([
+        "node",
+        "run",
+        "--resume-device",
+        "device-test",
+        "--ephemeral",
+        "--display-name",
+        "Cloud worker",
+      ]);
+      expectPrivate(launch);
+      expect(readText(stateDir, "workspace-sentinel")).toBe("private work stays here");
+      expect(readText(stateDir, "activation.jsonl")).toBe(activation);
+      expect(readText(runtimePackage(home, nodeBootstrap.sha256), "installed.json")).toBe(
+        installed,
+      );
+      expect(authorizations).toHaveLength(requests);
+      expect(resume({ deviceId: "other-device" }).status).toBe(1);
+      expect(resume({ nodeBootstrapSha256: "0".repeat(64) }).status).toBe(1);
+      await stop();
+      const deadPid = readText(pidFile);
+      try {
+        fs.writeFileSync(pidFile, String(process.pid));
+        expect(resume().stderr).toContain("different bootstrap artifact or invocation");
+      } finally {
+        fs.writeFileSync(pidFile, deadPid);
+      }
+      fs.unlinkSync(pidFile);
+      expect(resume().stderr).toContain("launch is incomplete");
+      expectAbsent(pidFile);
+    },
+  );
+
   it("installs and reuses a bundle beside a retained npm runtime without rerunning npm", async () => {
     const bytes = await createNodePackageFixture(
       (prefix) => tempDirs.make(prefix),

@@ -104,6 +104,7 @@ export function createWorkerProviderLifecycle(
 
   const runtimeRefresher = createWorkerRuntimeRefresher({
     ...options,
+    providerFor,
     requireCurrentOwner,
     stopOwner,
     identityResolverFor,
@@ -682,12 +683,7 @@ export function createWorkerProviderLifecycle(
     }
   };
 
-  const { createWithProfile, prepareIntent, prepareRetention, assertPreparedIntentCurrent } =
-    createWorkerProviderIntent({
-      ...options,
-      providerFor,
-      resumeProvision,
-    });
+  const intent = createWorkerProviderIntent({ ...options, providerFor, resumeProvision });
 
   return {
     readStartStatus: (record: WorkerEnvironmentRecord) => {
@@ -698,10 +694,7 @@ export function createWorkerProviderLifecycle(
     },
     getDedicatedNodeLeaseSignal: dedicatedLeases.signal,
     clearDedicatedNodeLeases: () => dedicatedLeases.clear(),
-    createWithProfile,
-    prepareIntent,
-    prepareRetention,
-    assertPreparedIntentCurrent,
+    ...intent,
     resumePrepared: (
       record: WorkerEnvironmentRecord,
       signal?: AbortSignal,
@@ -739,5 +732,6 @@ export function createWorkerProviderLifecycle(
     providerFor,
     reconcileRecord,
     readRuntimeRefresh: runtimeRefresher.read,
+    resumeNode: runtimeRefresher.resumeNode,
   };
 }

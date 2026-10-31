@@ -58,6 +58,11 @@ it.each([
   expect(target).toHaveBeenCalledWith(...expected);
 });
 
+it("passes exact-device resume to the node owner", async () => {
+  await run("run --ephemeral --resume-device device-1");
+  expectHost({ ephemeral: true, resumeDeviceId: "device-1" });
+});
+
 it.each([
   "--commands fixture.read,fixture.list install",
   "install --commands fixture.read --commands fixture.list,fixture.read",

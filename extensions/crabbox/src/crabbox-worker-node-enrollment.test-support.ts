@@ -90,6 +90,8 @@ const args = process.argv.slice(2);
 const state = process.env.OPENCLAW_STATE_DIR;
 if (args[0] === "--version") {
   console.log("OpenClaw 2026.8.1");
+} else if (args[0] === "node" && args[1] === "identity") {
+  console.log(JSON.stringify({ deviceId: fs.readFileSync(path.join(state, "saved-device"), "utf8") }));
 } else if (args[0] === "plugins" && args[1] === "enable") {
   fs.appendFileSync(path.join(state, "activation.jsonl"), JSON.stringify({ runtimePublished: fs.existsSync(path.join(state, "runtime")) }) + "\\n");
   if (${JSON.stringify(build)} === "activation-failed") { console.error("plugin dependency missing"); process.exit(1); }
@@ -98,6 +100,7 @@ if (args[0] === "--version") {
     fs.appendFileSync(path.join(state, "enabled"), id + "\\n");
   }
 } else {
+  if (args[0] === "connect") fs.writeFileSync(path.join(state, "saved-device"), "device-test");
   process.title = "openclaw-connect";
   const enabledFile = path.join(state, "enabled");
   const enabledPlugins = fs.existsSync(enabledFile) ? fs.readFileSync(enabledFile, "utf8").trim().split("\\n") : [];
@@ -209,4 +212,26 @@ export async function runtimeManifestSha256(archive: Buffer): Promise<string | u
   });
   await pipeline(Readable.from([archive]), parser).catch(() => undefined);
   return digest;
+}
+
+export function expectFailure(
+  result: { code: number | null; output: string },
+  diagnosis: string | RegExp,
+) {
+  expect(result).toMatchObject({
+    code: 1,
+    output:
+      typeof diagnosis === "string"
+        ? expect.stringContaining(diagnosis)
+        : expect.stringMatching(diagnosis),
+  });
+}
+export function expectAbsent(...files: string[]) {
+  for (const file of files) {
+    expect(fs.existsSync(file), file).toBe(false);
+  }
+}
+export function expectPrivate(launch: object) {
+  expect(launch).not.toHaveProperty("token");
+  expect(launch).not.toHaveProperty("setupCode");
 }

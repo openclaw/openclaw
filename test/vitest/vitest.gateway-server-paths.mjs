@@ -455,6 +455,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-destroy-timeout.test.ts",
   "src/gateway/worker-environments/provider-image-intent.test.ts",
   "src/gateway/worker-environments/provider-intent.test.ts",
+  "src/gateway/worker-environments/provider-node-resume.test.ts",
   "src/gateway/worker-environments/provider-node-teardown.test.ts",
   "src/gateway/worker-environments/provider-owner-revocation.test.ts",
   "src/gateway/worker-environments/provider-project-preparation.test.ts",
