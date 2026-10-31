@@ -1,0 +1,2 @@
+# Isolate extension tab discovery from uninitialized page targets regression tests.
+562
