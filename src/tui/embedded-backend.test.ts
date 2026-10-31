@@ -262,6 +262,7 @@ vi.mock("../config/config.js", () => ({
   },
 }));
 
+// mock-isolation: The embedded fixture owns startup without running agent database migration or recovery.
 vi.mock("../config/sessions/startup-migration-runtime.js", () => ({
   runSessionStartupMigration: (...args: Parameters<typeof runSessionStartupMigrationMock>) =>
     runSessionStartupMigrationMock(...args),
