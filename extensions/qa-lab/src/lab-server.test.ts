@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QaLabRunSelection, QaLabRunnerSnapshot } from "../runner-contract.js";
+import { writeEvidenceFixture } from "./evidence-gallery.test-support.js";
 import { writeQaLabSuiteResultFixture } from "./lab-server-suite.test-support.js";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
@@ -286,46 +287,6 @@ async function createQaLabRepoRootFixture(params?: {
     params?.uiHtml ?? "<!doctype html><html><body>qa lab fixture</body></html>",
   );
   return repoRoot;
-}
-
-async function writeEvidenceFixture(
-  evidenceDir: string,
-  id: string,
-  artifactPaths: string[],
-  artifactKind = "log",
-) {
-  await writeFile(
-    path.join(evidenceDir, "qa-evidence.json"),
-    JSON.stringify({
-      kind: "openclaw.qa.evidence-summary",
-      schemaVersion: 2,
-      generatedAt: "2026-06-17T12:00:00.000Z",
-      evidenceMode: "full",
-      entries: [
-        {
-          test: { kind: "vitest-test", id, title: id },
-          coverage: [{ id: "qa.artifact", role: "primary" }],
-          execution: {
-            runner: "vitest",
-            environment: { ref: "server-test", os: process.platform, nodeVersion: process.version },
-            provider: {
-              id: "mock-openai",
-              live: false,
-              model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
-            },
-            packageSource: { kind: "source-checkout" },
-            artifacts: artifactPaths.map((artifactPath) => ({
-              kind: artifactKind,
-              path: artifactPath,
-              source: "vitest",
-            })),
-          },
-          result: { status: "pass" },
-        },
-      ],
-    }),
-    "utf8",
-  );
 }
 
 describe("qa-lab server", () => {
@@ -994,76 +955,108 @@ describe("qa-lab server", () => {
     await expectFileMissing(outputPath);
   });
 
-  it("serves evidence artifact HEAD metadata and streams GET bodies", async () => {
-    const repoRoot = await createQaLabRepoRootFixture();
-    const evidenceDir = path.join(repoRoot, ".artifacts", "qa-e2e", "server");
-    await mkdir(evidenceDir, { recursive: true });
-    await writeFile(path.join(evidenceDir, "artifact.log"), "streamed body\n", "utf8");
-    await writeEvidenceFixture(evidenceDir, "qa-lab.server-artifact", ["artifact.log"], "gif-log");
-    const lab = await startLab({ repoRoot });
-    const evidencePath = ".artifacts/qa-e2e/server/qa-evidence.json";
-    const request = async (
-      route: string,
-      params: Record<string, string>,
-      status = 200,
-      method = "GET",
-    ) => {
-      const url = new URL(route, lab.baseUrl);
-      url.search = new URLSearchParams(params).toString();
-      const response = await fetchWithRetry(url.toString(), { method });
-      expect(response.status).toBe(status);
-      return response;
-    };
-    const artifact = (params: Record<string, string>, status = 200, method = "GET") =>
-      request("/api/evidence/artifact", { evidencePath, ...params }, status, method);
-    const evidenceResponse = await request("/api/evidence", { path: evidencePath });
-    expect(evidenceResponse.headers.get("cache-control")).toBe("no-store");
-    expect(await evidenceResponse.json()).toMatchObject({
-      evidence: {
-        counts: { pass: 1 },
-        entries: [
-          {
-            id: "qa-lab.server-artifact",
-            artifacts: [{ kind: "gif-log", mediaKind: "text", preview: "streamed body\n" }],
-          },
-        ],
-      },
-    });
+  it.each([
+    {
+      name: "ordinary paths",
+      directory: ".artifacts/qa-e2e/server",
+      evidencePath: ".artifacts/qa-e2e/server/qa-evidence.json",
+      artifactPath: "artifact.log",
+    },
+    {
+      name: "literal evidence filename",
+      directory: ".",
+      evidencePath: " qa-evidence.json",
+      artifactPath: " artifact.log",
+    },
+    {
+      name: "literal evidence directory",
+      directory: " gallery",
+      evidencePath: " gallery",
+      artifactPath: " artifact.log",
+    },
+  ])(
+    "serves evidence artifact HEAD metadata and GET bodies with $name",
+    async ({ directory, evidencePath, artifactPath }) => {
+      const repoRoot = await createQaLabRepoRootFixture();
+      const evidenceDir = path.join(repoRoot, directory);
+      await mkdir(evidenceDir, { recursive: true });
+      await writeFile(path.join(evidenceDir, artifactPath), "streamed body\n", "utf8");
+      if (artifactPath !== artifactPath.trim()) {
+        await writeFile(path.join(evidenceDir, artifactPath.trim()), "trimmed decoy\n", "utf8");
+      }
+      await writeEvidenceFixture(evidenceDir, "qa-lab.server-artifact", [artifactPath], "gif-log");
+      if (directory === ".") {
+        await fs.rename(
+          path.join(evidenceDir, "qa-evidence.json"),
+          path.join(repoRoot, evidencePath),
+        );
+      }
+      const lab = await startLab({ repoRoot });
+      const request = async (
+        route: string,
+        params: Record<string, string>,
+        status = 200,
+        method = "GET",
+      ) => {
+        const url = new URL(route, lab.baseUrl);
+        url.search = new URLSearchParams(params).toString();
+        const response = await fetchWithRetry(url.toString(), { method });
+        expect(response.status).toBe(status);
+        return response;
+      };
+      const artifact = (params: Record<string, string>, status = 200, method = "GET") =>
+        request("/api/evidence/artifact", { evidencePath, ...params }, status, method);
+      const evidenceResponse = await request("/api/evidence", { path: evidencePath });
+      expect(evidenceResponse.headers.get("cache-control")).toBe("no-store");
+      expect(await evidenceResponse.json()).toMatchObject({
+        evidence: {
+          counts: { pass: 1 },
+          entries: [
+            {
+              id: "qa-lab.server-artifact",
+              artifacts: [{ kind: "gif-log", mediaKind: "text", preview: "streamed body\n" }],
+            },
+          ],
+        },
+      });
 
-    // Missing evidence must fail before success headers are written, without resetting the connection.
-    const missing = await request(
-      "/api/evidence",
-      { path: ".artifacts/qa-e2e/server/does-not-exist.json" },
-      404,
-    );
-    expect(await missing.text()).not.toBe("");
-    const head = await artifact({ artifactPath: "artifact.log" }, 200, "HEAD");
-    expect(head.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-    const get = await artifact({ artifactPath: "artifact.log" });
-    for (const response of [head, get]) {
-      expect(response.headers.get("content-length")).toBe("14");
-      expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    }
-    expect(await head.text()).toBe("");
-    expect(await get.text()).toBe("streamed body\n");
-    const indexed = await artifact({ entryIndex: "0", artifactIndex: "0" });
-    expect(await indexed.text()).toBe("streamed body\n");
-    for (const params of [
-      { entryIndex: "0x0", artifactIndex: "0" },
-      { entryIndex: "0", artifactIndex: "1e0" },
-      { entryIndex: "00", artifactIndex: "0" },
-      { entryIndex: " 0 ", artifactIndex: "0" },
-    ]) {
-      await artifact(params, 400);
-    }
-    await writeFile(path.join(evidenceDir, "undeclared.log"), "hidden\n", "utf8");
-    await artifact({ artifactPath: "undeclared.log" }, 403);
-    const outsideDir = await makeTempDir("qa-lab-outside-artifact-");
-    const outsideArtifact = path.join(outsideDir, "outside.log");
-    await writeFile(outsideArtifact, "outside\n", "utf8");
-    await artifact({ artifactPath: outsideArtifact }, 404);
-  });
+      // Missing evidence must fail before success headers are written, without resetting the connection.
+      const missing = await request(
+        "/api/evidence",
+        { path: ".artifacts/qa-e2e/server/does-not-exist.json" },
+        404,
+      );
+      expect(await missing.text()).not.toBe("");
+      const head = await artifact({ artifactPath }, 200, "HEAD");
+      expect(head.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      const get = await artifact({ artifactPath });
+      for (const response of [head, get]) {
+        expect(response.headers.get("content-length")).toBe("14");
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      }
+      expect(await head.text()).toBe("");
+      expect(await get.text()).toBe("streamed body\n");
+      const indexed = await artifact({ entryIndex: "0", artifactIndex: "0" });
+      expect(await indexed.text()).toBe("streamed body\n");
+      await artifact({ artifactPath: " \t " }, 400);
+      await artifact({ evidencePath: " \t ", artifactPath }, 400);
+      for (const params of [
+        { entryIndex: "0x0", artifactIndex: "0" },
+        { entryIndex: "0", artifactIndex: "1e0" },
+        { entryIndex: "00", artifactIndex: "0" },
+        { entryIndex: " 0 ", artifactIndex: "0" },
+      ]) {
+        await artifact(params, 400);
+      }
+      await writeFile(path.join(evidenceDir, "undeclared.log"), "hidden\n", "utf8");
+      await artifact({ artifactPath: "undeclared.log" }, 403);
+      const outsideDir = await makeTempDir("qa-lab-outside-artifact-");
+      const outsideArtifact = path.join(outsideDir, "outside.log");
+      await writeFile(outsideArtifact, "outside\n", "utf8");
+      await artifact({ artifactPath: outsideArtifact }, 404);
+    },
+  );
 
   it("preserves UTF-8 at the evidence preview byte boundary", async () => {
     const repoRoot = await createQaLabRepoRootFixture();

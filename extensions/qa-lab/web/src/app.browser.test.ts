@@ -251,6 +251,31 @@ it("selects duplicate evidence labels independently before and after filtering",
   expect($(".evidence-inspector").textContent).toContain("observed attempt 1");
 });
 
+it.each(["path", "evidencePath"])(
+  "preserves evidence paths from %s and form input",
+  async (key) => {
+    const originalUrl = window.location.href;
+    onTestFinished(() => window.history.replaceState(null, "", originalUrl));
+    window.history.replaceState(
+      null,
+      "",
+      `/evidence?${key}=${encodeURIComponent(" evidence.json ")}`,
+    );
+    const root = await mountRunner(createRunnerSelection());
+    expect(httpMock.getJson).toHaveBeenCalledWith("/api/evidence?path=%20evidence.json%20");
+    setValue(root, "#evidence-path", " next.json ", "input");
+    query(root)('[data-action="load-evidence"]').click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(httpMock.getJson).toHaveBeenCalledWith("/api/evidence?path=%20next.json%20");
+    expect(new URL(window.location.href).searchParams.get("path")).toBe(" next.json ");
+    httpMock.getJson.mockClear();
+    setValue(root, "#evidence-path", " \t ", "input");
+    query(root)('[data-action="load-evidence"]').click();
+    expect(httpMock.getJson).not.toHaveBeenCalled();
+    expect(root.textContent).toContain("Evidence path is required.");
+  },
+);
+
 it("sends group conversation messages from the interactive chat composer", async () => {
   const root = await mountRunner(createRunnerSelection(), {
     conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],

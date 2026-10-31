@@ -42,3 +42,43 @@ export function vitestArtifactEvidence(params: {
     ],
   };
 }
+
+export async function writeEvidenceFixture(
+  evidenceDir: string,
+  id: string,
+  artifactPaths: string[],
+  artifactKind = "log",
+) {
+  await fs.writeFile(
+    path.join(evidenceDir, "qa-evidence.json"),
+    JSON.stringify({
+      kind: "openclaw.qa.evidence-summary",
+      schemaVersion: 2,
+      generatedAt: "2026-06-17T12:00:00.000Z",
+      evidenceMode: "full",
+      entries: [
+        {
+          test: { kind: "vitest-test", id, title: id },
+          coverage: [{ id: "qa.artifact", role: "primary" }],
+          execution: {
+            runner: "vitest",
+            environment: { ref: "server-test", os: process.platform, nodeVersion: process.version },
+            provider: {
+              id: "mock-openai",
+              live: false,
+              model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
+            },
+            packageSource: { kind: "source-checkout" },
+            artifacts: artifactPaths.map((artifactPath) => ({
+              kind: artifactKind,
+              path: artifactPath,
+              source: "vitest",
+            })),
+          },
+          result: { status: "pass" },
+        },
+      ],
+    }),
+    "utf8",
+  );
+}

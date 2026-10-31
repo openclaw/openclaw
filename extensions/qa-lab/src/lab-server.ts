@@ -17,13 +17,7 @@ import {
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { toQaError } from "./errors.js";
-import {
-  QaEvidenceGalleryError,
-  buildQaEvidenceGalleryModel,
-  resolveQaEvidenceArtifactFileByIndex,
-  resolveQaEvidenceArtifactFile,
-  resolveQaEvidenceProducerFile,
-} from "./evidence-gallery.js";
+import { QaEvidenceGalleryError } from "./evidence-gallery.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
   createQaCaptureLifecycle,
@@ -31,6 +25,7 @@ import {
   mapCaptureEventForQa,
   readQaCaptureStartupStatus,
 } from "./lab-server-capture.js";
+import { handleQaEvidenceRequest } from "./lab-server-evidence.js";
 import {
   detectContentType,
   isControlUiProxyPath,
@@ -106,40 +101,6 @@ function withQaLabRunCounts(run: Omit<QaLabScenarioRun, "counts">): QaLabScenari
       skipped: run.scenarios.filter((scenario) => scenario.status === "skip").length,
     },
   };
-}
-
-function parseQaEvidenceArtifactIndexText(value: string): number {
-  if (!/^(0|[1-9]\d*)$/.test(value)) {
-    throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
-  }
-  const index = Number(value);
-  if (!Number.isSafeInteger(index) || String(index) !== value) {
-    throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
-  }
-  return index;
-}
-
-const QA_EVIDENCE_CONTENT_TYPES: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".webm": "video/webm",
-  ".mp4": "video/mp4",
-  ".mov": "video/quicktime",
-  ".json": "application/json; charset=utf-8",
-  ".jsonl": "application/json; charset=utf-8",
-  ".md": "text/plain; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".log": "text/plain; charset=utf-8",
-};
-
-function detectQaEvidenceArtifactContentType(filePath: string): string {
-  const lower = filePath.toLowerCase();
-  return (
-    QA_EVIDENCE_CONTENT_TYPES[lower.slice(lower.lastIndexOf("."))] ?? "application/octet-stream"
-  );
 }
 
 async function startQaGatewayLoop(params: { baseUrl: string }) {
@@ -450,70 +411,15 @@ export async function startQaLabServer(
           res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir, repoRoot) }));
           return;
         }
-        if (req.method === "GET" && url.pathname === "/api/evidence") {
-          const evidencePath =
-            url.searchParams.get("path")?.trim() || runnerSnapshot.artifacts?.evidencePath;
-          // Build the model before sending any headers so a thrown QaEvidenceGalleryError
-          // still routes through writeQaLabServerError (writing headers first would make the
-          // error response throw ERR_HTTP_HEADERS_SENT and reset the connection).
-          const evidence = evidencePath
-            ? await buildQaEvidenceGalleryModel({ evidencePath, repoRoot })
-            : null;
-          res.writeHead(200, {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-          });
-          res.end(JSON.stringify({ evidence }));
-          return;
-        }
         if (
-          (req.method === "GET" || req.method === "HEAD") &&
-          url.pathname === "/api/evidence/artifact"
+          await handleQaEvidenceRequest({
+            req,
+            res,
+            url,
+            repoRoot,
+            defaultEvidencePath: runnerSnapshot.artifacts?.evidencePath,
+          })
         ) {
-          const evidencePath = url.searchParams.get("evidencePath")?.trim();
-          const artifactPath = url.searchParams.get("artifactPath")?.trim();
-          const producerFile = url.searchParams.get("producerFile")?.trim();
-          const entryIndexText = url.searchParams.get("entryIndex");
-          const artifactIndexText = url.searchParams.get("artifactIndex");
-          if (
-            !evidencePath ||
-            (!artifactPath && !producerFile && (!entryIndexText || !artifactIndexText))
-          ) {
-            writeError(res, 400, "Missing evidencePath and artifact selector");
-            return;
-          }
-          const artifactFile = artifactPath
-            ? await resolveQaEvidenceArtifactFile({
-                artifactPath,
-                evidencePath,
-                repoRoot,
-              })
-            : producerFile
-              ? await resolveQaEvidenceProducerFile({
-                  evidencePath,
-                  producerFile,
-                  repoRoot,
-                })
-              : await resolveQaEvidenceArtifactFileByIndex({
-                  artifactIndex: parseQaEvidenceArtifactIndexText(artifactIndexText!),
-                  entryIndex: parseQaEvidenceArtifactIndexText(entryIndexText!),
-                  evidencePath,
-                  repoRoot,
-                });
-          const artifactStats = await fs.promises.stat(artifactFile);
-          res.writeHead(200, {
-            "content-type": detectQaEvidenceArtifactContentType(artifactFile),
-            "content-length": artifactStats.size,
-            "cache-control": "no-store",
-            "x-content-type-options": "nosniff",
-          });
-          if (req.method === "HEAD") {
-            res.end();
-            return;
-          }
-          fs.createReadStream(artifactFile)
-            .on("error", (error) => res.destroy(toQaError(error)))
-            .pipe(res);
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/capture/events") {
