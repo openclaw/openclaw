@@ -2,8 +2,16 @@ import {
   canReuseMarkdownOwnershipForAppend,
   findCodeOwnership,
 } from "../shared/text/code-regions.js";
-import type { TextFilter, TextProjector } from "../shared/text/text-projection.js";
-import { stripInlineDirectiveTagsForDisplay } from "./directive-tags-batch.js";
+import {
+  createTextProjector,
+  type TextFilter,
+  type TextProjector,
+} from "../shared/text/text-projection.js";
+import {
+  stripAudioTagsForDisplay,
+  stripInlineDirectiveTagsForDisplay,
+  stripReplyTagsForDisplay,
+} from "./directive-tags-batch.js";
 
 /** Raw offsets for literal directives whose Markdown code ownership is settled. */
 export type StreamDirectiveCodePrefix = {
@@ -81,17 +89,14 @@ export function findDirectiveCodePrefix(
 /** Prose appends cannot open directive syntax or change Markdown code ownership. */
 const APPEND_SAFE_DELTA = /^[^[`~]*$/u;
 
-/** Removing an audio directive can change Markdown ownership before reply tags are parsed. */
-const AUDIO_DIRECTIVE = /\[\[\s*audio_as_voice\s*\]\]/iu;
-
 function hasUnsettledDirectiveMarker(source: string): boolean {
   const marker = source.lastIndexOf("[[");
   return marker !== -1 && source.lastIndexOf("]]") < marker;
 }
 
 /** Retain only literal directives whose Markdown ownership cannot change on append. */
-export const inlineDirectiveDisplayTextFilter: TextFilter = {
-  transform: (text) => stripInlineDirectiveTagsForDisplay(text).text,
+const replyDirectiveDisplayTextFilter: TextFilter = {
+  transform: stripReplyTagsForDisplay,
   create: (): TextProjector => {
     let prefix: StreamDirectiveCodePrefix | undefined;
     let hasMarker = false;
@@ -102,18 +107,16 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
     // A settled reply only re-parses when a delta can still change directive syntax.
     let settledMarker = true;
     let visibleMarker = false;
-    let audioDirective = false;
     let ownership: ReturnType<typeof findCodeOwnership> | undefined;
     const projector: TextProjector = (input) => {
       const appended = input.delta;
       if (appended === null) {
         source = input.text;
-        visible = stripInlineDirectiveTagsForDisplay(source).text;
+        visible = stripReplyTagsForDisplay(source);
         prefix = visible === source ? findDirectiveCodePrefix(source, source) : undefined;
         hasMarker = source.includes("[[");
         settledMarker = !hasUnsettledDirectiveMarker(source);
         visibleMarker = hasUnsettledDirectiveMarker(visible);
-        audioDirective = AUDIO_DIRECTIVE.test(source);
         identity = visible === source;
         ownership = undefined;
         previousChar = source.slice(-1);
@@ -128,7 +131,6 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         (prefix !== undefined || (settledMarker && !visibleMarker)) &&
         source.length + appended.length === input.text.length &&
         APPEND_SAFE_DELTA.test(appended) &&
-        !audioDirective &&
         (!hasMarker ||
           canReuseMarkdownOwnershipForAppend(
             source,
@@ -153,14 +155,13 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       previousChar = appended.slice(-1);
       source = input.text;
       if (hasMarker && !prefix) {
-        visible = stripInlineDirectiveTagsForDisplay(source).text;
+        visible = stripReplyTagsForDisplay(source);
         prefix = visible === source ? findDirectiveCodePrefix(source, appended) : undefined;
       } else {
         visible = source;
       }
       settledMarker = !hasUnsettledDirectiveMarker(source);
       visibleMarker = hasUnsettledDirectiveMarker(visible);
-      audioDirective = AUDIO_DIRECTIVE.test(source);
       identity = visible === source;
       ownership = undefined;
       if (identity) {
@@ -178,4 +179,28 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
     };
     return projector;
   },
+};
+
+/** Settles at Markdown checkpoints, so growing prose never re-parses the settled prefix. */
+const audioDirectiveDisplayTextFilter: TextFilter = {
+  transform: stripAudioTagsForDisplay,
+  activationTokens: ["audio_as_voice"],
+  checkpoint: (text, boundary, context) => {
+    const safe =
+      boundary > context.contentStart && !hasUnsettledDirectiveMarker(text.slice(0, boundary));
+    return {
+      text: stripAudioTagsForDisplay(text),
+      retainStart: safe ? boundary : context.contentStart,
+      retainedOutputStart: safe
+        ? stripAudioTagsForDisplay(text.slice(0, boundary)).length
+        : context.contentStart,
+    };
+  },
+};
+
+/** Canonical order: audio tags go first and can expose code that owns reply tags. */
+export const inlineDirectiveDisplayTextFilter: TextFilter = {
+  transform: (text) => stripInlineDirectiveTagsForDisplay(text).text,
+  create: () =>
+    createTextProjector([audioDirectiveDisplayTextFilter, replyDirectiveDisplayTextFilter]),
 };

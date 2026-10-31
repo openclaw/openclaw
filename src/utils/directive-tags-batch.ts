@@ -339,12 +339,19 @@ type StripInlineDirectiveTagsResult = {
   changed: boolean;
 };
 
+export function stripAudioTagsForDisplay(text: string): string {
+  return replaceOutsideCodeRegions(text, AUDIO_TAG_RE, () => "");
+}
+
+export function stripReplyTagsForDisplay(text: string): string {
+  return replaceReplyTagsOutsideCodeRegions(text, () => "");
+}
+
 export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
   }
-  const withoutAudio = replaceOutsideCodeRegions(text, AUDIO_TAG_RE, () => "");
-  const stripped = replaceReplyTagsOutsideCodeRegions(withoutAudio, () => "");
+  const stripped = stripReplyTagsForDisplay(stripAudioTagsForDisplay(text));
   return {
     text: stripped,
     changed: stripped !== text,

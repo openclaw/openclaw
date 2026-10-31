@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as markdownRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -875,13 +876,13 @@ describe("assistant text projection", () => {
     expectUpdate({ itemId: "second", text: "Tail." }, "Tail.");
   });
 
-  it("bounds parsing of growing literal directives", () => {
-    const regions = vi.spyOn(codeRegions, "findCodeRegions");
+  it.each(["", "[[audio_as_voice]]"])("bounds parsing of growing directives after %j", (audio) => {
+    const regions = vi.spyOn(markdownRegions, "findMarkdownCodeRegions");
     const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
     const run = state.getOrCreate("reply");
     const literal = `The marker is ${directive}.\n\nNext paragraph.\n\n`;
     const block = "```ts\nconst value = 1;\n```\n\n";
-    expectUpdate({ delta: literal }, literal);
+    expectUpdate({ delta: audio + literal }, literal);
     for (let index = 1; index <= 100; index++) {
       expectUpdate({ delta: block }, literal + block.repeat(index));
     }
