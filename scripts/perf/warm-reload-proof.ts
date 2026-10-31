@@ -203,7 +203,12 @@ async function readWarmCache(page: Page, sessionKey: string) {
                 .objectStore("sidebarSnapshots")
                 .get(value);
               request.addEventListener("success", () => resolve(request.result), { once: true });
-              request.addEventListener("error", () => reject(request.error), { once: true });
+              request.addEventListener(
+                "error",
+                () =>
+                  reject(new Error("Unable to read sidebar snapshot", { cause: request.error })),
+                { once: true },
+              );
             }),
         ),
       );
@@ -428,6 +433,7 @@ async function captureReload(
       ...probe.shifts,
       ...probe.domStates,
       ...probe.animationSamples,
+      ...probe.sidebarFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -845,7 +851,7 @@ try {
           await cdp.send("Network.clearBrowserCache");
           await page.evaluate(
             ({ viewerId, groups }) => {
-              const gateway = `ws://${location.host}`;
+              const gatewayUrl = `ws://${location.host}`;
               localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
               localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
               localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
@@ -854,11 +860,11 @@ try {
                 JSON.stringify(groups.slice(0, 5).map((group) => `category:${group}`)),
               );
               localStorage.setItem(
-                `openclaw.control.sidebarSessionOwnerFilter.v1:${gateway}:${encodeURIComponent(viewerId)}`,
+                `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(viewerId)}`,
                 "involving-me",
               );
               localStorage.setItem(
-                `openclaw.control.sidebarEmptyGroups.v1:${gateway}:user:${encodeURIComponent(viewerId)}`,
+                `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(viewerId)}`,
                 "always",
               );
             },
@@ -887,6 +893,21 @@ try {
               ),
             ],
           });
+          // Persist actual disclosure choices, not hand-authored snapshot fields.
+          for (const parent of fixture.fixtureSummary.sidebarParents) {
+            const toggle = page.locator(
+              `[data-child-session-toggle=${JSON.stringify(parent.key)}]`,
+            );
+            await toggle.waitFor({ state: "visible" });
+            if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+              await toggle.click();
+            }
+            for (const key of parent.childKeys) {
+              await page
+                .locator(`.sidebar-session-content [data-session-key=${JSON.stringify(key)}]`)
+                .waitFor({ state: "visible" });
+            }
+          }
           const details = page.locator(".chat-details-toggle:visible");
           if (
             route === "chat" &&

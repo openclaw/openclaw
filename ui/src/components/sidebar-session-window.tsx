@@ -104,8 +104,15 @@ export function createSidebarSessionWindow(
     const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
     const start = first < 0 ? positions.length : Math.max(0, first - 2);
     const end = beyond < 0 ? positions.length : Math.min(positions.length, beyond + 2);
+    const overscan = 2 * rowFloor();
+    // A section below the viewport otherwise admits its first two rows.
+    const visible = top + viewportHeight > -overscan && top < totalHeight + overscan;
+    // Scroll can precede geometry's retention update after selection or focus.
     const items = positions.filter(
-      (_, index) => (index >= start && index < end) || current[index]!.retained,
+      (item, index) =>
+        (visible && index >= start && index < end) ||
+        current[index]!.retained ||
+        retained(item.row, focusedKey()),
     );
     setView((previous) =>
       previous.height === totalHeight &&
