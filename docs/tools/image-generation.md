@@ -545,9 +545,10 @@ and ComfyUI support 1.
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,
       `1:2`, `19.5:9`, `9:19.5`, `20:9`, `9:20`
     - Resolutions: `1K`, `2K`
+    - Quality: `low`, `medium`, or `auto` for `grok-imagine-image-2.0`
     - Outputs: returned as OpenClaw-managed image attachments
 
-    OpenClaw intentionally does not expose xAI-native `quality`, `mask`,
+    OpenClaw intentionally does not expose xAI-native `mask`,
     `user`, or the `auto` aspect ratio until those controls exist in the shared
     cross-provider `image_generate` contract.
 

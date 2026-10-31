@@ -402,7 +402,9 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     ```
 
     <Note>
-    xAI also documents `quality`, `mask`, `user`, and an `auto` aspect ratio.
+    For `grok-imagine-image-2.0`, OpenClaw forwards `quality` as `low`, `medium`,
+    or `auto` for generation and edits. Omitting quality keeps xAI's default.
+    xAI also documents `mask`, `user`, and an `auto` aspect ratio.
     OpenClaw forwards only the shared cross-provider image controls today;
     these native-only knobs are not exposed through `image_generate`.
     </Note>
@@ -739,7 +741,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     - xAI Realtime voice currently exposes gateway-relay Talk transport only.
       Browser-owned provider WebSocket sessions are not wired in the Control UI
       yet.
-    - xAI image `quality`, image `mask`, and extra native-only aspect ratios are
+    - xAI image `mask` and extra native-only aspect ratios are
       not exposed until the shared `image_generate` tool has corresponding
       cross-provider controls.
   </Accordion>
