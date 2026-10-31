@@ -1,0 +1,2 @@
+# Cold model discovery must survive native refresh without losing the turn deadline.
+65

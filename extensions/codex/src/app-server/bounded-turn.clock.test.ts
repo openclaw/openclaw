@@ -85,3 +85,68 @@ it.each([60_000, -60_000])(
     }
   },
 );
+
+it("allows cold model discovery to finish after the native five-second refresh", async () => {
+  const thread = threadStartResult("discovery-thread", process.cwd());
+  const turn = {
+    turn: {
+      ...turnStartResult("discovery-turn", "completed").turn,
+      items: [{ id: "answer", type: "agentMessage", text: "Ready." }],
+    },
+  };
+  let replyToDiscovery: ((value: unknown) => void) | undefined;
+  let discoveryStarted!: () => void;
+  const discovery = new Promise<void>((resolve) => {
+    discoveryStarted = resolve;
+  });
+  const peer = await createWebSocketPeer((request, respond) => {
+    if (request.method === "initialized") {
+      return;
+    }
+    if (request.method === "model/list") {
+      replyToDiscovery = respond;
+      discoveryStarted();
+      return;
+    }
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: `codex/${CODEX_APP_SERVER_VERSION}` },
+      "thread/start": thread,
+      "turn/start": turn,
+    };
+    expect(responses).toHaveProperty(request.method);
+    respond(responses[request.method]);
+  });
+  let client: CodexAppServerClient | undefined;
+  let run: Promise<unknown> | undefined;
+  try {
+    vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient").mockImplementation(async () => {
+      client = await CodexAppServerClient.start({ transport: "websocket", url: peer.url });
+      await client.initialize();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      return client;
+    });
+    run = runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: thread.model },
+      timeoutMs: 30_000,
+      options: {},
+      taskLabel: "cold discovery proof",
+      developerInstructions: "Answer only.",
+      input: [{ type: "text", text: "Ready?", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "configured-transport",
+    }).catch((error: unknown) => error);
+    await discovery;
+    await vi.advanceTimersByTimeAsync(5_008);
+    replyToDiscovery!({ data: [codexModel(thread.model)], nextCursor: null });
+    vi.useRealTimers();
+    expect(await run).toMatchObject({ text: "Ready." });
+    expect(peer.methods).toContain("turn/start");
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    client?.close();
+    await run;
+    await client?.closeAndWait();
+    await peer.close();
+  }
+});
