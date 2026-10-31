@@ -42,6 +42,7 @@ import {
 } from "./group-policy.js";
 import { createZalouserIngressMonitor } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
+import { prepareZalouserReplyTables, sanitizeZalouserReplyPayload } from "./reply-text.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser } from "./send.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
@@ -628,6 +629,12 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
         },
       };
 
+      const markdownTableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg: config,
+        channel: "zalouser",
+        accountId: account.accountId,
+      });
+
       await core.channel.inbound.dispatch({
         channel: "zalouser",
         accountId: account.accountId,
@@ -635,22 +642,7 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
         route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
         ctxPayload,
         delivery: {
-          preparePayload: (payload) => {
-            if (payload.text === undefined) {
-              return payload;
-            }
-            return {
-              ...payload,
-              text: core.channel.text.convertMarkdownTables(
-                payload.text,
-                core.channel.text.resolveMarkdownTableMode({
-                  cfg: config,
-                  channel: "zalouser",
-                  accountId: account.accountId,
-                }),
-              ),
-            };
-          },
+          preparePayload: (payload) => prepareZalouserReplyTables(payload, markdownTableMode),
           durable: () => ({
             to: normalizedTo,
           }),
@@ -659,7 +651,8 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
             const mediaMaxBytes = account.mediaMaxBytes;
             const deliveryAccountId = account.accountId;
             let visibleReplySent = false;
-            const reply = resolveSendableOutboundReplyParts(payload);
+            const sanitizedPayload = sanitizeZalouserReplyPayload(payload);
+            const reply = resolveSendableOutboundReplyParts(sanitizedPayload);
             const chunkMode = core.channel.text.resolveChunkMode(
               config,
               "zalouser",
@@ -692,7 +685,7 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
             };
             try {
               await deliverTextOrMediaReply({
-                payload,
+                payload: sanitizedPayload,
                 text: reply.text,
                 sendText: sendReplyPart,
                 sendMedia: async ({ mediaUrl, caption }) => {
