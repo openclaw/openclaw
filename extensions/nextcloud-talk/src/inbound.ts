@@ -146,23 +146,8 @@ export async function handleNextcloudTalkInbound(params: {
   const resolveAccess = async (
     wasMentioned?: boolean,
     contextBinding?: ChannelIngressContextBinding,
-  ) => {
-    // A room allowlist can reference access groups. When the outer group allowlist is
-    // set, the nested room check used a literal-only matcher and dropped every sender
-    // of a room that allowlists `accessGroup:<name>`, so expand the references first.
-    const roomSenderAllowFrom =
-      isGroup && hasAllowEntries(roomAllowFrom) && hasAllowEntries(outerGroupAllowFrom)
-        ? await expandAllowFromWithAccessGroups({
-            cfg: config,
-            allowFrom: roomAllowFrom,
-            channel: CHANNEL_ID,
-            accountId: account.accountId,
-            senderId,
-            isSenderAllowed: (id, allow) =>
-              resolveNextcloudTalkAllowlistMatch({ senderId: id, allowFrom: allow }).allowed,
-          })
-        : roomAllowFrom;
-    return await core.channel.inbound.ingress.resolveStable({
+  ) =>
+    await core.channel.inbound.ingress.resolveStable({
       channelId: CHANNEL_ID,
       accountId: account.accountId,
       identity: {
@@ -208,7 +193,7 @@ export async function handleNextcloudTalkInbound(params: {
                     }
                   : {
                       allowed: resolveNextcloudTalkAllowlistMatch({
-                        allowFrom: roomSenderAllowFrom,
+                        allowFrom: roomAllowFrom,
                         senderId,
                       }).allowed,
                       matchId: "nextcloud-talk-room-sender",
@@ -240,7 +225,6 @@ export async function handleNextcloudTalkInbound(params: {
         hasControlCommand,
       },
     });
-  };
   let access = await resolveAccess();
   const logAuthorizationChanged = () => {
     runtime.log?.(
