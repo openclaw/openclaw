@@ -109,6 +109,7 @@ packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/decision-answer-capabilities.ts
+packages/model-catalog-core/src/decision-route-capabilities.ts
 packages/model-catalog-core/src/index.ts
 packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/model-catalog-core/src/model-catalog-pricing.ts
