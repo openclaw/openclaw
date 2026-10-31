@@ -1,2 +1,2 @@
-198
+200
 # Config CLI/update/MCP mutation regressions and real MCP process/registration proof after explicit repair.

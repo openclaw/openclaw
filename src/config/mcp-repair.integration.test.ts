@@ -30,7 +30,7 @@ it.each(["mcp", "nodeHost"] as const)(
         `import { appendFileSync as recordStart } from "node:fs"; recordStart(${JSON.stringify(starts)}, process.argv[2] + "\\n");\n` +
           (await fs.readFile(serverPath, "utf8")),
       );
-      const launch = expectDefined(fixture.config().mcp?.servers?.healthy);
+      const launch = expectDefined(fixture.config().mcp?.servers?.healthy, "healthy MCP fixture");
       const io = createConfigIO({
         configPath: state.configPath,
         observe: false,
@@ -50,7 +50,9 @@ it.each(["mcp", "nodeHost"] as const)(
           sourceConfigBeforeMigrations: raw,
           pluginContracts: false,
         });
-        await io.writeConfigFile(expectDefined(repaired.sourceConfig ?? repaired.config));
+        await io.writeConfigFile(
+          expectDefined(repaired.sourceConfig ?? repaired.config, "Doctor migration result"),
+        );
         const snapshot = await io.readConfigFileSnapshot();
         expect(snapshot.warnings).toContainEqual({
           path: `${owner === "mcp" ? "mcp" : "nodeHost.mcp"}.servers.docs`,
