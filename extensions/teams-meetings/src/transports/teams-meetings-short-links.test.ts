@@ -4,6 +4,7 @@ import {
   control,
   runStatusScript,
   runLeaveScript,
+  runAudioCaptureScript,
   MEETING_STATE_KEY,
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 import {
@@ -193,14 +194,33 @@ describe("new work meeting links", () => {
     });
     expect(leave.clicks).toBe(0);
   });
-  // Note: this suite previously also exercised audioCapture ownership gating here via
-  // TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.buildAudioCaptureScript, a per-plugin script
-  // builder that the current MeetingPlatformAdapter refactor does not expose in this shape
-  // (createPageScripts's audioCapture path is now generic SDK-level, built from
-  // normalizeUrl/pageIdentitySource rather than a plugin-provided buildAudioCaptureScript).
-  // That generic ownership gating is exercised by the shared SDK's own tests, not this
-  // plugin's; re-adding plugin-local coverage here would require first establishing the
-  // current generic audioCapture contract, which is out of scope for this URL-compatibility
-  // fix. Work-host short-link identity correctness itself remains covered above and in
-  // teams-meetings-urls.test.ts.
+  it.each([
+    [SHORT, true, "admitted"],
+    ["https://teams.microsoft.com/v2/", true, "admitted"],
+    [OTHER, false, "rejected"],
+    [OTHER.slice(0, OTHER.indexOf("?")), false, "rejected"],
+    ["https://evil.example/v2/", false, "rejected"],
+    ["https://login.microsoftonline.com/common/oauth2/v2.0/authorize", false, "rejected"],
+  ] as const)(
+    "gates audio capture against current meeting identity even with a retained control: %s (%s)",
+    async (currentUrl, isConnected, expected) => {
+      // Mirrors the fix already applied above to the sibling "unsafe navigation" case: a
+      // real cross-origin/full navigation destroys the prior DOM (isConnected becomes
+      // false), while an in-SPA route rewrite (e.g. the post-admission /v2/ route) leaves
+      // the retained Leave control connected. The shared SDK's default audioCapture
+      // ownership check (src/meeting-bot/page-script-source.ts) re-verifies
+      // meetingIdentity(location.href) and only falls back to the retained
+      // inCallUrl/inCallControl pair, so this still gates on current-page identity rather
+      // than trusting a stale retained reference alone.
+      const inCallControl = control({ label: "Leave" });
+      inCallControl.isConnected = isConnected;
+      await expect(
+        runAudioCaptureScript({
+          currentUrl,
+          inCallControl,
+          priorMeeting: { identity: normalizeTeamsMeetingUrlForReuse(SHORT) },
+        }),
+      ).rejects.toThrow(expected === "admitted" ? "capture admitted" : "no longer owns");
+    },
+  );
 });
