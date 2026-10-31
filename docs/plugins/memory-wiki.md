@@ -41,9 +41,9 @@ A common local-first setup uses builtin memory for recall and `memory-wiki` in
 `bridge` mode for durable synthesized pages. See the bridge-mode example under
 [Configuration](#configuration).
 
-If bridge mode reports zero exported artifacts, the active memory plugin is
-not currently exposing public bridge inputs. Run `openclaw wiki doctor` first,
-then confirm the active memory plugin supports public artifacts.
+Status and doctor do not enumerate public memory exports. An unknown artifact
+count is not zero. Use an explicit `openclaw wiki bridge import` when you want
+to import the current public artifacts and inspect its result.
 
 ## Vault modes
 
@@ -81,6 +81,22 @@ When bridge mode is active and `bridge.readMemoryArtifacts` is enabled,
 import` route through the running Gateway so they see the same active memory
 plugin context as agent/runtime memory. If bridge is disabled or artifact
 reads are off, those commands keep local/offline behavior.
+
+The current CLI explicitly requests snapshot diagnostics with `statusMode: "snapshot"`
+on `wiki.status` and `wiki.doctor`. Gateway callers that omit this parameter
+retain the released live behavior: synchronization, numeric counts, and exporter
+health checks. They can still exceed the CLI deadline on large vaults. The Gateway
+also accepts `statusMode: "live"` to select that behavior explicitly. Nullable
+counts are returned only to callers that select snapshot mode; existing remote
+CLI clients do not need to upgrade together with the Gateway.
+
+Local status/doctor, snapshot-mode Gateway calls, and `wiki_status` read the last published compile snapshot without
+starting source synchronization, compilation, or a full page scan. Counts may
+lag source edits; missing counts are reported as unknown. Existing snapshots
+retain their page counts, while compile timestamps and provenance counts become
+available after the next compile. Doctor checks configuration and snapshot
+availability, not current exporter health. Explicit imports and normal query
+workflows remain responsible for refreshing sources.
 
 ## Vault layout
 
@@ -244,8 +260,8 @@ vault or install file watchers.
 After rollback quarantine, a compile in the running process clears the owner
 immediately; a separate compiler process requires plugin lifecycle refresh so
 the daemon can confirm the new durable publication.
-When automatic compilation is enabled, source synchronization for status and
-wiki tools checks for a valid externally published cache before rebuilding a
+When automatic compilation is enabled, source synchronization for queries and
+mutating wiki tools checks for a valid externally published cache before rebuilding a
 missing in-process snapshot. An unchanged vault reuses that publication;
 changed imports, missing indexes, or an invalid cache still require compilation.
 ChatGPT import rollback records post-import edits before compile and keeps

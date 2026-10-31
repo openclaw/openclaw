@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { loadMemoryWikiVaultIdentity } from "./log.js";
 import type { WikiPageSummary, WikiRelationship } from "./markdown.js";
 import type { WikiPageKind } from "./wiki-page-kinds.js";
 
@@ -81,8 +82,17 @@ type MemoryWikiOverviewStatus = ReturnType<
   typeof import("./wiki-overview.js").buildMemoryWikiOverview
 >;
 export type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
+export type MemoryWikiSourceCounts = Record<
+  "native" | "bridge" | "bridgeEvents" | "unsafeLocal" | "other",
+  number
+>;
 
 export type MemoryWikiCompiledCacheSnapshot = {
+  // Older published snapshots remain readable without forcing compilation in diagnostics.
+  diagnostics?: {
+    compiledAt: string;
+    sourceCounts: MemoryWikiSourceCounts;
+  };
   digest: {
     claimCount: number;
     contradictionCount: number;
@@ -301,9 +311,36 @@ export function createMemoryWikiCompiledCacheStore(
     maxBytesPerNamespace: COMPILED_CACHE_MAX_BYTES,
     overflowPolicy: "evict-oldest",
   });
+  async function readPublication(
+    config: ResolvedMemoryWikiConfig,
+    identity: DurableVaultIdentity,
+  ): Promise<MemoryWikiCompiledCacheSnapshot | null> {
+    if (!identity.vaultGeneration || !identity.compiledCachePublicationId) {
+      return null;
+    }
+    const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
+    const entry = await store
+      .lookup(publicationKey(ownerId, identity.compiledCachePublicationId))
+      .catch((error: unknown) => {
+        options.onReadError?.(error);
+        throw error;
+      });
+    const metadata = entry?.metadata;
+    if (
+      !entry ||
+      !isMetadata(metadata) ||
+      metadata.ownerId !== ownerId ||
+      metadata.vaultPath !== path.resolve(config.vault.path) ||
+      metadata.vaultGeneration !== identity.vaultGeneration ||
+      metadata.publicationId !== identity.compiledCachePublicationId
+    ) {
+      return null;
+    }
+    return parseSnapshot(entry.bytes, metadata.generation);
+  }
   return {
+    readPublication,
     async read(this: void, config: ResolvedMemoryWikiConfig) {
-      const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault?.compiledCachePublicationId) {
         return null;
@@ -311,31 +348,12 @@ export function createMemoryWikiCompiledCacheStore(
       if (activeVault.snapshot) {
         return activeVault.snapshot;
       }
-      const key = publicationKey(ownerId, activeVault.compiledCachePublicationId);
-      const entry = await store.lookup(key).catch((error: unknown) => {
-        options.onReadError?.(error);
-        throw error;
-      });
-      if (!entry) {
-        return null;
-      }
-      const metadata = entry.metadata;
-      const vaultPath = path.resolve(config.vault.path);
-      if (!isMetadata(metadata) || metadata.ownerId !== ownerId) {
-        return null;
-      }
       // Compile or lifecycle refresh owns source changes; prompt preparation never polls files.
       // Every run still binds SQLite to that owner snapshot before exposing immutable lines.
-      if (
-        metadata.vaultPath !== vaultPath ||
-        metadata.vaultGeneration !== activeVault.vaultGeneration
-      ) {
-        return null;
-      }
-      if (metadata.publicationId !== activeVault.compiledCachePublicationId) {
-        return null;
-      }
-      const snapshot = parseSnapshot(entry.bytes, metadata.generation);
+      const snapshot = await readPublication(config, {
+        vaultGeneration: activeVault.vaultGeneration,
+        compiledCachePublicationId: activeVault.compiledCachePublicationId,
+      });
       if (!snapshot) {
         return null;
       }
@@ -423,6 +441,22 @@ export async function loadMemoryWikiCompiledCache(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiCompiledCacheSnapshot | null> {
   return await requireConfiguredStore().read(config);
+}
+
+/** Read the last publication, never validate or update source files during diagnostics. */
+export async function loadMemoryWikiDiagnosticSnapshot(
+  config: ResolvedMemoryWikiConfig,
+): Promise<MemoryWikiCompiledCacheSnapshot | null> {
+  const store = requireConfiguredStore();
+  if (resolveActiveVault(config)) {
+    // An active owner with no publication may be quarantined after a restore.
+    // Do not bypass that lifecycle decision with an offline journal lookup.
+    return await store.read(config);
+  }
+  // Offline CLI diagnostics can report historical counts without activating the
+  // vault. The journal selects an immutable publication, not current source state.
+  const identity = await loadMemoryWikiVaultIdentity(config.vault.path);
+  return await store.readPublication(config, identity);
 }
 
 export async function readMemoryWikiDashboardState(

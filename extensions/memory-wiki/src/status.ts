@@ -7,6 +7,11 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { OpenClawConfig } from "../api.js";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
+import {
+  loadMemoryWikiDiagnosticSnapshot,
+  type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiSourceCounts,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
@@ -19,6 +24,10 @@ const STATUS_WARNING_FIXES = {
     "Enable `plugins.entries.memory-wiki.config.bridge.enabled` or switch vaultMode away from `bridge`.",
   "bridge-artifacts-missing":
     "Use a memory plugin that exports public artifacts, create/import memory artifacts first, or switch the wiki back to isolated mode.",
+  "compiled-snapshot-missing":
+    "Run `openclaw wiki compile` to publish a snapshot; use `openclaw wiki bridge import` to refresh bridge inputs first.",
+  "compiled-snapshot-unreadable":
+    "Inspect the plugin state read error, then run `openclaw wiki compile` if the snapshot needs rebuilding.",
   "unsafe-local-disabled":
     "Enable `unsafeLocal.allowPrivateMemoryCoreAccess` or switch vaultMode away from `unsafe-local`.",
   "unsafe-local-paths-missing":
@@ -39,7 +48,26 @@ export type MemoryWikiDoctorReport = ReturnType<typeof buildMemoryWikiDoctorRepo
 type MemoryWikiStatusOptions = {
   appConfig?: OpenClawConfig;
   callerAgentId?: string;
+  mode?: "snapshot" | "live";
 };
+
+function unknownCounts() {
+  const pageCounts: Record<WikiPageKind, number | null> = {
+    entity: null,
+    concept: null,
+    source: null,
+    synthesis: null,
+    report: null,
+  };
+  const sourceCounts: { [K in keyof MemoryWikiSourceCounts]: number | null } = {
+    native: null,
+    bridge: null,
+    bridgeEvents: null,
+    unsafeLocal: null,
+    other: null,
+  };
+  return { pageCounts, sourceCounts };
+}
 
 function createEmptyVaultCounts() {
   const pageCounts: Record<WikiPageKind, number> = {
@@ -108,23 +136,45 @@ export async function resolveMemoryWikiStatus(
 ) {
   const agentId = resolveMemoryWikiVaultAgentId(config);
   const vaultExists = await pathExists(config.vault.path);
-  const bridgePublicArtifactCount =
+  const snapshotMode = options?.mode !== "live";
+  // Unnegotiated released RPC clients require live numeric counts. Only an
+  // explicit snapshot request may replace those counts with unknown values.
+  let bridgePublicArtifactCount: number | null = null;
+  if (
+    !snapshotMode &&
     options?.appConfig &&
     config.vaultMode === "bridge" &&
     config.bridge.enabled &&
     config.bridge.readMemoryArtifacts
-      ? filterMemoryWikiBridgeArtifacts({
-          config,
-          callerAgentId: options.callerAgentId,
-          artifacts: await listActiveMemoryPublicArtifacts({
-            cfg: options.appConfig,
-          }),
-        }).length
-      : null;
+  ) {
+    bridgePublicArtifactCount = filterMemoryWikiBridgeArtifacts({
+      config,
+      callerAgentId: options.callerAgentId,
+      artifacts: await listActiveMemoryPublicArtifacts({ cfg: options.appConfig }),
+    }).length;
+  }
   const obsidianProbe = await probeObsidianCli();
-  const counts = vaultExists
-    ? await collectVaultCounts(config.vault.path)
-    : createEmptyVaultCounts();
+  let published: MemoryWikiCompiledCacheSnapshot | null = null;
+  let snapshotState: "published" | "unavailable" | "failed" = "unavailable";
+  if (snapshotMode && vaultExists) {
+    try {
+      published = await loadMemoryWikiDiagnosticSnapshot(config);
+      snapshotState = published ? "published" : "unavailable";
+    } catch {
+      snapshotState = "failed";
+    }
+  }
+  const counts = snapshotMode
+    ? unknownCounts()
+    : vaultExists
+      ? await collectVaultCounts(config.vault.path)
+      : createEmptyVaultCounts();
+  if (published) {
+    Object.assign(counts.pageCounts, published.dashboards.overview.pageCounts);
+    if (published.diagnostics) {
+      Object.assign(counts.sourceCounts, published.diagnostics.sourceCounts);
+    }
+  }
 
   const rules: Array<[boolean, MemoryWikiStatusWarning["code"], string]> = [
     [!vaultExists, "vault-missing", "Wiki vault has not been initialized yet."],
@@ -139,7 +189,18 @@ export async function resolveMemoryWikiStatus(
       "vaultMode is `bridge` but bridge.enabled is false.",
     ],
     [
-      config.vaultMode === "bridge" &&
+      snapshotMode && vaultExists && snapshotState === "unavailable",
+      "compiled-snapshot-missing",
+      "No published wiki snapshot is available; page counts are unknown.",
+    ],
+    [
+      snapshotMode && vaultExists && snapshotState === "failed",
+      "compiled-snapshot-unreadable",
+      "The published wiki snapshot could not be read; page counts are unknown.",
+    ],
+    [
+      !snapshotMode &&
+        config.vaultMode === "bridge" &&
         config.bridge.enabled &&
         config.bridge.readMemoryArtifacts &&
         bridgePublicArtifactCount === 0,
@@ -174,6 +235,12 @@ export async function resolveMemoryWikiStatus(
     vaultExists,
     bridge: config.bridge,
     bridgePublicArtifactCount,
+    snapshot: snapshotMode
+      ? {
+          state: snapshotState,
+          compiledAt: published?.diagnostics?.compiledAt ?? null,
+        }
+      : undefined,
     obsidianCli: {
       enabled: config.obsidian.enabled,
       requested: config.obsidian.enabled && config.obsidian.useOfficialCli,
@@ -207,16 +274,22 @@ export function renderMemoryWikiStatus(
   status: MemoryWikiStatus,
   text: (value: string) => string = String,
 ): string {
+  const count = (value: number | null) => (value === null ? "unknown" : String(value));
   const lines = [
     `Wiki vault mode: ${text(status.vaultMode)}`,
     `Vault scope: ${text(status.vaultScope)}${status.agentId ? ` (${text(status.agentId)})` : ""}`,
     `Vault: ${status.vaultExists ? "ready" : "missing"} (${text(status.vaultPath)})`,
     `Render mode: ${text(status.renderMode)}`,
     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,
-    `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${status.bridgePublicArtifactCount !== null ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
+    `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${status.bridgePublicArtifactCount !== null ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : " (live export count not checked)"}`,
     `Unsafe local: ${status.unsafeLocal.allowPrivateMemoryCoreAccess ? `enabled (${status.unsafeLocal.pathCount} paths)` : "disabled"}`,
-    `Pages: ${status.pageCounts.source} sources, ${status.pageCounts.entity} entities, ${status.pageCounts.concept} concepts, ${status.pageCounts.synthesis} syntheses, ${status.pageCounts.report} reports`,
-    `Source provenance: ${status.sourceCounts.native} native, ${status.sourceCounts.bridge} bridge, ${status.sourceCounts.bridgeEvents} bridge-events, ${status.sourceCounts.unsafeLocal} unsafe-local, ${status.sourceCounts.other} other`,
+    ...(status.snapshot
+      ? [
+          `Snapshot: ${status.snapshot.state}${status.snapshot.compiledAt ? ` (${text(status.snapshot.compiledAt)})` : " (compile time unknown)"}; counts describe the last publication, not current files`,
+        ]
+      : []),
+    `Pages: ${count(status.pageCounts.source)} sources, ${count(status.pageCounts.entity)} entities, ${count(status.pageCounts.concept)} concepts, ${count(status.pageCounts.synthesis)} syntheses, ${count(status.pageCounts.report)} reports`,
+    `Source provenance: ${count(status.sourceCounts.native)} native, ${count(status.sourceCounts.bridge)} bridge, ${count(status.sourceCounts.bridgeEvents)} bridge-events, ${count(status.sourceCounts.unsafeLocal)} unsafe-local, ${count(status.sourceCounts.other)} other`,
   ];
 
   if (status.warnings.length > 0) {

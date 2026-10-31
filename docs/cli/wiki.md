@@ -79,7 +79,24 @@ digests already carry the active runtime agent context.
 
 ### `wiki status`
 
-Show vault mode and scope, resolved agent, health, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized, bridge mode is healthy, or Obsidian integration is available.
+Show vault mode and scope, resolved agent, configuration warnings, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized and has a published snapshot.
+
+For remote calls, this CLI requests `statusMode: "snapshot"` on `wiki.status`
+and `wiki.doctor`. A patched Gateway preserves the existing live response and
+numeric counts for clients that omit this parameter. Older clients therefore
+remain compatible, but retain the potentially slow synchronization and scan path.
+A current CLI can also read a legacy Gateway response without snapshot metadata;
+that server still performs its existing live diagnostic work.
+
+Local diagnostics and negotiated snapshot responses are observational: they do
+not import memory artifacts, compile, or scan wiki pages. Page counts describe the last published compile snapshot, not live
+vault contents. Unknown counts are `null` in JSON. Older snapshots can provide
+page counts without a compile timestamp or source-provenance counts; the next
+explicit compile adds those details. The current public memory export count is
+not checked and is reported as unknown.
+
+Snapshot-mode JSON consumers must accept `null` for unknown page and provenance
+counts. Unnegotiated Gateway responses preserve numeric counts.
 
 When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
 
@@ -87,11 +104,19 @@ When bridge mode is active and configured to read memory artifacts, this command
 
 Run wiki health checks and report actionable fixes. Exits non-zero when unhealthy.
 
+In snapshot mode, doctor uses the same published snapshot as status and does not synchronize or
+repair the wiki. Missing or unreadable snapshots produce a warning rather than
+triggering a rebuild. A healthy report covers configuration and snapshot
+availability; it does not certify the current memory exporter or source freshness.
+Use `wiki bridge import` to refresh bridge sources and `wiki compile` to publish
+fresh counts. Normal query and explicit import/compile workflows retain their
+existing synchronization behavior.
+
 When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline.
 
 Typical issues:
 
-- bridge mode enabled without public memory artifacts
+- bridge mode configured with bridge imports disabled
 - invalid or missing vault layout
 - missing external Obsidian CLI when Obsidian mode is expected
 

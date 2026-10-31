@@ -13,7 +13,7 @@ import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
-import { resolveMemoryWikiStatus } from "./status.js";
+import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { createCompiledSnapshot, createMemoryWikiTestHarness } from "./test-helpers.js";
 
 type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
@@ -65,17 +65,16 @@ vi.mock("./vault.js", () => ({ initializeMemoryWikiVault: vi.fn() }));
 
 const { createPluginApi } = createMemoryWikiTestHarness();
 
-function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
+function readRespond(
+  respond: { mock: { calls: Array<Array<unknown>> } },
+  type: "payload" | "error" = "payload",
+): unknown {
   const call = respond.mock.calls[0];
-  expect(call?.[0]).toBe(true);
-  return call?.[1];
-}
-
-function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = respond.mock.calls[0];
-  expect(call?.[0]).toBe(false);
-  expect(call?.[1]).toBeUndefined();
-  return call?.[2];
+  expect(call?.[0]).toBe(type === "payload");
+  if (type === "error") {
+    expect(call?.[1]).toBeUndefined();
+  }
+  return call?.[type === "payload" ? 1 : 2];
 }
 
 const VAULT_BACKED_GATEWAY_CASES = [
@@ -119,12 +118,7 @@ async function createGateway(method: string, options: GatewayOptions = {}, agent
     resolveConfig,
     ...options,
   });
-  const handler:
-    | ((ctx: {
-        params: Record<string, unknown>;
-        respond: (ok: boolean, payload?: unknown, error?: unknown) => void;
-      }) => Promise<void>)
-    | undefined = registerGatewayMethod.mock.calls.find(([name]) => name === method)?.[1];
+  const handler = registerGatewayMethod.mock.calls.find(([name]) => name === method)?.[1];
   if (!handler) {
     throw new Error(`${method} handler missing`);
   }
@@ -195,6 +189,69 @@ describe("memory-wiki gateway methods", () => {
     vi.mocked(searchMemoryWiki).mockResolvedValue({ items: [], total: 0 } as never);
   });
 
+  describe.each(["wiki.status", "wiki.doctor"])("%s diagnostics", (method) => {
+    it.each(["snapshot", undefined] as const)(
+      "honors negotiated mode %s and legacy live counts",
+      async (statusMode) => {
+        const signal = new AbortController().signal;
+        const { config, run, respond } = await createGateway(method, {
+          resolveSourceSyncSignal: () => signal,
+        });
+        vi.mocked(buildMemoryWikiDoctorReport).mockImplementation((status) => ({
+          healthy: true,
+          warningCount: 0,
+          status,
+          fixes: [],
+        }));
+        if (statusMode === "snapshot") {
+          vi.mocked(syncMemoryWikiImportedSources).mockRejectedValue(
+            new Error("Diagnostics must not import or compile"),
+          );
+        }
+        await run(statusMode ? { statusMode } : {});
+        if (statusMode === "snapshot") {
+          expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+        } else {
+          expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+            config,
+            appConfig: {},
+            signal,
+          });
+        }
+        expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, {
+          appConfig: {},
+          mode: statusMode ?? "live",
+        });
+        expect(respond).toHaveBeenCalledWith(true, expect.anything());
+      },
+    );
+  });
+
+  const invalidMode = "statusMode must be one of: snapshot, live.";
+  it.each([
+    ["wiki.status", { statusMode: "unknown" }, false, invalidMode],
+    ["wiki.status", { statusMode: null }, false, invalidMode],
+    ["wiki.status", { statusMode: 1 }, false, invalidMode],
+    ["wiki.status", {}, true, "agentId is required for memory-wiki when vault.scope=agent."],
+    ["wiki.status", { agentId: "unknown" }, true, "Unknown memory-wiki agentId: unknown."],
+    [
+      "wiki.obsidian.search",
+      { agentId: "support", query: "alpha" },
+      true,
+      "Official Obsidian CLI actions do not support memory-wiki vault.scope=agent.",
+    ],
+    ["wiki.search", {}, false, "query is required."],
+  ] as const)("rejects invalid %s %j requests", async (method, params, scoped, message) => {
+    const { run, respond } = await createGateway(method, {}, scoped);
+    await run(params);
+    expect(readRespond(respond, "error")).toEqual({ code: "internal_error", message });
+    if (method !== "wiki.search") {
+      expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+    }
+    expect(resolveMemoryWikiStatus).not.toHaveBeenCalled();
+    expect(searchMemoryWiki).not.toHaveBeenCalled();
+  });
+
   it("registers Obsidian, ingest, and compile methods with their required scopes", async () => {
     const { registerGatewayMethod } = await createGateway("wiki.compile");
 
@@ -213,17 +270,7 @@ describe("memory-wiki gateway methods", () => {
     }
   });
 
-  it.each([
-    ["wiki.importRuns", {}],
-    ["wiki.init", {}],
-    ["wiki.doctor", {}],
-    ["wiki.compile", {}],
-    ["wiki.ingest", { inputPath: "/tmp/alpha-notes.txt" }],
-    ["wiki.lint", {}],
-    ["wiki.bridge.import", {}],
-    ["wiki.unsafeLocal.import", {}],
-    ["wiki.get", { lookup: "alpha" }],
-  ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>)(
+  it.each(VAULT_BACKED_GATEWAY_CASES)(
     "%s resolves its request agent exactly once",
     async (method, methodParams) => {
       const { run, resolveConfig } = await createGateway(method, {}, true);
@@ -249,17 +296,6 @@ describe("memory-wiki gateway methods", () => {
     ).toEqual(VAULT_BACKED_GATEWAY_CASES.map(([method]) => method));
   });
 
-  it("rejects official Obsidian CLI actions for agent-scoped vaults", async () => {
-    const { run, respond } = await createGateway("wiki.obsidian.search", {}, true);
-
-    await run({ agentId: "support", query: "alpha" });
-
-    expect(readRespondError(respond)).toEqual({
-      code: "internal_error",
-      message: "Official Obsidian CLI actions do not support memory-wiki vault.scope=agent.",
-    });
-  });
-
   it("binds manual compilation to the active service generation", async () => {
     const signal = new AbortController().signal;
     const { config, run } = await createGateway("wiki.compile", {
@@ -278,21 +314,19 @@ describe("memory-wiki gateway methods", () => {
     const getAppConfig = vi.fn(() => scopedAppConfig);
     const { rootDir, run, respond } = await createGateway("wiki.status", { getAppConfig }, true);
 
-    await run({ agentId: "marketing" });
+    await run({ agentId: "marketing", statusMode: "snapshot" });
 
     const resolvedConfig = expect.objectContaining({
       agentId: "marketing",
       vault: expect.objectContaining({ path: path.join(rootDir, "marketing") }),
     });
     expect(getAppConfig).toHaveBeenCalledTimes(1);
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
-      config: resolvedConfig,
-      appConfig: scopedAppConfig,
-    });
+    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
     expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(resolvedConfig, {
       appConfig: scopedAppConfig,
+      mode: "snapshot",
     });
-    expect(readRespondPayload(respond)).toEqual({
+    expect(readRespond(respond)).toEqual({
       vaultScope: "agent",
       agentId: "marketing",
       vaultMode: "isolated",
@@ -300,23 +334,11 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
-  it.each([
-    [{}, "agentId is required for memory-wiki when vault.scope=agent."],
-    [{ agentId: "unknown" }, "Unknown memory-wiki agentId: unknown."],
-  ])("fails closed for invalid agent-scoped requests", async (requestParams, message) => {
-    const { run, respond } = await createGateway("wiki.status", {}, true);
-
-    await run(requestParams);
-
-    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
-    expect(readRespondError(respond)).toEqual({ code: "internal_error", message });
-  });
-
   it("returns import-run results and forwards the limit", async () => {
     const { config, run, respond } = await createGateway("wiki.importRuns");
     await run({ limit: 5 });
     expect(listMemoryWikiImportRuns).toHaveBeenCalledWith(config, { limit: 5 });
-    expect(readRespondPayload(respond)).toEqual(importRuns);
+    expect(readRespond(respond)).toEqual(importRuns);
   });
 
   it.each(["wiki.importInsights", "wiki.overview"])(
@@ -331,7 +353,7 @@ describe("memory-wiki gateway methods", () => {
       expect(respond).toHaveBeenCalledOnce();
       expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: {} });
       expect(loadMemoryWikiCompiledDashboards).toHaveBeenCalledWith(config);
-      expect(readRespondPayload(respond)).toEqual(
+      expect(readRespond(respond)).toEqual(
         method === "wiki.importInsights" ? dashboards.importInsights : dashboards.overview,
       );
       syncGate.resolve(emptySync);
@@ -352,7 +374,7 @@ describe("memory-wiki gateway methods", () => {
 
       await run();
 
-      expect(readRespondError(respond)).toEqual({
+      expect(readRespond(respond, "error")).toEqual({
         code,
         message: `dashboard ${state}`,
         details: { state },
@@ -360,18 +382,6 @@ describe("memory-wiki gateway methods", () => {
       });
     },
   );
-
-  it("validates required query params for wiki.search", async () => {
-    const { run, respond } = await createGateway("wiki.search");
-
-    await run();
-
-    expect(searchMemoryWiki).not.toHaveBeenCalled();
-    expect(readRespondError(respond)).toEqual({
-      code: "internal_error",
-      message: "query is required.",
-    });
-  });
 
   it.each([
     ["Teams Azure", 3, "local", "wiki", "route-question", {}],
@@ -394,7 +404,7 @@ describe("memory-wiki gateway methods", () => {
         searchCorpus,
         mode,
       });
-      expect(readRespondPayload(respond)).toEqual({ items: [], total: 0 });
+      expect(readRespond(respond)).toEqual({ items: [], total: 0 });
     },
   );
 
@@ -408,7 +418,7 @@ describe("memory-wiki gateway methods", () => {
       inputPath: "/tmp/alpha-notes.txt",
       title: "Alpha",
     });
-    expect(readRespondPayload(respond)).toEqual({ pagePath: "sources/alpha-notes.md" });
+    expect(readRespond(respond)).toEqual({ pagePath: "sources/alpha-notes.md" });
   });
 
   it("rejects an invalid wiki.apply operation before source sync or mutation", async () => {
@@ -425,7 +435,7 @@ describe("memory-wiki gateway methods", () => {
     expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
     expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
     expect(applyMemoryWikiMutation).not.toHaveBeenCalled();
-    expect(readRespondError(respond)).toEqual({ code: "internal_error", message });
+    expect(readRespond(respond, "error")).toEqual({ code: "internal_error", message });
   });
 
   it("applies wiki mutations over the gateway", async () => {
@@ -440,7 +450,7 @@ describe("memory-wiki gateway methods", () => {
       config,
       mutation: synthesisMutation,
     });
-    expect(readRespondPayload(respond)).toEqual({
+    expect(readRespond(respond)).toEqual({
       operation: "create_synthesis",
       pagePath: "syntheses/gateway-alpha.md",
     });

@@ -31,7 +31,6 @@ import {
   appendMemoryWikiLog,
   hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
-  loadMemoryWikiVaultIdentity,
 } from "./log.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import {
@@ -133,8 +132,8 @@ export async function publishCompiledSnapshot(
 ): Promise<string> {
   const publicationId = randomUUID();
   const reservationId = randomUUID();
-  const parentPublicationId = (await loadMemoryWikiVaultIdentity(config.vault.path))
-    .compiledCachePublicationId;
+  const identity = await loadMemoryWikiValidatedVaultIdentity(config.vault.path);
+  const parentPublicationId = identity.compiledCachePublicationId;
   const record = (details: Parameters<typeof appendMemoryWikiLog>[1]["details"]) =>
     appendMemoryWikiLog(config.vault.path, {
       type: "compile",
@@ -146,7 +145,8 @@ export async function publishCompiledSnapshot(
     compiledCachePublicationId: publicationId,
     compiledCacheParentPublicationId: parentPublicationId,
     compiledCacheReservationId: reservationId,
-    compiledCacheSourceGeneration: hashMemoryWikiVaultSources([]),
+    compiledCacheSourceGeneration:
+      identity.compiledCacheSourceGeneration ?? hashMemoryWikiVaultSources([]),
   });
   await writeMemoryWikiCompiledCache(
     config,

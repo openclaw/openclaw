@@ -33,6 +33,7 @@ import {
   setMemoryWikiDashboardState,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiSourceCounts,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -746,6 +747,30 @@ function buildCompiledCacheSnapshot(
   scan: Awaited<ReturnType<typeof readPageSummaries>>,
 ): MemoryWikiCompiledCacheSnapshot {
   const pagesInput = scan.pages;
+  const sourceCounts: MemoryWikiSourceCounts = {
+    native: 0,
+    bridge: 0,
+    bridgeEvents: 0,
+    unsafeLocal: 0,
+    other: 0,
+  };
+  for (const page of pagesInput) {
+    if (page.kind !== "source") {
+      continue;
+    }
+    const sourceType = page.sourceType;
+    if (sourceType === "memory-bridge-events") {
+      sourceCounts.bridgeEvents += 1;
+    } else if (sourceType === "memory-bridge") {
+      sourceCounts.bridge += 1;
+    } else if (page.provenanceMode === "unsafe-local" || sourceType === "memory-unsafe-local") {
+      sourceCounts.unsafeLocal += 1;
+    } else if (!sourceType) {
+      sourceCounts.native += 1;
+    } else {
+      sourceCounts.other += 1;
+    }
+  }
   const claims: MemoryWikiCompiledCacheSnapshot["claims"] = [];
   const pages = pagesInput
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
@@ -812,6 +837,7 @@ function buildCompiledCacheSnapshot(
       });
     });
   return {
+    diagnostics: { compiledAt: new Date().toISOString(), sourceCounts },
     digest: {
       claimCount: claims.length,
       contradictionCount:
