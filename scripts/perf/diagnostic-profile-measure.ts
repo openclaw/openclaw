@@ -227,13 +227,13 @@ if (mode === "frames") {
   }
   for (let iteration = 0; iteration < iterations; iteration++) {
     const allocated = getHeapStatistics().total_allocated_bytes;
-    const cpu = process.threadCpuUsage();
+    const cpuBefore = process.threadCpuUsage();
     const startedAt = performance.now();
     for (let pass = 0; pass < 20; pass++) {
       batch();
     }
     const wallMs = performance.now() - startedAt;
-    const usedCpu = process.threadCpuUsage(cpu);
+    const usedCpu = process.threadCpuUsage(cpuBefore);
     reports.push({
       iteration,
       frames: nodes * 20,

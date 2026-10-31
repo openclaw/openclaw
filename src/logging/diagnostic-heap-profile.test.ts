@@ -114,10 +114,9 @@ describe("diagnostic heap profile owner", () => {
       recordedProfile.packageRoot,
       { ...recordedProfile.metadata, durationLimitReason: "collected-samples" },
     );
-    const pathSplits = split.mock.calls.filter(([separator]) => separator === path.sep).length;
+    expect(split).not.toHaveBeenCalledWith(path.sep);
     split.mockRestore();
     expect(JSON.stringify(result)).toBe(JSON.stringify(recordedProfile.sanitized));
-    expect(pathSplits).toBe(0);
   });
 
   it.each([true])(
