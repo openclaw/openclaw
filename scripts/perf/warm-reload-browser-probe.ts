@@ -6,7 +6,7 @@ export const proofRegions = {
   header: ".chat-pane__header",
   transcript: ".chat-thread-viewport, .chat-thread",
   details: ".chat-details",
-  composer: ".agent-chat__input",
+  composer: ".chat-footer",
   dashboard: "openclaw-board-view",
 };
 
@@ -343,7 +343,10 @@ export function installWarmReloadBrowserProbe(route: string) {
     sampleAnimations();
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
     const rows = rowElements.length;
-    const sidebarRows = document.querySelectorAll("openclaw-app-sidebar [data-session-key]").length;
+    const sidebarRowElements = [
+      ...document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
+    ];
+    const sidebarRows = sidebarRowElements.length;
     const board = Boolean(document.querySelector("openclaw-board-view iframe"));
     const sidebar = document.querySelector("aside.sidebar");
     data.sidebarFrames.push({
@@ -352,11 +355,7 @@ export function installWarmReloadBrowserProbe(route: string) {
       frame: Boolean(sidebar),
       state: sidebar?.getAttribute("data-snapshot-state") ?? null,
       saved: sidebar?.getAttribute("data-snapshot-saved") ?? null,
-      rows: new Set(
-        [...document.querySelectorAll("openclaw-app-sidebar [data-session-key]")].map((row) =>
-          row.getAttribute("data-session-key"),
-        ),
-      ).size,
+      rows: new Set(sidebarRowElements.map((row) => row.getAttribute("data-session-key"))).size,
       sections: document.querySelectorAll("openclaw-app-sidebar [data-session-section]").length,
     });
     if (document.querySelector("openclaw-app-shell")) {
