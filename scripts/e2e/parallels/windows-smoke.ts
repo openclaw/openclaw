@@ -37,6 +37,7 @@ import {
   windowsAgentTurnConfigPatchScript,
   windowsAgentTurnScript,
   windowsOpenClawResolver,
+  windowsPackageInstallScript,
   windowsScopedEnvFunction,
 } from "./powershell.ts";
 import {
@@ -442,13 +443,7 @@ Invoke-OpenClaw --version
     const tgzUrl = this.server.urlFor(this.artifact.path);
     return this.guestPowerShellBackground(
       `install-main-${tempName.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`,
-      `$ErrorActionPreference = 'Stop'
-$tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
-curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
-npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
-if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
-Invoke-OpenClaw --version
-      if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`,
+      windowsPackageInstallScript(tgzUrl, tempName),
       this.phases.remainingTimeoutMs(WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS) ??
         WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS,
     );
