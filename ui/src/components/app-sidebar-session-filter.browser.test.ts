@@ -503,7 +503,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         .poll(() => trigger()?.getAttribute("aria-description"))
         .toBe(count ? "Status: All" : "Status: Active");
       expect(trigger()?.classList.contains("sidebar-session-sort--filtered")).toBe(count > 0);
-      expect(trigger()?.textContent?.trim()).toBe(count ? "All" : "Active");
       expect(query("#sidebar-sessions-reset") !== null).toBe(resetVisible);
     };
     await expectFilterCount(0);

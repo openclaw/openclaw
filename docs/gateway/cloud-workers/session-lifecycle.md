@@ -217,6 +217,8 @@ If provider teardown fails or times out during stop or move, the request reports
 
 While cleanup remains pending, the placement keeps the original failure and the latest cleanup cause. Repeated recovery checks do not append another copy of the same error, and long diagnostics retain the final provider cause.
 
+Before accepting a fresh worker or remote-exec turn, OpenClaw checks the exact attached provider lease. An unavailable observation rejects admission without replacing or releasing the worker; retry after provider connectivity returns. A dormant paired device keeps its lease and follows the existing reconnect path. Confirmed lease loss enters the same cleanup path as background recovery before any new input is claimed; this check never allocates a replacement or replays input.
+
 An ended or unusable provider lease is not proof that its machine was deleted. OpenClaw fences that worker, stops renewing the lease, and requests explicit provider teardown. Failed teardown stays retryable; a missing local claim or an earlier “not found” warning does not turn a failed stop into success.
 
 ## Move through the API

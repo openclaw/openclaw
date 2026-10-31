@@ -28,6 +28,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import {
   prepareLegacyArchiveRetention,
@@ -573,7 +574,7 @@ it("replaces rejected v31 storage when a full rescan matches the unchanged accep
   const projection = await prepare();
   const accepted = (await readProjection())!;
   const { db } = openOpenClawStateDatabase();
-  const records = readLocalWorkspaceTree(db, accepted.tree_root_digest!);
+  const records = decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, accepted.tree_root_digest!));
   for (const record of records.values()) {
     db.prepare(
       "INSERT INTO local_workspace_manifest_nodes (worktree_id, path, node_json) VALUES (?, ?, ?)",

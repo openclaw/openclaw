@@ -282,12 +282,7 @@ suite.define(() => {
   });
 
   it("persists edit/reopen fields and does not bounce a dragged linked card from stale lifecycle", async () => {
-    const proof = createWorkboardProof(
-      suite,
-      "workboard-status-persistence",
-      { height: 900, width: 1280 },
-      { parent: artifactParent },
-    );
+    const proof = createWorkboardProof("workboard-status-persistence", { parent: artifactParent });
     const page = await newPage({
       recordVideo: captureUiProofEnabled
         ? { dir: proof.directory, size: { height: 900, width: 1280 } }

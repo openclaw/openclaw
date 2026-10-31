@@ -37,7 +37,6 @@ openclaw-plugin-install-action {
   inset: -16px 0;
 }
 .plugin-install-progress {
-  box-sizing: border-box;
   width: 380px;
   max-width: calc(100vw - 24px);
   max-height: min(var(--oc-overlay-available-height, 420px), calc(100dvh - 16px));
@@ -107,7 +106,6 @@ openclaw-plugin-install-action {
   flex: 0 0 16px;
   width: 16px;
   height: 16px;
-  box-sizing: border-box;
   border-radius: 50%;
 }
 .plugin-install-progress__activity--started .plugin-install-progress__icon {

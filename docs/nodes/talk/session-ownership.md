@@ -78,3 +78,9 @@ an equivalent storage alias is not a replacement. A `talk.client.toolCall` ackno
 returns `agentId`, `agentSessionKey`, and `runId`; use that exact target for chat
 cancellation, history, and completion events, including when the resolved key is `global`. Transcription-only sessions
 without a key remain sessionless and do not select a default chat.
+
+During Gateway shutdown, Talk gives accepted persistence a grace period capped at
+30 seconds and derived from the remaining shutdown budget. It then requests abort
+and gives accepted work a second bounded period to settle. Completed writes keep
+their receipts; uncertain delivery is not replayed. If work ignores abort, shutdown
+reports retained resources instead of declaring that persistence completed.

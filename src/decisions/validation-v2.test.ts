@@ -1,9 +1,13 @@
-import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
+import type {
+  DecisionAnswerCapabilities,
+  ModelDecisionCapabilities,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeCapabilities } from "./catalog.test-support.js";
+import { DecisionContractError } from "./contract-error.js";
+import { validateDecisionBatchV2 } from "./input-validation.js";
+import { validateDecisionResultV2 } from "./result-validation.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
-import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-v2.js";
-import { DecisionContractError } from "./validation.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "synthetic evidence" },
@@ -32,7 +36,7 @@ function result(answers: Record<string, unknown> = {}) {
     metadata: { route: "synthetic" },
   };
 }
-function resultChecker(input = batch, capabilities?: ModelDecisionCapabilities) {
+function resultChecker(input = batch, capabilities?: DecisionAnswerCapabilities) {
   return (value: unknown, valid = true) => {
     expect(validateDecisionResultV2(input, value, capabilities)).toBe(valid);
   };
@@ -148,7 +152,7 @@ describe("V2 decision admission", () => {
   );
 
   it("distinguishes undeclared question support from an explicitly unsupported kind", () => {
-    const capabilities: ModelDecisionCapabilities = {
+    const capabilities: Parameters<typeof validateDecisionResultV2>[2] = {
       protocol: "fixture-native",
       input: ["text"],
     };
@@ -160,9 +164,7 @@ describe("V2 decision admission", () => {
   });
 
   it("rejects confidence reports when the route declares no confidence metric", () => {
-    const capabilities: ModelDecisionCapabilities = {
-      protocol: "fixture-native",
-      input: ["text"],
+    const capabilities: DecisionAnswerCapabilities = {
       confidence: "none",
     };
     const cases: { input: DecisionBatchV2; answers: Record<string, DecisionAnswerV2> }[] = [

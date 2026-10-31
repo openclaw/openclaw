@@ -913,17 +913,6 @@
 .chat-tool-card__widget-actions-panel {
   min-width: 164px;
   max-width: 208px;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
-.chat-tool-card__widget-actions .session-menu__item {
-  min-height: 32px;
-  padding-inline: 7px;
-  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {

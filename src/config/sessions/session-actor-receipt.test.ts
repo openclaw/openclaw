@@ -3,7 +3,10 @@ import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  appendTranscriptEventInTransaction,
+  appendTranscriptEventsInTransaction,
+} from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionActorHotState } from "./session-actor-contract.js";
 import {
   createSessionActorCommittedOutcome,
@@ -248,6 +251,127 @@ it("keeps append receipts independent of retained transcript length", async () =
   }
   // Scalar sequence/count encodings may grow; retained history must not cross the worker boundary.
   expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
+});
+
+it.each([16, 512])("encodes a required full reload once with %s resident events", async (count) => {
+  await withActor(async (f) => {
+    const history = Array.from({ length: count }, (_, index) => ({
+      type: "custom",
+      customType: "synthetic",
+      id: `history-${index}`,
+      parentId: index ? `history-${index - 1}` : null,
+      timestamp: "2026-01-01T00:00:00Z",
+      data: { text: "x".repeat(1024) },
+    }));
+    runSqliteImmediateTransactionSync(f.database.db, () =>
+      appendTranscriptEventsInTransaction(f.database, f.scope, history),
+    );
+    const before = f.read();
+    const event = { ...history[0]!, id: "appended", parentId: `history-${count - 1}` };
+    vi.mocked(serialize).mockClear();
+    const outcome = f.mutate({
+      type: "session.actor.appendTranscriptEvent",
+      input: {
+        target: f.target,
+        commandId: "reload",
+        phaseId: "turn",
+        entryReference: before.writeToken,
+        append: {
+          kind: "metadata",
+          input: {
+            scope: f.scope,
+            event: JSON.stringify(event),
+            options: {},
+            view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } },
+          },
+        },
+      },
+    });
+    assert(outcome.kind === "committed");
+    const appended = outcome.receipt.transcript.append;
+    assert(appended?.kind === "metadata");
+    expect(appended.value.reload).toMatchObject({
+      ok: true,
+      value: {
+        kind: "full",
+        snapshot: { events: [...history, event] },
+      },
+    });
+    const reloadEncodings = vi
+      .mocked(serialize)
+      .mock.calls.filter(
+        ([value]) =>
+          value === appended.value ||
+          value?.reload?.ok ||
+          value?.receipt?.transcript?.append?.value?.reload?.ok,
+      );
+    expect(reloadEncodings).toHaveLength(1);
+    expect(
+      readTranscriptEventRows(f.database, f.scope.sessionId).map((row) => row.eventJson),
+    ).toEqual([...history, event].map((row) => JSON.stringify(row)));
+  });
+});
+
+it("commits an append when deep historical JSON cannot cross the reload transport", async () => {
+  await withActor(async (f) => {
+    const deepJson =
+      '{"type":"custom","customType":"deep","id":"deep","parentId":null,"timestamp":"2026-01-01T00:00:00Z","data":' +
+      "[".repeat(50_000) +
+      "0" +
+      "]".repeat(50_000) +
+      "}";
+    expect(() => serialize(JSON.parse(deepJson))).toThrow(RangeError);
+    const history = Array.from({ length: 513 }, (_, index) => ({
+      type: "custom",
+      customType: "synthetic",
+      id: `tail-${index}`,
+      parentId: index ? `tail-${index - 1}` : "deep",
+      timestamp: "2026-01-01T00:00:00Z",
+    }));
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      appendTranscriptEventInTransaction(f.database, f.scope, JSON.parse(deepJson), {
+        eventJson: deepJson,
+        scheduleProjectionReconcile: false,
+      });
+      appendTranscriptEventsInTransaction(f.database, f.scope, history, {
+        scheduleProjectionReconcile: false,
+      });
+    });
+    const before = f.read();
+    const event = { ...history[0]!, id: "appended", parentId: "tail-512" };
+    const outcome = f.mutate({
+      type: "session.actor.appendTranscriptEvent",
+      input: {
+        target: f.target,
+        commandId: "deep-reload",
+        phaseId: "turn",
+        entryReference: before.writeToken,
+        append: {
+          kind: "metadata",
+          input: {
+            scope: f.scope,
+            event: JSON.stringify(event),
+            options: {},
+            view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } },
+          },
+        },
+      },
+    });
+    assert(outcome.kind === "committed");
+    const appended = outcome.receipt.transcript.append;
+    assert(appended?.kind === "metadata");
+    expect(appended.value.reload).toMatchObject({
+      ok: false,
+      error: {
+        nodes: [expect.objectContaining({ name: "RangeError" })],
+      },
+    });
+    const stored = readTranscriptEventRows(f.database, f.scope.sessionId);
+    expect(stored).toHaveLength(515);
+    expect(stored[0]?.eventJson).toBe(deepJson);
+    expect(stored.at(-1)?.eventJson).toBe(JSON.stringify(event));
+    expect(f.read().transcript.version.rawSeq).toBe(514);
+  });
 });
 
 it.each([false, true])("restores only an exact preimage (delta=%s)", (changed) => {

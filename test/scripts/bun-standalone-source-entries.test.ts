@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { UserConfig } from "tsdown";
@@ -12,18 +11,13 @@ import {
   createPluginNpmRuntimeBuildOptions,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../../scripts/lib/plugin-npm-runtime-build.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-entries-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-source-entries-");
   fs.mkdirSync(path.join(root, "src"));
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   const contents = "export const value: number = 42;\n";

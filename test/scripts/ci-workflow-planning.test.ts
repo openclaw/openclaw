@@ -6116,6 +6116,51 @@ describe("ci workflow guards", () => {
     expect(source).toContain("blacksmith-16vcpu-windows-2025");
   });
 
+  it.each(["restore-main", "save-main", "publish-run", "restore-run"])(
+    "computes the %s SDK identity only in its authoritative operation",
+    (mode) => {
+      const action = readWorkflow(".github/actions/sdk-declarations/action.yml");
+      const root = tempDirs.make("sdk-action-identity-");
+      const bin = path.join(root, "bin");
+      mkdirSync(bin);
+      mkdirSync(path.join(root, "scripts"));
+      writeFileSync(path.join(root, "scripts/ci-sdk-declarations.mts"), "");
+      const calls = path.join(root, "node.calls");
+      writeExecutable(path.join(bin, "node"), [
+        "#!/bin/sh",
+        'printf "%s\\n" "$*" >> "$SDK_NODE_CALLS"',
+        'printf "cache-key=fixture-sdk\\n" >> "$GITHUB_OUTPUT"',
+      ]);
+      const steps = { identity: { outputs: {} }, pack: { outputs: {} }, restore: { outputs: {} } };
+      const run = (id: keyof typeof steps) => {
+        const step = action.runs.steps.find((candidate: WorkflowStep) => candidate.id === id);
+        const output = path.join(root, `${id}.outputs`);
+        const result = runWorkflowShellScript(step.run, {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: bin + path.delimiter + process.env.PATH,
+            SDK_OPERATION: mode,
+            SDK_NODE_CALLS: calls,
+            GITHUB_OUTPUT: output,
+          },
+        });
+        expect(result.status, result.stderr).toBe(0);
+        steps[id].outputs = readWorkflowOutputs(output);
+      };
+      run("identity");
+      expect(steps.identity.outputs).toMatchObject({ enabled: "true" });
+      if (mode === "publish-run" || mode === "restore-run") {
+        expect(existsSync(calls)).toBe(false);
+        run(mode === "publish-run" ? "pack" : "restore");
+      }
+      expect(readFileSync(calls, "utf8").trim()).toBe(
+        `scripts/ci-sdk-declarations.mts ${mode === "publish-run" ? "pack" : mode === "restore-run" ? "restore --required" : "key"}`,
+      );
+      expect(evaluateWorkflow(action.outputs["cache-key"].value, { steps })).toBe("fixture-sdk");
+    },
+  );
+
   it("moves the existing boundary row into the SDK producer without widening the PR job graph", () => {
     const common = {
       bundledPlanner: true,
