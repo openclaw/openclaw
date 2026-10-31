@@ -55,7 +55,9 @@ export async function uninstallLaunchAgent({
 
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
-  const dest = path.join(trashDir, `${label}.plist`);
+  // A fixed name would replace an earlier Trash item, which macOS refuses without Full Disk
+  // Access unless this helper put that item there; a new name only adds to the Trash.
+  const dest = path.join(trashDir, `${label}-${Date.now()}.plist`);
   try {
     const { trashed } = await removeBootedOutLaunchAgentPlist(plistPath, dest);
     stdout.write(
