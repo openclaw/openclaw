@@ -13,9 +13,10 @@ import { startWebhookServer } from "./monitor.test-harness.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
-// The shared-state ingress queue requires host-broker admission, which only exists on
-// the process main thread; worker-thread runs (the default Vitest pool) skip this case.
-describe.skipIf(!isMainThread)(
+// The shared-state ingress queue requires host-broker admission and a real adoption
+// window, which only exist on the process main thread; CI shards run in worker threads,
+// so this proof runs locally with OPENCLAW_TALK_WEBHOOK_PROOF=1 and --pool=forks.
+describe.skipIf(!isMainThread || process.env.OPENCLAW_TALK_WEBHOOK_PROOF !== "1")(
   "nextcloud-talk access-group admission over a signed webhook",
   () => {
     it("delivers a signed webhook from a room access group under an outer allowlist", async () => {
