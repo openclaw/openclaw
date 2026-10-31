@@ -432,14 +432,29 @@ export async function streamContainerEvents(params: {
         if (envelope) {
           // WebSocket callbacks are synchronous. Chain async durable appends so
           // transport delivery order and receive-handler failures are preserved.
-          eventChain = eventChain.then(async () => {
+          // Stop reading until the chain drains: ws still emits frames already
+          // decoded from the current socket chunk, so retention stays within one
+          // read. The rest waits in the socket buffers; a peer that cannot
+          // buffer more must block or drop.
+          ws.pause();
+          const accepted = eventChain.then(async () => {
             await params.onEvent(envelope);
           });
-          void eventChain.catch((err: unknown) => {
-            logError(`[signal-ws] receive handler failed: ${coerceErrorMessage(err)}`);
-            rejectOnce(err);
-            ws.close();
-          });
+          eventChain = accepted;
+          void accepted.then(
+            () => {
+              if (eventChain === accepted) {
+                ws.resume();
+              }
+            },
+            (err: unknown) => {
+              logError(`[signal-ws] receive handler failed: ${coerceErrorMessage(err)}`);
+              rejectOnce(err);
+              // Read the peer's close frame; later frames skip the rejected chain.
+              ws.resume();
+              ws.close();
+            },
+          );
         }
       } catch {
         logError("[signal-ws] parse error: invalid JSON frame");

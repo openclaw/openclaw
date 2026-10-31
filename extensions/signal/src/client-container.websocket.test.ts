@@ -32,6 +32,8 @@ vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
     terminate() {
       state.terminations++;
     }
+    pause() {}
+    resume() {}
   },
 }));
 const baseUrl = "http://localhost:8080";
