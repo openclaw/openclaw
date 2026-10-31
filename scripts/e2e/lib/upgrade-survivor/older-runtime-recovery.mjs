@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   openInstalledRecoveryEvidence,
   writeInstalledRecoveryEvidence,
@@ -17,7 +18,8 @@ import {
 let phase = "resolve-installed-root";
 const sourceFiles = new Set(["older-runtime-recovery.mjs", "daemon-cli.js"]);
 async function main() {
-  const [artifacts, candidateRoot, rootArgument, tarball] = process.argv.slice(2);
+  const [artifacts, candidateRoot, rootArgument, tarball, publishedOperation, inputPath] =
+    process.argv.slice(2);
   const root = fs.realpathSync(rootArgument);
   const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
   const write = (file, value) =>
@@ -53,20 +55,70 @@ async function main() {
     assert.equal(typeof functions[0], "function");
     return { call: functions[0], owners };
   }
+  const userData = { cursor: 137, label: "archive — 東京", enabled: false };
+  if (publishedOperation) {
+    phase = "published-runtime";
+    let value;
+    if (publishedOperation === "notice") {
+      const writer = await binding(root, "restart-sentinel", "writeRestartSentinel");
+      value = await writer.call(read(inputPath).notice, process.env);
+    } else {
+      const oldDaemon = await import(pathToFileURL(path.join(root, "dist/cli/daemon-cli.js")).href);
+      assert.equal(
+        oldDaemon.runManagedHandoffSentinelChild,
+        undefined,
+        "published runtime must lack the new operation export",
+      );
+      const store = await import(
+        pathToFileURL(path.join(root, "dist/plugin-sdk/plugin-state-store-runtime.js")).href
+      );
+      const kv = store.createPluginStateSyncKeyedStore("older-runtime-survivor", {
+        namespace: "preferences",
+        maxEntries: 1,
+        env: process.env,
+      });
+      if (publishedOperation === "seed") {
+        // The published SDK and ledger own the real synchronous database commits.
+        kv.register("authored", userData);
+        const ledger = await binding(root, "update-run-ledger", "createUpdateRun");
+        value = ledger.call({
+          trigger: "cli",
+          before: { version: read(path.join(root, "package.json")).version },
+          target: { tag: tarball },
+        });
+      } else {
+        assert.equal(publishedOperation, "verify");
+        value = { stored: kv.lookup("authored"), settled: oldDaemon.getUpdateRun(inputPath) };
+      }
+    }
+    fs.writeSync(1, JSON.stringify(value));
+    // Owner calls have committed before this synchronous result. Their idle
+    // worker handles must not keep the disposable published probe alive.
+    process.exit(0);
+  }
   phase = "read-package-identities";
   const baseline = readWorkerCellPackageIdentity(root);
   const candidate = readWorkerCellPackageIdentity(candidateRoot);
   assert.equal(baseline.version, "2026.10.9");
   assert.notEqual(baseline.buildInfo.buildId, candidate.buildInfo.buildId);
-  phase = "load-published-runtime";
-  const oldDaemon = await import(pathToFileURL(path.join(root, "dist/cli/daemon-cli.js")).href);
-  assert.equal(
-    oldDaemon.runManagedHandoffSentinelChild,
-    undefined,
-    "published runtime must lack the new operation export",
-  );
-  phase = "load-published-ledger-owner";
-  const ledger = await binding(root, "update-run-ledger", "createUpdateRun");
+  // Different releases share process-global worker registries. Keep published
+  // imports in their own process instead of contaminating the candidate host.
+  const published = (operation, input = "") =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        [fileURLToPath(import.meta.url), artifacts, candidateRoot, root, tarball, operation, input],
+        {
+          env: process.env,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 90_000,
+          maxBuffer: 1024 * 1024,
+        },
+      ),
+    );
+  phase = "seed-published-runtime";
+  const run = published("seed");
   phase = "load-candidate-handoff-owner";
   const start = await binding(
     candidateRoot,
@@ -92,26 +144,10 @@ async function main() {
   const dataFile = path.join(workspace, "MEMORY.md");
   fs.writeFileSync(dataFile, "# Existing memory\n\nPreserve the operator's archive — 東京.\n");
   const dataDigest = hash(dataFile);
-  // Use the published SDK's real persistent store, not fixture SQL inserts.
-  const store = await import(
-    pathToFileURL(path.join(root, "dist/plugin-sdk/plugin-state-store-runtime.js")).href
-  );
-  const kv = store.createPluginStateSyncKeyedStore("older-runtime-survivor", {
-    namespace: "preferences",
-    maxEntries: 1,
-    env: process.env,
-  });
-  const userData = { cursor: 137, label: "archive — 東京", enabled: false };
-  kv.register("authored", userData);
   const runtimeFile = `${process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG}.runtime.json`;
   phase = "read-serving-gateway";
   const parentPid = read(runtimeFile).pid;
   assert(Number.isSafeInteger(parentPid) && parentPid > 1);
-  const run = ledger.call({
-    trigger: "cli",
-    before: { version: baseline.version },
-    target: { tag: tarball },
-  });
   const handoffId = randomUUID();
   const notice = {
     kind: "update",
@@ -128,7 +164,16 @@ async function main() {
   const specPath = path.join(artifacts, "older-runtime-observer.json");
   const noticeReceipt = path.join(artifacts, "concurrent-notice.json");
   const recoveryNotice = path.join(artifacts, "pre-recovery-notice.json");
-  write(specPath, { root, runId: run.runId, handoffId, notice, noticeReceipt, recoveryNotice });
+  write(specPath, {
+    root,
+    candidateRoot,
+    tarball,
+    runId: run.runId,
+    handoffId,
+    notice,
+    noticeReceipt,
+    recoveryNotice,
+  });
   const anchor = path.join(
     path.dirname(root),
     `.openclaw.package-activation-${createHash("sha256").update(root).digest("hex").slice(0, 24)}`,
@@ -234,9 +279,9 @@ async function main() {
   assertWorkerCellPackageIdentity(readWorkerCellPackageIdentity(root), baseline);
   assert.deepEqual(settings(), beforeSettings);
   assert.equal(hash(dataFile), dataDigest);
-  assert.deepEqual(kv.lookup("authored"), userData);
+  const { stored, settled } = published("verify", run.runId);
+  assert.deepEqual(stored, userData);
   phase = "verify-terminal-ledger";
-  const settled = oldDaemon.getUpdateRun(run.runId);
   assert.equal(settled.status, "rolled-back");
   assert(
     settled.steps.some(

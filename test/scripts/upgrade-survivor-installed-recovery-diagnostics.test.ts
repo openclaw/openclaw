@@ -83,9 +83,11 @@ function capture(f: ReturnType<typeof fixture>) {
   return publish(f).report;
 }
 
-it.each([false, true])(
-  "exits a rejected older-runtime startup with private evidence (unavailable=%j)",
-  (unavailable) => {
+it.each(["available", "unavailable", "published-failure"])(
+  "exits a rejected older-runtime startup with private evidence (%s)",
+  (mode) => {
+    const unavailable = mode === "unavailable";
+    const publishedFailure = mode === "published-failure";
     const f = fixture();
     const baseline = path.join(f.root, "published");
     const candidate = path.join(f.root, "candidate");
@@ -108,6 +110,12 @@ it.each([false, true])(
       fs.writeFileSync(path.join(root, "dist/cli/daemon-cli.js"), "export {};\n");
     }
     // Fixture exports stop at startup rejection; the packaged lane owns restoration proof.
+    fs.writeFileSync(
+      path.join(baseline, "dist/cli/daemon-cli.js"),
+      `globalThis[Symbol.for('openclaw.workerCpuSources')] = {};
+       ${publishedFailure ? `process.stderr.write(${JSON.stringify(privateData)}); throw new Error(${JSON.stringify(secret)});` : ""}
+       export {};\n`,
+    );
     fs.mkdirSync(path.join(baseline, "dist/plugin-sdk"));
     fs.writeFileSync(
       path.join(baseline, "dist/plugin-sdk/plugin-state-store-runtime.js"),
@@ -123,6 +131,9 @@ it.each([false, true])(
       import { fail } from './failing-worker-fixture.mjs';
       async function startManagedServiceUpdateHandoff() {
         setInterval(() => {}, 1000);
+        if (globalThis[Symbol.for('openclaw.workerCpuSources')]) {
+          throw new Error('Published runtime contaminated the candidate process');
+        }
         try { fail(); } catch (cause) {
           throw new Error(${JSON.stringify(secret)}, { cause });
         }
@@ -161,10 +172,12 @@ it.each([false, true])(
     );
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(
-      "phase=start-candidate-handoff sites=failing-worker-fixture.mjs:",
+      publishedFailure
+        ? "phase=seed-published-runtime sites=older-runtime-recovery.mjs:"
+        : "phase=start-candidate-handoff sites=failing-worker-fixture.mjs:",
     );
     expect(result.stderr).toContain(
-      unavailable
+      unavailable || publishedFailure
         ? "private driver diagnostic unavailable"
         : "inspect driver.err in the private run evidence",
     );

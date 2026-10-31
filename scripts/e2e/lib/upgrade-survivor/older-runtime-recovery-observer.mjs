@@ -5,9 +5,8 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { readDatabase } from "./observations.mjs";
-import { resolveWorkerCellExport } from "./worker-cell-package.mjs";
 
 const specPath = process.env.OPENCLAW_SURVIVOR_OLDER_RUNTIME;
 if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
@@ -18,21 +17,6 @@ if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
   assert.equal(params.handoffId, spec.handoffId);
   assert.equal(params.action, "update");
   assert(params.commandArgv.includes(path.join(spec.root, "openclaw.mjs")));
-  const writers = [];
-  for (const name of fs.readdirSync(path.join(spec.root, "dist")).toSorted()) {
-    if (!name.startsWith("restart-sentinel-") || !name.endsWith(".mjs")) {
-      continue;
-    }
-    const file = path.join(spec.root, "dist", name);
-    const alias = resolveWorkerCellExport(fs.readFileSync(file, "utf8"), "writeRestartSentinel");
-    if (alias) {
-      writers.push((await import(pathToFileURL(file).href))[alias]);
-    }
-  }
-  const unique = [...new Set(writers)];
-  assert.equal(unique.length, 1, "one published notice writer must own the concurrent notice");
-  const writeNotice = unique[0];
-  assert.equal(typeof writeNotice, "function");
   const snapshot = () =>
     readDatabase(params.stateDatabasePath, (db) =>
       db
@@ -90,7 +74,29 @@ if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
                 .toString()
                 .replace(/^park\n/u, ""),
             );
-            const written = await writeNotice(spec.notice, process.env);
+            // The published writer commits in its own runtime, before the
+            // candidate helper observes close and begins restoration.
+            const written = JSON.parse(
+              childProcess.execFileSync(
+                process.execPath,
+                [
+                  fileURLToPath(new URL("./older-runtime-recovery.mjs", import.meta.url)),
+                  path.dirname(specPath),
+                  spec.candidateRoot,
+                  spec.root,
+                  spec.tarball,
+                  "notice",
+                  specPath,
+                ],
+                {
+                  env: process.env,
+                  encoding: "utf8",
+                  stdio: ["ignore", "pipe", "pipe"],
+                  timeout: 90_000,
+                  maxBuffer: 1024 * 1024,
+                },
+              ),
+            );
             fs.writeFileSync(
               spec.noticeReceipt,
               JSON.stringify({
