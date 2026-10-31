@@ -1,8 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
-import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
+import { runGatewayResume, runGatewaySuspend, runGatewaySuspendStatus } from "./suspend-cli.js";
 
 vi.mock("node:timers/promises", { spy: true });
 
@@ -125,4 +125,47 @@ it.each([
   await runGatewayResume({ rpcOpts: {}, suspensionId: "suspension-1" }, { callGateway, runtime });
 
   expect(runtime.log).toHaveBeenCalledExactlyOnceWith(message);
+});
+
+describe("gateway suspend status CLI", () => {
+  it.each([
+    [
+      { status: "running" as const },
+      "Gateway is running (no matching suspension lease).",
+      undefined,
+    ],
+    [
+      {
+        status: "ready" as const,
+        expiresAtMs: Date.parse("2026-08-11T12:00:00.000Z"),
+      },
+      "Gateway suspension ready.",
+      `Expires: 2026-08-11T12:00:00.000Z (${Date.parse("2026-08-11T12:00:00.000Z")} ms)`,
+    ],
+  ] as const)("prints human summary for %j", async (result, first, second) => {
+    callGateway.mockResolvedValue(result);
+
+    await runGatewaySuspendStatus(
+      { rpcOpts: {}, suspensionId: "suspension-1" },
+      { callGateway, runtime },
+    );
+
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      "gateway.suspend.status",
+      {},
+      { suspensionId: "suspension-1" },
+    );
+    expect(runtime.log).toHaveBeenCalledWith(first);
+    if (second !== undefined) {
+      expect(runtime.log).toHaveBeenCalledWith(second);
+    }
+  });
+
+
+  it("rejects blank suspension ids before calling the Gateway", async () => {
+    await expect(
+      runGatewaySuspendStatus({ rpcOpts: {}, suspensionId: "   " }, { callGateway, runtime }),
+    ).rejects.toThrow("suspensionId must contain 1 to 128 characters");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 });
