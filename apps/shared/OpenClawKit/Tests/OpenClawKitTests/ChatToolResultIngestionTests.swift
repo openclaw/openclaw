@@ -373,7 +373,7 @@ struct ChatToolResultIngestionTests {
         .init(leafEntryId: leaf, headline: "Current path", messageCount: 3, updatedAt: nil, active: true)
     }
 
-    private static func command(_ id: String, scope: OpenClawChatOutboxBranchScope) -> OpenClawChatOutboxCommand {
+    private static func command(_ id: String, scope: OpenClawChatOutboxScope) -> OpenClawChatOutboxCommand {
         .init(
             id: id,
             sessionKey: scope.sessionKey,
