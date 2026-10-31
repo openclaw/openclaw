@@ -910,7 +910,7 @@ it("ignores stale scheduled refresh results after auth profile rotation", async 
   controller.stopRuntimeAuthRefreshTimer();
 });
 
-it.each([false, true])(
+it.each([false, true, "provider-abort"])(
   "injects the AWS SDK sentinel and clears stale refresh state (exchange throws: %s)",
   async (exchangeThrows) => {
     vi.useFakeTimers();
@@ -932,7 +932,11 @@ it.each([false, true])(
       source: "aws-sdk default chain",
     });
     if (exchangeThrows) {
-      mocks.prepareProviderRuntimeAuth.mockRejectedValue(new Error("No runtime auth plugin"));
+      const error = new Error("No runtime auth plugin");
+      if (exchangeThrows === "provider-abort") {
+        error.name = "AbortError";
+      }
+      mocks.prepareProviderRuntimeAuth.mockRejectedValue(error);
     } else {
       mocks.prepareProviderRuntimeAuth.mockResolvedValue(null);
     }

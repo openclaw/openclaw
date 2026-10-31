@@ -1,4 +1,3 @@
-import { isAbortError } from "../../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import {
@@ -572,7 +571,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
         runtimeAuthHandled = true;
       }
     } catch (error) {
-      if (isAbortError(error) || params.authProfileBinding || !usesAwsSdkChain) {
+      if (authSignal.aborted || params.authProfileBinding || !usesAwsSdkChain) {
         throw error;
       }
       params.log.warn(
@@ -627,7 +626,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
           await applyApiKeyInfo(candidate, index);
           return true;
         } catch (error) {
-          if (isAbortError(error) || error instanceof SecretSurfaceUnavailableError) {
+          if (authSignal.aborted || error instanceof SecretSurfaceUnavailableError) {
             throw error;
           }
           await recordOAuthRefreshFailure(candidate, error);
@@ -658,7 +657,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
       }
     } catch (err) {
       if (
-        isAbortError(err) ||
+        authSignal.aborted ||
         err instanceof FailoverError ||
         err instanceof SecretSurfaceUnavailableError
       ) {
@@ -696,7 +695,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
       }
       return true;
     } catch (error) {
-      if (isAbortError(error)) {
+      if (authSignal.aborted) {
         throw error;
       }
       return false;
