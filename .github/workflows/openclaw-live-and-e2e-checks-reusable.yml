@@ -1632,14 +1632,13 @@ jobs:
             --server-san 127.0.0.1 --server-san localhost --server-san host.openshell.internal
           cat > "$fixture_root/gateway.toml" <<TOML
           [openshell]
-          version = 1
+          version = 2
           [openshell.gateway]
-          compute_drivers = ["docker"]
+          compute_driver = "docker"
           [openshell.gateway.mtls_auth]
           enabled = true
           [openshell.drivers.docker]
-          sandbox_namespace = "$gateway_name"
-          network_name = "$gateway_name"
+          sandbox_label = "$gateway_name"
           grpc_endpoint = "https://host.openshell.internal:$gateway_port"
           TOML
           RUST_LOG=info openshell-gateway --config "$fixture_root/gateway.toml" \
