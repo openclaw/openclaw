@@ -437,6 +437,48 @@ describe("wizard setup ownership", () => {
     await cancelWizardSessions(context.wizardSessions);
   });
 
+  it("releases setup admission after the starting client stops polling", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.text({ message: "Bot token" });
+    });
+    const minutes = (count: number) => count * 60 * 1000;
+    try {
+      const abandoned = await startWizard(context);
+      const abandonedSession = getSession(context, abandoned.sessionId);
+
+      // A client that still polls keeps its session.
+      await vi.advanceTimersByTimeAsync(minutes(20));
+      await invokeWizard("wizard.next", { sessionId: abandoned.sessionId }, context);
+      await vi.advanceTimersByTimeAsync(minutes(20));
+      expect(abandonedSession.getStatus()).toBe("running");
+      expectBusy(await callWizard("wizard.start", { mode: "local" }, context));
+
+      // Then the client goes away for good.
+      await vi.advanceTimersByTimeAsync(minutes(5));
+      expect(abandonedSession.signal.aborted).toBe(true);
+      await whenAdmittedWizardSessionSettled(abandonedSession);
+      expect(abandonedSession.getStatus()).toBe("cancelled");
+      const replacement = await startWizard(context);
+
+      // A returning client learns that its session expired.
+      const late = await callWizard(
+        "wizard.next",
+        { sessionId: abandoned.sessionId, answer: { stepId: "late", value: "token" } },
+        context,
+      );
+      expect(late).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ details: { code: "WIZARD_NOT_FOUND" } }),
+      );
+      expect(getSession(context, replacement.sessionId).getStatus()).toBe("running");
+    } finally {
+      await cancelWizardSessions(context.wizardSessions);
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["wizard.status", "done"],
     ["wizard.status", "error"],

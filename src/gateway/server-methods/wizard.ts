@@ -67,6 +67,11 @@ async function runHostedWizard(run: (runtime: RuntimeEnv) => Promise<void>): Pro
   }
 }
 
+// Setup sessions are not bound to the connection that started them, so a client
+// that goes away would otherwise hold setup admission until Gateway restart.
+// Each wizard.next renews this idle window.
+const HOSTED_WIZARD_IDLE_TIMEOUT_MS = 25 * 60 * 1000;
+
 function readWizardStatus(session: WizardSession) {
   return {
     status: session.getStatus(),
@@ -111,32 +116,34 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
     const createSession = () =>
-      new WizardSession((prompter, _signal, wizardSession) =>
-        runHostedWizard((runtime) =>
-          flow === "channels"
-            ? context.channelWizardRunner(
-                {
-                  channel: params.channel,
-                  onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
-                  // Durable effects (plugin installs, config commit) must finish
-                  // even if the client cancels mid-write.
-                  beforePersistentEffect: async () => wizardSession.lockCancellation(),
-                  assertPersistentEffectCurrent: () =>
-                    wizardSession.assertPersistentEffectCurrent(),
-                },
-                runtime,
-                prompter,
-              )
-            : context.wizardRunner(
-                {
-                  mode: params.mode,
-                  workspace: params.workspace,
-                  installDaemon: params.installDaemon,
-                },
-                runtime,
-                prompter,
-              ),
-        ),
+      new WizardSession(
+        (prompter, _signal, wizardSession) =>
+          runHostedWizard((runtime) =>
+            flow === "channels"
+              ? context.channelWizardRunner(
+                  {
+                    channel: params.channel,
+                    onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
+                    // Durable effects (plugin installs, config commit) must finish
+                    // even if the client cancels mid-write.
+                    beforePersistentEffect: async () => wizardSession.lockCancellation(),
+                    assertPersistentEffectCurrent: () =>
+                      wizardSession.assertPersistentEffectCurrent(),
+                  },
+                  runtime,
+                  prompter,
+                )
+              : context.wizardRunner(
+                  {
+                    mode: params.mode,
+                    workspace: params.workspace,
+                    installDaemon: params.installDaemon,
+                  },
+                  runtime,
+                  prompter,
+                ),
+          ),
+        { idleTimeoutMs: HOSTED_WIZARD_IDLE_TIMEOUT_MS },
       );
     await startGatewayWizard({
       request,
@@ -144,6 +151,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
       lockSetupTarget: flow === "setup",
       createSession,
       respondStarted: async (session) => {
+        // No client is left to collect an expired session; one that returns gets
+        // the not-found answer clients already show as an expired session.
+        const retireExpired = () => {
+          if (session.wasExpired()) {
+            context.purgeWizardSession(sessionId);
+          }
+        };
+        void whenAdmittedWizardSessionSettled(session).then(retireExpired, retireExpired);
         const result = await session.next();
         if (result.done) {
           // Let the runner release setup admission before the terminal response,
