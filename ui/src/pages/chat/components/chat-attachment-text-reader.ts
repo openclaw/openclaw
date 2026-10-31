@@ -18,17 +18,31 @@ export async function readAttachmentText(
   }
   const timeoutController = new AbortController();
   const timeout = setTimeout(() => timeoutController.abort(), 10_000);
+  const combinedSignal = AbortSignal.any([signal, timeoutController.signal]);
+  // Node's bundled fetch crashes the process when a data: response is aborted after
+  // delivery but before its body is consumed: the data-scheme path builds the body
+  // without the stream controller its abort handler dereferences. A data: body is
+  // already local, so settle cancellation around the read instead of handing the
+  // signal to fetch.
+  const isDataUrl = src.startsWith("data:");
   try {
     const response = await fetch(src, {
       credentials: "same-origin",
       redirect: "error",
-      signal: AbortSignal.any([signal, timeoutController.signal]),
+      signal: isDataUrl ? undefined : combinedSignal,
     });
+    if (isDataUrl && combinedSignal.aborted) {
+      await response.body?.cancel().catch(() => undefined);
+      throw combinedSignal.reason;
+    }
     if (!response.ok) {
       await response.body?.cancel();
       throw new Error("Text attachment unavailable");
     }
     const bytes = await readResponseBytesWithinLimit(response, maxBytes, { truncate: excerpt });
+    if (isDataUrl && combinedSignal.aborted) {
+      throw combinedSignal.reason;
+    }
     if (!bytes) {
       throw new Error("Text attachment exceeds preview limit");
     }
