@@ -17,15 +17,18 @@ type BrowserExtensionPairing = {
   topology: "local" | "browser-node" | "direct-remote";
 };
 
+/** The extension accepts wss:// anywhere and ws:// only for loopback hosts. */
+function isAllowedGatewayUrl(url: URL): boolean {
+  return url.protocol === "wss:" || (url.protocol === "ws:" && isLoopbackHost(url.hostname));
+}
+
 /** Resolve a safe Gateway relay URL with the v2-bound route path. */
 function buildGatewayExtensionRelayUrl(raw: string): URL {
   const url = URL.parse(raw.trim());
   if (!url) {
     throw new Error("--gateway-url must be a valid ws:// or wss:// URL");
   }
-  const secure = url.protocol === "wss:";
-  const localPlaintext = url.protocol === "ws:" && isLoopbackHost(url.hostname);
-  if (!secure && !localPlaintext) {
+  if (!isAllowedGatewayUrl(url)) {
     throw new Error("--gateway-url must use wss:// (ws:// is allowed only for loopback)");
   }
   if (url.username || url.password || url.search || url.hash) {
@@ -38,6 +41,12 @@ function buildGatewayExtensionRelayUrl(raw: string): URL {
   }
   url.pathname = GATEWAY_EXTENSION_RELAY_PATH;
   return url;
+}
+
+/** The extension rejects every pairing whose optional gateway hint it cannot parse. */
+function isAllowedGatewayHint(raw: string): boolean {
+  const url = URL.parse(raw);
+  return url !== null && isAllowedGatewayUrl(url);
 }
 
 /**
@@ -76,7 +85,11 @@ export async function buildBrowserExtensionPairing(params: {
   if (!gateway && params.profile && relayUrl.pathname === GATEWAY_EXTENSION_RELAY_PATH) {
     relayUrl.searchParams.set("profile", params.profile);
   }
-  relayUrl.searchParams.set("gateway", gatewayHint);
+  // A plaintext non-loopback hint is unparsable for the extension and would turn
+  // a valid browser-node pairing into `malformed_response`; the hint is optional.
+  if (isAllowedGatewayHint(gatewayHint)) {
+    relayUrl.searchParams.set("gateway", gatewayHint);
+  }
   return {
     pairingString: `${relayUrl.toString()}#${token}`,
     relayPort,
