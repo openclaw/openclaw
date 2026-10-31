@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
+import { MANAGED_HANDOFF_RECOVERY_SOURCE } from "./update-managed-service-handoff-recovery-source.js";
 
 type CommandResult = { code: number; stdout: string; stderr: string };
 const output = (code = 1, stderr = ""): CommandResult => ({ code, stdout: "", stderr });
@@ -106,3 +107,36 @@ it.each([9_000, 1024 * 1024 + 1])(
     }
   },
 );
+
+it("keeps an elapsed recovery budget across wall-clock steps", () => {
+  let wallClock = 1_700_000_000_000;
+  let elapsed = 0;
+  const budget = runInNewContext(`${MANAGED_HANDOFF_COMMAND_SOURCE}\ncreateMonotonicBudget;`, {
+    Date: { now: () => wallClock },
+    performance: { now: () => elapsed },
+    params: { recoveryTimeoutMs: 2_400_000 },
+    hasManagedUpdateLease: () => true,
+  })(240_000);
+
+  elapsed = 60_000;
+  expect(budget.remainingMs()).toBe(180_000);
+
+  // A wall-clock step must not shorten or stretch the remaining budget, while the
+  // epoch deadline handed to runServiceCommand keeps tracking the live wall clock.
+  wallClock += 3_600_000;
+  expect([budget.remainingMs(), budget.commandDeadlineAt() - wallClock]).toEqual([
+    180_000, 180_000,
+  ]);
+  wallClock -= 7_200_000;
+  expect([budget.remainingMs(), budget.commandDeadlineAt() - wallClock]).toEqual([
+    180_000, 180_000,
+  ]);
+});
+
+it("drives the launchd recovery budget from elapsed time", () => {
+  expect(MANAGED_HANDOFF_RECOVERY_SOURCE).toContain(
+    "createMonotonicBudget(params.recoveryTimeoutMs)",
+  );
+  expect(MANAGED_HANDOFF_RECOVERY_SOURCE).not.toContain("Date.now() + params.recoveryTimeoutMs");
+  expect(MANAGED_HANDOFF_RECOVERY_SOURCE).not.toContain("deadline - Date.now()");
+});
