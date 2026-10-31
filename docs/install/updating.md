@@ -71,6 +71,14 @@ uncertain cleanup leaves a warning and retains the stage. Activation recovery
 and backups remain with their existing recovery owners. These changes must be
 present in the installed updater; a newer candidate cannot repair an old launcher.
 
+If an update driver disappears after the candidate was recorded as installed and
+serving, reconciliation records success with a driver-loss warning. It preserves
+plugin warnings and does not invent command exit codes or a current health check.
+Unverified candidates and recorded failures or recovery keep their failure path.
+The reconciling candidate must contain this change; it uses observations older
+updaters already record. A first update from an older release still uses that
+release's handoff launcher, and previously terminal history is not rewritten.
+
 Managed systemd stops bound the native command by the selected unit's effective
 stop timeout plus five seconds. Unavailable or infinite policy uses the finite
 Gateway stop budget with a warning; a command timeout retains its reason code
@@ -548,8 +556,17 @@ openclaw doctor --fix --full-integrity-check
 The default can miss an index/table mismatch in an untouched table. Use the full
 check when you need that coverage; it can take considerably longer on large
 databases. A successful quick check is never recorded as a full verification.
-Later runtime admission still performs a full check when no reusable
-full-verification seal exists, and can detect that mismatch before activation.
+Ordinary post-migration Doctor/update opens with no seal use bounded admission
+when the agent schema is current and there is no corruption evidence. They retain
+that file-bound admission across same-process reopens, including an incomplete
+checkpoint, without claiming a full verification or publishing a seal. The next
+Gateway startup runs full integrity and foreign-key verification in the
+background; readiness does not wait for it. Proven corruption revokes admission.
+Required index repairs, rejected proof, crash recovery, revoked validation, and
+explicit FULL policy retain their required checks. Whole-file checks required by
+synchronous agent openers run in the integrity child. Pending migrations still
+require their scoped pre-mutation checks, and update canaries retain foreground
+verification.
 The flag selects migration checks; it does not turn an already-current database
 into a separate verification job. Explicit database verification, backup
 verification, Doctor recovery, and compaction retain their existing checks.

@@ -293,6 +293,9 @@ reference more than one skill:
 Use $github and $release_notes to summarize this change for the release.
 ```
 
+The picker matches display titles across composed and decomposed Unicode forms
+without changing the displayed title or inserted command name.
+
 OpenClaw resolves explicit references from authorized senders on every channel
 and on generic Gateway, CLI, and webhook agent turns. It matches the current
 agent's eligible, user-invocable skills and tells the model to read each

@@ -4,9 +4,11 @@
  * Repeat with timing and allocation in separate processes; counts are plugin generations.
  * Append errors to measure auth-publication failures retaining synthetic 256 KiB build graphs:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-generation-retention.ts retention 25 40 errors
+ * Append decisions to retain a decision provider across sibling plugin replacements:
+ * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-generation-retention.ts retention 20 40 decisions
  * Uses the real bundled module binder, registry records, invocation views, and physical disposal.
  * Fixtures live under .local and are removed afterward; no Gateway or operator state is accessed.
- * Acceptance: retired-instance count stays bounded by one generation of adopted shared values.
+ * Acceptance: modules retain at most one adopted generation; errors and decisions retain none.
  * Timing excludes census GC; allocation samples include collected objects. Compare matched modes.
  */
 import assert from "node:assert/strict";
@@ -23,7 +25,7 @@ const [mode = "retention", rawGenerations = "25", rawPlugins = "40", scenario = 
 const generations = Number(rawGenerations);
 const pluginCount = Number(rawPlugins);
 assert(["retention", "timing", "allocation"].includes(mode));
-assert(["modules", "errors"].includes(scenario));
+assert(["modules", "errors", "decisions"].includes(scenario));
 assert(Number.isSafeInteger(generations) && generations > 0);
 assert(Number.isSafeInteger(pluginCount) && pluginCount > 0);
 assert(global.gc, "Run with --expose-gc");
@@ -127,7 +129,86 @@ async function createErrorWorkload() {
     }
   };
 }
-const generation = scenario === "errors" ? await createErrorWorkload() : moduleGeneration;
+async function createDecisionWorkload() {
+  const { createPluginRegistry } = await import("../../src/plugins/registry.js");
+  const { createPluginRuntime } = await import("../../src/plugins/runtime/index.js");
+  const { runPluginRegisterSyncInRegistry } =
+    await import("../../src/plugins/loader-module-runtime.js");
+  const { projectPluginContributions } =
+    await import("../../src/plugins/registry-contributions.js");
+  const { markPluginRegistryActive } = await import("../../src/plugins/registry-lifecycle.js");
+  const { getPluginInstance } = await import("../../src/plugins/plugin-instance-scope.js");
+  const { disposePluginRegistryInstances } = await import("../../src/plugins/runtime.js");
+  const runtime = createPluginRuntime();
+  class SiblingService {
+    readonly id: string;
+    constructor(id: string) {
+      this.id = id;
+    }
+    start() {}
+  }
+  const decisionProvider = {
+    id: "retained-decision",
+    contractVersion: 2 as const,
+    provider: { label: "Retention fixture", auth: [] },
+    evaluate: async () => ({ status: "unavailable" as const, reason: "transport" as const }),
+  };
+  let current: ReturnType<typeof createEmptyPluginRegistry> | undefined;
+  return async (track: boolean) => {
+    const builder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime,
+      activateGlobalSideEffects: false,
+    });
+    const retained = current?.plugins[0];
+    if (current && retained) {
+      builder.registry.plugins.push(retained);
+      projectPluginContributions(current, retained, builder.registry);
+    }
+    for (let index = retained ? 0 : -1; index < pluginCount; index++) {
+      const record = createPluginRecord({
+        id: index < 0 ? "decision-owner" : `sibling-${index}`,
+        source: path.join(root, `plugin-${index}.js`),
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+        ...(index < 0 ? { contracts: { decisionProviders: [decisionProvider.id] } } : {}),
+      });
+      const api = builder.createApi(record, { config: {} });
+      runPluginRegisterSyncInRegistry(
+        () => {
+          if (index < 0) {
+            api.registerDecisionProvider(decisionProvider);
+          } else {
+            api.registerService(new SiblingService(record.id));
+          }
+        },
+        api,
+        builder.registry,
+        record.id,
+      );
+      builder.registry.plugins.push(record);
+    }
+    assert.deepEqual(builder.registry.diagnostics, []);
+    markPluginRegistryActive(builder.registry);
+    if (current) {
+      if (track) {
+        instances.push(
+          ...current.plugins.slice(1).map((record) => new WeakRef(getPluginInstance(record)!)),
+        );
+      }
+      const result = await disposePluginRegistryInstances(current, builder.registry, { cfg: {} });
+      assert.deepEqual(result.failures, []);
+    }
+    current = builder.registry;
+  };
+}
+const generation =
+  scenario === "errors"
+    ? await createErrorWorkload()
+    : scenario === "decisions"
+      ? await createDecisionWorkload()
+      : moduleGeneration;
 async function census() {
   await setImmediate();
   // queryObjects performs a full GC, including ephemeron processing.
@@ -189,9 +270,15 @@ try {
     }),
   );
   assert(
-    final.liveTrackedObjects <= (scenario === "errors" ? 0 : pluginCount),
+    final.liveTrackedObjects <= (scenario === "modules" ? pluginCount : 0),
     "Retired graphs remain",
   );
+  if (scenario === "decisions" && mode === "retention") {
+    assert(
+      final.memory.heapUsed - initial.memory.heapUsed <= 32 * 1024 * 1024,
+      "Post-GC decision reload heap grew beyond the 32 MiB budget",
+    );
+  }
 } finally {
   inspector.disconnect();
   fs.rmSync(root, { recursive: true, force: true });

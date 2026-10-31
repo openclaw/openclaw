@@ -370,6 +370,9 @@ still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
 machine running a session, and unavailable measurements are not shown as zero.
+The telemetry and backup overview reserves its space while those readings load,
+so the desktop stays in place. Scroll that overview when its contents exceed the
+available space; turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
 

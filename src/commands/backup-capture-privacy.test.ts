@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createBackupArchive } from "../infra/backup-create.js";
-import { isolatedBackupCase } from "../infra/backup-create.test-support.js";
+import { isolatedBackupCase, listArchiveEntries } from "../infra/backup-create.test-support.js";
 import { createGitBackup } from "../snapshot/git-backup.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -41,17 +40,6 @@ function createDatabase(databasePath: string, role: "global" | "agent" = "global
     "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,created_at,updated_at) VALUES('primary',?,?,?,1,1)",
   ).run(role, version, role === "agent" ? "main" : null);
   db.close();
-}
-
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    onReadEntry: (entry) => {
-      entries.push(entry.path);
-    },
-  });
-  return entries;
 }
 
 describe("private update capture exclusion", () => {
@@ -343,7 +331,7 @@ describe("private update capture exclusion", () => {
               databases: [database],
             });
       await expect(create).rejects.toThrow("Private update captures are excluded");
-      expect(await fs.readFile(databasePath)).toEqual(before);
+      expect((await fs.readFile(databasePath)).equals(before), databasePath).toBe(true);
     }),
   );
 
@@ -424,7 +412,7 @@ describe("private update capture exclusion", () => {
         await fs.writeFile(marker, bytes);
         await expect(create()).rejects.toThrow("Private update capture");
         await expect(fs.stat(repository)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(await fs.readFile(databasePath)).toEqual(before);
+        expect((await fs.readFile(databasePath)).equals(before), databasePath).toBe(true);
         expect(await fs.readFile(marker, "utf8")).toBe(bytes);
       }
       // Only remove this fixture-owned marker. The same ordinary alias must remain usable.

@@ -280,11 +280,12 @@ if (args[0] === "run" && args[1] === "list") {
     { databaseId: 201, event: "workflow_dispatch", headSha: "manual", status: "completed", conclusion: "success" },
     { databaseId: 202, event: "push", headSha: "failed", status: "completed", conclusion: "failure" },
     { databaseId: 203, event: "push", headSha: "running", status: "in_progress", conclusion: "" },
-    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success" },
-    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success" }
+    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z", attempt: 3 },
+    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success", createdAt: "2026-08-30T23:59:00Z", updatedAt: "2026-08-31T00:01:00Z", attempt: 2 }
   ]));
 } else if (args[0] === "run" && args[1] === "view") {
-  console.log(JSON.stringify({ status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z" }));
+  console.error("run metadata must come from the captured list observation");
+  process.exit(18);
 } else if (args[0] === "api" && args.some((arg) => arg.includes("/jobs?"))) {
   const endpoint = args.find(arg => arg.includes("/jobs?"));
   const page = Number(new URL(endpoint, "https://api.github.com").searchParams.get("page"));
@@ -342,6 +343,13 @@ if (args[0] === "run" && args[1] === "list") {
       } else {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout.match(/CI run \d+/gu)).toEqual(runIds.map((id) => `CI run ${id}`));
+        for (const id of runIds) {
+          expect(result.stdout).toContain(
+            id === 204
+              ? "CI run 204  first  wall=60s  exec=30s  firstStartDelay=10s"
+              : "CI run 205  second  wall=120s  exec=30s  firstStartDelay=70s",
+          );
+        }
         expect(
           result.stdout.match(
             new RegExp(`jobs=${fixture.jobs} {2}avg=30s {2}p90=30s {2}p95=30s {2}max=30s`, "gu"),
@@ -360,13 +368,16 @@ if (args[0] === "run" && args[1] === "list") {
       );
       expect(
         calls.filter((args) => args[0] === "run" && args[1] === "view").map((args) => args[2]),
-      ).toEqual(runIds.map(String));
+      ).toEqual([]);
+      expect(calls[0]?.[calls[0].indexOf("--json") + 1]?.split(",")).toEqual(
+        expect.arrayContaining(["createdAt", "updatedAt", "attempt"]),
+      );
       expect(calls.filter((args) => args[0] === "api").map((args) => args[3])).toEqual(
         runIds.flatMap((id) =>
           Array.from(
             { length: fixture.requests },
             (_, page) =>
-              `repos/openclaw/openclaw/actions/runs/${id}/jobs?per_page=100&page=${page + 1}`,
+              `repos/openclaw/openclaw/actions/runs/${id}/attempts/${id === 204 ? 3 : 2}/jobs?per_page=100&page=${page + 1}`,
           ),
         ),
       );

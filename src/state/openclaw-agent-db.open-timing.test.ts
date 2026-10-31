@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import {
   closeOpenClawAgentDatabaseByPath as closeAgentDb,
@@ -92,7 +92,7 @@ describe("agent database open timings", () => {
     const { options, pathname, advance } = createTimedOpen();
     openAgentDb(options);
     closeOpenClawAgentDatabasesForTest();
-    revokeSqliteDatabaseAdmissionsForPath(pathname);
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     logger.warn.mockClear();
     const nativeFinished = createDeferredCore();
     const release = createDeferredCore();

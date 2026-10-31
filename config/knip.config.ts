@@ -142,7 +142,9 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-delete-diagnostics-measure.ts!",
   "scripts/perf/session-entry-projection-measure.ts!",
+  "scripts/perf/session-lifecycle-delete-sql-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
@@ -316,7 +318,8 @@ const repositoryScriptEntries = [
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
   "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
-  // Installed recovery launches its driver and preloads its fault observer by path.
+  // Installed recovery launches its driver/access probe and preloads its fault observer by path.
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery-observer.mjs!",

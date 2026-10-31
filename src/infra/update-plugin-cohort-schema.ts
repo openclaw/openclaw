@@ -168,7 +168,7 @@ export type PluginCohortRecoveryWriteBinding = z.infer<
 >;
 
 /** This exact old-reader shape reserves the operation; it never claims full-state recovery. */
-export function assertPluginCohortReservation(reservation: UpdateRecoveryRecord): void {
+function assertPluginCohortReservation(reservation: UpdateRecoveryRecord): void {
   if (!reservation.source) {
     throw new Error("Plugin cohort reservation requires its original state source");
   }

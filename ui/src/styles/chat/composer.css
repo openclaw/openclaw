@@ -3306,9 +3306,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__effort-zap--ultrafast {
-  --icon-secondary: color-mix(in oklab, var(--accent) 75%, white);
-  --icon-primary: var(--accent);
-
   width: 16px;
   height: 18px;
   flex-basis: 16px;
@@ -3547,9 +3544,13 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
       transform: translate(-50%, -50%);
     }
 
+    /* The double bolt is centered geometrically, but its bright front bolt sits
+       low-right and its tip hangs below the open dial. Nudge it up-left so its
+       visual weight lands on the dial center and its tip meets the arc ends. */
     & .chat-controls__effort-fast-badge.chat-controls__effort-zap--ultrafast {
       width: 12px;
       height: 14px;
+      margin: -0.75px 0 0 -0.25px;
     }
 
     & .agent-chat__composer-footer .chat-controls__effort-fast-badge svg {
@@ -3956,8 +3957,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   stroke: currentColor;
 }
 
+/* Reset the muted overrides so zapDouble uses its own accent colors. */
 .chat-controls__speed-option[aria-checked="true"] .chat-controls__speed-option-icon {
-  --icon-secondary: color-mix(in oklab, var(--accent) 75%, white);
+  --icon-primary: initial;
+  --icon-secondary: initial;
   color: var(--accent);
 }
 

@@ -394,9 +394,12 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   dashboards: {
     ready: "openclaw-dashboards-page .dashboard-card",
     action: {
-      label: "Filter 200 dashboards to one match",
+      label: "Type a search to filter 200 dashboards to one match",
       run: async (page) => {
-        await page.locator("openclaw-dashboards-page input[type=search]").fill("Interaction 0995");
+        // Native typing attributes expected result reflow to user input; fill() does not.
+        await page
+          .locator("openclaw-dashboards-page input[type=search]")
+          .pressSequentially("Interaction 0995");
         await page.waitForFunction(() => {
           const cards = document.querySelectorAll(".dashboard-card[data-dashboard-session]");
           return (
@@ -746,9 +749,9 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     ready: ".skills-group .plugins-item",
     rows: { selector: ".skills-group .plugins-item", minimum: 1000 },
     action: {
-      label: "Filter 1,000 installed skills to one match",
+      label: "Type a search to filter 1,000 installed skills to one match",
       run: async (page) => {
-        await page.locator(".skills-toolbar__search input").fill("Data skill 0999");
+        await page.locator(".skills-toolbar__search input").pressSequentially("Data skill 0999");
         await page.waitForFunction(() => {
           const rows = document.querySelectorAll(".plugins-item--clickable");
           return rows.length === 1 && rows[0]?.textContent?.includes("Data skill 0999");
@@ -940,8 +943,8 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
     source: requiredScenario(interactionScenarios, "cron-search"),
     action: {
-      label: "Filter 500 automations to one match",
-      run: requiredScenario(interactionScenarios, "cron-search").run,
+      label: "Type a search to filter 500 automations to one match",
+      run: requiredScenario(interactionScenarios, "cron-search-typing").run,
     },
   },
 };
