@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  registerInternalHook,
+  unregisterInternalHook,
+  type AgentBootstrapHookContext,
+} from "../hooks/internal-hooks.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -28,6 +33,104 @@ afterEach(async () => {
   await state.cleanup();
 });
 describe("personal bootstrap", () => {
+  it("keeps shared defaults but does not open selected profiles in non-private sessions", async () => {
+    const workspaceDir = tempDirs.make("bootstrap-people-audience-");
+    const alice = ensureProfileForEmail("alice@example.test");
+    const bob = ensureProfileForEmail("bob@example.test");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared defaults");
+    for (const [id, content] of [
+      [alice.id, "Alice private preferences"],
+      [bob.id, "Bob private preferences"],
+    ] as const) {
+      const dir = path.join(workspaceDir, "users", id);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "USER.md"), content);
+    }
+    const load = async (sessionKey: string, chatType?: "direct" | "group" | "channel") => {
+      const context = await resolveBootstrapContextForRun({
+        workspaceDir,
+        bootstrapUserProfileId: alice.id,
+        sessionKey,
+        chatType,
+      });
+      return context.contextFiles.filter((file) => file.path.endsWith("USER.md"));
+    };
+    expect((await load("agent:main:private", "direct")).map((file) => file.content)).toEqual([
+      "Shared defaults",
+      "Alice private preferences",
+    ]);
+    using reads = vi.spyOn(workspaceFiles, "readWorkspaceFileWithGuards");
+    for (const [key, chatType, expected] of [
+      ["agent:main:opaque", "group", ["Shared defaults"]],
+      ["agent:main:opaque", "channel", ["Shared defaults"]],
+      ["agent:main:discord:group:room", undefined, ["Shared defaults"]],
+      ["agent:main:discord:channel:room", undefined, ["Shared defaults"]],
+      ["agent:main:cron:daily", undefined, ["Shared defaults"]],
+      ["agent:main:subagent:child", undefined, []],
+    ] as const) {
+      reads.mockClear();
+      const files = await load(key, chatType);
+      expect(
+        files.map((file) => file.content),
+        key,
+      ).toEqual(expected);
+      expect(
+        reads.mock.calls.some(([params]) =>
+          params.filePath.includes(`${path.sep}users${path.sep}`),
+        ),
+        key,
+      ).toBe(false);
+    }
+    expect((await load("agent:main:private", "direct")).map((file) => file.content)).toEqual([
+      "Shared defaults",
+      "Alice private preferences",
+    ]);
+    expect(
+      (await load("agent:main:discord:group:room", "direct")).map((file) => file.content),
+    ).toEqual(["Shared defaults", "Alice private preferences"]);
+  });
+
+  it.each(["group", "channel"] as const)(
+    "withholds personal sources added by bootstrap hooks in a %s",
+    async (chatType) => {
+      const workspaceDir = tempDirs.make("bootstrap-people-hook-audience-");
+      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared defaults");
+      const personalDir = path.join(workspaceDir, "users", "synthetic");
+      const hook: Parameters<typeof registerInternalHook>[1] = (event) => {
+        const context = event.context as AgentBootstrapHookContext;
+        context.bootstrapFiles.push(
+          {
+            name: "USER.md",
+            path: path.join(personalDir, "USER.md"),
+            content: "Hook private preferences",
+            missing: false,
+            personalUser: true,
+          },
+          {
+            name: "USER.md",
+            path: path.join(personalDir, "other", "USER.md"),
+            content: "Origin private preferences",
+            missing: false,
+            origin: { kind: "personal", rootPath: personalDir },
+          },
+        );
+      };
+      registerInternalHook("agent:bootstrap", hook);
+      try {
+        const context = await resolveBootstrapContextForRun({
+          workspaceDir,
+          sessionKey: "agent:main:opaque",
+          chatType,
+        });
+        expect(context.contextFiles.filter((file) => file.path.endsWith("USER.md"))).toEqual([
+          { path: path.join(workspaceDir, "USER.md"), content: "Shared defaults" },
+        ]);
+      } finally {
+        unregisterInternalHook("agent:bootstrap", hook);
+      }
+    },
+  );
+
   it("rejects a retired profile's overlay after worker preparation and a merge during the file read", async () => {
     const workspaceDir = tempDirs.make("bootstrap-profile-retired-");
     const alice = ensureProfileForEmail("alice@example.test");

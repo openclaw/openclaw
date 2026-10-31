@@ -34,9 +34,13 @@ their implied write/admin scopes); broader Gateway read access, administrator
 access, and general write access are not required. The editor always uses the signed-in person, not the owner of
 the currently open chat. It cannot edit another person’s file or shared defaults.
 
-You can also ask an agent in any authenticated Gateway chat session to update
+You can also ask an agent in an authenticated Gateway chat session to update
 your personal instructions, including sessions backed by a project worktree or
-owned by someone else. The `personal_instructions` tool reads or updates the
+owned by someone else. Known group/channel requests are excluded: use
+**Settings → Profile → Personal instructions** instead, so the file contents do
+not enter shared tool results. This also applies when a group request delegates
+the operation into another session or a private request runs in a known group.
+The authenticated Settings editor is unchanged. The `personal_instructions` tool reads or updates the
 **requesting person’s** file in the selected agent’s configured workspace; the
 session owner, task directory, and model-supplied profile IDs never choose the
 write target. It reads the current file before saving with its content hash.
@@ -69,6 +73,16 @@ turns, OpenClaw loads the shared file first and the selected personal file secon
 The personal file supplements, rather than replaces, the shared file, overriding
 conflicting shared user preferences, not project rules or security policy. The
 workspace-root `USER.md` remains shared regardless of the workspace directory's name.
+
+Group and channel bootstrap contexts omit the selected personal overlay and do
+not open its file. Cron and subagent bootstrap contexts also omit personal
+profiles; their existing shared-file allowlists still apply. Host-resolved chat
+type takes precedence over session-key fallback classification. Withholding the
+overlay does not reassign the session or change which person can edit a file.
+This is not private-audience admission: shared web sessions that are classified
+as direct or unknown, enabled filesystem tools, and previously delivered history
+retain their existing boundaries. The chat tool rejects known group/channel
+origins and destinations; it does not prove a direct or unknown session is private.
 
 Codex connections without a managed inference relay use shared workspace
 preferences only: they omit the selected personal overlay because native thread

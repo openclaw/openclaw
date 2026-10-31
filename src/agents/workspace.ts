@@ -932,6 +932,19 @@ type BootstrapSessionContext = {
   workspaceDir?: string;
 };
 
+/** Bootstrap class only; this does not establish a person-private audience. */
+export function isNonPrivateBootstrapSession(session?: string | BootstrapSessionContext): boolean {
+  const { sessionKey, chatType }: BootstrapSessionContext =
+    typeof session === "string" ? { sessionKey: session } : (session ?? {});
+  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
+  return (
+    isSubagentSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    effectiveChatType === "group" ||
+    effectiveChatType === "channel"
+  );
+}
+
 function filterRootMemoryBootstrapFiles(
   files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
@@ -958,15 +971,15 @@ export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  const { sessionKey, chatType, workspaceDir }: BootstrapSessionContext =
+  const { sessionKey, workspaceDir }: BootstrapSessionContext =
     typeof session === "string" ? { sessionKey: session } : (session ?? {});
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
-  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  const isNonPrivate =
-    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
+  const isNonPrivate = isNonPrivateBootstrapSession(session);
   const privacyFilteredFiles = isNonPrivate
-    ? filterRootMemoryBootstrapFiles(files, workspaceDir)
+    ? filterRootMemoryBootstrapFiles(files, workspaceDir).filter(
+        (file) => file.personalUser !== true && file.origin?.kind !== "personal",
+      )
     : files;
   if (isSubagent) {
     return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));

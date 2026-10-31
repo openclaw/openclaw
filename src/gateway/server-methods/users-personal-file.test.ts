@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import {
   withGatewayToolCallerIdentity,
   withGatewayPersonalToolUser,
@@ -259,6 +260,69 @@ describe("personal USER.md self-service", () => {
         content: "Prefer examples.",
         path: personalPath(),
       });
+    },
+  );
+
+  it.each(["get", "set"] as const)(
+    "keeps personal %s out of group and channel tool results without touching either file",
+    async (action) => {
+      const { identity } = toolTurn(["operator.sessions.read"]);
+      const tool = createPersonalInstructionsTool("main");
+      const original = "Alice private instructions";
+      const peer = path.join(workspace, "users", "bob", "USER.md");
+      await fs.mkdir(path.dirname(personalPath()), { recursive: true });
+      await fs.mkdir(path.dirname(peer), { recursive: true });
+      await fs.writeFile(personalPath(), original);
+      await fs.writeFile(peer, "Bob private instructions");
+      const before = await withGatewayToolCallerIdentity(identity, () =>
+        tool.execute("personal-read", { action: "get" }),
+      );
+      const hash = (before.details as { hash: string }).hash;
+      const groupKey = "agent:main:discord:group:room";
+      const channelKey = "agent:main:discord:channel:room";
+      for (const [sessionKey, sourceKey, chatType] of [
+        [identity.sessionKey, "agent:main:opaque", "group"],
+        [identity.sessionKey, "agent:main:opaque", "channel"],
+        [identity.sessionKey, groupKey, undefined],
+        [identity.sessionKey, channelKey, undefined],
+        [groupKey, undefined, undefined],
+        [channelKey, undefined, undefined],
+        [groupKey, "agent:main:private-source", "direct"],
+      ] as const) {
+        const beforeRoots = state.rootCalls;
+        const caller = {
+          ...identity,
+          sessionKey,
+          requesterOrigin: sourceKey
+            ? captureRequesterOrigin({ sessionKey: sourceKey, chatType })
+            : undefined,
+        };
+        await expect(
+          withGatewayToolCallerIdentity(caller, () =>
+            tool.execute("personal-shared", {
+              action,
+              ...(action === "set" ? { content: "Must not save", expectedHash: hash } : {}),
+            }),
+          ),
+        ).rejects.toThrow(/Settings.*Profile.*Personal instructions/);
+        expect(state.rootCalls).toBe(beforeRoots);
+        expect(await fs.readFile(personalPath(), "utf8")).toBe(original);
+        expect(await fs.readFile(peer, "utf8")).toBe("Bob private instructions");
+        expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
+      }
+      // Host-resolved direct chat type retains precedence over a group-looking key.
+      const direct = await withGatewayToolCallerIdentity(
+        {
+          ...identity,
+          sessionKey: groupKey,
+          requesterOrigin: captureRequesterOrigin({
+            sessionKey: groupKey,
+            chatType: "direct",
+          }),
+        },
+        () => tool.execute("personal-direct", { action: "get" }),
+      );
+      expect(direct.details).toMatchObject({ profileId: "alice", content: original });
     },
   );
 

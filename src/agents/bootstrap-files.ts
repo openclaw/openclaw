@@ -30,6 +30,7 @@ import {
   filterBootstrapFilesForSession,
   getWorkspaceFileSourceRelativePath,
   isWorkspaceSetupCompleted,
+  isNonPrivateBootstrapSession,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
   workspaceFilesShareSourceIdentity,
@@ -276,11 +277,13 @@ async function resolveBootstrapFiles(
   for (const file of rawFiles) {
     file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
   }
-  const personalFile = await loadPersonalUserBootstrapFile(
-    params.workspaceDir,
-    params.bootstrapUserProfileId,
-    params.warn,
-  );
+  const personalFile = isNonPrivateBootstrapSession(session)
+    ? undefined
+    : await loadPersonalUserBootstrapFile(
+        params.workspaceDir,
+        params.bootstrapUserProfileId,
+        params.warn,
+      );
   const userIndex = rawFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);

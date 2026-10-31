@@ -18,6 +18,7 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   hasMultipleResidentSessionSharingIdentities,
@@ -95,6 +96,21 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       assertAdmittedRunOperatorAuthority(requesterAuthority);
       assertToolCurrent();
       operatorAuthority.assertCurrent();
+      // Tool results enter conversation history. A private edit request does not
+      // authorize returning the whole profile to a group, including delegated work.
+      const origin = toolCaller?.requesterOrigin;
+      const sourceChatType =
+        origin?.chatType ??
+        deriveSessionChatTypeFromKey(origin?.sessionKey ?? toolCaller?.sessionKey);
+      const targetChatType =
+        origin?.sessionKey === toolCaller?.sessionKey
+          ? sourceChatType
+          : deriveSessionChatTypeFromKey(toolCaller?.sessionKey);
+      if ([sourceChatType, targetChatType].some((type) => type === "group" || type === "channel")) {
+        throw new PersonalFileAccessError(
+          "Personal instructions are unavailable in group or channel chats. Use Settings → Profile → Personal instructions instead.",
+        );
+      }
       id = operatorAuthority.profileId;
     } else {
       if (

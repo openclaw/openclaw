@@ -32,7 +32,7 @@ export function createPersonalInstructionsTool(agentId: string): AnyAgentTool {
     name: "personal_instructions",
     label: "Personal Instructions",
     description:
-      "On a multi-user Gateway, read or update the authenticated requesting user’s personal USER.md from any Gateway chat session, including project worktrees. Defaults to this agent’s configured workspace; agentId selects another permitted agent. Use get first, preserve unrelated preferences, then set the complete content with expectedHash set to the returned hash (null only when missing). Limit 4,000 characters. Only update when the user asks. Never use the session owner’s identity or shared USER.md. Requires a live authenticated user turn; does not grant general filesystem access.",
+      "On a multi-user Gateway, read or update the authenticated requesting user’s personal USER.md, including from project worktrees. Group or channel chats must use Settings → Profile → Personal instructions so private contents do not enter shared tool results. Defaults to this agent’s configured workspace; agentId selects another permitted agent. Use get first, preserve unrelated preferences, then set the complete content with expectedHash set to the returned hash (null only when missing). Limit 4,000 characters. Only update when the user asks. Never use the session owner’s identity or shared USER.md. Requires a live authenticated user turn; does not grant general filesystem access.",
     parameters: PersonalInstructionsSchema,
     execute: async (_id, input, signal) => {
       const inputParams = asOptionalObjectRecord(input);
