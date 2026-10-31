@@ -1,7 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  ensureMemoryChunkProvenance,
-  ensureMemoryRecallMetadataSchema,
   migrateMemoryIndexSourcesIdentity,
   migrateMemoryIndexStorage,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
@@ -84,6 +82,7 @@ import {
   finishAgentSchemaMigration,
   hasPendingCurrentVersionAgentDatabaseMigration,
   hasPendingMemoryChunkMetadataMigration,
+  migrateMemoryChunkMetadataSchema,
   migrateRetiredAgentStateLeaseSchema,
   ensureSessionKeyContractSchemaInTransaction,
   ensureSessionReactionsSchemaInTransaction,
@@ -135,11 +134,6 @@ import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-
 import { resolveSchemaMigrationIntegrityTables } from "./schema-migration-integrity-tables.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
-
-function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
-  ensureMemoryRecallMetadataSchema(db);
-  ensureMemoryChunkProvenance(db);
-}
 
 export function* agentDatabaseIntegrityBeforeMutationSteps(
   database: DatabaseSync,
