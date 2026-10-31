@@ -940,10 +940,10 @@ summary,
     --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
   }
 
-  html.control-ui-chat-shell,
-  .control-ui-chat-shell body {
+  html.control-ui-content-canvas,
+  .control-ui-content-canvas body {
     /* iOS Safari exposes the document canvas around its browser chrome; keep
-       that canvas on the same semantic surface as the narrow transcript. */
+       that canvas on the same surface as the exposed narrow route canvas. */
     background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
   }
 }

@@ -1,7 +1,7 @@
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
-import { transcodeAudioBuffer } from "../media/media-services.js";
+import { transcodeAudioBuffer } from "../media/audio-transcode.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
@@ -86,42 +86,34 @@ export async function textToSpeechCore(
   }
 
   const transcodeChannel = params.channel;
-  const transcodeTarget = synthesis.target;
-  const transcodeBuffer = synthesis.audioBuffer;
-  const transcodeExtension = synthesis.fileExtension;
-  const transcoded = await (async () => {
-    if (transcodeTarget !== "audio-file") {
-      return undefined;
-    }
+  let audioBuffer = synthesis.audioBuffer;
+  let fileExtension = synthesis.fileExtension;
+  let outputFormat = synthesis.outputFormat;
+  if (synthesis.target === "audio-file") {
     const delivery = resolveChannelTtsVoiceDelivery(transcodeChannel);
     const preferred = delivery?.preferAudioFileFormat?.trim().toLowerCase();
-    if (!preferred) {
-      return undefined;
-    }
-    const sourceExt = transcodeExtension.trim().toLowerCase().replace(/^\./, "");
-    if (sourceExt === preferred) {
-      return undefined;
-    }
-    const outcome = await transcodeAudioBuffer({
-      audioBuffer: transcodeBuffer,
-      sourceExtension: sourceExt,
-      targetExtension: preferred,
-    });
-    if (!outcome.ok) {
-      if (outcome.reason === "transcoder-failed") {
-        // Surface only the case where the host actually attempted the transcode
-        // and it broke. The other reasons are by-design skips and would just be log noise.
-        logVerbose(
-          `TTS: pre-transcode ${sourceExt}->${preferred} for channel=${transcodeChannel ?? "?"} failed: ${outcome.detail ?? "unknown"}`,
-        );
+    if (preferred) {
+      const sourceExt = fileExtension.trim().toLowerCase().replace(/^\./, "");
+      if (sourceExt !== preferred) {
+        const outcome = await transcodeAudioBuffer({
+          audioBuffer,
+          sourceExtension: sourceExt,
+          targetExtension: preferred,
+        });
+        if (outcome.ok) {
+          audioBuffer = outcome.buffer;
+          fileExtension = `.${preferred}`;
+          outputFormat = preferred;
+        } else if (outcome.reason === "transcoder-failed") {
+          // Surface only the case where the host actually attempted the transcode
+          // and it broke. The other reasons are by-design skips and would just be log noise.
+          logVerbose(
+            `TTS: pre-transcode ${sourceExt}->${preferred} for channel=${transcodeChannel ?? "?"} failed: ${outcome.detail ?? "unknown"}`,
+          );
+        }
       }
-      return undefined;
     }
-    return { audioBuffer: outcome.buffer, fileExtension: `.${preferred}`, outputFormat: preferred };
-  })();
-  const audioBuffer = transcoded ? transcoded.audioBuffer : synthesis.audioBuffer;
-  const fileExtension = transcoded ? transcoded.fileExtension : synthesis.fileExtension;
-  const outputFormat = transcoded ? transcoded.outputFormat : synthesis.outputFormat;
+  }
   const metadata = {
     latencyMs: synthesis.latencyMs,
     provider: synthesis.provider,

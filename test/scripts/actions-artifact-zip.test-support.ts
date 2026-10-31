@@ -12,14 +12,14 @@ function u32(value: number): Buffer {
   return buffer;
 }
 
-export function makeStoredZip(files: Record<string, string>): Buffer {
+export function makeStoredZip(files: Record<string, string | Buffer>): Buffer {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let offset = 0;
 
   for (const [name, contents] of Object.entries(files)) {
     const nameBuffer = Buffer.from(name, "utf8");
-    const contentsBuffer = Buffer.from(contents, "utf8");
+    const contentsBuffer = Buffer.isBuffer(contents) ? contents : Buffer.from(contents, "utf8");
     const checksum = crc32(contentsBuffer);
     const localHeader = Buffer.concat([
       u32(0x04034b50),

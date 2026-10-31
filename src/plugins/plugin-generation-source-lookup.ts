@@ -5,7 +5,12 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
-import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
+import {
+  markPluginSourceAcquisitionError,
+  markPluginSourcePreparationOperation,
+  PluginSourceRecoveryUnavailableError,
+} from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
   createPluginNativeReferenceValidator,
@@ -215,6 +220,7 @@ function createRecoverySourceResolver(
 
 export type PluginRecoverySource = {
   rootDir: string;
+  directories: ReadonlySet<string>;
   sourceCapture: ReturnType<typeof createPluginSourceCapture>;
   native?: PluginNativeRecovery;
   resolve: (source: string) => string;
@@ -229,6 +235,7 @@ function copyRecoverySource({
   capturedRoot,
   boundaryRoot,
   sources,
+  directories,
   native: suppliedNative,
 }: {
   rootDir: string;
@@ -236,6 +243,7 @@ function copyRecoverySource({
   capturedRoot: string;
   boundaryRoot: string;
   sources: ReadonlyMap<string, string>;
+  directories: ReadonlySet<string>;
   native?: PluginNativeRecovery;
 }): PluginRecoverySource {
   let native = suppliedNative;
@@ -246,6 +254,8 @@ function copyRecoverySource({
     const relocate = (filename: string) =>
       path.join(directory, path.relative(boundaryRoot, filename));
     const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
+    const metrics = getPluginGenerationMetrics();
+    let copiedBytes = 0;
     // Keep dependency links within the new capture without reopening installed packages.
     fs.cpSync(boundaryRoot, recovery.directory, {
       recursive: true,
@@ -253,7 +263,11 @@ function copyRecoverySource({
       filter: (from, to) => {
         const fact = native?.references.get(from);
         if (!fact) {
-          if (fs.lstatSync(from).isSymbolicLink()) {
+          const entry = fs.lstatSync(from);
+          if (metrics && entry.isFile()) {
+            copiedBytes += entry.size;
+          }
+          if (entry.isSymbolicLink()) {
             const target = fs.readlinkSync(from);
             const relative = path.isAbsolute(target)
               ? relativePluginPathInsideRootSync(boundaryRoot, target)
@@ -280,6 +294,9 @@ function copyRecoverySource({
         return false;
       },
     });
+    if (metrics) {
+      metrics.copiedBytes += copiedBytes;
+    }
     const assertReference = createPluginNativeReferenceValidator(recovery.directory, rootDir);
     for (const [target, fact] of hardlinkedTargets) {
       assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
@@ -292,9 +309,11 @@ function copyRecoverySource({
     previousNative?.dispose();
     const sourceCapture = recovery;
     const root = relocate(capturedRoot);
+    const copiedDirectories = new Set([...directories].map(relocate));
     let disposed = false;
     return {
       rootDir: root,
+      directories: copiedDirectories,
       sourceCapture,
       resolve: createRecoverySourceResolver(rootDir, sourceRoot, copiedSources),
       native,
@@ -308,6 +327,7 @@ function copyRecoverySource({
           capturedRoot: root,
           boundaryRoot: directory,
           sources: copiedSources,
+          directories: copiedDirectories,
           native: native?.fork(),
         });
       }),
@@ -348,6 +368,7 @@ export function createPluginGenerationSourceLookup({
   capturedRoot,
   boundaryRoot,
   capturedPaths,
+  capturedDirectories,
   hardlinkedSources,
   assertModuleAvailable,
   captureNativeRecovery,
@@ -357,6 +378,7 @@ export function createPluginGenerationSourceLookup({
   capturedRoot: string;
   boundaryRoot: string;
   capturedPaths: ReadonlyMap<string, string>;
+  capturedDirectories: ReadonlySet<string>;
   hardlinkedSources: ReadonlySet<string>;
   assertModuleAvailable: (filename: string) => void;
   captureNativeRecovery?: () => PluginNativeRecovery;
@@ -367,19 +389,23 @@ export function createPluginGenerationSourceLookup({
   };
   return {
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
-    resolve: (source: string, rejectHardlinks = false) => {
+    resolve: markPluginSourcePreparationOperation((source: string, rejectHardlinks = false) => {
       // Public exports may be loaded for the first time after the original package
       // has been edited or removed. Resolve only through facts captured with it.
       const captured = resolveCaptured(source);
       if (!captured) {
-        throw new Error("Plugin entry is outside its captured source package");
+        throw markPluginSourceAcquisitionError(
+          new Error("Plugin entry is outside its captured source package"),
+        );
       }
       if (rejectHardlinks && hardlinkedSources.has(captured)) {
-        throw new Error("Plugin source is hardlinked; use a separate file and reload.");
+        throw markPluginSourceAcquisitionError(
+          new Error("Plugin source is hardlinked; use a separate file and reload."),
+        );
       }
       assertModuleAvailable(captured);
       return captured;
-    },
+    }),
     captureRecoverySource: markPluginSourceCaptureOperation(() => {
       for (const captured of new Set(capturedPaths.values())) {
         assertModuleAvailable(captured);
@@ -390,6 +416,7 @@ export function createPluginGenerationSourceLookup({
         capturedRoot,
         boundaryRoot,
         sources: new Map(capturedPaths),
+        directories: new Set(capturedDirectories),
         native: captureNativeRecovery?.(),
       });
     }),
@@ -430,7 +457,7 @@ export function createPluginGenerationModuleLookup({
     moduleRoot: (filename: string) =>
       originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
     assertModuleAvailable,
-    prepareModule: (filename: string) => {
+    prepareModule: markPluginSourcePreparationOperation((filename: string) => {
       const owner = packageForFile(filename);
       const source = originalSources.get(filename);
       const needsEntry =
@@ -445,7 +472,7 @@ export function createPluginGenerationModuleLookup({
           owner.materialize(source);
         }
       }).additions;
-    },
+    }),
     prepareDependency: (importer: string, specifier: string) =>
       captureAdmitted(() => moduleCaptures.get(importer)?.prepareDependency(specifier)).additions,
     prepareNativeScopes: (importer?: string) => {

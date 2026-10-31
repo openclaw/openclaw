@@ -1,6 +1,7 @@
 import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
+import { registerSessionPeopleEnglish } from "../i18n/locales/en-session-people.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
@@ -13,7 +14,8 @@ import { Icon } from "./solid/icon.tsx";
 import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
+registerSessionPeopleEnglish();
 
 export function useSessionMenuDetails(
   actions: SessionMenuActions,

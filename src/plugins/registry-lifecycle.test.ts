@@ -3,10 +3,13 @@ import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { createPluginCache, retirePluginCache } from "./plugin-cache.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { projectPluginContributions } from "./registry-contributions.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   capturePluginLifecycleAuthority as captureAuthority,
@@ -22,6 +25,7 @@ import {
   revokePluginRecord,
   withPluginRegistryPreparationScope,
 } from "./registry-lifecycle.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import type { PluginRegistry } from "./registry-types.js";
 import * as runtime from "./runtime.js";
 import {
@@ -52,6 +56,64 @@ function callableRegistry(value: string) {
 
 afterEach(() => runtime.resetPluginRuntimeStateForTest());
 afterEach(resetPluginLoaderTestStateForTest);
+
+it("releases retired siblings while an unchanged decision provider survives registry transfer", async () => {
+  class RetiredService {
+    id = "retired-sibling";
+    start() {}
+  }
+  const decisionProvider = {
+    id: "retained-decision",
+    contractVersion: 2 as const,
+    provider: { label: "Retention fixture", auth: [] },
+    evaluate: async () => ({ status: "unavailable" as const, reason: "transport" as const }),
+  };
+  async function transfer() {
+    const builder = createTestPluginRegistry();
+    const retained = createPluginRecord({
+      id: "decision-owner",
+      contracts: { decisionProviders: [decisionProvider.id] },
+    });
+    const sibling = createPluginRecord({ id: "retired-sibling" });
+    for (const record of [retained, sibling]) {
+      const api = builder.createApi(record, { config: {} });
+      runPluginRegisterSyncInRegistry(
+        () => {
+          if (record === retained) {
+            api.registerDecisionProvider(decisionProvider);
+          } else {
+            api.registerService(new RetiredService());
+          }
+        },
+        api,
+        builder.registry,
+        record.id,
+      );
+      builder.registry.plugins.push(record);
+    }
+    expect(builder.registry.diagnostics).toEqual([]);
+    markActive(builder.registry);
+    const current = createEmptyPluginRegistry();
+    current.plugins.push(retained);
+    projectPluginContributions(builder.registry, retained, current);
+    markActive(current);
+    await runtime.disposePluginRegistryInstances(builder.registry, current, { cfg: {} });
+    expect(getPluginInstance(sibling)?.owner?.registry).toBeUndefined();
+    return current;
+  }
+  const current = await transfer();
+  try {
+    await setImmediate();
+    expect(queryObjects(RetiredService)).toBe(0);
+    expect(current.decisionProviders[0]?.host.inspect({})).toMatchObject({
+      pluginId: "decision-owner",
+      activeRequests: 0,
+    });
+    expect(getPluginInstance(current.plugins[0]!)?.acceptingCalls).toBe(true);
+  } finally {
+    await runtime.disposePluginRegistryInstances(current, undefined, { cfg: {} });
+  }
+});
 
 it.each(["return", "throw", "resolve", "reject"] as const)(
   "releases preparation authority and its registry after %s",

@@ -24,7 +24,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
-import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
   UpdateDatabaseBackupSchema,
@@ -87,6 +87,7 @@ const ReceiptSchema = z.object({
   displacedConfigFiles: z.array(z.string()).optional(),
   configDisplacementHashes: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/u)).optional(),
   deferredInspectionCheckIds: UpdateDoctorDeferredInspectionCheckIdsSchema.optional(),
+  warnings: z.array(z.string()).optional(),
   error: z.string().optional(),
 });
 type Receipt = z.infer<typeof ReceiptSchema>;
@@ -297,6 +298,7 @@ export async function updateMigrateCommand(
         }
       }
       receipt.deferredInspectionCheckIds = capture.deferredInspectionCheckIds;
+      receipt.warnings = capture.warnings;
     });
     const migrated = await measure("schema-verification", () => prepareDoctorDatabasePreflight());
     if (hasSchemaRefusal(migrated) || migrated.pendingMigrations?.length) {
@@ -322,7 +324,12 @@ export async function updateMigrateCommand(
       }
     }
   }
-  defaultRuntime.writeJson({ status: receipt.status, receipt: file, databases: receipt.databases });
+  defaultRuntime.writeJson({
+    status: receipt.status,
+    receipt: file,
+    databases: receipt.databases,
+    ...(receipt.warnings?.length ? { warnings: receipt.warnings } : {}),
+  });
 }
 
 /** Rollback of a stopped, still-fenced candidate may discard its startup bookkeeping. */
@@ -399,7 +406,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
             try {
               await writeTextAtomic(staged, current.raw, {
                 mode: 0o600,
-                dirMode: readExistingStateRootMode(path.dirname(staged), receipt.stateDir),
+                dirMode: stateRootDirectoryMode(path.dirname(staged), receipt.stateDir),
                 durable: true,
               });
               const identity = await fs.lstat(staged);
@@ -426,7 +433,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
           if (config.raw !== null) {
             await writeTextAtomic(configPath, config.raw, {
               mode: 0o600,
-              dirMode: readExistingStateRootMode(path.dirname(configPath), receipt.stateDir),
+              dirMode: stateRootDirectoryMode(path.dirname(configPath), receipt.stateDir),
               durable: true,
               beforeRename: async () => assertCurrent(),
             });
@@ -465,9 +472,12 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
   receipt.configFiles = [];
   await saveReceipt(file, receipt);
   const removed = await removePackageUpdatePath(receipt.backup.directory);
-  const warnings = removed
-    ? []
-    : [`Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`];
+  const warnings = [
+    ...(receipt.warnings ?? []),
+    ...(removed
+      ? []
+      : [`Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`]),
+  ];
   // Cleanup retires rollback originals only after a later update succeeds. Starting the
   // run at migration keeps originals from this update's own Doctor run protected; a
   // receipt without its start time cannot prove that ordering and is not recorded.
@@ -482,6 +492,14 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
         },
         { env: process.env },
       );
+      for (const [index, warning] of (receipt.warnings ?? []).entries()) {
+        recordUpdateRunDiagnostic(
+          receipt.runId,
+          warning,
+          { env: process.env },
+          `warning:doctor:${index}`,
+        );
+      }
       if (receipt.deferredInspectionCheckIds?.length) {
         const pendingStep = "warning:post-activation doctor inspections";
         recordUpdateRunDiagnostic(

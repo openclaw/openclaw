@@ -30,7 +30,12 @@ export async function runSqliteIntegrityOperationInWorker<T>(
           signal,
           undefined,
           step.value.timing,
-          { check: step.value.check, tables: step.value.tables, ftsSchemas: step.value.ftsSchemas },
+          {
+            check: step.value.check,
+            schemaOnly: step.value.schemaOnly,
+            tables: step.value.tables,
+            ftsSchemas: step.value.ftsSchemas,
+          },
         );
       } catch (error) {
         failure = { error };

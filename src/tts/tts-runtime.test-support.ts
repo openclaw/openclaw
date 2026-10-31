@@ -40,11 +40,12 @@ const {
     vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
   // Keep the real return union so individual cases can enable transcoding.
   transcodeAudioBufferMock: vi.fn<
-    () => ReturnType<typeof import("../media/media-services.js").transcodeAudioBuffer>
+    () => ReturnType<typeof import("../media/audio-transcode.js").transcodeAudioBuffer>
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
 }));
 
-vi.mock("../media/media-services.js", () => ({
+vi.mock("../media/audio-transcode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/audio-transcode.js")>()),
   transcodeAudioBuffer: transcodeAudioBufferMock,
 }));
 
@@ -99,7 +100,6 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
 
 export const {
-  testApi,
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProviderAsync,
@@ -122,14 +122,6 @@ export {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-
-export const nativeVoiceNoteChannels = [
-  "discord",
-  "feishu",
-  "matrix",
-  "telegram",
-  "whatsapp",
-] as const;
 
 export function createMockSpeechProvider(
   id = "mock",

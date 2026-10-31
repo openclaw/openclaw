@@ -20,8 +20,7 @@ export async function prepareConfigFileWrite(
     assertCurrent?: () => void;
     destinationHardlinks?: "reject";
     durable?: boolean;
-    dirMode?: number;
-  } & Pick<ReplaceFileAtomicSyncOptions, "assertBeforeMutation" | "onDestinationState">,
+  } & Pick<ReplaceFileAtomicSyncOptions, "assertBeforeMutation" | "onDestinationState" | "dirMode">,
 ) {
   const { configPath, fsModule } = params;
   const assertCurrent = createConfigWriteAuthorityGuard(params.assertCurrent);

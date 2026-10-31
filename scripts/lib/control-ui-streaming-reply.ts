@@ -23,6 +23,7 @@ function installStreamingReplyProbe() {
   };
   let active = false;
   let startedAt = 0;
+  let startMarkCompletedAt = 0;
   let stoppedAt = 0;
   let current: Delta | undefined;
   let finalReceived = false;
@@ -450,6 +451,8 @@ function installStreamingReplyProbe() {
         );
       }
       startedAt = performance.now();
+      performance.mark(`streaming-reply:start:${startedAt}`, { startTime: startedAt });
+      startMarkCompletedAt = performance.now();
       active = true;
       if (measureFrames) {
         commitObserver = new MutationObserver(() => {
@@ -660,6 +663,7 @@ function installStreamingReplyProbe() {
         measurement:
           "Streaming interval only; see the run manifest for tracing overhead. Per-delta taskAndMicrotasksMs is delivery to a MessageChannel task (includes app microtasks and scheduling delay). Parse/geometry/style totals include asynchronous work until the next delta. Event-to-frame starts at WebSocket delivery; commit-to-frame starts at a transcript MutationObserver callback. Both end at rAF, not paint. Frame loss assumes 60 Hz; keydown samples are trusted native input to next rAF, not presentation timestamps.",
         startedAt,
+        startMarkCompletedAt,
         elapsedMs: stoppedAt - startedAt,
         pipeline,
         tailPosition: panes[0]!.tailPosition,

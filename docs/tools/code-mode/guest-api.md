@@ -260,6 +260,14 @@ in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
 truncation metadata.
 
+## Reading skill companions
+
+Installed skills use `await skills.read(name)` for complete instructions.
+For local Gateway skills, `await skills.read(name, "references/workflow.md")`
+returns a text companion scoped to that skill's directory (256 KiB maximum).
+Traversal, symlinks, hardlinks, and binary content are rejected. Restricted
+placements remain instruction-only; see [skill reads](/tools/skills#search-installed-skills).
+
 ## Session store
 
 Use `await store(key, value)` and `await load(key)` to keep small JSON values

@@ -21,6 +21,7 @@ import {
   parseNodeEventPayload,
   pruneBoundedTimestampMap,
 } from "./server-node-event-source.js";
+import { withNodeExecPathPrependWarning } from "./server-node-events-exec-path.js";
 import type {
   NodeEventContext,
   NodeEventHandlerOptions,
@@ -133,6 +134,7 @@ export async function handleNodeExecEvent(
     if (compactOutput) {
       text += `\n${compactOutput}`;
     }
+    text = withNodeExecPathPrependWarning(text, cfg, agentId);
   }
 
   const notify = async () => {

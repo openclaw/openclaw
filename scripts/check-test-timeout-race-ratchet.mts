@@ -63,63 +63,63 @@ export function countTestTimeoutRaceReferences(
   return count;
 }
 
-function collectTestTimeoutRaceCounts(root: string, options: { staged: boolean }) {
-  const result = spawnSync(
-    "git",
-    [
-      "grep",
-      "-l",
-      "-z",
-      "-F",
-      ...(options.staged ? ["--cached"] : ["--untracked"]),
-      "-e",
-      "withTestTimeout",
-      "-e",
-      "raceWithTimeoutResult",
-      "--",
-      ".",
-    ],
-    { cwd: root, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER },
-  );
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0 && result.status !== 1) {
-    throw new Error(result.stderr.trim() || `git grep failed (${result.status})`);
-  }
-  const filePaths = result.stdout.split("\0").filter(isGovernedSourcePath).toSorted();
-  const sources = options.staged
-    ? loadRatchetSources(root, filePaths)
-    : filePaths.map((filePath): [string, string] => [
-        filePath,
-        fs.readFileSync(path.join(root, filePath), "utf8"),
-      ]);
-  using parser = createNativeTypeScriptParser({ cwd: root });
-  const counts = new Map<string, number>();
-  const candidates = [...sources];
-  // Bound retained syntax trees while avoiding a new native snapshot for every file.
-  const batchSize = 32;
-  for (let offset = 0; offset < candidates.length; offset += batchSize) {
-    const batch = candidates.slice(offset, offset + batchSize);
-    const syntax = parser.parseSourceFiles(batch.map(([fileName, text]) => ({ fileName, text })));
-    syntax.forEach((source, index) => {
-      const filePath = batch[index]![0];
-      const count = countTestTimeoutRaceReferences(filePath, source, parser);
-      if (count > 0) {
-        counts.set(filePath, count);
-      }
-    });
-  }
-  return counts;
-}
-
 export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
+  // Current and historical scans share this compiler; counts escape each scan, never its AST.
   using parser = createNativeTypeScriptParser({ cwd: root });
+  function collectTestTimeoutRaceCounts(options: { staged: boolean }) {
+    const result = spawnSync(
+      "git",
+      [
+        "grep",
+        "-l",
+        "-z",
+        "-F",
+        ...(options.staged ? ["--cached"] : ["--untracked"]),
+        "-e",
+        "withTestTimeout",
+        "-e",
+        "raceWithTimeoutResult",
+        "--",
+        ".",
+      ],
+      { cwd: root, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER },
+    );
+    if (result.error) {
+      throw result.error;
+    }
+    if (result.status !== 0 && result.status !== 1) {
+      throw new Error(result.stderr.trim() || `git grep failed (${result.status})`);
+    }
+    const filePaths = result.stdout.split("\0").filter(isGovernedSourcePath).toSorted();
+    const sources = options.staged
+      ? loadRatchetSources(root, filePaths)
+      : filePaths.map((filePath): [string, string] => [
+          filePath,
+          fs.readFileSync(path.join(root, filePath), "utf8"),
+        ]);
+    const counts = new Map<string, number>();
+    const candidates = [...sources];
+    // Bound retained syntax trees while avoiding a new native snapshot for every file.
+    const batchSize = 32;
+    for (let offset = 0; offset < candidates.length; offset += batchSize) {
+      const batch = candidates.slice(offset, offset + batchSize);
+      const syntax = parser.parseSourceFiles(batch.map(([fileName, text]) => ({ fileName, text })));
+      syntax.forEach((source, index) => {
+        const filePath = batch[index]![0];
+        const count = countTestTimeoutRaceReferences(filePath, source, parser);
+        if (count > 0) {
+          counts.set(filePath, count);
+        }
+      });
+    }
+    return counts;
+  }
+
   return runPerFileCountRatchet(root, argv, {
     baselinePath: BASELINE_PATH,
     baselineHeader: BASELINE_HEADER,
     renameSourceRoots: ["."],
-    collectCurrent: (options) => collectTestTimeoutRaceCounts(root, options),
+    collectCurrent: collectTestTimeoutRaceCounts,
     countAtRef(ref, filePath) {
       const source = execFileSync("git", ["show", `${ref}:${filePath}`], {
         cwd: root,

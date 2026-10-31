@@ -17,7 +17,7 @@ import { watchChildMemory } from "../child-memory.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
-import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS, isTimeoutReason } from "./cancellation-policy.js";
 import type {
   ManagedRun,
   ProcessExtinctionResult,
@@ -77,10 +77,6 @@ function appendCapturedOutput(
   const marker = `[openclaw: captured ${stream} truncated to last ${maxChars} chars]\n`;
   const tailChars = Math.max(0, maxChars - marker.length);
   return `${marker}${sliceUtf16Safe(next, -tailChars)}`;
-}
-
-function isTimeoutReason(reason: TerminationReason) {
-  return reason === "overall-timeout" || reason === "no-output-timeout";
 }
 
 export function createProcessSupervisor(): ProcessSupervisor & {
@@ -392,6 +388,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       overallDeadline.reset();
       outputDeadline.reset();
       const construction = {
+        executionIntent: input.executionIntent,
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
         initiateSpawn: input.initiateSpawn,

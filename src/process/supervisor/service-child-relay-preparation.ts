@@ -115,7 +115,6 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
           ? { parentLineageFds: [lineageFd!, ...parentLineageFds] }
           : { lineageFd, parentLineageFds },
       spawn: {
-        ...(params.ownedWorker ? { gatewayWorker: true as const } : {}),
         workerUrl: useLinuxSubreaper
           ? new URL(nativeProcessOwner!)
           : resolveRuntimeProcessEntrypointUrl(
@@ -150,6 +149,7 @@ export function createServiceChildStart(
 ): ServiceChildStart {
   return {
     type: params.initiateSpawn ? "prepare" : "start",
+    executionIntent: params.executionIntent,
     generation,
     command: params.command,
     args: params.args,

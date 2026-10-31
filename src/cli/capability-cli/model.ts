@@ -142,7 +142,8 @@ export function registerModelCapabilityCommands(capability: Command): void {
   model
     .command("run")
     .description("Run a one-shot model turn")
-    .requiredOption("--prompt <text>", "Prompt text")
+    .option("--prompt <text>", "Prompt text")
+    .option("--prompt-file <path>", "Prompt file relative to the current directory (max 1 MiB)")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--thinking <level>", "Thinking level override")
@@ -156,7 +157,15 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
-        const prompt = opts.prompt;
+        if ((opts.prompt === undefined) === (opts.promptFile === undefined)) {
+          throw new Error("Use exactly one of --prompt or --prompt-file.");
+        }
+        let prompt = opts.prompt;
+        if (opts.promptFile !== undefined) {
+          const { root } = await import("../../infra/fs-safe.js");
+          const promptRoot = await root(process.cwd());
+          prompt = await promptRoot.readText(opts.promptFile, { maxBytes: 1_048_576 });
+        }
         if (normalizeOptionalString(prompt) === undefined) {
           throw new Error("--prompt cannot be empty or whitespace-only.");
         }

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import type { PluginGenerationMetrics } from "../plugins/plugin-generation-metrics.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -213,6 +214,8 @@ export type PreparedModelRuntimeRefreshOptions = {
   joinSupersedingPublication?: boolean;
   /** Restricts replacement to configured owners whose normalized agent id is present. */
   agentIds?: ReadonlySet<string>;
+  /** Auth-only config publications rebuild credentials without replacing plugin capabilities. */
+  preservePluginGenerations?: boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{
@@ -228,6 +231,7 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   generatedCatalogReadCount: number;
   workspaceFactsMs: number;
   runtimePluginMs: number;
+  pluginPreparation?: Readonly<PluginGenerationMetrics>;
   pluginMetadataMs: number;
   staticProviderCatalogMs: number;
   ambientCredentialsMs: number;

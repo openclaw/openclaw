@@ -548,7 +548,9 @@ function stubPullRequestPreparation(sessionKey: string) {
   vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockImplementation(
     async ({ assertCurrent }) => ({
       result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
+      details: {},
       assertCurrent,
+      ownPublication: false,
       requirePublicRepositories: false,
     }),
   );
@@ -689,7 +691,13 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
     assert(earlier, "The earlier message must be persisted");
     await fs.writeFile(path.join(state.workspaceDir, "notes.md"), "original notes\n");
     vi.spyOn(requester, "prepareGitHubPublicationRequesterV2").mockResolvedValue({
-      requester: { snapshot: { actor: { kind: "system" } }, assertCurrent() {} },
+      requester: {
+        snapshot: {
+          actor: { kind: "system" },
+          scopes: [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE],
+        },
+        assertCurrent() {},
+      },
       release() {},
     } as never);
     stubPullRequestPreparation(target.sessionKey);

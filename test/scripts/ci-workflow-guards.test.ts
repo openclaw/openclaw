@@ -686,12 +686,27 @@ AFTER_CD
   });
 
   it.each([
-    // name, body, override, permission, issue, admitted, reacts
-    ["multiline", "context\r\n \t/merge now \r\n", "", "write", false, true, true],
-    ["non-maintainer", "/merge", "", "read", false, true, false],
+    // name, body, override, permission, issue, admitted, reacts, permission lookup
+    ["multiline", "context\r\n \t/merge now \r\n", "", "write", false, true, true, true],
+    ["non-maintainer", "/merge", "", "read", false, true, false, true],
+    ["link", "https://example.com/project", "", "write", false, false, false, false],
+    ["path", "see src/example.ts", "", "write", false, false, false, false],
+    ["untracked", "try /help", "", "write", false, false, false, false],
+    ["autoclose", "/autoclose", "", "write", false, true, true, true],
+    ["sweeper close", "/clawsweeper autoclose", "", "write", false, true, true, true],
+    ["sweeper merge", "/clawsweeper automerge", "", "write", false, true, true, true],
+    ["merge", "/merge", "", "write", false, true, true, true],
+    ["land", "/land", "", "write", false, true, true, true],
+    ["landpr", "/landpr", "", "write", false, true, true, true],
+    ["custom", "ship", "ship", "write", false, true, true, true],
+    ["custom no match", "ordinary text", "ship", "write", false, true, false, false],
+    ["prefix only", "/landscape", "", "write", false, true, false, false],
+    ["issue autoclose", "/autoclose", "", "write", true, true, true, true],
+    ["issue sweeper close", "/clawsweeper autoclose", "", "write", true, true, true, true],
+    ["issue merge", "/merge", "", "write", true, true, false, false],
   ] as const)(
     "preserves reaction admission and actions for %s",
-    async (_name, body, commands, permission, issue, admitted, reacts) => {
+    async (_name, body, commands, permission, issue, admitted, reacts, lookup) => {
       const job = readWorkflow(".github/workflows/maintainer-command-reactions.yml").jobs.react;
       const event = {
         comment: { id: 456, body, user: { login: "comment-author" } },
@@ -736,7 +751,7 @@ AFTER_CD
         },
       });
       expect(reactions).toEqual(reacts ? ["eyes"] : []);
-      expect(permissionUsers.every((login) => login === "comment-author")).toBe(true);
+      expect(permissionUsers).toEqual(lookup ? ["comment-author"] : []);
       expect(Boolean(evaluateWorkflowExpression(job.if, context))).toBe(admitted);
     },
   );
@@ -1700,10 +1715,20 @@ AFTER_CD
     const manualDispatch = { ...releaseChild, dispatchId: "" };
     expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
     expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
-    expect(prepare.run).toContain("pnpm build:ci-artifacts");
-    expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
-    expect(prepare.run).not.toContain("--skip-check");
-    expect(prepare.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
+    const prepareRun = expectDefined(prepare.run, "Docker smoke package preparation");
+    expect(prepareRun).toContain("pnpm build:ci-artifacts");
+    const declarations =
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
+    expect(prepareRun).toContain(declarations);
+    expect(prepareRun.indexOf("pnpm build:ci-artifacts")).toBeLessThan(
+      prepareRun.indexOf(declarations),
+    );
+    expect(prepareRun.indexOf(declarations)).toBeLessThan(
+      prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+    );
+    expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
+    expect(prepareRun).not.toContain("--skip-check");
+    expect(prepareRun).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
     expect(job.steps.indexOf(prepare)).toBeLessThan(job.steps.indexOf(run));
     const baseline = requiredWorkflowStep(
       job.steps,
@@ -6287,6 +6312,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("prepares public declarations before packing the published-driver candidate", () => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["build-artifacts"].steps,
+      "Package published-driver candidate",
+    );
+    const run = expectDefined(step.run, "published-driver package preparation");
+    const declarations =
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
+    expect(run).toContain(declarations);
+    expect(run.indexOf(declarations)).toBeLessThan(
+      run.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+    );
+    expect(run).not.toContain("--skip-check");
+  });
+
   it("uses candidate-owned script interfaces for frozen target CI", () => {
     const workflow = readCiWorkflow();
     const buildChecks = workflow.jobs["build-artifacts"].steps.find(
@@ -6699,6 +6739,12 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
   expect(publisher.run).toContain("input_args=()");
   expect(publisher.run).toContain('"${input_args[@]}"');
   expect(publisher.run).toContain("--request-run-id");
+  expect(publisher.env).toMatchObject({
+    WORKFLOW_SHA: "${{ needs.validate_release.outputs.tooling_sha }}",
+    BUILDER_SHA: "${{ github.workflow_sha }}",
+  });
+  expect(publisher.run).toContain('--tooling-sha "$WORKFLOW_SHA"');
+  expect(publisher.run).toContain('--builder-sha "$BUILDER_SHA"');
   expect(JSON.stringify(steps)).not.toContain("linux-updater-manifest.mjs publish");
   expect(JSON.stringify(steps)).not.toContain("--clobber");
 });
@@ -6749,6 +6795,7 @@ fi
         RELEASE_TAG: "v2026.10.3",
         TAG_SHA: "a".repeat(40),
         WORKFLOW_SHA: "b".repeat(40),
+        BUILDER_SHA: "c".repeat(40),
         WORKFLOW_REF: "main",
         WORKFLOW_FULL_REF: "refs/heads/main",
         REQUEST_RUN_ID: "43",
@@ -6781,6 +6828,8 @@ fi
   const resumed = run("false", complete);
   expect(resumed.status, resumed.stderr).toBe(0);
   expect(resumed.args?.join(" ")).toContain(localArgs.join(" "));
+  expect(resumed.args?.join(" ")).toContain(`--tooling-sha ${"b".repeat(40)}`);
+  expect(resumed.args?.join(" ")).toContain(`--builder-sha ${"c".repeat(40)}`);
   const reused = run("true", complete);
   expect(reused.status, reused.stderr).toBe(0);
   expect(reused.args).not.toContain("--assets");
@@ -6930,7 +6979,7 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
   });
 });
 
-it("rejects malformed or stale Linux release requests before selected code runs", () => {
+it("accepts a completed Linux release request when the builder starts at a later main SHA", () => {
   const workflow = readWorkflow(".github/workflows/linux-app-release.yml");
   const job = workflow.jobs.validate_release;
   const requestStep = expectDefined((job.steps as WorkflowStep[])[0], "first request validation");
@@ -6963,12 +7012,12 @@ it("rejects malformed or stale Linux release requests before selected code runs"
       false,
     );
   }
-  for (const [workflowSha, title, matching] of [
-    ["b".repeat(40), "Linux App Release Request [v2026.8.2] desktop=false", false],
-    [requestSha, "Linux App Release Request [v2026.8.2] desktop=false", true],
-    [requestSha, "Linux App Release Request [v2026.8.2] desktop=true", true],
-    [requestSha, "Linux App Release Request [v2026.8.2] desktop=true extra", false],
+  for (const [title, matching] of [
+    ["Linux App Release Request [v2026.8.2] desktop=false", true],
+    ["Linux App Release Request [v2026.8.2] desktop=true", true],
+    ["Linux App Release Request [v2026.8.2] desktop=true extra", false],
   ] as const) {
+    const workflowSha = "b".repeat(40);
     expect(admitted({ ...github, workflow_sha: workflowSha })).toBe(true);
     expect(requestStep.name).toBe("Validate trusted release request");
     const output = path.join(tempDirs.make("openclaw-linux-request-"), "output");
@@ -6980,18 +7029,14 @@ it("rejects malformed or stale Linux release requests before selected code runs"
         GITHUB_OUTPUT: output,
         REQUEST_TITLE: title,
         REQUEST_HEAD_SHA: requestSha,
-        WORKFLOW_SHA: workflowSha,
       },
     });
     expectProcessExit(result, matching ? 0 : 1);
     expect(readFileSync(output, "utf8")).toBe(
-      matching ? `release_tag=v2026.8.2\ndesktop_test_bundles=${title.endsWith("true")}\n` : "",
+      matching
+        ? `release_tag=v2026.8.2\ndesktop_test_bundles=${title.endsWith("true")}\nworkflow_sha=${requestSha}\n`
+        : "",
     );
-    if (workflowSha !== requestSha) {
-      expect(`${result.stdout}${result.stderr}`).toContain(
-        "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request",
-      );
-    }
   }
 });
 
@@ -7226,6 +7271,9 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     types: ["completed"],
   });
   expect(linux.permissions).toEqual({});
+  expect(linux.jobs.validate_release.outputs.tooling_sha).toBe(
+    "${{ steps.request.outputs.workflow_sha }}",
+  );
   const tauriSigningEnvNames = [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PATH",
@@ -7277,7 +7325,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   ).toEqual(["sign_linux", "sign_desktop"]);
   const linuxSteps = linux.jobs.validate_release.steps as WorkflowStep[];
   expect(requiredWorkflowStep(linuxSteps, "Checkout trusted release tooling").with).toMatchObject({
-    ref: "${{ github.workflow_sha }}",
+    ref: "${{ steps.request.outputs.workflow_sha }}",
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
@@ -7287,7 +7335,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(tooling?.env).toMatchObject({
     WORKFLOW_FULL_REF: "${{ github.ref }}",
     WORKFLOW_REF: "${{ github.ref_name }}",
-    WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    WORKFLOW_SHA: "${{ steps.request.outputs.workflow_sha }}",
   });
   expect(tooling?.run).toContain(
     "node .release-tooling/scripts/release-tooling-identity.mjs verify",
@@ -7300,7 +7348,6 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(releaseRequest.env).toEqual({
     REQUEST_TITLE: "${{ github.event.workflow_run.display_title }}",
     REQUEST_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
-    WORKFLOW_SHA: "${{ github.workflow_sha }}",
   });
   const updaterTrust = requiredWorkflowStep(linuxSteps, "Validate updater trust root");
   expect(updaterTrust.run).toContain("selected_config=apps/linux/src-tauri/tauri.conf.json");
@@ -7326,7 +7373,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(trustedToolingCheckout).toBe(selectedTagInstall + 1);
   const trustedToolingOptions = linuxBuildSteps[trustedToolingCheckout]?.with;
   expect(trustedToolingOptions).toMatchObject({
-    ref: "${{ github.workflow_sha }}",
+    ref: "${{ needs.validate_release.outputs.tooling_sha }}",
     path: ".release-tooling",
     "fetch-depth": 1,
     "persist-credentials": false,

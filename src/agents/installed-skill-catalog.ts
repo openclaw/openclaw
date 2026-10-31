@@ -1,3 +1,5 @@
+import { isUtf8 } from "node:buffer";
+import type { Root } from "@openclaw/fs-safe/root";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -12,6 +14,8 @@ export type InstalledSkill = CodeModeSkill & {
   /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */
   promptListed?: boolean;
   assertCurrent?: () => void;
+  /** Only the local placement owner may grant access to this pinned skill directory. */
+  resourceRoot?: Promise<Root>;
   /** The owner must bound I/O before allocating the returned content. */
   readSearchContent?: (maxBytes: number, signal?: AbortSignal) => Promise<string>;
 };
@@ -291,6 +295,7 @@ export async function readInstalledSkill(
   skills: readonly InstalledSkill[],
   name: string,
   signal?: AbortSignal,
+  relativePath?: string,
 ): Promise<SkillInstructionResult> {
   signal?.throwIfAborted();
   const skill = skills.find((entry) => entry.name === name);
@@ -300,18 +305,48 @@ export async function readInstalledSkill(
     );
   }
   skill.assertCurrent?.();
-  const content =
-    !skill.promptListed && typeof skill.source.readContent !== "string" && !skill.reader
-      ? (
-          await readLocalFileSafely({
-            filePath: skill.source.filePath,
-            maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
-          })
-        ).buffer.toString("utf8")
-      : await readCodeModeSkill(skill, signal);
+  let content: string;
+  if (relativePath !== undefined) {
+    if (
+      !relativePath ||
+      relativePath.split("/").includes("..") ||
+      /[\\\0]|^(?:\/|~(?:\/|$)|[a-z]:)/iu.test(relativePath)
+    ) {
+      throw new ToolInputError("relativePath must stay inside the skill directory.");
+    }
+    if (!skill.resourceRoot) {
+      throw new ToolInputError("This placement is instruction-only; omit relativePath.");
+    }
+    const root = await skill.resourceRoot;
+    signal?.throwIfAborted();
+    skill.assertCurrent?.();
+    const { buffer } = await root.read(relativePath, {
+      maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
+      symlinks: "reject",
+      hardlinks: "reject",
+    });
+    if (buffer.includes(0) || !isUtf8(buffer)) {
+      throw new ToolInputError("Skill companions must be UTF-8 text without NUL bytes.");
+    }
+    content = buffer.toString("utf8");
+  } else {
+    content =
+      !skill.promptListed && typeof skill.source.readContent !== "string" && !skill.reader
+        ? (
+            await readLocalFileSafely({
+              filePath: skill.source.filePath,
+              maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
+            })
+          ).buffer.toString("utf8")
+        : await readCodeModeSkill(skill, signal);
+  }
   signal?.throwIfAborted();
   skill.assertCurrent?.();
-  if (!skill.promptListed && Buffer.byteLength(content, "utf8") > MAX_SKILL_INSTRUCTION_BYTES) {
+  if (
+    relativePath === undefined &&
+    !skill.promptListed &&
+    Buffer.byteLength(content, "utf8") > MAX_SKILL_INSTRUCTION_BYTES
+  ) {
     throw new ToolInputError(
       `Skill ${JSON.stringify(name)} exceeds the ${MAX_SKILL_INSTRUCTION_BYTES}-byte instruction limit.`,
     );
@@ -319,6 +354,7 @@ export async function readInstalledSkill(
   return {
     name: skill.name,
     location: skill.location,
+    ...(relativePath !== undefined ? { relativePath } : {}),
     ...(skill.locationNote ? { locationNote: skill.locationNote } : {}),
     content,
   };

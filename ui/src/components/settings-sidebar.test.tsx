@@ -121,6 +121,27 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
+  it("keeps Usage and Logs copy narrow until the first search without replacing the input", async () => {
+    for (const activeRouteId of ["usage", "logs"] as const) {
+      render({ activeRouteId, saveIndicator: { ...saveIndicator(), status: "paused" } });
+      expect(labels()).toContain("Appearance");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Autosave paused after reconnect"),
+      );
+      expect(t("configView.chatPrefs.title")).toBe("configView.chatPrefs.title");
+    }
+    const search = searchHarness("", {
+      activeRouteId: "logs",
+      searchParams: { query: "collapse task progress", schema: null, value: null, uiHints: {} },
+    });
+    search.input.focus();
+    search.enter("collapse task progress");
+    await waitForSolid(() => expect(labels(".settings-sidebar__subitem-label")).toContain("Chat"));
+    expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
+    expect(document.activeElement).toBe(search.input);
+    expect(search.input.value).toBe("collapse task progress");
+  });
+
   it("keeps save recovery available in the embedded page header", async () => {
     const onRetry = vi.fn();
     render({
@@ -347,6 +368,33 @@ describe("settings sidebar search", () => {
     expect(onExit).not.toHaveBeenCalled();
 
     input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
+  });
+
+  it("clears the visible search before its projected query commits", () => {
+    const onExit = vi.fn();
+    const onSearchQueryChange = vi.fn((searchQuery: string) => {
+      setProps((current) => ({ ...current, searchQuery }));
+    });
+    const [props, setProps] = createSignal(sidebarProps({ onExit, onSearchQueryChange }));
+    mountSolid(() => <SettingsSidebar {...props()} />, { container });
+    flush();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input")!;
+    input.focus();
+    input.value = "appearance";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onSearchQueryChange).toHaveBeenLastCalledWith("");
+    expect(input.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
     expect(onExit).toHaveBeenCalledOnce();

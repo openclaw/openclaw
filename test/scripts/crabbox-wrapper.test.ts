@@ -2715,9 +2715,31 @@ describe("scripts/crabbox-wrapper", () => {
 
   it.each([
     { args: ["warmup", "--timing-json=false"], status: 0, retained: true },
-    { args: ["run", "--label=", "--keep", "--", "echo", "ok"], status: 0, retained: true },
+    {
+      args: [
+        "run",
+        "--label=decoy",
+        "-label=",
+        "--keep",
+        "--",
+        "echo",
+        "--id",
+        "payload",
+        "--keep=false",
+        "--blacksmith-job=payload",
+      ],
+      status: 0,
+      retained: true,
+    },
+    { args: ["run", "--keep=true", "-keep=false", "--", "echo", "ok"], status: 0, retained: false },
+    { args: ["run", "--keep=false", "-keep", "--", "echo", "ok"], status: 0, retained: true },
     { args: ["run", "--keep-on-failure", "--", "false"], status: 7, retained: true },
     { args: ["run", "--keep-on-failure", "--", "true"], status: 0, retained: false },
+    {
+      args: ["run", "--keep-on-failure=true", "-keep-on-failure=false", "--", "false"],
+      status: 7,
+      retained: false,
+    },
   ])("records retained allocation for $args with exit $status", ({ args, status, retained }) => {
     const home = invocationLogTempDirs.make("openclaw-testbox-allocation-");
     const id = "tbx_allocation_fixture";

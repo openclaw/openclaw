@@ -228,7 +228,15 @@ fail with an explanation rather than falling back to host execution.
 
 The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
-this checkout while capturing or applying changes, records pending results and
+this checkout while capturing or applying changes. An existing session first
+checks both workspaces against their accepted baseline without pausing. If both
+are unchanged and no recovery is pending, its runtimes keep running. Changed or
+interrupted checks return to paused reconciliation; file edits are never applied
+from the live check. Concurrent preparations of the same workspace and session
+generation share queued reconciliation. Once filesystem observation begins,
+later preparations require a fresh check so intervening edits remain visible.
+Completed preparation results are not cached. Each caller retains its own
+cancellation and authority checks. OpenClaw records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not

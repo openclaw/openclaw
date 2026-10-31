@@ -52,6 +52,7 @@ export async function writeWorkspaceGitInput(params: {
   ref: string;
   entries: readonly WorkerWorkspaceManifestEntry[];
   readVerifiedContent: (entry: WorkerWorkspaceManifestEntry) => Promise<Uint8Array>;
+  existingObjects?: ReadonlyMap<string, string>;
   message?: { chunks: readonly Uint8Array[]; byteLength: number };
   parentCommit?: string;
   assertBeforeMutation?: () => void;
@@ -59,6 +60,9 @@ export async function writeWorkspaceGitInput(params: {
   const entries = params.entries.toSorted((left, right) => left.path.localeCompare(right.path));
   async function* chunks() {
     for (const [index, entry] of entries.entries()) {
+      if (params.existingObjects?.has(entry.path)) {
+        continue;
+      }
       const content = await params.readVerifiedContent(entry);
       yield Buffer.from(`blob\nmark :${index + 1}\ndata ${content.byteLength}\n`);
       yield content;
@@ -80,7 +84,7 @@ export async function writeWorkspaceGitInput(params: {
                 : (entry.mode & 0o111) !== 0
                   ? "100755"
                   : "100644";
-            return `M ${mode} :${offset + index + 1} ${quoteFastImportPath(entry.path)}\n`;
+            return `M ${mode} ${params.existingObjects?.get(entry.path) ?? `:${offset + index + 1}`} ${quoteFastImportPath(entry.path)}\n`;
           })
           .join(""),
       );

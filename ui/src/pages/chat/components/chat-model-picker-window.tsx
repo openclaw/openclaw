@@ -108,6 +108,13 @@ export function createModelPickerWindow(
     reveal(key: string) {
       const index = rows().indexOf(key);
       if (index >= 0) {
+        const row = virtualizer.measurementsCache[index];
+        const top = virtualizer.scrollOffset ?? 0;
+        const height = virtualizer.scrollRect?.height ?? 0;
+        // Leave any pending reveal to settle; an in-view key needs no new scroll.
+        if (row && row.start >= top && row.end <= top + height) {
+          return;
+        }
         virtualizer.scrollToIndex(index, { align: "auto" });
         publish();
       }

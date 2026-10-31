@@ -4157,14 +4157,6 @@ jobs:
             bash .release-harness/scripts/docker/shared-image-artifact.sh \
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
-      - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile)
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -4306,13 +4298,6 @@ jobs:
         env: *live_test_image_load_env
         shell: bash
         run: *live_test_image_load_run
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
 
       - name: Normalize provider allowlist
         shell: bash

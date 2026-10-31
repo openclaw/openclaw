@@ -1996,6 +1996,7 @@ jobs:
         id: published_driver_package
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
         run: |
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
           node scripts/package-openclaw-for-docker.mjs --skip-build \
             --allow-unreleased-changelog --output-dir .artifacts/published-driver-package \
             --output-name openclaw-candidate.tgz
@@ -2646,8 +2647,10 @@ jobs:
           import { resolve } from "node:path";
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
           ].filter(existsSync));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
@@ -6134,6 +6137,10 @@ jobs:
       BUNDLE_DEPLOYMENT: "true"
       BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
     steps:
+      - name: Reserve host CPU for screenshots
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
+
       - *platform_checkout_step
 
       - name: Setup Ruby
@@ -6889,13 +6896,14 @@ jobs:
           console.log(`OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=${scenario}`);
           NODE
 
-      # Smoke keeps runtime and SDK types.
+      # Smoke packages include declarations for every public entrypoint.
       - name: Prepare Docker smoke package
         if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
         run: |
           set -euo pipefail
           pnpm clean:dist
           pnpm build:ci-artifacts
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
           package_dir="${RUNNER_TEMP}/docker-seed-package"
           node scripts/package-openclaw-for-docker.mjs --skip-build \
             --allow-unreleased-changelog --output-dir "$package_dir" \
