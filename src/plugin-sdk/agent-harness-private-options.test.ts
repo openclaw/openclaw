@@ -37,6 +37,7 @@ async function surface(mode: "sync" | "async", config: SurfaceParams["config"]) 
 it("keeps host-owned controls out of public attempt and tool inputs", () => {
   expectTypeOf<KeysIn<Attempts, "thinkingExplicit">>().toEqualTypeOf<never>();
   expectTypeOf<KeysIn<[Tools, AsyncTools], "requesterThinkingExplicit">>().toEqualTypeOf<never>();
+  expectTypeOf<KeysIn<[Tools, AsyncTools], "toolPolicyScope">>().toEqualTypeOf<never>();
   expectTypeOf<KeysIn<Attempts, "blindPrompt">>().toEqualTypeOf<never>();
   expectTypeOf<Pick<SurfaceParams, "trigger">>().toEqualTypeOf<{
     trigger?: Harness.AgentHarnessAttemptParamsV2["trigger"];

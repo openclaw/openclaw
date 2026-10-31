@@ -17,6 +17,7 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
+import { createStableSkillAuthoring } from "../../stable-skill-authoring.js";
 import { resolveLiveToolResultMaxChars } from "../../tool-result-limits.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
@@ -42,6 +43,9 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+// Internal turns publish the session's last human skill_workshop shape with an expired grant.
+const resolveStableEmbeddedSkillAuthoring = createStableSkillAuthoring();
 
 /** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 export async function prepareAndDispatchEmbeddedRunAttempt(
@@ -622,7 +626,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
     skillWorkshopReviewOf: params.skillWorkshopReviewOf,
-    skillLibraryAuthoring: params.skillLibraryAuthoring,
+    skillLibraryAuthoring: resolveStableEmbeddedSkillAuthoring(
+      params.sessionKey,
+      params.skillLibraryAuthoring,
+    ),
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,

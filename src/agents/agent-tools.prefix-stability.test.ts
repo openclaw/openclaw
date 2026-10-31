@@ -9,6 +9,7 @@ import { resolveChatSendCallerContext } from "../gateway/server-methods/gateway-
 import { createSessionMutationTestClient } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
@@ -20,6 +21,7 @@ import {
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createStableSkillAuthoring } from "./stable-skill-authoring.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -265,6 +267,32 @@ it.each<[string, ToolOptions]>([
   expect(surface(createOpenClawCodingTools(options))).toEqual(
     surface(createOpenClawCodingTools(userTurn)),
   );
+});
+it("offers the human turn's skill_workshop definition on an internal turn", async () => {
+  const resolve = createStableSkillAuthoring();
+  const human: SkillLibraryAuthoringCapability = {
+    target: "personal",
+    defaultTarget: "workspace",
+    multipleProfiles: true,
+    bind: () => {},
+    invoke: async () => {
+      throw new Error("an internal turn must not reach the human grant");
+    },
+  };
+  const workshop = (options: ToolOptions, libraryAuthoring?: SkillLibraryAuthoringCapability) =>
+    createOpenClawCodingTools({
+      ...options,
+      ...(libraryAuthoring ? { skillWorkshop: { libraryAuthoring } } : {}),
+    }).filter((tool) => tool.name === "skill_workshop");
+  const user = workshop(userTurn, resolve(session.sessionKey, human));
+  const wake = completionTurn("exec");
+  expect(user).toHaveLength(1);
+  expect(surface(workshop(wake))).not.toEqual(surface(user));
+  const stable = workshop(wake, resolve(session.sessionKey, undefined));
+  expect(surface(stable)).toEqual(surface(user));
+  await expect(
+    stable[0]!.execute("personal-list", { action: "list", target: "personal" }),
+  ).rejects.toThrow("fresh message");
 });
 it("offers the same message definition on a source-bound completion turn", () => {
   const assemble = (sourceReplyOnly: boolean) =>

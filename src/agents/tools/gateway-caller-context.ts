@@ -61,6 +61,8 @@ type GatewayToolCallerIdentity = {
   requesterOrigin?: RequesterOrigin;
   /** Restrict-only executable surface captured for internal follow-ups. */
   sessionEventToolsAllow?: readonly string[];
+  /** The surface restates this caller session's own policy; follow-ups to that session skip it. */
+  sessionEventToolsAllowSessionScoped?: true;
   /** An object with no mode retains the producer's default permission posture. */
   sessionEventSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
@@ -618,6 +620,15 @@ export async function withGatewayToolCallerIdentity<T>(
               inheritedOwner.sessionEventToolsAllow!.includes(name),
             )
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
+      // Only an owner of the same session with no narrower surface of its own keeps the exemption.
+      sessionEventToolsAllowSessionScoped:
+        !inheritedOwner ||
+        (inheritedOwner.agentId === identity.agentId.trim() &&
+          inheritedOwner.sessionKey === identity.sessionKey.trim() &&
+          (!inheritedOwner.sessionEventToolsAllow ||
+            inheritedOwner.sessionEventToolsAllowSessionScoped))
+          ? identity.sessionEventToolsAllowSessionScoped
+          : undefined,
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
