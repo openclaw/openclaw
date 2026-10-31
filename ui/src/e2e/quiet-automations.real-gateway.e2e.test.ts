@@ -10,6 +10,7 @@ import type {
   CronJob,
   CronRunLogEntry,
 } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../../src/agents/agent-run-terminal-outcome.ts";
 import { escapeMarkdownText } from "../../../src/shared/text/escape-markdown.ts";
 import {
   createOpenClawTestInstance,
@@ -94,6 +95,7 @@ const suite = createControlUiE2eSuite({
     try {
       instance = await createOpenClawTestInstance({
         name: "quiet-automations",
+        entrypoint: ["dist/index.js"],
         ...(baselineRoot ? { cwd: baselineRoot } : {}),
         env: {
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -550,7 +552,10 @@ suite.define(() => {
           await save();
           return audit.events.find((event) => event.action === "agent.run.finished");
         };
-        await expect.poll(terminalAuditRun).toBeDefined();
+        // Failed terminals retain the retry grace before entering the asynchronous audit writer.
+        await expect
+          .poll(terminalAuditRun, { timeout: AGENT_RUN_TERMINAL_RETRY_GRACE_MS + 15_000 })
+          .toBeDefined();
         const auditRun = (await terminalAuditRun())!;
         proof.stage = "inspect admitted agent identity";
         await save();

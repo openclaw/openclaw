@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -7,6 +9,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   executeOpenClawStateWorker,
+  createOpenClawStateWorkerLease,
   openOpenClawStateWorkerCleanupStore,
 } from "../state/openclaw-state-worker-store.js";
 import { withGatewayServiceInstallation } from "./gateway-service-installation-context.js";
@@ -47,6 +50,42 @@ function read(context: ReturnType<typeof captureOpenClawStateWorkerContext>) {
 }
 
 describe("shared-state worker schema policies", () => {
+  it("preserves active service policy through a natively published hardlink and symlink", async () => {
+    const { env, databasePath } = await fixture();
+    captureOpenClawStateWorkerContext({ path: databasePath, env });
+    const serviceDir = path.join(env.OPENCLAW_STATE_DIR, "service");
+    const aliasDir = path.join(env.OPENCLAW_STATE_DIR, "service-alias");
+    await fs.mkdir(serviceDir);
+    const servicePath = path.join(serviceDir, "openclaw.sqlite");
+    await fs.link(databasePath, servicePath);
+    await fs.symlink(serviceDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+    const aliasPath = path.join(aliasDir, "openclaw.sqlite");
+    openOpenClawStateDatabase({ path: aliasPath, env });
+    const installation = {
+      root: "/synthetic-installed-runtime",
+      version: "2026.10.1",
+      cliVersion: "2026.10.9",
+      databasePath: servicePath,
+    };
+    await withGatewayServiceInstallation({ installation }, async () => {
+      const captured = captureOpenClawStateWorkerContext({ path: aliasPath, env });
+      const lease = createOpenClawStateWorkerLease(captured);
+      try {
+        await lease.ready;
+        await withGatewayServiceInstallation(
+          { installation: { ...installation, version: "2026.10.2" } },
+          async () => {
+            await expect(
+              read(captureOpenClawStateWorkerContext({ path: aliasPath, env })),
+            ).rejects.toThrow("policy changed while its actor is in use");
+          },
+        );
+      } finally {
+        await lease.release();
+      }
+    });
+  });
+
   it("reopens the whole actor when schema policy changes with a cleanup client retained", async () => {
     const { env, databasePath } = await fixture();
     const captured = captureOpenClawStateWorkerContext({ path: databasePath, env });

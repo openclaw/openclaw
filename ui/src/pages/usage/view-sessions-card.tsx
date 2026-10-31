@@ -41,6 +41,7 @@ const SESSION_PREVIEW = 10;
 
 export function SessionsCard(props: {
   sessions: UsageSessionEntry[];
+  selectedRows: UsageSessionEntry[];
   usage: UsageProps;
   overview?: UsageProps["data"]["sessionPage"];
   loading?: boolean;
@@ -49,7 +50,6 @@ export function SessionsCard(props: {
   const isTokenMode = createMemo(() => props.usage.display.chartMode === "tokens");
   // The page leads with the costliest sessions; the rest of the page stays one click away.
   const [showAll, setShowAll] = createSignal(false);
-  const selectedRows = () => props.usage.data.overview?.selectedRows ?? [];
   const averageLabel = createMemo(() => {
     i18nRevision();
     const count = props.overview?.tableSessionCount ?? 0;
@@ -172,45 +172,44 @@ export function SessionsCard(props: {
             </Show>
           </div>
         )}
-        {props.usage.display.sessionsTab === "all" && props.overview ? (
-          <div class="data-table-pagination">
-            <div class="data-table-pagination__controls">
-              <button
-                class="btn btn--sm"
-                disabled={props.loading || props.overview.offset === 0}
-                onClick={() =>
-                  props.usage.callbacks.display.onPageChange(
-                    Math.max(0, props.overview!.offset - props.overview!.limit),
-                  )
-                }
-              >
-                {t("common.previous")}
-              </button>
-              <button
-                class="btn btn--sm"
-                disabled={
-                  props.loading ||
-                  props.overview.offset + props.overview.limit >= props.overview.total
-                }
-                onClick={() =>
-                  props.usage.callbacks.display.onPageChange(
-                    props.overview!.offset + props.overview!.limit,
-                  )
-                }
-              >
-                {t("common.next")}
-              </button>
+        <Show when={props.usage.display.sessionsTab === "all" ? props.overview : undefined}>
+          {(overview) => (
+            <div class="data-table-pagination">
+              <div class="data-table-pagination__controls">
+                <button
+                  class="btn btn--sm"
+                  disabled={props.loading || overview().offset === 0}
+                  onClick={() =>
+                    props.usage.callbacks.display.onPageChange(
+                      Math.max(0, overview().offset - overview().limit),
+                    )
+                  }
+                >
+                  {t("common.previous")}
+                </button>
+                <button
+                  class="btn btn--sm"
+                  disabled={
+                    props.loading || overview().offset + overview().limit >= overview().total
+                  }
+                  onClick={() =>
+                    props.usage.callbacks.display.onPageChange(overview().offset + overview().limit)
+                  }
+                >
+                  {t("common.next")}
+                </button>
+              </div>
             </div>
-          </div>
-        ) : undefined}
-        {selectedRows().length > 1 ? (
+          )}
+        </Show>
+        {props.selectedRows.length > 1 ? (
           <div class="sessions-selected-group">
             <div class="sessions-card-count">
-              {t("usage.sessions.selected", { count: String(selectedRows().length) })}
+              {t("usage.sessions.selected", { count: String(props.selectedRows.length) })}
             </div>
             <div class="session-bars session-bars--selected">
               <SessionRows
-                sessions={selectedRows()}
+                sessions={props.selectedRows}
                 selectedSessions={props.usage.filters.selectedSessions}
                 isTokenMode={isTokenMode()}
                 onSelect={props.usage.callbacks.details.onSelectSession}

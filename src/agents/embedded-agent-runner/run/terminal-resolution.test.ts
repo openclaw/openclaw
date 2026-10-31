@@ -67,6 +67,18 @@ describe("terminal resolution", () => {
     resetGeneratedMediaTaskActivityForTests();
   });
 
+  it("acknowledges an already-delivered input without empty-response recovery", async () => {
+    const resolved = await resolveTerminal({
+      assistant: undefined,
+      attemptOverrides: { inputAlreadyDelivered: true },
+      runParams: { terminalReplyExpectation: "result-required" },
+    });
+    expectComplete(resolved);
+    expect(resolved.result.payloads).toBeUndefined();
+    expect(resolved.result.meta.error).toBeUndefined();
+    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
+  });
+
   it("completes an empty post-tool turn after committed media delivery", async () => {
     const input = makeTerminalInput({
       assistant: emptyAssistant(),

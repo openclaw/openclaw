@@ -212,11 +212,14 @@ suite.define(() => {
       expect(await label.textContent()).toBe("Loading…");
       const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton, label]);
       await writeFile(path.join(artifactDir, `${phase}.png`), png);
+      // The live composer remains part of the frame without placeholder decoration.
       const geometry = await skeleton.evaluate((element) =>
-        [element, ...element.querySelectorAll(".skeleton")].map((node) => {
-          const { x, y, width, height } = node.getBoundingClientRect();
-          return { x, y, width, height };
-        }),
+        [element, ...element.querySelectorAll(".skeleton, .loading-skeleton__composer")].map(
+          (node) => {
+            const { x, y, width, height } = node.getBoundingClientRect();
+            return { x, y, width, height };
+          },
+        ),
       );
       return { png: decodeProofPng(png), geometry, label: await label.boundingBox() };
     };

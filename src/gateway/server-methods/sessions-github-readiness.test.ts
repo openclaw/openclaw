@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
@@ -24,6 +23,8 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
+import * as readCandidates from "../../config/sessions/session-store-read-candidates.js";
+import * as targetInventory from "../../config/sessions/session-store-target-inventory.js";
 import {
   historyLane,
   projectionLane,
@@ -32,6 +33,9 @@ import {
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OpenClawSchema } from "../../config/zod-schema.js";
+import * as sqliteBackup from "../../infra/sqlite-backup.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "../../infra/sqlite-private-directory.js";
+import { SQLITE_SNAPSHOT_PREFIX } from "../../infra/sqlite-snapshot-retirement.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -218,24 +222,28 @@ function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
     }),
   );
 }
+// Readiness reads through the live owner: stored bytes stay unchanged and no private
+// whole-database copy is staged. SQLite's own -wal/-shm on open are not custody changes.
 async function databaseArtifacts(
   paths = [resolveOpenClawStateSqlitePath(), resolveOpenClawAgentSqlitePath({ agentId: "main" })],
 ) {
   const values: Record<string, string> = {};
   for (const pathname of paths) {
-    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-      try {
-        values[pathname + suffix] = createHash("sha256")
-          .update(await fs.readFile(pathname + suffix))
-          .digest("hex");
-      } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-          throw error;
-        }
+    try {
+      values[pathname] = createHash("sha256")
+        .update(await fs.readFile(pathname))
+        .digest("hex");
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
       }
     }
   }
-  return values;
+  const staging = resolvePrivateSqliteSnapshotStagingRoot();
+  const copies = (await fs.readdir(staging).catch(() => [] as string[])).filter((name) =>
+    name.startsWith(SQLITE_SNAPSHOT_PREFIX),
+  );
+  return { ...values, snapshotCopies: copies.length };
 }
 async function cold() {
   await closeOpenClawAgentDatabasesAsync();
@@ -260,12 +268,15 @@ it("qualifies real managed Git, retains cached freshness, and never stages files
     await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
     const head = await git(worktree.path, "rev-parse", "HEAD");
     const status = await git(worktree.path, "status", "--porcelain");
+    openOpenClawStateDatabase();
+    const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
     const first = await observe(f);
     expect(first).toMatchObject({
       custody: { kind: "qualified", source: "worktree" },
       target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
     });
     expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
+    expect(backups).not.toHaveBeenCalled();
     expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
     expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
     expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
@@ -385,6 +396,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
       };
       personal.request_digest = repositoryGitHubPublicationDigest(personal);
       insertRepositoryGitHubPublicationFixture(personal, () => {});
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
       expect(await observe(f)).toMatchObject({
         custody: { kind: "qualified", source: "repository" },
         target: { kind: "supported", basis: "repository-url" },
@@ -402,6 +414,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
         reason: "not-observable",
         selectedRequestId: personal.request_id,
       });
+      expect(backups).not.toHaveBeenCalled();
     },
     { personal: true },
   );
@@ -468,8 +481,8 @@ it.each([
           assertCurrent: () => grant.signal.throwIfAborted(),
         },
       };
-      // Reacquire agent authority from a private snapshot. The live profile catalog
-      // keeps its existing shared-store admission for method-policy checks.
+      // Start cold so the held read reacquires the agent source. The live profile
+      // catalog keeps its existing shared-store admission for method-policy checks.
       await closeOpenClawAgentDatabasesAsync();
       const original = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const replacement = original + ".replacement";
@@ -525,6 +538,7 @@ it.each([
         }
         held.release();
         const [ok, payload, error] = await pending;
+        expect((await databaseArtifacts([])).snapshotCopies, "no agent snapshot copies").toBe(0);
         if (kind.startsWith("registry-") || kind === "published-replacement") {
           const registered = listOpenClawRegisteredAgentDatabases({ env: process.env }).some(
             (row) => row.agentId === "main" && row.path === original,
@@ -757,8 +771,8 @@ it.each([
         ).toBe(false);
         const before = await databaseArtifacts(sourcePaths);
         expect(before).toHaveProperty(databasePath);
-        expect(before[databasePath + "-wal"]).toBeUndefined();
-        expect(before[databasePath + "-shm"]).toBeUndefined();
+        expect(fsSync.existsSync(databasePath + "-wal")).toBe(false);
+        expect(fsSync.existsSync(databasePath + "-shm")).toBe(false);
         const counts = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 4));
         const create = workerCpu.createCpuTrackedWorker;
         const observer = vi
@@ -784,53 +798,21 @@ it.each([
               setEnvironmentData(key, previous);
             }
           });
-        const hostReads: Record<string, string[]> = { cold: [], warm: [] };
-        let observation: "cold" | "warm" = "cold";
-        const stat = fsSync.statSync;
-        const realpath = fsSync.realpathSync.native;
-        const hostStat = vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
-          if (args[0] === databasePath) {
-            hostReads[observation]!.push(new Error("statSync").stack ?? "statSync");
-          }
-          return Reflect.apply(stat, fsSync, args);
-        });
-        const hostRealpath = vi
-          .spyOn(fsSync.realpathSync, "native")
-          .mockImplementation((...args) => {
-            if (args[0] === databasePath) {
-              hostReads[observation]!.push(new Error("realpathSync").stack ?? "realpathSync");
-            }
-            return Reflect.apply(realpath, fsSync.realpathSync, args);
-          });
-        const asyncStat = fs.stat;
-        const asyncRealpath = fs.realpath;
-        const hostAsyncStat = vi.spyOn(fs, "stat").mockImplementation((...args) => {
-          if (args[0] === databasePath) {
-            hostReads[observation]!.push(new Error("stat").stack ?? "stat");
-          }
-          return Reflect.apply(asyncStat, fs, args);
-        });
-        const hostAsyncRealpath = vi.spyOn(fs, "realpath").mockImplementation((...args) => {
-          if (args[0] === databasePath) {
-            hostReads[observation]!.push(new Error("realpath").stack ?? "realpath");
-          }
-          return Reflect.apply(asyncRealpath, fs, args);
-        });
-        syncBuiltinESMExports();
+        // Path qualification stays in discovery workers. Live reads still take the
+        // per-read admission identity check every Gateway session read performs.
+        const hostQualification = [
+          vi.spyOn(targetInventory, "prepareSessionStoreTargetInventory"),
+          vi.spyOn(targetInventory, "captureSessionStoreReadCandidates"),
+          vi.spyOn(readCandidates, "captureSessionStoreReadCandidate"),
+        ];
         try {
           expect(await observe(f)).toMatchObject(unbound);
-          observation = "warm";
           expect(await observe(f)).toMatchObject(unbound);
-          hostStat.mockRestore();
-          hostRealpath.mockRestore();
-          hostAsyncStat.mockRestore();
-          hostAsyncRealpath.mockRestore();
-          syncBuiltinESMExports();
           expect(await databaseArtifacts(sourcePaths)).toEqual(before);
-          expect(hostReads, "Gateway must not stat or realpath the original database").toEqual({
-            cold: [],
-            warm: [],
-          });
+          expect(
+            hostQualification.map((spy) => spy.mock.calls.length),
+            "Gateway thread must not qualify session-store paths",
+          ).toEqual([0, 0, 0]);
           const nativeReadCounts = Array.from(counts);
           if (roleReader) {
             const member = f.client.authenticatedUserProfile!.profileId;
@@ -901,7 +883,11 @@ it.each([
           expect(nativeReadCounts[0], "real worker SQLite opens must be observed").toBeGreaterThan(
             0,
           );
-          expect(nativeReadCounts[1], "readiness must open private images, not the source").toBe(0);
+          // A private image of a live multi-GB agent database stalls the whole Gateway.
+          expect(
+            nativeReadCounts[1],
+            "readiness must read the source through its owner, not a private image",
+          ).toBeGreaterThan(0);
           expect(
             nativeReadCounts[2],
             "worker must inspect original source identity",
@@ -911,11 +897,9 @@ it.each([
             "worker must resolve original source identity",
           ).toBeGreaterThan(0);
         } finally {
-          hostStat.mockRestore();
-          hostRealpath.mockRestore();
-          hostAsyncStat.mockRestore();
-          hostAsyncRealpath.mockRestore();
-          syncBuiltinESMExports();
+          for (const spy of hostQualification) {
+            spy.mockRestore();
+          }
           observer.mockRestore();
         }
       },

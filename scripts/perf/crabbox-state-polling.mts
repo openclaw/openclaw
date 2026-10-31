@@ -49,7 +49,7 @@ writeFileSync(
   `#!/bin/sh
 if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
   printf '%s\\n' version >> ${quote(callsPath)}
-  printf '%s\\n' 'crabbox version 0.79.2'
+  printf '%s\\n' 'crabbox version 0.80.0'
   exit 0
 fi
 printf '%s\\n' unexpected >> ${quote(callsPath)}

@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DEFAULT_WORKER_PENDING_BYTES } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -115,9 +116,7 @@ describe("sessions.usage result cache and owner attribution", () => {
     );
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.useRealTimers().restoreAllMocks());
 
   it.each(["detail", "overview"] as const)(
     "%s usage follows invited membership and drops a revoked source",
@@ -317,10 +316,60 @@ describe("sessions.usage result cache and owner attribution", () => {
     },
   );
 
+  it("prepares model cohorts only after a partial overview has finished summarizing", async () => {
+    const query = fixture(
+      [
+        { sessionId: "known", updatedAt: 2, model: "Alpha" },
+        { sessionId: "pending", updatedAt: 1, model: "Beta" },
+      ],
+      { known: 17, pending: 23 },
+    );
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce({
+      summaries: [usageTotals(17), null],
+      cacheStatus: {
+        status: "refreshing",
+        cachedFiles: 1,
+        pendingFiles: 1,
+        staleFiles: 0,
+      },
+    });
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const taskKinds = () =>
+      run.mock.calls.flatMap(([task]) =>
+        isRecord(task) && typeof task.kind === "string" ? [task.kind] : [],
+      );
+
+    const partial = await query({ projection: "overview", limit: 2 });
+    expect(partial.partial?.reason).toBe("summarizing");
+    expect(partial.totals.totalTokens).toBe(17);
+    expect(partial.sessions.map((row) => row.sessionId)).toEqual(["known", "pending"]);
+    expect(partial.sessions[1]).toMatchObject({ usage: null, computing: true });
+    expect(taskKinds()).not.toContain("prepare");
+    expect(taskKinds()).not.toContain("cohorts");
+
+    run.mockClear();
+    publishSessionCostUsageUpdated("main");
+    const complete = await query({ projection: "overview", limit: 2 });
+    expect(complete.partial).toBeUndefined();
+    expect(complete.totals.totalTokens).toBe(40);
+    expect(complete.sessions.map((row) => row.usage?.totalTokens)).toEqual([17, 23]);
+    expect(taskKinds().filter((kind) => kind === "prepare")).toHaveLength(1);
+
+    run.mockClear();
+    const filtered = await query({ projection: "overview", query: "model:Alpha" });
+    expect(filtered.sessions.map((row) => row.sessionId)).toEqual(["known"]);
+    expect(filtered.totals.totalTokens).toBe(17);
+    expect(taskKinds()).toEqual(["cohorts"]);
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+  });
+
   it("shares population facts across pages and filters until an owner publishes new usage", async () => {
+    // Keep snapshot reuse independent of worker scheduling and the request deadline.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const entries = Array.from({ length: 60 }, (_, index) => ({
       sessionId: `page-${index + 1}`,
       updatedAt: index + 1,
+      model: index % 2 ? "Beta" : "Alpha",
     }));
     const tokens = Object.fromEntries(entries.map((entry, index) => [entry.sessionId, index + 1]));
     const query = fixture(entries, tokens);
@@ -339,6 +388,10 @@ describe("sessions.usage result cache and owner attribution", () => {
     const filtered = await query({ projection: "overview", query: "minTokens:55" });
     expect(filtered.sessions).toHaveLength(6);
     expect(filtered.totals.totalTokens).toBe(345);
+    const alpha = await query({ projection: "overview", query: "model:ALPH" });
+    expect(alpha.sessions).toHaveLength(30);
+    expect(alpha.totals.totalTokens).toBe(900);
+    expect(alpha.overview?.filterOptions.model).toEqual(["Alpha", "Beta"]);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
 
@@ -346,6 +399,9 @@ describe("sessions.usage result cache and owner attribution", () => {
     publishSessionCostUsageUpdated("main");
     const updated = await query({ projection: "overview", sort: "tokens", sortDirection: "desc" });
     expect(updated.sessions[0]).toMatchObject({ sessionId: "page-1", usage: { totalTokens: 100 } });
+    expect((await query({ projection: "overview", query: "model:alpha" })).totals.totalTokens).toBe(
+      999,
+    );
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
 
     // Context predicates hydrate a different source snapshot, unlike usage-only filters.
@@ -530,8 +586,8 @@ describe("usage creator attribution", () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         [
-          ownedRow("ada", 1, ada.id, { visibility: "shared" }),
-          ownedRow("bob", 2, bob.id, { visibility: "shared" }),
+          ownedRow("ada", 1, ada.id, { visibility: "shared", model: "Alpha" }),
+          ownedRow("bob", 2, bob.id, { visibility: "shared", model: "Alpha" }),
         ],
         { ada: 10, bob: 20 },
       );
@@ -548,8 +604,9 @@ describe("usage creator attribution", () => {
         [bob.id, ["agent:main:bob"], 20],
       ] as const) {
         const viewer = usageClient(profileId);
-        const result = await query({ limit: 20 }, viewer, roleConfig);
-        expect(await query({ limit: 20 }, viewer, roleConfig)).toEqual(result);
+        const overview = { projection: "overview", query: "model:Alpha" };
+        const result = await query(overview, viewer, roleConfig);
+        expect(await query(overview, viewer, roleConfig)).toEqual(result);
         expect(result.sessions.map(({ key }) => key)).toEqual(expectedKeys);
         expect(result.totals.totalTokens).toBe(tokens);
       }

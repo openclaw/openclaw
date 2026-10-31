@@ -18,6 +18,7 @@ import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
+import { chatHistoryOlderSelector } from "./chat-history-request.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -50,7 +51,10 @@ import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
+import {
+  openSessionWorkspaceFile,
+  openSessionWorkspaceManagedArtifact,
+} from "./components/chat-session-workspace.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
@@ -199,7 +203,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const historyHasMore = catalogKey
       ? Boolean(this.history.catalogCursor)
-      : state.chatHistoryPagination.hasMore;
+      : chatHistoryOlderSelector(state) !== null;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       state,
@@ -499,13 +503,13 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : undefined,
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
-      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
-      onModelSetup: () => this.context.navigate("model-setup"),
       error: providerPaused ? null : state.lastError,
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
-        catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
+        catalogKey || providerPaused || selectedSessionArchived
+          ? null
+          : (state.chatRunError ?? placementComposer.runError),
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
@@ -529,7 +533,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       contextGateway: this.context.gateway,
       onOpenContext: this.openContextPanel,
-      operatorAuth: state.hello?.auth ?? null,
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
@@ -551,6 +554,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
       onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
+      onOpenManagedArtifact: (href) => openSessionWorkspaceManagedArtifact(state, href),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
@@ -637,6 +641,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       personActivity: personActivityRouting(this.context),
       ...this.resourceProps(state, this.context),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
+      onComposerWidthChange: (value) => {
+        state.settings = patchSettings({ chatMessageMaxWidth: value });
+      },
       chatBubbleMode: isChatBubbleMode(
         state.settings,
         state.sessionKey,

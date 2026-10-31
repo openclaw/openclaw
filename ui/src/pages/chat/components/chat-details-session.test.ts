@@ -11,6 +11,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
@@ -97,7 +98,12 @@ it("keeps compaction busy until the owning request settles and uses the current 
       },
     ],
   }));
-  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+    hello: gatewayHelloForMethods(["sessions.usage"]),
+  });
   const view = mountSolid(() =>
     createComponent(ChatContextPanel, {
       presented: true,

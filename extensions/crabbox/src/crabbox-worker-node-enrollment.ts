@@ -10,6 +10,7 @@ import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
+const CLOUD_WORKER_CODEX_ENV = "CRABBOX_WORKER_CODEX_CONFIG";
 // Tolerate brief network pauses while resuming stalls well before the command deadline.
 const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
 
@@ -93,8 +94,10 @@ const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const desktopSetup = ${JSON.stringify(params.desktopSetup)};
 const credentials = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
+const workerCodexBase64 = process.env.${CLOUD_WORKER_CODEX_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
+delete process.env.${CLOUD_WORKER_CODEX_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
 let phaseStarted = performance.now();
@@ -114,6 +117,40 @@ setPhase("preparation");
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
   const stateDir = ${createCrabboxWorkerStateDirScript(leaseId)};
+  const stageWorkerCodex = () => {
+    if (!workerCodexBase64) return;
+    let settings;
+    try { settings = JSON.parse(Buffer.from(workerCodexBase64, "base64").toString("utf8")); }
+    catch { throw new Error("Cloud worker Codex settings are invalid"); }
+    const { configToml, helperScript, helperPath, configVersion } = settings;
+    if (![configToml, helperScript, helperPath, configVersion].every((value) => typeof value === "string" && value.length > 0) || !/^[a-f0-9]{64}$/.test(configVersion)) throw new Error("Cloud worker Codex settings are incomplete");
+    if ([configToml, helperScript].some((value) => Buffer.byteLength(value, "utf8") > 16 * 1024)) throw new Error("Cloud worker Codex settings exceed their size limit");
+    const helperName = path.basename(helperPath);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\\.mjs$/.test(helperName) || configToml.split(helperPath).length !== 2) throw new Error("Cloud worker Codex helper path is missing or ambiguous");
+    const directory = path.join(stateDir, "codex-runtime");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (!fs.lstatSync(directory).isDirectory() || fs.realpathSync(directory) !== directory) throw new Error("Cloud worker Codex settings directory is unsafe");
+    if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+    const config = configToml.replace(helperPath, path.join(directory, helperName));
+    const versionFile = path.join(directory, "version");
+    // A replay must not change the configuration behind an already advertised command identity.
+    if (fs.existsSync(versionFile) && (
+      fs.readFileSync(versionFile, "utf8") !== configVersion ||
+      fs.readFileSync(path.join(directory, "config.toml"), "utf8") !== config ||
+      fs.readFileSync(path.join(directory, helperName), "utf8") !== helperScript
+    )) throw new Error("Cloud worker Codex version changed on an existing lease; reprovision the worker");
+    const writePrivate = (name, content) => {
+      const destination = path.join(directory, name);
+      const temporary = destination + "." + crypto.randomUUID();
+      try {
+        fs.writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, destination);
+      } finally { fs.rmSync(temporary, { force: true }); }
+    };
+    writePrivate(helperName, helperScript);
+    writePrivate("config.toml", config);
+    writePrivate("version", configVersion);
+  };
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
@@ -195,18 +232,34 @@ setPhase("preparation");
     }
   }
   ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  // Lease-private settings are never part of runtime-only preparation or its captured image.
+  if (mode) stageWorkerCodex();
   if (desktopTarget === "macos") finishDesktopSetup();
   if (reuseNodeProcess()) {
     if (desktopTarget !== "macos") finishDesktopSetup();
     setPhase("complete");
     return;
   }
-  const verifyRuntime = (root) => {
+  const verifyRuntime = (root, fresh = false) => {
     setPhase("runtime verification");
     if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
     const packageRoot = path.join(root, "node_modules", "openclaw");
     const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
     if (manifest.name !== "openclaw" || manifest.version !== bootstrap.openclawVersion) throw new Error("Cloud worker bootstrap package identity does not match the Gateway");
+    if (bootstrap.install !== "npm") {
+    const inventoryBytes = fs.readFileSync(path.join(packageRoot, "node-runtime.manifest.json"));
+    if (!bootstrap.manifestSha256 || crypto.createHash("sha256").update(inventoryBytes).digest("hex") !== bootstrap.manifestSha256) throw new Error("Cloud worker runtime inventory does not match the Gateway");
+    const metadataBytes = fs.readFileSync(path.join(packageRoot, "node-runtime.json"));
+    const metadata = JSON.parse(metadataBytes);
+    if (!bootstrap.buildId || metadata.buildId !== bootstrap.buildId || metadata.openclawVersion !== bootstrap.openclawVersion) throw new Error("Cloud worker runtime build identity does not match the Gateway");
+    if ((metadata.install ?? "bundle") !== (bootstrap.install ?? "bundle")) throw new Error("Cloud worker runtime installation mode does not match the Gateway");
+    const target = metadata.platforms.find((item) => item.platform === process.platform && item.arch === process.arch);
+    if (!target) throw new Error("Cloud worker runtime has no prepared dependencies for " + process.platform + "/" + process.arch + "; prepare the matching runtime on the Gateway before provisioning");
+    if (fresh && target.prefix) {
+      fs.renameSync(path.join(packageRoot, "node_modules"), path.join(packageRoot, ".host-node_modules"));
+      fs.renameSync(path.join(packageRoot, target.prefix, "node_modules"), path.join(packageRoot, "node_modules"));
+    }
+    }
     const probe = spawnSync(process.execPath, [path.join(packageRoot, "openclaw.mjs"), "--version"], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
     const version = probe.stdout?.trim();
     const expected = "OpenClaw " + bootstrap.openclawVersion;
@@ -416,6 +469,7 @@ setPhase("preparation");
         await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
         downloadAbort.signal.throwIfAborted();
         fs.mkdirSync(installDir, directoryOptions);
+        if (bootstrap.install === "npm") {
         let locked = false;
         const warnUnlocked = (reason) => console.error("CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:" + reason);
         if (installLock) {
@@ -491,7 +545,58 @@ setPhase("preparation");
           const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
           throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
         }
-        verifyRuntime(installDir);
+        } else {
+        const packageRoot = path.join(installDir, "node_modules", "openclaw");
+        fs.mkdirSync(packageRoot, { recursive: true, ...directoryOptions });
+        const runTar = (args) => new Promise((resolve, reject) => {
+          const child = spawn(process.platform === "win32" ? "tar.exe" : "tar", args, { env: nodeEnv, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+          const output = []; let bytes = 0; let failure;
+          const kill = () => {
+            if (!child.pid) return;
+            try {
+              if (process.platform === "win32") {
+                const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                if (result.error) failure ||= result.error;
+              }
+              else process.kill(-child.pid, "SIGKILL");
+            } catch (error) { if (error.code !== "ESRCH") failure ||= error; }
+          };
+          const stop = () => { failure ||= downloadAbort.signal.reason; kill(); };
+          const cancel = () => downloadAbort.abort(new Error("Cloud worker runtime extraction cancelled"));
+          const timeout = setTimeout(() => { failure = new Error("Cloud worker runtime extraction timed out"); kill(); }, 600000);
+          process.once("SIGTERM", cancel); process.once("SIGINT", cancel);
+          downloadAbort.signal.addEventListener("abort", stop, { once: true });
+          child.stdout.on("data", (chunk) => {
+            bytes += chunk.length;
+            if (bytes > 32 * 1024 * 1024) { failure = new Error("Cloud worker runtime archive listing exceeds its limit"); kill(); }
+            else output.push(chunk);
+          });
+          child.stderr.resume();
+          child.once("error", (error) => { failure = error; });
+          child.once("close", (status) => {
+            clearTimeout(timeout); process.removeListener("SIGTERM", cancel); process.removeListener("SIGINT", cancel);
+            downloadAbort.signal.removeEventListener("abort", stop);
+            if (failure || status !== 0) reject(failure || new Error("Cloud worker runtime archive extraction failed; verify tar is available in the image"));
+            else resolve(Buffer.concat(output).toString("utf8"));
+          });
+          if (downloadAbort.signal.aborted) stop();
+        });
+        // Only regular producer-owned files/directories enter the private staging tree.
+        // Listing before extraction prevents tar from following archive links or escaping package/.
+        setPhase("extraction");
+        const names = (await runTar(["-tzf", archive])).trimEnd().split("\\n");
+        const seen = new Set();
+        if (names.length > 250000) throw new Error("Cloud worker runtime archive exceeds its entry limit");
+        for (const name of names) {
+          const relative = name.endsWith("/") ? name.slice(0, -1) : name;
+          if (seen.has(relative) || relative.includes("\\\\") || path.posix.normalize(relative) !== relative || (relative !== "package" && !relative.startsWith("package/")) || relative.split("/").some((part) => !part || part === ".." || part === ".")) throw new Error("Cloud worker runtime archive path is unsafe");
+          seen.add(relative);
+        }
+        const types = (await runTar(["-tvzf", archive])).trimEnd().split("\\n");
+        if (types.some((entry) => !["-", "d"].includes(entry[0]))) throw new Error("Cloud worker runtime archive contains an unsafe entry type");
+        await runTar(["-xzf", archive, "--strip-components=1", "--no-same-owner", "--no-same-permissions", "-C", packageRoot]);
+        }
+        verifyRuntime(installDir, true);
       })().catch((error) => {
         if (!downloadAbort.signal.aborted) downloadAbort.abort(Object.assign(error, { downloadPhase: phase }));
         throw downloadAbort.signal.reason;
@@ -545,6 +650,13 @@ setPhase("preparation");
         "bootstrap",
       ),
     forwardedEnv: {
+      ...(enrollment?.workerCodex
+        ? {
+            [CLOUD_WORKER_CODEX_ENV]: Buffer.from(JSON.stringify(enrollment.workerCodex)).toString(
+              "base64",
+            ),
+          }
+        : {}),
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
         nodeBootstrap: token,
         workerBundle: params.workerBundle?.token,

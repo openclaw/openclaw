@@ -11,10 +11,12 @@ export async function launchControlUiObservationBrowser(options: {
   colorScheme: "light" | "dark";
   isMobile?: boolean;
   hasTouch?: boolean;
+  args?: string[];
 }) {
   const server = await chromium.launchServer({
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
     host: "127.0.0.1",
+    args: options.args,
   });
   const child = server.process();
   const stderr: Buffer[] = [];

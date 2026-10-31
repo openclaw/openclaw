@@ -6,6 +6,7 @@ import {
   readDatabasePathIdentitySync,
   assertDatabasePathIdentity,
   assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -76,10 +77,29 @@ import {
 
 export type SessionStoreTargetPreparationRequest =
   | { storePath: string }
-  | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv };
+  | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv }
+  | {
+      validate: {
+        candidates: readonly SessionStoreReadCandidate[];
+        sources: readonly { path: string; identity: DatabasePathIdentity }[];
+      };
+    };
 
 /** Only filesystem qualification runs before FIFO; content discovery remains ordered. */
 export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetPreparationRequest) {
+  if ("validate" in request) {
+    if (!request.validate.candidates.every(isSessionStoreReadCandidateCurrent)) {
+      throw new Error("Session database selector changed before effect preparation");
+    }
+    for (const source of request.validate.sources) {
+      assertDatabasePathIdentity(source.path, source.identity);
+    }
+    return {
+      kind: "session-target-prepare" as const,
+      candidates: [...request.validate.candidates],
+      inventory: undefined,
+    };
+  }
   const inventory =
     "storePath" in request
       ? undefined
@@ -96,7 +116,7 @@ export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetP
   return {
     kind: "session-target-prepare" as const,
     candidates,
-    inventory: inventory && { ...inventory, candidates, preserveSourceArtifacts: true as const },
+    inventory: inventory && { ...inventory, candidates },
   };
 }
 

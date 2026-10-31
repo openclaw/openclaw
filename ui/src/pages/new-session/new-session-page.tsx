@@ -499,6 +499,7 @@ function renderPageContent(host: PageHost) {
                   "new-session-page--incognito": page().submission.visibility === "incognito",
                 },
               ]}
+              style={{ "--chat-thread-max-width": options().chatMessageMaxWidth ?? "48rem" }}
             >
               <SessionBackgroundView context={page().context} surface="new-session" />
               <Show when={!catalog.isTarget(page().data)}>

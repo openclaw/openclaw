@@ -33,6 +33,12 @@ function inScope(session: ProcessSession, scope: ProcessObservationScope): boole
   );
 }
 
+/** Live row metadata must not inherit the process panel's output and row limits. */
+export function countRunningBackgroundProcesses(scope: ProcessObservationScope): number {
+  return listRunningSessions().filter((session) => !session.exited && inScope(session, scope))
+    .length;
+}
+
 /** Non-consuming observation: never drains poll output or acknowledges an exit notification. */
 export function readBackgroundProcesses(scope: ProcessObservationScope): {
   processes: SessionProcessSummary[];

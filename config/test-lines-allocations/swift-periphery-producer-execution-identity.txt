@@ -1,0 +1,2 @@
+592
+# Covers physical producer cohorts, partial reruns, failed sibling reports, and exact artifact identity.

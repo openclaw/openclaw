@@ -229,7 +229,7 @@ describe("AppSidebar session ownership filtering", () => {
         sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set([matchingSection]));
         await sidebar.updateComplete;
         expect(sectionIds()).toEqual([matchingSection]);
-        expect(sidebar.querySelector(".sidebar-session-group-count")?.textContent).toBe("1");
+        expect(sidebar.querySelector(".sidebar-session-group-count")).toBeNull();
         expect(sidebar.querySelector('[data-session-key="agent:main:match"]')).toBeNull();
       }
 

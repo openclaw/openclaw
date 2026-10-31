@@ -1,0 +1,2 @@
+# Separate forced-GC cases while covering ordinary UI behavior on Bun.
+104

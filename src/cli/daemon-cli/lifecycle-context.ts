@@ -37,7 +37,11 @@ export async function resolveGatewayLifecycleContext(
 
 export async function resolveGatewayConfigPorts() {
   const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
-  return { explicit: config?.gateway?.port, fallback: resolveGatewayPort(config, process.env) };
+  return {
+    config,
+    explicit: config?.gateway?.port,
+    fallback: resolveGatewayPort(config, process.env),
+  };
 }
 
 // The detached update helper imports this through the stable daemon CLI entry.

@@ -8,8 +8,10 @@ import {
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
+import { acquirePluginSource, createPluginSourceValidationError } from "./plugin-instance-error.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
 import { copyPluginSourceFile } from "./plugin-source-file.js";
@@ -31,21 +33,23 @@ export function linkPluginGenerationDependency(link: string, target: string): bo
   ) {
     return false;
   }
-  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  acquirePluginSource(() => fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 }));
   if (process.platform === "win32") {
     if (entry) {
       // MoveFileEx cannot replace a directory junction. Unlink only the reparse point.
       if (!fs.lstatSync(link).isSymbolicLink()) {
         throw new Error(`Dependency link became a real entry: ${link}`);
       }
-      fs.unlinkSync(link);
+      acquirePluginSource(() => fs.unlinkSync(link));
     }
-    fs.symlinkSync(target, link, "junction");
+    acquirePluginSource(() => fs.symlinkSync(target, link, "junction"));
   } else {
     const staged = `${link}.${randomUUID()}.tmp`;
     try {
-      fs.symlinkSync(path.relative(path.dirname(link), target), staged, "junction");
-      fs.renameSync(staged, link);
+      acquirePluginSource(() => {
+        fs.symlinkSync(path.relative(path.dirname(link), target), staged, "junction");
+        fs.renameSync(staged, link);
+      });
     } finally {
       fs.rmSync(staged, { force: true });
     }
@@ -62,8 +66,20 @@ export function linkPluginGenerationDependency(link: string, target: string): bo
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
   return {
-    defer(filename: string, root: string, source: string, entry: fs.BigIntStats): boolean {
-      if (!entry.isSymbolicLink() || isPathInside(root, fs.realpathSync(filename))) {
+    defer(
+      filename: string,
+      root: string,
+      source: string,
+      entry: fs.BigIntStats,
+      originalSource = true,
+    ): boolean {
+      if (
+        !entry.isSymbolicLink() ||
+        isPathInside(
+          root,
+          acquirePluginSource(() => fs.realpathSync(filename), originalSource),
+        )
+      ) {
         return false;
       }
       links.add(source);
@@ -78,8 +94,10 @@ export function createPluginGenerationFileCapture({
   boundary,
   destination,
   directory,
+  packageKind,
   outputRoot,
   capturedPaths,
+  capturedDirectories,
   originalSources,
   hardlinkedSources,
   sourceCapture,
@@ -94,8 +112,10 @@ export function createPluginGenerationFileCapture({
   boundary: string;
   destination: string;
   directory: string;
+  packageKind: "package" | "dependency";
   outputRoot?: string;
   capturedPaths: Map<string, string>;
+  capturedDirectories: Set<string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
   sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
@@ -117,6 +137,7 @@ export function createPluginGenerationFileCapture({
     realParent?: string,
     sourceEntry?: fs.BigIntStats,
   ) => {
+    const metrics = getPluginGenerationMetrics();
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
       return;
@@ -126,19 +147,26 @@ export function createPluginGenerationFileCapture({
     const inputBoundary = prepared?.boundary ?? boundary;
     // Directory recursion shares child metadata and the real parent; only links need a path walk.
     const entry =
-      !prepared && realParent ? (sourceEntry ?? fs.lstatSync(input, { bigint: true })) : undefined;
+      !prepared && realParent
+        ? (sourceEntry ?? acquirePluginSource(() => fs.lstatSync(input, { bigint: true })))
+        : undefined;
     const ordinary = entry && !entry.isSymbolicLink();
-    const real = ordinary ? path.join(realParent!, path.basename(input)) : fs.realpathSync(input);
+    const real = ordinary
+      ? path.join(realParent!, path.basename(input))
+      : acquirePluginSource(() => fs.realpathSync(input), !prepared);
     const retainedNative = nativeAdmission.isRetainedReference(source, real);
     if (!isPathInside(inputBoundary, real) && !retainedNative) {
-      throw new Error(
+      throw createPluginSourceValidationError(
         `Plugin source link leaves its package: ${path.relative(boundary, source)}. Declare shared code as a package dependency.`,
+        !prepared,
       );
     }
     if (!prepared && outputRoot && isPathInside(outputRoot, real)) {
       return;
     }
-    const stat = ordinary ? entry : fs.statSync(real, { bigint: true });
+    const stat = ordinary
+      ? entry
+      : acquirePluginSource(() => fs.statSync(real, { bigint: true }), !prepared);
     const captured = capturedPaths.get(real);
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
@@ -152,24 +180,34 @@ export function createPluginGenerationFileCapture({
       `${stat.isDirectory() ? "directory" : "file"}\0${path.relative(destination, target)}\0`,
     );
     if (stat.isDirectory()) {
+      capturedDirectories.add(target);
       if (ancestors.has(real)) {
-        throw new Error(`Plugin source contains a directory cycle: ${source}`);
+        throw createPluginSourceValidationError(
+          `Plugin source contains a directory cycle: ${source}`,
+          !prepared,
+        );
       }
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      for (const name of readPluginSourceDirectory(real)) {
+      for (const name of readPluginSourceDirectory(real, !prepared)) {
         const childSource = path.join(source, name);
         const childInput = path.join(input, name);
         const childEntry =
           deferExternalLinks && !nativeAdmission.isRetainedReference(childSource)
-            ? fs.lstatSync(childInput, { bigint: true })
+            ? acquirePluginSource(() => fs.lstatSync(childInput, { bigint: true }), !prepared)
             : undefined;
-        if (!childEntry || !sourceLinks.defer(childInput, inputBoundary, childSource, childEntry)) {
+        if (
+          !childEntry ||
+          !sourceLinks.defer(childInput, inputBoundary, childSource, childEntry, !prepared)
+        ) {
           copy(childSource, path.join(target, name), copyFile, openFile, real, childEntry);
         }
       }
       ancestors.delete(real);
     } else if (stat.isFile()) {
+      if (metrics) {
+        metrics[packageKind === "package" ? "packageFiles" : "dependencyFiles"]++;
+      }
       if (stat.nlink > 1n) {
         hardlinkedSources.add(target);
       }
@@ -181,6 +219,9 @@ export function createPluginGenerationFileCapture({
       additions.add(target);
       const retainedFile = retained?.files.get(path.relative(directory, target));
       const retainedReference = retained?.source.native?.references.has(target);
+      if (metrics && !prepared && !captured && (!retainedFile || retainedReference)) {
+        metrics.originalBytes += Number(stat.size);
+      }
       if (retainedReference) {
         // The fork owns this validated reference; the new lease must admit its own native owner.
         fs.unlinkSync(target);
@@ -222,7 +263,10 @@ export function createPluginGenerationFileCapture({
         onPackageMetadata(source, target);
       }
     } else {
-      throw new Error(`Plugin build input is not a regular file: ${source}`);
+      throw createPluginSourceValidationError(
+        `Plugin build input is not a regular file: ${source}`,
+        !prepared,
+      );
     }
   };
   return (source: string, target: string) => {

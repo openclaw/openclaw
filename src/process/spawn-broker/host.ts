@@ -155,6 +155,8 @@ export class SpawnBrokerHost {
     return this.fileReads.read(filePath, signal);
   }
 
+  readonly readFilePage = this.fileReads.readPage.bind(this.fileReads);
+
   captureNativeResource(
     input: BrokerNativeResourceInput,
     callbacks: BrokerNativeResourceCallbacks,
@@ -216,6 +218,7 @@ export class SpawnBrokerHost {
     args: string[],
     options: SpawnOptions,
     initiateSpawn?: SpawnInitiation,
+    execCgroup?: string,
   ): BrokerChild {
     const prepared = brokerSpawnOptions(options);
     if (!prepared) {
@@ -227,14 +230,21 @@ export class SpawnBrokerHost {
         id: ++this.sequence,
         argv: [command, ...args],
         options: prepared,
+        execCgroup,
       },
       initiateSpawn,
     ).child;
   }
 
-  spawnExeca(argv: string[], options: BrokerExecaOptions) {
+  spawnExeca(argv: string[], options: BrokerExecaOptions, execCgroup?: string) {
     const id = ++this.sequence;
-    const request = this.admit({ type: "spawn-execa", id, argv, options });
+    const request = this.admit({
+      type: "spawn-execa",
+      id,
+      argv,
+      options,
+      execCgroup,
+    });
     return {
       child: request.child,
       result: request.result!.promise,
@@ -255,9 +265,7 @@ export class SpawnBrokerHost {
     );
     const result =
       message.type === "spawn-execa" ? createDeferredCore<BrokerExecaResult>() : undefined;
-    if (result) {
-      void result.promise.catch(() => {});
-    }
+    void result?.promise.catch(() => {});
     const request: Request = {
       child,
       initiateSpawn,

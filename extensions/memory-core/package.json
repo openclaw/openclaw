@@ -10,13 +10,13 @@
     "./worker-api.js": "./worker-api.ts"
   },
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.13",
+    "@openclaw/fs-safe": "0.27.0",
     "@solidjs/web": "2.0.0-rc.18",
     "solid-js": "2.0.0-rc.18",
     "json5": "2.2.3",
     "kysely": "0.29.7",
     "p-limit": "7.3.3",
-    "typebox": "1.4.2"
+    "typebox": "1.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

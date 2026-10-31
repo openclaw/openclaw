@@ -13,10 +13,6 @@ export function createGatewayStateProcessOwnerRetiredError(): Error {
   return new Error(GATEWAY_STATE_PROCESS_OWNER_RETIRED_MESSAGE);
 }
 
-export function isGatewayStateProcessOwnerRetiredError(error: unknown): boolean {
-  return error instanceof Error && error.message === GATEWAY_STATE_PROCESS_OWNER_RETIRED_MESSAGE;
-}
-
 export class StateDatabaseAccessError extends Error {
   override name = "StateDatabaseAccessError";
 }

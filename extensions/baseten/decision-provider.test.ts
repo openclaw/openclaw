@@ -26,6 +26,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
 const ids = [
   "decision-models/baseten-elephant-9b-latest",
   "decision-models/baseten-mammoth-27b-latest",
+  "decision-models/baseten-joey-2b-latest",
 ];
 const route = {
   type: "choice",
@@ -48,6 +49,7 @@ const batch: DecisionBatchV2 = {
 function reply() {
   return {
     model: "elephant-1",
+    provider: "Baseten",
     answers: {
       refund: { type: "noul", noul: 0.98 },
       route,
@@ -59,7 +61,7 @@ function reply() {
         confidence: 0.6,
       },
     },
-    usage: { input_tokens: 42, output_tokens: 3 },
+    usage: { input_tokens: 42, output_tokens: 3, cost: 0.5, native_units: 3 },
   };
 }
 function invalidAnswer(name: keyof ReturnType<typeof reply>["answers"], fields: object) {
@@ -148,20 +150,19 @@ it.each([
   expect(mocks.fetch).toHaveBeenCalledOnce();
   expect(mocks.release).toHaveBeenCalledOnce();
 });
-it("rejects malformed distributions, usage, and reflected credentials", async () => {
-  for (const payload of [
-    invalidAnswer("refund", { noul: 2 }),
-    invalidAnswer("route", { probabilities: { billing: 1 } }),
-    invalidAnswer("urgency", { legend: { "0": "Wrong", "1": "Emergency" } }),
-    { ...reply(), usage: { input_tokens: 42, output_tokens: 0 } },
-    { ...reply(), model: "synthetic-baseten-key" },
-  ]) {
-    mocks.fetch.mockResolvedValue(Response.json(payload));
-    expect(await registered().evaluate(batch, context())).toEqual({
-      status: "unavailable",
-      reason: "invalid-response",
-    });
-  }
+it.each([
+  invalidAnswer("refund", { noul: 2 }),
+  invalidAnswer("route", { probabilities: { billing: 1 } }),
+  invalidAnswer("route", { confidence: undefined }),
+  invalidAnswer("urgency", { legend: { "0": "Wrong", "1": "Emergency" } }),
+  { ...reply(), usage: { input_tokens: 42, output_tokens: 0 } },
+  { ...reply(), model: "synthetic-baseten-key" },
+])("rejects malformed native results or reflected credentials %#", async (payload) => {
+  mocks.fetch.mockResolvedValue(Response.json(payload));
+  expect(await registered().evaluate(batch, context())).toEqual({
+    status: "unavailable",
+    reason: "invalid-response",
+  });
 });
 it("does not dispatch unsupported model, input, reasoning, or missing credentials", async () => {
   const provider = registered();

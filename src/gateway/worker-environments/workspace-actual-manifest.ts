@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats } from "node:fs";
+import { constants, realpathSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
@@ -195,6 +195,8 @@ type ActualWorkspaceNode = WorkerWorkspaceManifestEntry | { path: string; type: 
 export async function scanActualWorkspaceManifest(
   params: ActualWorkspaceManifestOptions & {
     onEntry: (entry: ActualWorkspaceNode, identity?: string) => void;
+    // Only repair candidates authenticated against a saved root may retain this former input.
+    includeLegacyPnpmStore?: boolean;
     reuseFile?: (
       entryPath: string,
       identity: string,
@@ -332,7 +334,8 @@ export async function scanActualWorkspaceManifest(
       if (sha256) {
         // Included paths can cross a replaced parent directory even when the
         // leaf inode still matches a prior content hash.
-        if ((await fs.realpath(absolute)) !== absolute) {
+        // This scan runs in the computation worker; avoid a per-file pool round trip.
+        if (realpathSync.native(absolute) !== absolute) {
           throw new Error("Gateway workspace file changed while it was being read");
         }
         addEntry(
@@ -367,6 +370,7 @@ export async function scanActualWorkspaceManifest(
         relative,
         retained.has(relative) || (await isStagedInput(relative)),
         params.buildCacheInputs !== undefined,
+        params.includeLegacyPnpmStore,
       )
     ) {
       return "derived-only";
@@ -395,6 +399,7 @@ export async function scanActualWorkspaceManifest(
             child,
             retained.has(child) || (await isStagedInput(child)),
             params.buildCacheInputs !== undefined,
+            params.includeLegacyPnpmStore,
           ) ||
           derivedOnlyDirectories.has(child)
         ) {
@@ -422,6 +427,7 @@ export async function scanActualWorkspaceManifest(
             relative,
             retained.has(relative) || (await isStagedInput(relative)),
             params.buildCacheInputs !== undefined,
+            params.includeLegacyPnpmStore,
           )
         ) {
           hasDerivedEntry = true;

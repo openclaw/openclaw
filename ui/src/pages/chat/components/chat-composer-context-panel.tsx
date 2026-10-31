@@ -13,6 +13,7 @@ import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
 } from "./chat-composer-context-model.ts";
+import { ContextCompactButton } from "./chat-context-compact.tsx";
 
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
   export: "ChatContextBreakdown",
@@ -269,7 +270,8 @@ export function ChatComposerContextPanel(
                     : "chat.composer.contextUsage.contextWindow",
                 )}
               </span>
-              <strong class="context-usage__context-value">
+              {/* Translation replaces the text anchors used by live token updates. */}
+              <strong class="context-usage__context-value" translate="no">
                 {context().detail} · {context().approximate ? "~" : ""}
                 {context().pct}%
               </strong>
@@ -289,15 +291,25 @@ export function ChatComposerContextPanel(
                 />
               </Loading>
             </Show>
-            <button
-              type="button"
-              class="context-usage__open"
-              disabled={!props.onOpenContext}
-              onClick={() => props.onOpenContext?.()}
-            >
-              {t("chat.sessionDetails.contextOpen")}
-              <Icon name="chevronRight" />
-            </button>
+            <div class="context-usage__actions">
+              <button
+                type="button"
+                class="context-usage__open"
+                disabled={!props.onOpenContext}
+                onClick={() => props.onOpenContext?.()}
+              >
+                {t("chat.sessionDetails.contextOpen")}
+                <Icon name="chevronRight" />
+              </button>
+              {/* A secondary action beside View context: the ring already carries the warning.
+                  Compacting keeps the popover open so the budget above shows the result. */}
+              <ContextCompactButton
+                onCompact={props.onCompact}
+                compactionStatus={props.compactionStatus}
+                runActive={props.runActive}
+                connected={props.connected !== false}
+              />
+            </div>
             <div class="context-usage__separator" />
             <div class="context-usage__latest">
               <span>{t("chat.composer.contextUsage.latestRun")}</span>

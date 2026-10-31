@@ -14,6 +14,7 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
     (receipt) => receipt.id === "shared-auth-store",
   );
   if (sharedAuth?.outcome === "skipped" && sharedAuth.warnings.length > 0) {
+    ctx.retirementOnly = false;
     return;
   }
   const { repairAuthProfileMigration } = await import("../commands/doctor/auth-profile-repair.js");
@@ -29,6 +30,14 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
       env: ctx.env,
       prompter: ctx.prompter,
     });
+    if (
+      authRepair.config !== ctx.cfg ||
+      authRepair.storeChanges.length > 0 ||
+      authRepair.warnings.length > 0 ||
+      authRepair.findings.length > 0
+    ) {
+      ctx.retirementOnly = false;
+    }
     emitDoctorNotes({
       note,
       changeNotes: authRepair.storeChanges,
@@ -51,13 +60,25 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
     prompter: ctx.prompter,
     runtime: ctx.runtime,
     reportFindings: (findings: readonly HealthFinding[], warnings?: readonly string[]) => {
+      if (findings.length > 0 || warnings?.length) {
+        ctx.retirementOnly = false;
+      }
       recordDoctorHealthWarnings(ctx, warnings ? [] : findings, warnings);
       renderStructuredHealthFindings(ctx, findings);
     },
   });
-  await maybeMigrateLegacyPluginModelCatalogs(migrationContext());
+  if (await maybeMigrateLegacyPluginModelCatalogs(migrationContext())) {
+    ctx.retirementOnly = false;
+  }
   const modelsBeforeRepair = ctx.cfg.agents?.defaults?.models;
   const legacyOAuthRepair = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
+  if (
+    legacyOAuthRepair.config !== ctx.cfg ||
+    legacyOAuthRepair.retiredProfileCleanupPlans.length > 0 ||
+    legacyOAuthRepair.findings.length > 0
+  ) {
+    ctx.retirementOnly = false;
+  }
   recordDoctorHealthWarnings(ctx, legacyOAuthRepair.findings);
   renderStructuredHealthFindings(ctx, legacyOAuthRepair.findings);
   ctx.cfg = legacyOAuthRepair.config;
@@ -75,12 +96,16 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   }
   const { maybeMigrateModelCatalogCredentials } =
     await import("../commands/doctor-model-catalog-credentials.js");
-  await maybeMigrateModelCatalogCredentials(migrationContext());
+  const credentials = await maybeMigrateModelCatalogCredentials(migrationContext());
+  if (credentials.detected > 0 || credentials.migrated > 0 || credentials.removed > 0) {
+    ctx.retirementOnly = false;
+  }
   let authProfileHealthReady = true;
   if (
     ctx.configResult.retiredAuthProfileCleanupPlans?.length ||
     ctx.configResult.openAICodexAuthProfileIdMap?.size
   ) {
+    ctx.retirementOnly = false;
     const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
       await import("./doctor-health-contribution-runners.config.js");
     const persisted = await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
@@ -93,6 +118,7 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   ctx.authProfileHealthReady = authProfileHealthReady;
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
   if (ctx.gatewayDetails.remoteFallbackNote) {
+    ctx.retirementOnly = false;
     const findings: HealthFinding[] = [
       {
         checkId: "core/doctor/gateway-remote-config",

@@ -59,7 +59,17 @@ const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
 });
 
 export async function fixture(
-  options: { fork?: boolean; empty?: boolean; conflict?: boolean; priorPublication?: boolean } = {},
+  options: {
+    fork?: boolean;
+    empty?: boolean;
+    conflict?: boolean;
+    priorPublication?: boolean;
+    linked?: boolean;
+    newerProjectBase?: boolean;
+    unpublishedProjectWork?: boolean;
+    baseBranch?: string;
+    projectFork?: boolean;
+  } = {},
 ) {
   const original = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
   mocks.findWorktree.mockImplementation((_kind: string, ownerId: string) => ({
@@ -76,10 +86,12 @@ export async function fixture(
     expect(priorPublication.status).toBe("published");
     f.externalWrites.length = 0;
   }
-  await syncCanonicalGitHubIdentity({
-    identity: { accountId: 101, login: "contributor" },
-    authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
-  });
+  if (options.linked !== false) {
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
+    });
+  }
   const upstream = path.join(path.dirname(local.cwd), "upstream");
   const upstreamGit = (...args: string[]) => local.git("-C", upstream, ...args);
   const commitUpstream = async (message: string, files: Record<string, string>) => {
@@ -101,14 +113,30 @@ export async function fixture(
   const baseCommit = await commitUpstream("Newer base work", {
     "newer-base.txt": "base advanced after PR\n",
   });
+  if (options.baseBranch && options.baseBranch !== "main") {
+    await upstreamGit("branch", options.baseBranch, baseCommit);
+  }
+  let projectCommit = baseCommit;
+  if (options.newerProjectBase) {
+    for (let revision = 1; revision <= 5; revision++) {
+      projectCommit = await commitUpstream("Advance published project base", {
+        "published-base.txt": `Published revision ${revision}\n`,
+      });
+    }
+  }
   // The publication harness starts with staged work. A fresh selected-project
   // fixture instead starts at the real, clean project base; prior publications
   // retain their existing work and must be refused by initial preparation.
   if (!options.empty) {
     await local.git("fetch", "--no-write-fetch-head", upstream, "main");
-    await local.git("update-ref", "refs/heads/main", baseCommit);
+    await local.git("update-ref", "refs/heads/main", projectCommit);
     if (!options.priorPublication) {
-      await local.git("reset", "--hard", baseCommit);
+      await local.git("reset", "--hard", projectCommit);
+    }
+    if (options.unpublishedProjectWork) {
+      await fs.writeFile(path.join(local.cwd, "notes.txt"), "unpublished project work\n");
+      await local.git("add", "notes.txt");
+      await local.git("commit", "-m", "Unpublished project work");
     }
   }
   let cwd = local.cwd;
@@ -140,6 +168,12 @@ export async function fixture(
   }
   const git = (...args: string[]) => local.git("-C", cwd, ...args);
   const { baseRepo, headRepo } = createPublicationRepositories(options.fork);
+  if (options.projectFork) {
+    mocks.resolveRepository.mockResolvedValue({
+      ...(await mocks.resolveRepository(cwd)),
+      originUrl: `https://github.com/${headRepo.full_name}.git`,
+    });
+  }
   const pr = {
     number: 7,
     html_url: "https://github.com/openclaw/openclaw/pull/7",
@@ -148,7 +182,7 @@ export async function fixture(
     draft: false,
     merged: false,
     maintainer_can_modify: true,
-    base: { repo: baseRepo, ref: "main", sha: baseCommit },
+    base: { repo: baseRepo, ref: options.baseBranch ?? "main", sha: baseCommit },
     head: { repo: headRepo, ref: "topic/existing", sha: headCommit },
   };
   const branch = { name: pr.head.ref, commit: { sha: pr.head.sha }, protected: false };
@@ -161,12 +195,31 @@ export async function fixture(
       argv: string[],
       commandOptions?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
     ) => {
-      if (argv.includes("push") || (argv[0] === "gh" && !argv.includes("GET"))) {
+      const method = argv.indexOf("--method");
+      if (
+        argv.includes("push") ||
+        (argv[0] === "gh" && method >= 0 && argv[method + 1] !== "GET")
+      ) {
         writes.push(argv);
         throw new Error("PR preparation attempted a GitHub write");
       }
       if (argv[0] === "gh") {
-        const endpoint = argv.at(-1)!;
+        const endpoint = argv.find((arg) => arg.startsWith("repos/"))!;
+        const reference =
+          /^repos\/((?:openclaw|contributor)\/openclaw)\/git\/ref\/heads\/(.+)$/u.exec(endpoint);
+        if (reference) {
+          const [, repository, ref] = reference;
+          return commandResult(
+            JSON.stringify({
+              ref: `refs/heads/${ref}`,
+              // The fork's main may advance independently of the upstream base.
+              sha:
+                options.projectFork && repository === baseRepo.full_name && ref === "main"
+                  ? baseCommit
+                  : await upstreamGit("rev-parse", ref!),
+            }),
+          );
+        }
         const reads: Record<string, unknown> = {
           "repos/openclaw/openclaw": baseRepo,
           "repos/contributor/openclaw": headRepo,

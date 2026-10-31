@@ -3,10 +3,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
   type DiagnosticSkillUsedEvent,
 } from "../../infra/diagnostic-events.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
@@ -97,7 +97,7 @@ describe("Claude CLI native Skill tool usage", () => {
 
     parser.push(skillToolUse("toolu_1", "openclaw-skills:deploy-notes"));
     parser.push(skillToolResult("toolu_1", "openclaw-skills:deploy-notes"));
-    await flushDiagnosticEvents();
+    await waitForDiagnosticEventsDrained();
 
     expect(consumeRunSkillUsage(runId)).toEqual([
       { name: "deploy-notes", source: "workspace", activation: "read", skillFile },
@@ -124,7 +124,7 @@ describe("Claude CLI native Skill tool usage", () => {
     parser.push(skillToolResult("toolu_err", "openclaw-skills:deploy-notes", true));
     parser.push(skillToolUse("toolu_user", "user-skill"));
     parser.push(skillToolResult("toolu_user", "user-skill"));
-    await flushDiagnosticEvents();
+    await waitForDiagnosticEventsDrained();
 
     expect(consumeRunSkillUsage(runId)).toEqual([]);
     expect(events).toEqual([]);

@@ -356,6 +356,8 @@ export abstract class ChatPaneStateOwner {
   }
   draft?: string = undefined;
   focusComposer = false;
+  /** The active pane for the route's session adopts the document's boot composer. */
+  ownsRouteComposer = false;
   dashboardExpanded = false;
   routeFace?: BoardFace = undefined;
   onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void = undefined;

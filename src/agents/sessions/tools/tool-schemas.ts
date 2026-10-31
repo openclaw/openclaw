@@ -103,8 +103,15 @@ export const readTruncationOutputSchema = Type.Object(
   {
     truncated: Type.Literal(true),
     truncatedBy: Type.Union([Type.Literal("lines"), Type.Literal("bytes")]),
-    totalLines: Type.Integer({ minimum: 0 }),
-    totalBytes: Type.Integer({ minimum: 0 }),
+    totalLines: Type.Optional(
+      Type.Integer({ minimum: 0, description: "Exact line count; absent until EOF is reached." }),
+    ),
+    totalBytes: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "Exact selection byte count; absent until EOF is reached.",
+      }),
+    ),
     outputLines: Type.Integer({ minimum: 0 }),
     outputBytes: Type.Integer({ minimum: 0 }),
     lastLinePartial: Type.Boolean(),

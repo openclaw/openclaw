@@ -434,6 +434,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/bash-durable-process-store.ts",
+    [
+      {
+        tier: "W",
+        operations: ["writeDurableProcess", "listDurableProcesses"],
+        evidence:
+          "Only openclaw-state-worker-registry.ts loads durableProcessOperations for durableProcess.write (writeDurableProcess), and openclaw-state-read-operation-registry.ts loads durableProcessReadOperations for durableProcess.list (listDurableProcesses). The main-thread createDurableProcessStore facade only awaits those worker operations; the native store fixture forbids host SQL during its warm read/write flow.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-read.ts",
     [
       {
@@ -2226,7 +2237,7 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["isCanonicalSqliteSessionMainKeyCurrent"],
         evidence:
-          "Only startup-migration.ts:287 calls it, through gateway/server-startup-session-migration.ts:201 and server-startup-plugins.ts:99 or deferred boot admission at server-agent-database-startup.ts:112.",
+          "Only startup-migration-runtime.ts calls it, through gateway/server-startup-session-migration.ts:201 and server-startup-plugins.ts:99 or deferred boot admission at server-agent-database-startup.ts:112.",
       },
     ],
   ],
@@ -2237,7 +2248,7 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["setCanonicalSqliteSessionMainKey", "markCanonicalSessionValidationPending"],
         evidence:
-          "The setter serves startup-migration.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex.",
+          "The setter serves startup-migration-runtime.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex.",
       },
     ],
   ],

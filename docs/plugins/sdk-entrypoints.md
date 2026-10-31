@@ -436,3 +436,16 @@ type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
 markers; preserve them through header merges and OpenAI SDK calls. Use the helper
 after the final merge when a direct HTTP client needs a string-only header map.
 This entrypoint loads no provider policy, transport host, or credential runtime.
+
+### Node workspace process environment
+
+A node-host workspace lease may expose `processEnvironment`. Call `prepare` after
+generic environment sanitization and `assertCurrent` synchronously immediately
+before a process effect. The lease and invocation own its lifetime; saved copies
+do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
+This capability is host-local and is never a wire environment override.
+
+`process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
+streams. It preserves incomplete lines and leaves CR handling to the consumer.
+Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
+the runtime's existing dispatch and delivery authority.

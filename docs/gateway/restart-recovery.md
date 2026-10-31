@@ -19,6 +19,22 @@ from that process. Open the conversation and send a message to continue. This is
 an accepted loss window: files, external actions, and tool effects may already
 have changed, so check them before repeating work.
 
+On upgrade from the retired restart-recovery subsystem (through 2026.10.9),
+startup and `openclaw doctor --fix` also repair tombstoned root sessions, with or
+without a recorded continuation. The repair backs up the original database,
+clears obsolete execution claims, and warns with the session key. Pending final
+delivery is retired with an unknown outcome rather than replayed under obsolete
+sender authority; its original content remains in the backup. Existing transcript
+content is unchanged. Eligible roots receive one ordinary resume input; manual
+archives, provider review, and external harness ownership retain their normal gates.
+Every retained fence and pending final must match the tombstone's recorded run or
+generation before retirement. A different generation, missing ownership link, or
+live execution leaves custody intact and prevents automatic resume of that row.
+Doctor names the session and asks the operator to inspect its retained identities
+and delivery outcome against the transcript before repairing custody. Legacy scalar
+delivery fields can still be normalized without discarding the pending final, so
+ordinary admission no longer depends on the retired tombstone gate.
+
 ## What survives a restart
 
 | State                                                | Behavior                                                                        |
@@ -68,10 +84,16 @@ startup's temporary database access or wait for model executions to finish.
 ## Graceful shutdown
 
 Once a stop or restart is committed, the Gateway fences new admission, snapshots
-running sessions, writes their markers, and aborts active runs. It waits only a
-short bounded time for in-flight persistence and gives other resource cleanup a
-bounded grace. A long model stream, tool call, or background process does not get
+running sessions, writes their markers, and aborts active runs. It joins accepted
+persistence before retiring state and gives other resource cleanup a bounded
+grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.
+
+After marker persistence and cancellation, process-owned shutdown logs a warning
+when required connection cleanup exceeds five seconds, then keeps joining its
+accepted finalizers before releasing the Gateway lock and state admission. The
+existing process shutdown deadline still bounds this join. Embedded hosts also
+join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
@@ -87,7 +109,10 @@ cleanup deadline, lifetime sidecar, or retained plugin runtime, and returns with
 status `0` unless required persistence failed. A runtime that still owns resources
 is never reused for an in-process restart. Node exits naturally after owned handles
 close; the native shutdown watchdog kills the process if leaked handles keep it
-alive past the deadline. That signal exit is accepted, and the supervisor starts
+alive two seconds past the shutdown deadline. Its worker and main-thread fallback
+share one monotonic deadline, including worker startup time, and report retained
+cleanup owners before forcing exit. A duplicate `SIGTERM` during shutdown is
+logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
 Reversible suspension and host freeze preparation keep their own semantics. A
@@ -330,7 +355,9 @@ adopts an unsettled cycle only when the entry has `abortedLastRun: true`, status
 `interrupted`, and an `updatedAt` within the six hours before this process started.
 Old shutdown marking updated that timestamp. Startup clears the cycle and sends
 the same single resume input under the current-authority rules below. Stale,
-future-dated, settled, tombstoned, `done`, and `killed` entries do not resume.
+future-dated, settled, `done`, and `killed` entries do not resume through that bridge.
+Legacy tombstones use the backed-up repair described above and do not require
+a recent timestamp or a continuation session.
 An installation stopped for longer than six hours before upgrading loses this
 one-time resume; send a new message to continue. Old execution and authority
 snapshots are not restored.

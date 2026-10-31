@@ -30,12 +30,12 @@ status before any new session row is materialized. Use the channel status and
 health commands above for live connectivity checks.
 
 Per-agent session counts and recent activity include only that agent's sessions,
-even when agents share a SQLite session store. Status counts each physical store
+even when agents share a session store. Status counts each physical store
 once in its aggregate. The top-level health session summary represents the
 default agent, or the first configured agent when there is no default; it is not
 a fleet total. A running Gateway serves clean health and status session summaries
 from its resident session-row projection. Store hydration and exact dirty-row
-refreshes retain the existing read-only SQLite fallback.
+refreshes retain the existing read-only store fallback.
 These summaries wait for current selection metadata. Display preparation and
 background model catalog discovery can continue independently, so a large fleet's
 catalog warmup does not hold session counts and recent-activity summaries open.
@@ -160,6 +160,12 @@ waits for that publication once, then retries preparation against current config
 and secrets. Recovery uses the existing four-attempt startup publication budget without
 reopening or migrating the database again. A failed publication or exhausted budget
 keeps the agent unavailable and records its reason and repair hint in readiness.
+
+Temporary SQLite worker-capacity refusals during an agent's database open share
+the existing four-attempt startup lock-retry budget. Releasing capacity can let
+that agent recover without restarting the Gateway. Persistent pressure or a
+non-retryable database failure still leaves it unavailable; opening retries do
+not replay migration or publication.
 
 If Node.js is upgraded or removed while the Gateway is running, its retained
 runtime may stop launching child workers even though the Gateway process is
@@ -311,12 +317,15 @@ not identify the thread consuming CPU or prove a main-thread hang. Inspect the
 delay measurements alongside CPU pressure. The `eventLoop` diagnostic does not
 change the readiness result by itself.
 
-Main-thread callbacks longer than one second produce a `main-thread stall` log
-with a code-owned task label where available. On Node 26, a bounded CPU flight
+Instrumented synchronous work lasting at least 250 ms and unattributed event-loop
+gaps longer than one second produce a `main-thread stall` log with a code-owned
+task label where available. Native launches through the process and command
+runners and PTY helper have fixed task labels; these measure
+the synchronous launch, not the child's running time. On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
-trailing window's top inclusive frames, sample count, and truncation status.
-Several callbacks can finish before a sample, so this window is not assigned to
-an individual task. It samples every 25 ms and rotates five-second windows without
+stall interval's top inclusive frames, sample count, and truncation status.
+Several stalls can finish before reporting; only the longest interval is profiled.
+It samples every 25 ms and rotates five-second windows without
 stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains
@@ -328,6 +337,12 @@ options. Callback labels still work on those runtimes. Native blocking work can
 remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.
+
+`samples=0` means neither retained profile contains a timestamped sample in that
+stall interval. It does not prove the entire process stopped or identify the
+blocking operation. For example, Linux libuv blocks the sampling signal on the
+calling thread around `fork()`, including allocator fork hooks. The synchronous
+task labels remain available during such sampling gaps.
 
 ## Uptime monitoring
 

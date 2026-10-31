@@ -88,6 +88,57 @@ function capture(json: string) {
   const fixtureState = fixture(json);
   return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
 }
+it.each([false, true])(
+  "identifies sampled leaves below shared ancestors within the log cap (long=%s)",
+  (long) => {
+    const frame = (id: number, name: string, url: string, children?: number[]) => ({
+      id,
+      callFrame: { functionName: name, url, lineNumber: 9, columnNumber: 0, scriptId: 1 },
+      children,
+    });
+    const appUrl = new URL("../agents/admitted-run-context.ts", import.meta.url).href;
+    const suffix = long ? "x".repeat(200) : "";
+    const nodes = Array.from({ length: 12 }, (_, i) =>
+      frame(
+        i,
+        `shared${i}${suffix}`,
+        appUrl,
+        i < 11 ? [i + 1] : Array.from({ length: 12 }, (_leaf, j) => j + 12),
+      ),
+    );
+    nodes.push(
+      ...Array.from({ length: 12 }, (_, i) => frame(i + 12, `probe${i}${suffix}`, "node:fs")),
+    );
+    const { result, warn } = capture(
+      JSON.stringify({
+        startTime: 0,
+        endTime: 1_500_000,
+        nodes,
+        samples: Array.from({ length: 12 }, (_, i) => i + 12),
+        timeDeltas: Array.from({ length: 12 }, () => 100_000),
+      }),
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(result).toContain("self=");
+    const self = JSON.parse(result!.match(/ self=(.*) deepest=/)![1]!) as Array<
+      [string, number, number, string]
+    >;
+    const deepest = JSON.parse(result!.split(" deepest=")[1]!) as Array<[number, string[]]>;
+    expect(self[0]).toEqual([
+      expect.stringContaining("probe0"),
+      1,
+      100,
+      expect.stringContaining("shared11"),
+    ]);
+    expect(deepest[0]?.[1].at(-1)).toContain("probe0");
+    expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+    if (!long) {
+      expect(self).toHaveLength(10);
+    } else {
+      expect(result).toContain("reportTruncated=true");
+    }
+  },
+);
 it("rotates without a sampling gap and reports only the recent stall's inclusive frames", () => {
   const { recorder, handles, sampleAt } = fixture();
   expect(sampleAt(5_000, null)).toBeUndefined();

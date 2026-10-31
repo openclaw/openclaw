@@ -662,23 +662,24 @@ describe("cron trigger cadence", () => {
     expect(h.runSessionEvent).toHaveBeenCalledOnce();
     expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
   });
-
   it.each([
     { name: "quiet immediate-wake", wakeMode: "now", result: evaluated(false) },
     { name: "fired", wakeMode: "next-heartbeat", result: evaluated(true) },
     { name: "busy", wakeMode: "next-heartbeat", result: { kind: "busy" } },
   ] as const)(
-    "preserves the $name interval through maintenance and restart",
+    "preserves the $name occurrence's scheduling ownership",
     async ({ result, wakeMode }) => {
       const { h, evaluate } = await createCadence(() => result);
       h.cron.pauseScheduling();
       const job = await h.cron.add(mainWatcher("cadence probe", { wakeMode }));
       expect(await runWhenDue(h.cron, job.id)).toEqual({ ok: true, ran: true });
-      const nextAt = Date.now() + 30_000;
+      const nextAt = result.kind === "busy" ? job.state.nextRunAtMs! : Date.now() + 30_000;
       expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
+      if (result.kind === "busy") {
+        return expect(h.cron.getJob(job.id)?.state.triggerEvalCount).toBeUndefined();
+      }
       h.cron.stop();
       const offline = new CronService({ ...h.deps, cronEnabled: false });
-      expect((await offline.readJob(job.id))?.state.nextRunAtMs).toBe(nextAt);
       expect((await offline.list())[0]?.state.nextRunAtMs).toBe(nextAt);
       await h.restart(Date.now() + 10_000);
       h.cron.pauseScheduling();
@@ -691,7 +692,6 @@ describe("cron trigger cadence", () => {
       expect(evaluate).toHaveBeenCalledTimes(2);
     },
   );
-
   it("defers an expired quiet immediate-wake occurrence without reevaluating it at startup", async () => {
     const { h, evaluate } = await createCadence(() => evaluated(false, { state: { count: 1 } }));
     const job = await h.cron.add(

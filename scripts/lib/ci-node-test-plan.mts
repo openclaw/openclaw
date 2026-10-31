@@ -1571,7 +1571,9 @@ export function createUiTestShardGroups(
     e2eGroups[0]!.includePatterns = [
       ...new Set([
         ...options.uiE2eFiles.filter(includeUiTest),
-        ...(options.includeReleaseOnlyE2eTests ? uiE2eRealGatewayTestFiles : retained),
+        ...(options.includeReleaseOnlyE2eTests
+          ? uiE2eRealGatewayTestFiles.filter(includeUiTest)
+          : retained),
       ]),
     ].toSorted();
   }

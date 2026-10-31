@@ -4,6 +4,9 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import type { AgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import { parseControlUiSessionReturnPath } from "./control-ui-session-entry-path.js";
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -19,6 +22,7 @@ export async function serveControlUiSessionEntry(
     res: ServerResponse;
     basePath: string;
     projection?: SessionRowProjection;
+    agentDatabaseStartup?: AgentDatabasePreparation;
     serveApp: (path: string, isCurrent?: () => boolean) => Promise<boolean>;
   },
 ): Promise<true> {
@@ -80,14 +84,39 @@ export async function serveControlUiSessionEntry(
   if (projection) {
     prepareGatewayRecipientProfile(client);
   }
-  const selected = projection
-    ? await resolveControlUiSessionPath({
-        target,
-        projection,
-        client,
-        isCurrent: requestAuth.hasCurrentClientAuthority,
-      })
-    : null;
+  let selected: Awaited<ReturnType<typeof resolveControlUiSessionPath>> = null;
+  if (projection) {
+    for (;;) {
+      let preparation: Promise<void> | undefined;
+      try {
+        selected = await resolveControlUiSessionPath({
+          target,
+          projection,
+          client,
+          isCurrent: requestAuth.hasCurrentClientAuthority,
+        });
+        break;
+      } catch (error) {
+        if (
+          !(error instanceof AgentDatabaseAdmissionError) ||
+          error.refusal.code !== "agent-database-inspection-pending"
+        ) {
+          throw error;
+        }
+        // An old document can reach this handoff before its source is readable.
+        // Join that source's publication, not full writable integrity or other agents.
+        preparation = params.agentDatabaseStartup?.waitForAgentPreparation(error.refusal.agentId, {
+          forWrite: false,
+          signal: getAsyncWorkSignal(),
+        });
+        if (!preparation) {
+          throw error;
+        }
+      }
+      await preparation;
+      await requestAuth.revalidate();
+    }
+  }
   if (!selected || !projection || !requestAuth.hasCurrentClientAuthority()) {
     res.statusCode = 403;
     res.end(probe ? undefined : "Session unavailable. Reload the conversation or log in again.");

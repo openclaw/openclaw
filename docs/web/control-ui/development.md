@@ -128,6 +128,13 @@ Local development (separate dev server):
 pnpm ui:dev
 ```
 
+On macOS, the dev server uses native `fs.watch` notifications to avoid delayed or
+missed FSEvents updates on external drives. For filesystems that need polling,
+start it with `CHOKIDAR_USEPOLLING=1 pnpm ui:dev`. To measure file-save, watcher,
+WebSocket, and browser-application latency on representative source edits, run
+`node --import ./scripts/tsx.mjs scripts/bench-control-ui-hmr.mts --out-dir .artifacts/hmr`.
+The headless diagnostic restores its temporary source edits; use an idle checkout.
+
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
 
 To use the real Gateway's capabilities, media, and native plugin UI while

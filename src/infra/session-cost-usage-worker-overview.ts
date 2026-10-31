@@ -149,18 +149,6 @@ export async function projectUsageCostQuartersInWorker(params: {
       }
       // Transcript writes advance the mutation time; a later append keeps the prefix usable.
       fresh = checkpoint.mtimeMs >= file.mtimeMs;
-    } else if (
-      operation.kind === "overview" &&
-      checkpoint.kind === "sqlite" &&
-      file.kind === "sqlite"
-    ) {
-      if ((checkpoint.generation ?? null) !== (file.generation ?? null)) {
-        // Discovery and the cache crossed a rewrite; the refresh owner rebuilds it.
-        return { state: "pending" };
-      }
-      // A same-generation append can commit after discovery; newer cache stays usable.
-      fresh =
-        checkpoint.maxSeq > (file.maxSeq ?? 0) || isUsageCostRollupFresh({ checkpoint, file });
     } else {
       // usage.cost rejects a checkpoint beyond the current transcript, such as a shorter rewrite.
       if (!canUseUsageCostRollupForPartial({ checkpoint, file })) {
@@ -336,13 +324,11 @@ export async function projectUsageCostQuartersInWorker(params: {
   );
   observe(snapshot);
   // Freshness facts for cached instances: SQLite mutation facts, or file stats for JSONL.
-  const files: Array<InstanceSource | undefined> = instances.map(
-    (instance) => instance.transcriptFile,
-  );
+  const files: Array<InstanceSource | undefined> = Array(instances.length);
   const sqlite: Array<{ index: number; marker: SqliteSessionFileMarker }> = [];
   const jsonl: number[] = [];
   for (const [index, instance] of instances.entries()) {
-    if (instance.transcriptFile || paths[index] === undefined || !snapshot.has(paths[index])) {
+    if (paths[index] === undefined || !snapshot.has(paths[index])) {
       continue;
     }
     const marker = parseSqliteSessionFileMarker(instance.sessionFile);

@@ -26,6 +26,7 @@ import {
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createPaneTestHost,
@@ -405,6 +406,62 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages[0]).not.toBe(cachedMessage);
   });
 
+  it.each(["direct", "prewarmed"] as const)(
+    "refetches reasoning omitted by the previous cached projection (%s)",
+    async (mode) => {
+      const cursor = "head-with-hidden-reasoning";
+      const messages = [
+        nativeHistoryMessage(1, "Check the evidence."),
+        ...["reasoning-1", "reasoning-2"].map((id, index) => ({
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Compare the evidence." }],
+          __openclaw: { id, seq: index + 2 },
+        })),
+        nativeHistoryMessage(4, "The answer is ready."),
+      ];
+      const cacheKey = resolveChatSnapshotKey(
+        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+        { sessionKey },
+      );
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
+        // Version 12 filtered out reasoning while retaining the current transcript cursor.
+        projectionVersion: 12,
+        savedAt: 0,
+        sessionKey: cacheKey,
+        sessionId: stored.sessionId,
+        snapshot: {
+          ...stored,
+          deltaCursor: cursor,
+          messages: [messages[0], messages[3]],
+        },
+      });
+      if (mode === "prewarmed") {
+        await prewarmChatSnapshot(cacheKey);
+        await vi.dynamicImportSettled();
+      }
+      const h = mountPane(sessionKey, false, new SessionSnapshotStore());
+      // A late cache read already triggers a full request; settle it before connection
+      // so only projection invalidation can retire the otherwise-current cursor.
+      await paintCachedSnapshot();
+      h.request.mockImplementation(async (_method, params) =>
+        typeof params === "object" &&
+        params !== null &&
+        "cursor" in params &&
+        params.cursor === cursor
+          ? { kind: "delta", messages: [], deltaCursor: cursor, sessionId: stored.sessionId }
+          : { ...h.liveResult, messages, deltaCursor: cursor },
+      );
+      h.connect();
+      await h.start();
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "chat.startup",
+        expect.not.objectContaining({ cursor: expect.anything() }),
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+      );
+      expect(h.state.chatMessages).toEqual(messages);
+    },
+  );
+
   it.each([false, true])(
     "requests history without waiting for storage and ignores a late snapshot (subscription=%s)",
     async (subscribe) => {
@@ -440,6 +497,40 @@ describe("first chat startup snapshot ordering", () => {
       expect(h.state.chatMessages).toEqual(liveMessages);
       h.read.resolve(stored);
       await vi.advanceTimersByTimeAsync(0);
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      expect(h.request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the pending full refill when an obsolete snapshot is rejected (subscription=%s)",
+    async (subscribe) => {
+      const record = createDeferred<unknown>();
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(
+        record.promise,
+      );
+      const h = mountPane(sessionKey, false, new SessionSnapshotStore());
+      onTestFinished(subscribeChatPaneSnapshotInvalidation(() => h.state));
+      const network = h.pendingResponse();
+      if (subscribe) {
+        connectSessionOwner(h);
+      } else {
+        h.connect();
+      }
+      const subscription = subscribe
+        ? syncSelectedSessionMessageSubscription(h.state, { initialHistory: true })
+        : undefined;
+      const loading = h.start();
+      await vi.waitFor(() => expect(h.request).toHaveBeenCalledOnce());
+      record.resolve({ ...snapshotRecord(h, stored), projectionVersion: 12 });
+      await paintCachedSnapshot();
+      network.resolve(
+        subscribe
+          ? { key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } }
+          : h.liveResult,
+      );
+      await subscription;
+      await loading;
       expect(h.state.chatMessages).toEqual(liveMessages);
       expect(h.request).toHaveBeenCalledOnce();
     },

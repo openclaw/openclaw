@@ -10701,7 +10701,7 @@ describe("package artifact reuse", () => {
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
     expect(openCodeGoSmoke.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
   });
@@ -16108,6 +16108,7 @@ esac
 
   it("validates the macOS release handoff before the GitHub release page exists", () => {
     const macosRelease = readWorkflow(".github/workflows/macos-release.yml");
+    const publicReleaseBranch = macosRelease.on?.workflow_dispatch?.inputs?.public_release_branch;
     const validateJob = workflowJob(
       ".github/workflows/macos-release.yml",
       "validate_macos_release_request",
@@ -16118,6 +16119,8 @@ esac
     expect(stepNames).not.toContain("Ensure matching GitHub release exists");
     expect(macosRelease.jobs?.validate_macos_release_request).toBeDefined();
     expect(buildControlUi?.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
+    expect(publicReleaseBranch).toMatchObject({ required: true });
+    expect(publicReleaseBranch).not.toHaveProperty("default");
   });
 
   it("classifies fast pretag Control UI output as a release artifact", () => {
