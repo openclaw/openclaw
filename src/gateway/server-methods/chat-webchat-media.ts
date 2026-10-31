@@ -7,7 +7,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
 import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
-import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
+import { sanitizeReplyDirectiveId } from "../../utils/directive-tags-batch.js";
 
 /** Cap local audio files exposed through assistant media. */
 const MAX_WEBCHAT_AUDIO_BYTES = 15 * 1024 * 1024;

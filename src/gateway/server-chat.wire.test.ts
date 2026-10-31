@@ -31,7 +31,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat.js";
-import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
+import { broadcastChatFinal, prepareChatTerminalMessage } from "./server-methods/chat-broadcast.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -959,7 +959,10 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
         context: { ...harness, ...broadcaster },
         runId,
         sessionKey,
-        message: { role: "assistant", content: [{ type: "text", text: expected }] },
+        preparedMessage: await prepareChatTerminalMessage({
+          role: "assistant",
+          content: [{ type: "text", text: expected }],
+        }),
       });
       chatRunState.clearRun(runId);
     } else {

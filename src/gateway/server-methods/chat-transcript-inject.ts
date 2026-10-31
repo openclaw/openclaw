@@ -15,6 +15,7 @@ import {
   projectAssistantDisplayContent,
   retainAssistantModelContent,
 } from "../../shared/assistant-display-content.js";
+import { runChatTextTask, shouldOffloadChatText } from "../chat-display-projection.async.js";
 import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -94,7 +95,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   }
   const now = Date.now();
   const resolvedContent = resolveInjectedAssistantContent(params);
-  const displayMessage: {
+  let displayMessage: {
     role: "assistant";
     content: Array<Record<string, unknown>>;
     openclawDelivery?: unknown;
@@ -102,9 +103,18 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     role: "assistant",
     content: resolvedContent.map((block) => Object.assign({}, block)),
   };
-  const displayContent = params.literal
-    ? displayMessage.content
-    : applyAssistantDeliveryDirectives(displayMessage).content;
+  if (!params.literal) {
+    if (shouldOffloadChatText(displayMessage)) {
+      const result = await runChatTextTask({
+        kind: "delivery-directives",
+        message: displayMessage,
+      });
+      displayMessage = result.value;
+    } else {
+      applyAssistantDeliveryDirectives(displayMessage);
+    }
+  }
+  const displayContent = displayMessage.content;
   const first = displayContent[0];
   if (
     params.humanMentions?.length &&

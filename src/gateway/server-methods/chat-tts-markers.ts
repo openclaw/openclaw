@@ -16,43 +16,47 @@ export function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyP
   return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
 }
 
-function resolveTtsSupplementMarkerText(text: string): string {
-  const trimmed = text.trim();
+/** Pure worker task: code-aware extraction and hashing stay with the projection. */
+export function projectTtsSupplementTranscriptMarker(
+  text: string,
+): GatewayInjectedTtsSupplementMarker {
   const projected = projectChatDisplayMessage(
     {
       role: "assistant",
-      content: [{ type: "text", text: trimmed }],
+      content: [{ type: "text", text }],
     },
     { maxChars: Number.MAX_SAFE_INTEGER },
   );
   const projectedContent = Array.isArray(projected?.content)
     ? (projected.content as AssistantDisplayContentBlock[])
     : undefined;
-  return (
+  const visibleText =
     extractAssistantDisplayText(projectedContent) ??
     (typeof projected?.text === "string" ? projected.text.trim() : undefined) ??
-    trimmed
-  );
+    text;
+  return { textSha256: sha256Hex(visibleText) };
 }
 
-export function buildTtsSupplementTranscriptMarker(
+export async function buildTtsSupplementTranscriptMarker(
   payload: ReplyPayload,
-): GatewayInjectedTtsSupplementMarker | undefined {
+): Promise<GatewayInjectedTtsSupplementMarker | undefined> {
   const supplement = getReplyPayloadTtsSupplement(payload);
   if (!supplement) {
     return undefined;
   }
-  const visibleText = resolveTtsSupplementMarkerText(
-    payload.text?.trim() || supplement.spokenText.trim(),
-  );
-  return {
-    textSha256: sha256Hex(visibleText),
-  };
+  const text = payload.text?.trim() || supplement.spokenText.trim();
+  const { runChatTextTask, shouldOffloadChatText } =
+    await import("../chat-display-projection.async.js");
+  if (!shouldOffloadChatText(text)) {
+    return projectTtsSupplementTranscriptMarker(text);
+  }
+  const result = await runChatTextTask({ kind: "tts-supplement-marker", text });
+  return result.value;
 }
 
-export function buildMediaOnlyTtsSupplementTranscriptMarker(
+export async function buildMediaOnlyTtsSupplementTranscriptMarker(
   payload: ReplyPayload,
-): GatewayInjectedTtsSupplementMarker | undefined {
+): Promise<GatewayInjectedTtsSupplementMarker | undefined> {
   if (payload.text?.trim()) {
     return undefined;
   }

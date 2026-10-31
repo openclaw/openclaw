@@ -14,10 +14,8 @@ import {
   beginSessionEffect,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
-import {
-  projectChatDisplayMessage,
-  resolveEffectiveChatHistoryMaxChars,
-} from "../chat-display-projection.js";
+import { projectChatDisplayMessageAsync } from "../chat-display-projection.async.js";
+import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
@@ -165,9 +163,10 @@ export async function injectGatewayAssistantMessage(
     return ok({ messageId: appended.messageId, replayed: true });
   }
 
-  const message = projectChatDisplayMessage(appended.message, {
+  const message = await projectChatDisplayMessageAsync(appended.message, {
     maxChars: resolveEffectiveChatHistoryMaxChars(),
   });
+  sessionMutationCommitGuard?.();
   const chatPayload = {
     runId: `inject-${appended.messageId}`,
     sessionKey,

@@ -25,6 +25,7 @@ import {
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { retainSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { sameTranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptReader } from "../../config/sessions/transcript-write-context.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
@@ -35,8 +36,8 @@ import {
 } from "../../shared/chat-message-content.js";
 import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { projectChatDisplayMessageAsync } from "../chat-display-projection.async.js";
 import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
-import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { formatForLog } from "../ws-log.js";
@@ -213,7 +214,7 @@ export function createChatSendReplyDispatch(params: {
       ]);
       let decision: ReplyDeliveryState = "pending";
       let sourceDecision: ReplyDeliveryState = "missing";
-      await readSessionTranscriptAnchorsAsync(
+      const prepared = await readSessionTranscriptAnchorsAsync(
         scope,
         {
           entryIds: [admission.entryId],
@@ -223,17 +224,60 @@ export function createChatSendReplyDispatch(params: {
           includeMessagesForRunId: runId,
         },
         params.abortSignal,
-        (facts) => {
+      );
+      const visibleAnswers = new Set<string>();
+      for (const row of prepared.tail?.entries ?? []) {
+        const message = asOptionalRecord(row.message);
+        if (message?.role !== "assistant" || readSessionTranscriptRunId(message) !== runId) {
+          continue;
+        }
+        const hasTools =
+          message.stopReason === "toolUse" ||
+          (Array.isArray(message.content) &&
+            message.content.some((block) => isToolHistoryBlockType(asOptionalRecord(block)?.type)));
+        const answer = hasTools
+          ? extractAssistantTextForPhase(message, { phase: "final_answer" })
+          : extractAssistantPhaseText(message);
+        if (
+          answer &&
+          extractAssistantPhaseText(
+            await projectChatDisplayMessageAsync(message, undefined, params.abortSignal),
+          )
+        ) {
+          visibleAnswers.add(row.entryId);
+        }
+      }
+      await readSessionTranscriptAnchorsAsync(
+        scope,
+        {
+          entryIds: prepared.anchors.map((anchor) => anchor.entryId),
+          includeSession: true,
+          includeWatermark: true,
+        },
+        params.abortSignal,
+        (current) => {
           assertRoutingCurrent(getRuntimeConfig());
           if (
             !isInspectionCurrent() ||
-            facts.session?.sessionId !== admission.sessionId ||
-            facts.session.lifecycleRevision !== lifecycleRevision ||
-            !facts.watermark
+            current.session?.sessionId !== admission.sessionId ||
+            current.session.lifecycleRevision !== lifecycleRevision ||
+            !current.watermark
           ) {
             decision = "missing";
             return;
           }
+          const currentAnchors = new Map(current.anchors.map((anchor) => [anchor.entryId, anchor]));
+          // Keep custody pending until visibility and anchors describe the same transcript.
+          if (
+            current.watermark?.generation !== prepared.watermark?.generation ||
+            current.watermark?.maxSeq !== prepared.watermark?.maxSeq ||
+            !prepared.anchors.every((anchor) =>
+              sameTranscriptEntryAnchor(anchor, currentAnchors.get(anchor.entryId)),
+            )
+          ) {
+            return;
+          }
+          const facts = { ...current, tail: prepared.tail };
           const input = facts.anchors.find((anchor) => anchor.entryId === admission.entryId);
           if (!input || input.rawSeq !== admission.rawSeq) {
             decision = "missing";
@@ -254,37 +298,24 @@ export function createChatSendReplyDispatch(params: {
             return;
           }
           decision = "missing";
-          // Payload visibility and anchors were selected in this same history snapshot.
-          // The callback consumes them before releasing the FIFO and native mutation witness.
+          // Consume prepared visibility under the final FIFO and native mutation witness.
           for (const row of facts.tail?.entries ?? []) {
+            if (!visibleAnswers.has(row.entryId)) {
+              continue;
+            }
             const message = asOptionalRecord(row.message);
-            if (message?.role !== "assistant" || readSessionTranscriptRunId(message) !== runId) {
-              continue;
-            }
-            const hasTools =
-              message.stopReason === "toolUse" ||
-              (Array.isArray(message.content) &&
-                message.content.some((block) =>
-                  isToolHistoryBlockType(asOptionalRecord(block)?.type),
-                ));
-            const answer = hasTools
-              ? extractAssistantTextForPhase(message, { phase: "final_answer" })
-              : extractAssistantPhaseText(message);
-            if (!answer || !extractAssistantPhaseText(projectChatDisplayMessage(message))) {
-              continue;
-            }
             const selected = resolveChatReplyDeliveryFromAnchors({
               facts,
               admissionId: admission.entryId,
               inputId: latestInput.entryId,
               messageId: row.entryId,
               afterSeq: transcriptStart.afterSeq,
-              watermark: facts.watermark,
-              currentWatermark: facts.watermark,
+              watermark: current.watermark,
+              currentWatermark: current.watermark,
             });
             if (selected !== undefined) {
               decision = selected;
-              const mirror = asOptionalRecord(message.openclawDeliveryMirror);
+              const mirror = asOptionalRecord(message?.openclawDeliveryMirror);
               if (mirror?.kind === "message-tool-source-reply" && mirror.final === true) {
                 sourceDecision = selected;
                 return;
@@ -344,7 +375,7 @@ export function createChatSendReplyDispatch(params: {
     }
     const sessionKey = transcript?.sessionKey ?? session.sessionKey;
     const agentId = transcript?.agentId ?? session.agentId;
-    const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
+    const ttsSupplementMarker = await buildTtsSupplementTranscriptMarker(payload);
     const mediaScope = await captureWebchatReplyMediaScope({
       requesterContext: params.requesterContext,
       cfg,

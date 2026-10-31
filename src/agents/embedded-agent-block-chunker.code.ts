@@ -1,7 +1,9 @@
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
-import type { MarkdownIndentedSource } from "../../packages/markdown-core/src/reasoning-tag-parser.js";
+import {
+  parseMarkdownOwnership,
+  type MarkdownIndentedSource,
+} from "../../packages/markdown-core/src/reasoning-tag-parser.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
-import { findCodeOwnership } from "../shared/text/code-regions.js";
 
 // from/to bound pending source; start/end and body bounds address the rendered projection.
 // regionStart can be negative when parser-owned framing precedes the pending source.
@@ -27,7 +29,7 @@ export function prepareIndentedCode(
 ) {
   const parsed = context + source;
   let ownership = /\t| {4}/u.test(parsed)
-    ? findCodeOwnership(parsed, { includeIndentedSource: true })
+    ? parseMarkdownOwnership(parsed, { includeIndentedSource: true })
     : undefined;
   const replacements: Replacement[] = [];
   const parts: string[] = [];
@@ -159,7 +161,7 @@ export function prepareIndentedCode(
         return `${replacement.code.context}${continuation}`;
       }
       const at = context.length + index;
-      const currentOwnership = (ownership ??= findCodeOwnership(parsed, {
+      const currentOwnership = (ownership ??= parseMarkdownOwnership(parsed, {
         includeIndentedSource: true,
       }));
       for (const region of currentOwnership.regions) {

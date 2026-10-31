@@ -5,11 +5,9 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-pro
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { projectChatDisplayMessageAsync } from "../chat-display-projection.async.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
-import {
-  augmentChatHistoryWithCanvasBlocks,
-  projectChatDisplayMessage,
-} from "../chat-display-projection.js";
+import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
@@ -105,15 +103,13 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
             [pending.message],
             context.cronStorePath,
           );
-          await withCurrentSession(() => {
-            const message = projectPendingInputMessage(
-              pending,
-              effectiveMaxChars,
-              undefined,
-              resolveCronJobName,
-            );
-            respondMessage(message);
-          });
+          const message = await projectPendingInputMessage(
+            pending,
+            effectiveMaxChars,
+            undefined,
+            resolveCronJobName,
+          );
+          await withCurrentSession(() => respondMessage(message));
           return;
         }
         const resolved = await readChatHistoryMessageById({
@@ -153,16 +149,20 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           [resolved.message],
           context.cronStorePath,
         );
-        await withCurrentSession(() => {
-          const projectedMessage = resolved.message
-            ? projectChatDisplayMessage(resolved.message, {
+        const projectedMessage = resolved.message
+          ? await projectChatDisplayMessageAsync(
+              resolved.message,
+              {
                 includeCommentaryFallbacks: true,
                 includePluginSteering,
                 maxChars: effectiveMaxChars,
                 resolveCurrentUserProfileDisplay,
                 resolveCronJobName,
-              })
-            : undefined;
+              },
+              signal,
+            )
+          : undefined;
+        await withCurrentSession(() => {
           const projected = projectedMessage
             ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
             : undefined;

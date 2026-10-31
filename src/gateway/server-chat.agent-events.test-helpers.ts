@@ -2,17 +2,23 @@ import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig as getCurrentRuntimeConfig } from "../config/io.js";
 import {
+  emitAgentEventForOwner,
   onAgentRuntimeEvent,
   type AgentEventPayload,
   type AgentEventStream,
 } from "../infra/agent-events.js";
+import { releaseAgentRunContext, type claimAgentRunContext } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getRpcSourceForGateway } from "../sessions/session-controller.rpc-sources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
+import { broadcastChatFinal, prepareChatTerminalMessage } from "./server-methods/chat-broadcast.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
+import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { createGatewayTerminalTracking } from "./server-runtime-terminal-tracking.js";
 import { agentDiscoveryMock } from "./test-helpers.runtime-state.js";
 
@@ -448,5 +454,106 @@ export function registerBoundedWidgetSnapshotsTest({
     await h.emit("run-widgets", "lifecycle", { phase: "end" }, { seq: ++seq });
     expect(h.chat().at(-1)?.[1].message.content).toHaveLength(2);
     await h.handler.dispose();
+  });
+}
+
+export function registerReplyDispatchDrainTest({
+  createHarness,
+  claimOwnedRun,
+}: {
+  createHarness: typeof import("./server-chat.agent-events.test-harness.js").createAgentEventTestHarness;
+  claimOwnedRun: (
+    runId: string,
+    context: Parameters<typeof claimAgentRunContext>[1],
+  ) => NonNullable<ReturnType<typeof claimAgentRunContext>>;
+}) {
+  test("drains reply-dispatch text once across global after its source is released", async () => {
+    const sessionKey = "global";
+
+    vi.useFakeTimers();
+    const runId = "run-reply-dispatch-drain";
+    const harness = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+    const entered = createDeferred();
+    const pairing = createDeferred();
+    let delayed = false;
+    const runtime = createGatewayNodeSessionRuntime({
+      broadcast: vi.fn(),
+      resolveCurrentPairingState: async () => {
+        if (delayed) {
+          entered.resolve();
+          await pairing.promise;
+        }
+        return { identity: "identity-a", generation: "generation-a" };
+      },
+      isPairingStateCurrent: (_nodeId, expected) => expected.generation === "generation-a",
+      sessionEventSubscribers: harness.sessionEventSubscribers,
+      sessionMessageSubscribers: harness.sessionMessageSubscribers,
+    });
+    const frames: string[] = [];
+    registerNodeSession(runtime.nodeRegistry, makeClient("conn-node", "node-a", frames), {
+      pairingGeneration: "generation-a",
+    });
+    runtime.nodeSubscribe("node-a", sessionKey, "conn-node");
+    runtime.nodeSubscribe("node-a", "agent:main:global", "conn-node");
+    const sends: Promise<void>[] = [];
+    harness.nodeSendToSession.mockImplementation(
+      (key: string, event: string, payload: unknown, opts?: GatewayBroadcastOpts) => {
+        sends.push(runtime.nodeSendToSession(key, event, payload, opts));
+      },
+    );
+    const claimId = claimOwnedRun(runId, { sessionKey, agentId: "main" });
+    const stop = subscribeAgentEvents(harness.handler);
+    try {
+      emitAgentEventForOwner(
+        { runId, stream: "assistant", data: { text: "one", delta: "one" } },
+        claimId,
+      );
+      await stop.drain();
+      await Promise.all(sends);
+      delayed = true;
+      emitAgentEventForOwner(
+        { runId, stream: "assistant", data: { text: "one two", delta: " two" } },
+        claimId,
+      );
+      emitAgentEventForOwner(
+        {
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", completionSource: "reply-dispatch" },
+        },
+        claimId,
+      );
+      await entered.promise;
+      releaseAgentRunContext(runId, claimId);
+      broadcastChatFinal({
+        terminalEntry: undefined,
+        context: harness,
+        runId,
+        sessionKey,
+        preparedMessage: await prepareChatTerminalMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "one two" }],
+        }),
+      });
+      harness.chatRunState.clearRun(runId);
+      pairing.resolve();
+      await stop.drain();
+      await Promise.all(sends);
+
+      const events = frames.map((frame) => JSON.parse(frame));
+      expect(
+        events
+          .filter((frame) => frame.event === "agent" && frame.payload.stream === "assistant")
+          .map((frame) => frame.payload.data),
+      ).toEqual([{ text: "one", delta: "one" }, { delta: " two" }]);
+      expect(events.at(-1)?.payload).toMatchObject({
+        state: "final",
+        message: { content: [{ text: "one two" }] },
+      });
+    } finally {
+      await stop();
+      releaseAgentRunContext(runId, claimId);
+      await harness.handler.dispose();
+    }
   });
 }

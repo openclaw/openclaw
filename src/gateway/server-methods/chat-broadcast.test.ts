@@ -1,7 +1,12 @@
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { broadcastChatDelta, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import {
+  broadcastChatDelta,
+  broadcastChatError,
+  broadcastChatFinal,
+  prepareChatTerminalMessage,
+} from "./chat-broadcast.js";
 import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -26,7 +31,7 @@ it.each([
   ],
 ] as const)(
   "keeps pending snapshots scoped and retires them with %s",
-  (sessionKey, agentId, keys, config) => {
+  async (sessionKey, agentId, keys, config) => {
     const context = createContext(0, config);
     let current = true;
     const request = { context, runId: "run-1", sessionKey, agentId, isCurrent: () => current };
@@ -49,9 +54,20 @@ it.each([
     expect(liveText?.coalesce?.merge(first?.[1], second?.[1])).toBe(second?.[1]);
     expect(context.chatRunState.resolveBuffer("run-1").text).toBe("first\n\nsecond");
 
-    broadcastChatFinal({ terminalEntry: undefined, ...request });
+    const preparedMessage = await prepareChatTerminalMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to_current]] first\n\nsecond" }],
+    });
+    expect(context.broadcast).toHaveBeenCalledTimes(2);
+    expect(context.agentRunSeq.get("run-1")).toBe(2);
+    broadcastChatFinal({ terminalEntry: undefined, ...request, preparedMessage });
     const final = context.broadcast.mock.calls[2];
-    expect(final?.[1]).toMatchObject({ state: "final", seq: 3, sessionKey });
+    expect(final?.[1]).toMatchObject({
+      state: "final",
+      seq: 3,
+      sessionKey,
+      message: { content: [{ type: "text", text: "[[reply_to_current]] first\n\nsecond" }] },
+    });
     if (sessionKey === "global") {
       expect(final?.[1]).toHaveProperty("agentId", agentId);
     }

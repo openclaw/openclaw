@@ -7,7 +7,8 @@ import type {
   ChatHistoryDisplayRequest,
   ChatHistoryDisplayResult,
 } from "../config/sessions/session-history-types.js";
-import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
+import { prepareChatHistoryRecoveryMessagesAsync } from "./chat-display-projection.async.js";
+import { createSubagentCoordinationHistoryProjection } from "./chat-display-projection.history.js";
 import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
 import type { ProcessHeldCliHistoryRequest } from "./cli-session-history.process-held.worker.js";
 import { prepareSessionHistorySubagentFacts } from "./session-history-delta-visibility.js";
@@ -108,13 +109,17 @@ async function readProcessHeldCliHistoryQuery(
           : readResult.message === undefined
             ? []
             : [readResult.message];
+      const prepared = await prepareChatHistoryRecoveryMessagesAsync(
+        messages,
+        undefined,
+        requestSignal,
+      );
+      assertCurrent();
       const facts = prepareSessionHistorySubagentFacts(
         readers.subagentCoordination,
         (recording) => {
-          for (const message of messages) {
-            createChatHistoryRecoveryProjection({ subagentCoordination: recording }).append([
-              message,
-            ]);
+          for (const message of prepared) {
+            createSubagentCoordinationHistoryProjection(recording)([message]);
           }
         },
       );

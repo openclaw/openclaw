@@ -1820,7 +1820,7 @@ fs.symlinkSync(${JSON.stringify(expected)}, path.join(root, "node_modules/tsx"),
 const workspaceModules = path.join(root, "packages/markdown-core/node_modules");
 fs.mkdirSync(workspaceModules, { recursive: true });
 for (const name of Object.keys(${JSON.stringify(JSON.parse(readScript("packages/markdown-core/package.json")).dependencies)})) {
-  if (name !== "micromark" && !name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
+  if (!name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
   const target = path.join(root, "node_modules/.workspace", name);
   fs.cpSync(fs.realpathSync(path.join(${JSON.stringify(fixture.tooling)}, "packages/markdown-core/node_modules", name)), target, { recursive: true });
   fs.symlinkSync(path.relative(workspaceModules, target), path.join(workspaceModules, name), "dir");
@@ -1902,7 +1902,7 @@ while (readSync(0, command, 0, 1, null) > 0) {
     console.log("cache-reader=" + JSON.stringify({ event: "read", value: readFileSync(path, "utf8") }));
   }
 }
-`)}, join(anchor, "node_modules/micromark/package.json")], { stdio: [3, 1, 2] });
+`)}, join(anchor, "node_modules/mdast-util-from-markdown/package.json")], { stdio: [3, 1, 2] });
   reader.unref();
 } else {
   const retired = spawnSync(process.execPath, [join(anchor, "scripts/pr-lib/materialized-anchor.mjs"), "retire-created", anchor], { encoding: "utf8", stdio });
@@ -2188,15 +2188,15 @@ closeSync(fd);
       const consumers = () => readPrCacheState(installation).anchors;
       expect(consumers()).toEqual([first, second].toSorted());
       const usableProjection = (anchor: string) => {
-        const projected = join(anchor, "node_modules/micromark");
+        const projected = join(anchor, "node_modules/mdast-util-from-markdown");
         expect(realpathSync(projected)).toBe(
-          join(installation, "node_modules/.workspace/micromark"),
+          join(installation, "node_modules/.workspace/mdast-util-from-markdown"),
         );
         const manifest = JSON.parse(
           readScript(join(anchor, "packages/markdown-core/package.json")),
         );
         expect(JSON.parse(readScript(join(projected, "package.json"))).version).toBe(
-          manifest.dependencies.micromark,
+          manifest.dependencies["mdast-util-from-markdown"],
         );
         expect(consumers()).toContain(anchor);
       };

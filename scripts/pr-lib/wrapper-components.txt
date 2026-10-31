@@ -2504,6 +2504,8 @@ packages/gateway-protocol/src/schema/users-background.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/fences.ts
+packages/markdown-core/src/markdown-code-regions.inline.ts
+packages/markdown-core/src/markdown-code-regions.ownership.ts
 packages/markdown-core/src/markdown-code-regions.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tag-syntax.ts

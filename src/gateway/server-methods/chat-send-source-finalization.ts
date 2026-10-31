@@ -25,6 +25,7 @@ import {
   broadcastChatQueueNotice,
   broadcastChatTerminal,
   isSourceReplyTranscriptMirrorPayload,
+  prepareChatTerminalMessage,
 } from "./chat-broadcast.js";
 import { withPreparedWebchatReplyMedia } from "./chat-reply-media.js";
 import {
@@ -111,7 +112,7 @@ export function createChatSendLateReplyFinalizer(
             inputs: queueNotices.map((payload) => ({ kind: "raw", payload })),
             isCurrent,
             session: { ...session, clientRunId: runId },
-            publishMessage: (message) => {
+            preparePublication: async (message) => () => {
               publicationStarted = true;
               const text = typeof message?.text === "string" ? message.text : undefined;
               if (text) {
@@ -137,39 +138,47 @@ export function createChatSendLateReplyFinalizer(
         isCurrent,
         session: { ...session, clientRunId: runId },
         suppressFinal: completion.kind === "failed" || completion.kind === "aborted",
-        publishMessage: (message, deliveryAuthorized, releaseAuthority) => {
-          publicationStarted = true;
+        preparePublication: async (message, deliveryAuthorized, releaseAuthority) => {
           if (completion.kind === "progress") {
-            const text = typeof message?.text === "string" ? message.text : undefined;
-            if (text) {
-              const run = context.chatRunState.getOrCreate(runId);
-              run.releaseBufferAuthority?.();
-              run.releaseBufferAuthority = releaseAuthority;
-              broadcastChatDelta({
-                ...broadcastParams,
-                text,
-                isCurrent: () =>
-                  context.chatRunState.runs.get(runId) === run && deliveryAuthorized(),
-              });
-              return true;
-            }
-          } else {
-            const run = context.chatRunState.runs.get(runId);
-            const canvas = run?.bufferIsCurrent?.() === false ? [] : (run?.canvasBlocks ?? []);
+            return () => {
+              publicationStarted = true;
+              const text = typeof message?.text === "string" ? message.text : undefined;
+              if (text) {
+                const run = context.chatRunState.getOrCreate(runId);
+                run.releaseBufferAuthority?.();
+                run.releaseBufferAuthority = releaseAuthority;
+                broadcastChatDelta({
+                  ...broadcastParams,
+                  text,
+                  isCurrent: () =>
+                    context.chatRunState.runs.get(runId) === run && deliveryAuthorized(),
+                });
+                return true;
+              }
+              return false;
+            };
+          }
+          const run = context.chatRunState.runs.get(runId);
+          const canvas = run?.bufferIsCurrent?.() === false ? [] : (run?.canvasBlocks ?? []);
+          const preparedMessage = await prepareChatTerminalMessage(
+            appendChatCanvasBlocksToMessage(
+              message ??
+                (canvas.length
+                  ? { role: "assistant", content: [], timestamp: Date.now() }
+                  : undefined),
+              canvas,
+            ),
+          );
+          return () => {
+            publicationStarted = true;
             broadcastChatTerminal({
               ...broadcastParams,
               state: "final",
-              message: appendChatCanvasBlocksToMessage(
-                message ??
-                  (canvas.length
-                    ? { role: "assistant", content: [], timestamp: Date.now() }
-                    : undefined),
-                canvas,
-              ),
+              preparedMessage,
               stopReason: completion.stopReason,
             });
-          }
-          return false;
+            return false;
+          };
         },
       });
       if (!isCurrent()) {
@@ -189,6 +198,22 @@ export function createChatSendLateReplyFinalizer(
           payloads.length === 0 &&
           canvas.length > 0 &&
           !(run?.rawBuffer ?? run?.buffer ?? "").trim();
+        const preparedMessage =
+          (completion.kind === "aborted" && buffered.text && !buffered.suppress) || canvasOnly
+            ? await prepareChatTerminalMessage(
+                appendChatCanvasBlocksToMessage(
+                  {
+                    role: "assistant",
+                    content: canvasOnly ? [] : [{ type: "text", text: buffered.text }],
+                    timestamp: Date.now(),
+                  },
+                  canvas,
+                ),
+              )
+            : undefined;
+        if (!isCurrent()) {
+          return { kind: "dropped", reason: "no-visible-content" };
+        }
         if (completion.kind === "failed" || completion.kind === "aborted") {
           context.chatRunState.flushPendingText(runId);
         }
@@ -200,19 +225,7 @@ export function createChatSendLateReplyFinalizer(
             ? { state: "error", errorMessage: completion.error, errorKind: completion.errorKind }
             : {
                 state: completion.kind === "aborted" ? "aborted" : "final",
-                ...((completion.kind === "aborted" && buffered.text && !buffered.suppress) ||
-                canvasOnly
-                  ? {
-                      message: appendChatCanvasBlocksToMessage(
-                        {
-                          role: "assistant",
-                          content: canvasOnly ? [] : [{ type: "text", text: buffered.text }],
-                          timestamp: Date.now(),
-                        },
-                        canvas,
-                      ),
-                    }
-                  : {}),
+                preparedMessage: run?.bufferIsCurrent?.() === false ? undefined : preparedMessage,
               }),
         });
       }
@@ -251,11 +264,11 @@ async function finalizeChatSendAgentReplyPayloads(
   params: ChatSendReplyFinalizationParams & {
     inputs: readonly ReplyDispatchOperation[];
     suppressFinal?: boolean;
-    publishMessage?: (
+    preparePublication?: (
       message: Record<string, unknown> | undefined,
       deliveryAuthorized: () => boolean,
       releaseAuthority: () => void,
-    ) => boolean;
+    ) => Promise<() => boolean>;
     isCurrent?: () => boolean;
   },
 ): Promise<ChatSendAgentReplyFinalization> {
@@ -475,14 +488,21 @@ async function finalizeChatSendAgentReplyPayloads(
         : undefined;
     // Failed turns retain source media/transcript finalization; chat.error carries no message.
     if (!params.suppressFinal) {
+      const publishMessage = params.preparePublication
+        ? await params.preparePublication(message, deliveryAuthorized, release)
+        : undefined;
+      const preparedMessage =
+        !params.preparePublication && message
+          ? await prepareChatTerminalMessage(message)
+          : undefined;
       if (!authorizeDelivery("broadcast")) {
         return { kind: "dropped", reason: "no-visible-content" };
       }
       if (hasVisibleAssistantFinalMessage(message)) {
         emitFirstAssistantServerTiming();
       }
-      if (params.publishMessage) {
-        authorityTransferred = params.publishMessage(message, deliveryAuthorized, release);
+      if (publishMessage) {
+        authorityTransferred = publishMessage();
       } else if (message) {
         broadcastChatFinal({
           terminalEntry: params.terminalEntry,
@@ -490,7 +510,7 @@ async function finalizeChatSendAgentReplyPayloads(
           runId: clientRunId,
           sessionKey,
           agentId,
-          message,
+          preparedMessage,
         });
       }
     }

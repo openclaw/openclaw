@@ -267,6 +267,24 @@ it.each([
 });
 
 it.each([
+  ["image description", "![example `x\n[tool:read] {}\nx` label\n", "](/url)\n"],
+  ["reference title", '[id]: /url\n"title\n`x\n[tool:read] {}\nx` label\n', '"\n'],
+])("bounds ownership work while an unresolved %s gains lines", (_name, opening, closing) => {
+  const line = "continued text\n";
+  const source = opening + line.repeat(128) + closing;
+  const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  const before = markdownOwnershipWork.scannedCharacters;
+  stream.append(opening);
+  for (let index = 0; index < 128; index += 1) {
+    stream.append(line);
+  }
+  stream.append(closing);
+  expect(stream.text).toBe(expected);
+  expect(markdownOwnershipWork.scannedCharacters - before).toBeLessThan(source.length * 16);
+});
+
+it.each([
   ["![example `x\n[tool:read] {}\nx` label", "](/url)\n"],
   ['[id]: /url\n"title\n`x\n[tool:read] {}\nx` trailing\n', '"'],
   ["![example `x\n[tool:read] {}\nx`][id]\n\n[id]:\n", "/url\n"],

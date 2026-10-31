@@ -4,7 +4,7 @@ import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 it.each(["history", "live", "delta"] as const)(
   "never publishes model-only next-turn guidance through %s",
-  (surface) => {
+  async (surface) => {
     const text = "Continue reviewing the patch.";
     const guidance = "Advisor guidance for the model only: check the rollback path.";
     const message = {
@@ -20,11 +20,13 @@ it.each(["history", "live", "delta"] as const)(
     const display =
       surface === "history"
         ? projectChatDisplayMessages([message])[0]
-        : projectSessionMessagePayload({
-            sessionKey: "agent:main:next-turn-guidance",
-            message,
-            historyDelta: surface === "delta",
-          }).payload?.message;
+        : (
+            await projectSessionMessagePayload({
+              sessionKey: "agent:main:next-turn-guidance",
+              message,
+              historyDelta: surface === "delta",
+            })
+          ).payload?.message;
 
     expect(display).not.toHaveProperty(["__openclaw", "modelPromptProjection"]);
     expect(JSON.stringify(display)).not.toContain(guidance);
@@ -39,7 +41,7 @@ it.each(["history", "live", "delta"] as const)(
 
 it.each(["history", "live", "delta"] as const)(
   "omits provider input replay from %s without changing durable messages or tool arguments",
-  (surface) => {
+  async (surface) => {
     const message = {
       role: "assistant",
       content: [
@@ -61,11 +63,13 @@ it.each(["history", "live", "delta"] as const)(
     const display =
       surface === "history"
         ? projectChatDisplayMessages([message])[0]
-        : projectSessionMessagePayload({
-            sessionKey: "agent:main:input-replay",
-            message,
-            historyDelta: surface === "delta",
-          }).payload?.message;
+        : (
+            await projectSessionMessagePayload({
+              sessionKey: "agent:main:input-replay",
+              message,
+              historyDelta: surface === "delta",
+            })
+          ).payload?.message;
 
     expect(display).not.toHaveProperty("openclawResponsesInputReplay");
     expect(display).toMatchObject({ role: "assistant", content: message.content });

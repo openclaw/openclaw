@@ -22,6 +22,10 @@ test.each([
   ["an incomplete whitespace-padded ID", `λ [[reply_to:${" ".repeat(4_000)}x`],
   ["nested incomplete markers", `λ ${"[[reply_to:".repeat(16_000)}x`],
   ["long blank runs around literal markers", `before${"\n".repeat(60_000)}[[ordinary text]]after`],
+  [
+    "many literal audio and reply markers",
+    "Use `[[reply_to_current]]` and ``[[audio_as_voice]]`` literally.\n\n".repeat(12_000),
+  ],
 ])("preserves %s without stalling", (_name, text) => {
   const started = performance.now();
   expectUnchanged(text);
@@ -34,6 +38,7 @@ test.each([
   [delivery, "[[reply_to:\n \n]]Visible", "Visible"],
   [display, "[[reply_to:[[audio_as_voice]]id]]Visible", "Visible"],
   [delivery, plain, plain],
+  [delivery, "[[reply_to:`id`]]\n\n    code", "    code"],
 ] as const)("strips only directives with %s: %s", (strip, input, text) => {
   expect(strip(input)).toEqual({ text, changed: input !== text });
 });

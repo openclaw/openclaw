@@ -5,7 +5,6 @@ import {
   createTextPartCodeRegionResolver,
   indexTextParts,
   findCodeRegions,
-  isInsideCode,
   type CodeRegion,
 } from "../shared/text/code-ranges.js";
 import { trimTextPreservingCode } from "../shared/text/trim-code-text.js";
@@ -49,17 +48,45 @@ const NO_INLINE_DIRECTIVES = {
 // neighborhood; authored spacing elsewhere (for example `<pre>` columns) stays.
 const REMOVED_DIRECTIVE_MARKER_SEED = "\uE000";
 
+/** Each transform visits source offsets in order, as do the scanner-owned ranges. */
+function createCodeRegionCursor(text: string) {
+  let regions: ReturnType<typeof findCodeRegions> | undefined;
+  let index = 0;
+  let blockIndex = 0;
+  return (offset: number, blockOnly = false) => {
+    regions ??= findCodeRegions(text);
+    let cursor = blockOnly ? blockIndex : index;
+    let region = regions[cursor];
+    while (region && region.end <= offset) {
+      region = regions[++cursor];
+    }
+    if (blockOnly) {
+      while (region && !region.block) {
+        region = regions[++cursor];
+      }
+    }
+    if (blockOnly) {
+      blockIndex = cursor;
+    } else {
+      index = cursor;
+    }
+    return region;
+  };
+}
+
 export function replaceOutsideCodeRegions(
   text: string,
   regex: RegExp,
   replacement: (match: string, captures: unknown[], offset: number, source: string) => string,
 ): string {
-  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  const nextCodeRegion = createCodeRegionCursor(text);
+  const hasMarkers = text.includes("[[");
   return text.replace(regex, (...args: unknown[]) => {
-    codeRegions ??= text.includes("[[") ? findCodeRegions(text) : [];
     const match = String(args[0]);
     const offset = args.at(-2);
-    return typeof offset === "number" && isInsideCode(offset + match.indexOf("[["), codeRegions)
+    const marker = typeof offset === "number" ? offset + match.indexOf("[[") : undefined;
+    const region = marker !== undefined && hasMarkers ? nextCodeRegion(marker) : undefined;
+    return region && marker !== undefined && region.start <= marker
       ? match
       : replacement(match, args.slice(1, -2), Number(offset), text);
   });
@@ -72,7 +99,7 @@ type TextReplacer = (text: string, replacement: TextReplacement) => string;
 
 function replaceReplyTagsOutsideCodeRegions(text: string, replacement: TextReplacement): string {
   const readReply = createInlineReplyTagReader(text);
-  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  const nextCodeRegion = createCodeRegionCursor(text);
   let cursor = 0;
   let searchFrom = 0;
   let result = "";
@@ -83,7 +110,11 @@ function replaceReplyTagsOutsideCodeRegions(text: string, replacement: TextRepla
     }
     const tag = readReply(marker);
     searchFrom = tag ? tag.end : marker + 1;
-    if (!tag || isInsideCode(marker, (codeRegions ??= findCodeRegions(text)))) {
+    if (!tag) {
+      continue;
+    }
+    const region = nextCodeRegion(marker);
+    if (region && region.start <= marker) {
       continue;
     }
     result += text.slice(cursor, marker);
@@ -372,7 +403,7 @@ function collectDeliveryDirectiveEdits(text: string): NativeTextEdit[] {
   }
   // Only malformed prefixes at the absolute message start are control text.
   const readReply = createInlineReplyTagReader(text);
-  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  const nextCodeRegion = createCodeRegionCursor(text);
   const edits: NativeTextEdit[] = [];
   let cursor = 0;
   let searchFrom = 0;
@@ -403,13 +434,13 @@ function collectDeliveryDirectiveEdits(text: string): NativeTextEdit[] {
       }
     }
     previousMatchEnd = searchFrom;
-    if (isInsideCode(marker, (codeRegions ??= findCodeRegions(text)))) {
+    const region = nextCodeRegion(marker);
+    if (region && region.start <= marker) {
       continue;
     }
     // Padding before the next code block owns its line break and indentation.
-    const preserveCodePadding = codeRegions.some(
-      (region) => region.block && region.start > marker && region.start <= searchFrom,
-    );
+    const nextBlock = nextCodeRegion(marker, true);
+    const preserveCodePadding = nextBlock && nextBlock.start <= searchFrom;
     cursor = preserveCodePadding
       ? start + text.slice(start, searchFrom).trimEnd().length
       : searchFrom;

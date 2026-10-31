@@ -1,6 +1,6 @@
 /** Bounded source-conversation context for current-bound cron runs. */
 import type { SessionEntry } from "../../config/sessions.js";
-import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.js";
+import { projectChatDisplayMessagesAsync } from "../../gateway/chat-display-projection.async.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -25,12 +25,14 @@ function truncateContextLine(role: "user" | "assistant", text: string): string {
   return `${prefix}${truncated}...`;
 }
 
-function formatCurrentConversationContext(messages: unknown[]): string | undefined {
-  const lines = projectChatDisplayMessages(messages, {
-    maxChars: CURRENT_CONTEXT_MAX_LINE_CHARS,
-    // Prompt context retains only role and text, never forwarded sender labels.
-    resolveCronJobName: () => undefined,
-  })
+async function formatCurrentConversationContext(messages: unknown[]): Promise<string | undefined> {
+  const lines = (
+    await projectChatDisplayMessagesAsync(messages, {
+      maxChars: CURRENT_CONTEXT_MAX_LINE_CHARS,
+      // Prompt context retains only role and text, never forwarded sender labels.
+      resolveCronJobName: () => undefined,
+    })
+  )
     .flatMap((message) => {
       if (!message || typeof message !== "object" || Array.isArray(message)) {
         return [];
@@ -82,7 +84,7 @@ export async function buildCurrentConversationContextBlock(
         maxMessages: CURRENT_CONTEXT_RAW_MESSAGES_MAX,
       },
     );
-    return formatCurrentConversationContext(Array.isArray(messages) ? messages : []);
+    return await formatCurrentConversationContext(Array.isArray(messages) ? messages : []);
   } catch {
     return undefined;
   }

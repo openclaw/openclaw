@@ -47,7 +47,7 @@ import {
   projectPluginSteeringMessage,
   toProjectedMessages,
 } from "./chat-display-projection.history.js";
-import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
+import { mapChatDisplayMessages, joinChatDisplayMessage } from "./chat-display-projection.map.js";
 import {
   prepareAssistantHistoryMessage,
   sanitizeChatHistoryContentBlock,
@@ -394,7 +394,7 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
   let recoveryObserved = false;
   let pendingIndexes: number[] = [];
   const repairedIndexes = new Set<number>();
-  const append = (message: Record<string, unknown>) => {
+  const append = (message: Record<string, unknown>, visible?: boolean) => {
     const receiptRunId =
       readSessionTranscriptFailureRunId(message) ?? readRunFailureNotice(message)?.runId;
     if (receiptRunId) {
@@ -420,7 +420,7 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
     }
     if (
       (!unseenPending && pendingIndexes.length === 0) ||
-      !hasVisibleAssistantDisplayContent(message)
+      !(message.display !== false && (visible ?? hasVisibleAssistantDisplayContent(message)))
     ) {
       return;
     }
@@ -445,15 +445,19 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
       return false;
     });
   };
+  const appendPrepared = (input: unknown[], visible?: readonly boolean[]) => {
+    const projected = projectCoordination(input);
+    for (const [index, message] of toProjectedMessages(projected).entries()) {
+      if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
+        append(message, visible?.[index]);
+      }
+    }
+  };
   return {
     append(input: unknown[]) {
-      const projected = projectCoordination(prepareChatHistoryRecoveryMessages(input, options));
-      for (const message of toProjectedMessages(projected)) {
-        if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
-          append(message);
-        }
-      }
+      appendPrepared(prepareChatHistoryRecoveryMessages(input, options));
     },
+    appendPrepared,
     get pending() {
       return unseenPending || pendingIndexes.length > 0;
     },
@@ -531,7 +535,7 @@ function projectEmptyAssistantErrorMessages(
   });
 }
 
-type ChatHistoryRecoveryOptions = Pick<
+export type ChatHistoryRecoveryOptions = Pick<
   ChatDisplayProjectionOptions,
   "maxChars" | "stripEnvelope" | "assistantErrorPending" | "subagentCoordination"
 >;
@@ -577,14 +581,42 @@ export function prepareChatHistoryRecoveryMessages(
     : stripEnvelopeFromMessages(projectedMessages);
 }
 
-export function projectChatDisplayMessagesWithState(
+/** Visibility is message-local; the recovery reducer retains cross-append run ownership. */
+export function prepareChatHistoryRecoveryFacts(
+  input: unknown[],
+  options?: ChatHistoryRecoveryOptions,
+) {
+  const messages = toProjectedMessages(prepareChatHistoryRecoveryMessages(input, options));
+  let pending = options?.assistantErrorPending ?? false;
+  return {
+    messages,
+    visible: messages.map((message) => {
+      if (isOpenClawMessageToolMirrorAssistantMessage(message)) {
+        return false;
+      }
+      if (isPendingAssistantError(message) || readRunFailureNotice(message)) {
+        pending = true;
+        return false;
+      }
+      return pending && hasVisibleAssistantDisplayContent(message);
+    }),
+  };
+}
+
+/** Shared preparation boundary lets workers obtain live display facts between pure stages. */
+export function prepareChatDisplayProjection(
   messages: unknown[],
   options?: ChatDisplayProjectionOptions,
-): ChatDisplayProjectionResult {
+  preparedRecovery?: unknown[],
+) {
   options?.subagentCoordination?.assertCurrent?.();
   const recovery = createChatHistoryRecoveryProjection(options);
   const catalogDisplay = messages.flatMap(projectPreservedCatalogMessageForDisplay);
-  recovery.append(catalogDisplay);
+  if (preparedRecovery) {
+    recovery.appendPrepared(preparedRecovery);
+  } else {
+    recovery.append(catalogDisplay);
+  }
   const recoveredErrors = recovery.result();
   const projectedErrors = projectEmptyAssistantErrorMessages(
     projectRunFailureNotices(recoveredErrors.messages),
@@ -623,6 +655,14 @@ export function projectChatDisplayMessagesWithState(
     sanitizedMessages.some(
       (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
     );
+  return { sanitizedMessages, activity, recoveredErrors, commentaryFallbacksObserved };
+}
+
+export function finishChatDisplayProjection(
+  prepared: ReturnType<typeof prepareChatDisplayProjection>,
+  options?: ChatDisplayProjectionOptions,
+): ChatDisplayProjectionResult {
+  const { sanitizedMessages, activity, recoveredErrors, commentaryFallbacksObserved } = prepared;
   const filtered = filterVisibleProjectedHistoryMessages(
     projectForwardedMessages(
       options?.includePluginSteering
@@ -657,6 +697,13 @@ export function projectChatDisplayMessagesWithState(
   return result;
 }
 
+export function projectChatDisplayMessagesWithState(
+  messages: unknown[],
+  options?: ChatDisplayProjectionOptions,
+): ChatDisplayProjectionResult {
+  return finishChatDisplayProjection(prepareChatDisplayProjection(messages, options), options);
+}
+
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: ChatDisplayProjectionOptions,
@@ -669,33 +716,5 @@ export function projectChatDisplayMessage(
   options?: ChatDisplayProjectionOptions,
 ): Record<string, unknown> | undefined {
   const projected = projectChatDisplayMessages([message], options);
-  if (
-    !options?.includeCommentaryFallbacks ||
-    !projected.some((entry) => entry.openclawStreamFallback)
-  ) {
-    return projected[0];
-  }
-  // A fetched source row restores all its visible fragments as one message.
-  const result: Record<string, unknown> = {
-    ...projected.at(-1),
-    content: projected.flatMap(({ content }) =>
-      Array.isArray(content)
-        ? content
-        : typeof content === "string"
-          ? [{ type: "text", text: content }]
-          : [],
-    ),
-  };
-  const truncated = projected
-    .map((entry) => asOptionalRecord(entry["__openclaw"]))
-    .find((metadata) => metadata?.truncated === true);
-  if (truncated) {
-    result["__openclaw"] = {
-      ...asOptionalRecord(result["__openclaw"]),
-      truncated: true,
-      reason: truncated.reason,
-    };
-  }
-  delete result.openclawStreamFallback;
-  return result;
+  return joinChatDisplayMessage(projected, options?.includeCommentaryFallbacks);
 }

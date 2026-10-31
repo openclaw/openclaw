@@ -621,7 +621,7 @@ describe("persisted chat image artifact recovery", () => {
         appended.messageId,
       );
       const metadata = asOptionalRecord(asOptionalRecord(persisted.message)?.["__openclaw"]);
-      const live = projectSessionMessagePayload({
+      const live = await projectSessionMessagePayload({
         message: persisted.message,
         sessionKey: transcriptScope.sessionKey,
         messageId: appended.messageId,

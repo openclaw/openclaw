@@ -49,6 +49,14 @@ vi.mock("./chat-display-projection.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./chat-display-projection.js")>();
   return { ...actual, projectChatDisplayMessage: projectChatDisplayMessageMock };
 });
+vi.mock("./chat-display-projection.async.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-display-projection.async.js")>();
+  return {
+    ...actual,
+    projectChatDisplayMessageAsync: async (message: unknown) =>
+      projectChatDisplayMessageMock(message),
+  };
+});
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
   return {

@@ -10,11 +10,9 @@ import {
   isRpcSourceQueued,
   listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
+import { projectChatDisplayMessageAsync } from "../chat-display-projection.async.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
-import {
-  createCurrentUserProfileMessageProjector,
-  projectChatDisplayMessage,
-} from "../chat-display-projection.js";
+import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
 import { replaceOversizedChatHistoryMessages } from "../chat-history-budget.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
@@ -53,7 +51,7 @@ export function captureQueuedChatInputRunIds(
   );
 }
 
-export function projectPendingInputMessage(
+export async function projectPendingInputMessage(
   input: SessionPendingInput,
   maxChars: number,
   projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay),
@@ -69,7 +67,10 @@ export function projectPendingInputMessage(
       __openclaw: { id: `${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}` },
     };
   }
-  const projected = projectChatDisplayMessage(input.message, { maxChars, resolveCronJobName });
+  const projected = await projectChatDisplayMessageAsync(input.message, {
+    maxChars,
+    resolveCronJobName,
+  });
   const message = projected ? projectProfile(projected) : undefined;
   if (!message) {
     return undefined;
@@ -104,15 +105,18 @@ export async function readChatPendingInputs(
     options.cronStorePath,
   );
   const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  const visible = page.items.flatMap((input) => {
-    const message = projectPendingInputMessage(
+  const visible: Array<{ input: SessionPendingInput; message: Record<string, unknown> }> = [];
+  for (const input of page.items) {
+    const message = await projectPendingInputMessage(
       input,
       options.maxChars,
       projectProfile,
       resolveCronJobName,
     );
-    return message ? [{ input, message }] : [];
-  });
+    if (message) {
+      visible.push({ input, message });
+    }
+  }
   const messages = replaceOversizedChatHistoryMessages({
     messages: visible.map(({ message }) => message),
     maxSingleMessageBytes: Math.floor(

@@ -18,6 +18,7 @@ import {
   broadcastChatTerminal,
   broadcastSideResult,
   isBtwReplyPayload,
+  prepareChatTerminalMessage,
 } from "./chat-broadcast.js";
 import { prepareWebchatReplyMediaForDisplay } from "./chat-reply-media.js";
 import {
@@ -276,9 +277,13 @@ export async function finalizeChatSendDispatchedReplies(
       includeSensitiveDisplay: true,
       logGateway: context.logGateway,
     });
-    const ttsSupplementMarker = finalPayloads
-      .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
-      .find((marker): marker is GatewayInjectedTtsSupplementMarker => Boolean(marker));
+    let ttsSupplementMarker: GatewayInjectedTtsSupplementMarker | undefined;
+    for (const payload of finalPayloads) {
+      ttsSupplementMarker = await buildMediaOnlyTtsSupplementTranscriptMarker(payload);
+      if (ttsSupplementMarker) {
+        break;
+      }
+    }
     const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
       ? persistedAssistantContent
       : undefined;
@@ -364,14 +369,15 @@ export async function finalizeChatSendDispatchedReplies(
         usage: { input: 0, output: 0, totalTokens: 0 },
       };
     }
-    if (!authorizeDelivery("broadcast")) {
-      return;
-    }
     const run = context.chatRunState.runs.get(clientRunId);
     if (!suppressReplies && run?.bufferIsCurrent?.() !== false) {
       // Only an authorized delivered message receives previews; an absent message
       // can be a deliberate post-hook suppression, not a tool-only reply.
       message = appendChatCanvasBlocksToMessage(message, run?.canvasBlocks ?? []);
+    }
+    const preparedMessage = await prepareChatTerminalMessage(message);
+    if (!authorizeDelivery("broadcast")) {
+      return;
     }
     if (hasVisibleAssistantFinalMessage(message)) {
       emitFirstAssistantServerTiming();
@@ -382,7 +388,7 @@ export async function finalizeChatSendDispatchedReplies(
       runId: clientRunId,
       sessionKey,
       agentId,
-      message,
+      preparedMessage,
       state: params.state,
       stopReason: params.stopReason,
     });

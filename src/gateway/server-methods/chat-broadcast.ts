@@ -8,6 +8,7 @@ import {
   captureChatAbortRegistrationGuard,
   markChatAbortTerminalOutcome,
 } from "../chat-abort-lifecycle-internal.js";
+import { projectChatDisplayMessageAsync } from "../chat-display-projection.async.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { capLiveAssistantText } from "../live-chat-projector.js";
 import type { GatewayBroadcastOpts } from "../server-broadcast-types.js";
@@ -108,8 +109,22 @@ function broadcastChatPayload(
   sendGlobalAwareNodeChatPayload({ ...params, event, payload, opts });
 }
 
+export type PreparedChatTerminalMessage = {
+  message: Awaited<ReturnType<typeof projectChatDisplayMessageAsync>>;
+};
+
+export async function prepareChatTerminalMessage(
+  message: Record<string, unknown> | undefined,
+): Promise<PreparedChatTerminalMessage> {
+  return { message: await projectChatDisplayMessageAsync(message) };
+}
+
 type ChatTerminal =
-  | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
+  | {
+      state: "final" | "aborted";
+      preparedMessage?: PreparedChatTerminalMessage;
+      stopReason?: string;
+    }
   | {
       state: "error";
       errorMessage?: string;
@@ -148,7 +163,7 @@ function broadcastChatFrame(
       : params.state !== "error"
         ? {
             state: params.state,
-            message: projectChatDisplayMessage(params.message),
+            message: params.preparedMessage?.message,
             ...(params.stopReason ? { stopReason: params.stopReason } : {}),
           }
         : {
@@ -186,7 +201,7 @@ function broadcastChatFrame(
 /** Text-only clients need one acknowledgment; queue-aware clients use pending inputs. */
 export function broadcastChatQueueNotice(params: ChatBroadcastParams & { text: string }): void {
   broadcastChatFrame(
-    { ...params, state: "delta" },
+    { ...params, state: "delta", text: capLiveAssistantText({ text: params.text }) },
     undefined,
     GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
   );
@@ -234,7 +249,7 @@ export function broadcastChatTerminal(params: ChatTerminalBroadcastParams & Chat
 }
 
 export function broadcastChatFinal(
-  params: ChatTerminalBroadcastParams & { message?: Record<string, unknown> },
+  params: ChatTerminalBroadcastParams & { preparedMessage?: PreparedChatTerminalMessage },
 ): void {
   broadcastChatTerminal({ ...params, state: "final" });
 }

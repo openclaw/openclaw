@@ -1,4 +1,6 @@
+import { findMarkdownCodeRegions as findCodeSourceRegions } from "../../packages/markdown-core/src/reasoning-tag-parser.js";
 // Text chunking helpers split long outbound text while preserving readable line boundaries.
+import { findMarkdownCodeRegions } from "../../packages/markdown-core/src/reasoning-tags.js";
 import { chunkTextByBreakResolver, splitLongTextLine } from "../shared/text-chunking.js";
 
 /** Offset-preserving text ranges for transports with native style metadata. */
@@ -86,7 +88,16 @@ export {
   isAutoLinkedFileRef,
 } from "../shared/text/auto-linked-file-ref.js";
 /** Code-region helpers for markdown-aware text transformations. */
-export { findCodeRegions, isInsideCode, type CodeRegion } from "../shared/text/code-regions.js";
+export { isInsideCode, type CodeRegion } from "../shared/text/code-ranges.js";
+export function findCodeRegions(
+  text: string,
+  options?: Parameters<typeof findCodeSourceRegions>[1],
+): ReturnType<typeof findCodeSourceRegions> {
+  // Decoded source maps are part of the shipped chunking contract; plain ranges need no AST.
+  return options?.includeSource || options?.includeIndentedSource
+    ? findCodeSourceRegions(text, options)
+    : findMarkdownCodeRegions(text, options);
+}
 /** Reasoning-tag stripping helpers for public channel output. */
 export {
   stripReasoningTagsFromText,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as reasoningTagParser from "../../../markdown-core/src/reasoning-tag-parser.js";
+import * as markdownCodeRegions from "../../../markdown-core/src/markdown-code-regions.js";
+import * as reasoningTagSyntax from "../../../markdown-core/src/reasoning-tag-syntax.js";
 import type { ReasoningTagTextDelta } from "../../../markdown-core/src/reasoning-tags.js";
 import { createReasoningTagTextPartitioner } from "./reasoning-tag-text-partitioner.js";
 
@@ -116,25 +117,34 @@ describe("createReasoningTagTextPartitioner", () => {
   it("recovers a byte-streamed 110KB malformed quoted tag without reparsing prefixes", () => {
     const input = `<think data-x="${"x".repeat(110_000)}<think>hidden</think>After`;
     let parsedCharacters = 0;
-    const parserSpies = (
-      ["parseReasoningTagAt", "scanReasoningTags", "parseMarkdownOwnership"] as const
-    ).map((name) => {
-      const original = reasoningTagParser[name];
+    const count = (text: string) => {
+      // Bound reparsed input independently of runner speed, and fail before quadratic work.
+      parsedCharacters += text.length;
+      expect(parsedCharacters).toBeLessThanOrEqual(input.length * 4);
+    };
+    const parserSpies = (["parseReasoningTagAt", "scanReasoningTags"] as const).map((name) => {
+      const original = reasoningTagSyntax[name];
       return vi
-        .spyOn(reasoningTagParser, name)
+        .spyOn(reasoningTagSyntax, name)
         .mockImplementation((text: string, ...args: unknown[]) => {
-          // Bound reparsed input independently of runner speed, and fail before quadratic work.
-          parsedCharacters += text.length;
-          expect(parsedCharacters).toBeLessThanOrEqual(input.length * 4);
+          count(text);
           return Reflect.apply(original, undefined, [text, ...args]);
         });
     });
+    const findOwnership = markdownCodeRegions.findMarkdownCodeOwnership;
+    const ownershipSpy = vi
+      .spyOn(markdownCodeRegions, "findMarkdownCodeOwnership")
+      .mockImplementation((text, options) => {
+        count(text);
+        return findOwnership(text, options);
+      });
     try {
       const result = collectVisibleMode(input, bytes(input));
       expect(result.text).not.toContain("hidden");
       expect(result.text.endsWith("After")).toBe(true);
       expect(result.thinking).toBe("hidden");
     } finally {
+      ownershipSpy.mockRestore();
       for (const spy of parserSpies) {
         spy.mockRestore();
       }

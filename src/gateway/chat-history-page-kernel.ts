@@ -4,16 +4,14 @@ import type {
 } from "../config/sessions/session-history-types.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../config/sessions/transcript-tree.js";
 import { createTranscriptDisplaySource } from "../sessions/transcript-display-position.js";
+import { projectChatDisplayMessagesWithStateAsync } from "./chat-display-projection.async.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import {
-  projectChatDisplayMessagesWithState,
-  createChatHistoryRecoveryProjection,
-  type ChatDisplayProjectionOptions,
-} from "./chat-display-projection.core.js";
+import type { ChatDisplayProjectionOptions } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isProjectedHistoryTurnBoundaryMessage,
 } from "./chat-display-projection.history.js";
+import { createAsyncChatHistoryRecoveryProjection } from "./chat-history-recovery.async.js";
 import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
 import { isChatHistoryResponsePageByteLimited } from "./chat-history-response-page.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
@@ -153,7 +151,7 @@ export async function readChatHistoryPageKernel(
       overreadContextMessage,
     );
     const project = (messages: unknown[]) =>
-      projectChatDisplayMessagesWithState(messages, {
+      projectChatDisplayMessagesWithStateAsync(messages, {
         includePluginSteering: params.includePluginSteering,
         subagentCoordination: options.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
@@ -165,7 +163,7 @@ export async function readChatHistoryPageKernel(
           : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
         turnBoundaryPending: isProjectedHistoryTurnBoundaryMessage(overreadContextMessage),
       });
-    const projection = project(localMessages);
+    const projection = await project(localMessages);
     let projected = projection.messages;
     const newestPageSeq = readSequence(localMessages.at(-1));
     if (
@@ -175,12 +173,12 @@ export async function readChatHistoryPageKernel(
     ) {
       const recoveryContext = await readChatHistoryRecoveryContext({
         messages: localMessages,
-        createRecovery: (messages) => {
-          const recovery = createChatHistoryRecoveryProjection({
+        createRecovery: async (messages) => {
+          const recovery = createAsyncChatHistoryRecoveryProjection({
             maxChars: effectiveMaxChars,
             subagentCoordination: options.readers.subagentCoordination,
           });
-          recovery.append(messages);
+          await recovery.append(messages);
           return recovery;
         },
         readScope,
@@ -191,7 +189,7 @@ export async function readChatHistoryPageKernel(
         sessionStartedAt: entry?.sessionStartedAt,
       });
       if (recoveryContext.length > 0) {
-        projected = project([...localMessages, ...recoveryContext]).messages.filter(
+        projected = (await project([...localMessages, ...recoveryContext])).messages.filter(
           (message) => (readSequence(message) ?? Infinity) <= newestPageSeq,
         );
       }

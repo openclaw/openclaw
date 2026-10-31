@@ -206,14 +206,16 @@ it("hands paced native reasoning to stable durable identity despite rewritten po
       },
     ]);
     // Live ownership is remapped; durable identity survives rewritten display positions.
-    const durable = projectSessionMessagePayload({
-      sessionKey,
-      message: committed,
-      messageSeq: 7,
-      messageId,
-      runId,
-      projectCurrentUserProfile: (message) => message,
-    }).payload;
+    const durable = (
+      await projectSessionMessagePayload({
+        sessionKey,
+        message: committed,
+        messageSeq: 7,
+        messageId,
+        runId,
+        projectCurrentUserProfile: (message) => message,
+      })
+    ).payload;
     expect(durable).toMatchObject({
       runId,
       message: { __openclaw: { id: messageId, runId, seq: 7 } },

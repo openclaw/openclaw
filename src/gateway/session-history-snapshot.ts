@@ -3,9 +3,10 @@ import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
-import {
+import { projectChatDisplayMessagesWithStateAsync } from "./chat-display-projection.async.js";
+import type {
   projectChatDisplayMessagesWithState,
-  type ChatDisplayProjectionOptions,
+  ChatDisplayProjectionOptions,
 } from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./chat-history-budget.js";
@@ -50,7 +51,7 @@ export async function readSessionHistorySnapshotKernel(
       rawMessages.push(...page.messages);
       transcriptPath = page.transcriptPath;
     }
-    projected = projectChatDisplayMessagesWithState(rawMessages, {
+    projected = await projectChatDisplayMessagesWithStateAsync(rawMessages, {
       subagentCoordination: options.readers.subagentCoordination,
       includeCommentaryFallbacks: true,
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,

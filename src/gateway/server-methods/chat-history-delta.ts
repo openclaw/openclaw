@@ -170,7 +170,7 @@ async function projectChatHistoryDelta(
       return { kind: "reset" as const };
     }
     const messageId = asOptionalRecord(row.event)?.id;
-    const projected = projectSessionMessagePayload({
+    const projected = await projectSessionMessagePayload({
       agentId: params.agentId,
       historyDelta: true,
       includePluginSteering: params.includePluginSteering,

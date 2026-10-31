@@ -334,7 +334,7 @@ it.each([
       expect(gateway.chatRunState.resolveBuffer(runId).text).toBe("");
       // Tool-use persistence keeps producer ownership inside the message; the
       // outer run ID is reserved for terminal assistant rows by the writer.
-      const publication = projectSessionMessagePayload({
+      const publication = await projectSessionMessagePayload({
         sessionKey: "main",
         message: saved,
         messageId: saved["__openclaw"].id,

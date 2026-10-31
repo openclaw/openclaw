@@ -1,12 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
-import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import {
-  createCurrentUserProfileMessageProjector,
-  projectChatDisplayMessage,
-  projectChatDisplayMessagesWithState,
-} from "./chat-display-projection.js";
+  projectChatDisplayMessageAsync,
+  projectChatDisplayMessagesWithStateAsync,
+} from "./chat-display-projection.async.js";
+import { isPendingAssistantError } from "./chat-display-projection.core.js";
+import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.js";
 import { readChatHistoryReplyMessageId } from "./chat-history-reply-messages.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
@@ -27,7 +27,7 @@ function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefin
 }
 
 /** Project one transcript message into the exact payload emitted as session.message. */
-export function projectSessionMessagePayload(params: {
+export async function projectSessionMessagePayload(params: {
   agentId?: string;
   historyDelta?: boolean;
   includePluginSteering?: boolean;
@@ -44,12 +44,12 @@ export function projectSessionMessagePayload(params: {
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
   subagentCoordination?: SubagentCoordinationDisplayResolver;
-}): {
+}): Promise<{
   payload?: Record<string, unknown>;
   projectionState: SessionMessageProjectionState;
   requiresHistoryReset?: true;
   deferredAssistantError?: true;
-} {
+}> {
   const idempotencyKey = readTranscriptMessageIdempotencyKey(params.message);
   const senderIsOwner = readTranscriptMessageSenderIsOwner(params.message);
   const messageRunId = readSessionTranscriptRunId(params.message) ?? params.runId;
@@ -62,7 +62,7 @@ export function projectSessionMessagePayload(params: {
     ...(params.messageSeq !== undefined ? { seq: params.messageSeq } : {}),
   });
   const historyProjection = params.historyDelta
-    ? projectChatDisplayMessagesWithState([rawMessage], {
+    ? await projectChatDisplayMessagesWithStateAsync([rawMessage], {
         ...params.projectionState,
         includePluginSteering: params.includePluginSteering,
         subagentCoordination: params.subagentCoordination,
@@ -95,7 +95,7 @@ export function projectSessionMessagePayload(params: {
     historyProjection && !historyProjection.commentaryFallbacksObserved
       ? historyProjection
       : params.projectionState
-        ? projectChatDisplayMessagesWithState([rawMessage], {
+        ? await projectChatDisplayMessagesWithStateAsync([rawMessage], {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
             activity: false,
@@ -107,7 +107,7 @@ export function projectSessionMessagePayload(params: {
           })
         : {
             messages: [
-              projectChatDisplayMessage(rawMessage, {
+              await projectChatDisplayMessageAsync(rawMessage, {
                 includePluginSteering: params.includePluginSteering,
                 subagentCoordination: params.subagentCoordination,
                 resolveCronJobName: params.resolveCronJobName,

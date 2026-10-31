@@ -65,11 +65,11 @@ it("keeps scheduler repair inputs in the model transcript, not pending, live, or
       messageId: undefined,
     });
     expect(history.messages).toMatchObject([human, answer, quote]);
-    const live = (message: unknown) =>
-      projectSessionMessagePayload({ message, sessionKey: scope.sessionKey }).payload;
-    expect(live(repair)).toBeUndefined();
-    expect(live(answer)?.message).toMatchObject(answer);
-    const pending = projectPendingInputMessage(
+    const live = async (message: unknown) =>
+      (await projectSessionMessagePayload({ message, sessionKey: scope.sessionKey })).payload;
+    expect(await live(repair)).toBeUndefined();
+    expect((await live(answer))?.message).toMatchObject(answer);
+    const pending = await projectPendingInputMessage(
       {
         id: "repair-1",
         runId: "cron-failure-repair:repair-1",

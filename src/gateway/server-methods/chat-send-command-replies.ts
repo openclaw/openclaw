@@ -14,7 +14,7 @@ import {
   parseInlineDirectives,
   sanitizeReplyDirectiveId,
   stripInlineDirectiveTagsForDelivery,
-} from "../../utils/directive-tags.js";
+} from "../../utils/directive-tags-batch.js";
 import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
 
 export type DeliveredChatSendReply = {

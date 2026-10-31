@@ -19,7 +19,7 @@ import {
   gatewayReplyMock,
   installGatewayTestHooks,
 } from "../test-helpers.js";
-import { broadcastChatFinal } from "./chat-broadcast.js";
+import { broadcastChatFinal, prepareChatTerminalMessage } from "./chat-broadcast.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import * as workAdmission from "./chat-send-work-admission.js";
 import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -230,6 +230,10 @@ it.for(
       });
     let mutation: Promise<void> | undefined;
     try {
+      const preparedMessage = await prepareChatTerminalMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Completed before source replacement." }],
+      });
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
       expect(registration.entry).not.toBe(originalEntry);
       if (publication === "chat-final") {
@@ -238,6 +242,7 @@ it.for(
           runId,
           sessionKey: fixture.scope.sessionKey,
           terminalEntry: originalEntry,
+          preparedMessage,
         });
       }
       expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();

@@ -16,8 +16,8 @@ import { resolveSessionStorePathForScope } from "../config/sessions/session-stor
 import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { readPluginInlineViewBlock } from "../shared/plugin-inline-view.js";
+import { projectChatDisplayMessagesAsync } from "./chat-display-projection.async.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
-import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { prepareSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
@@ -275,11 +275,14 @@ async function readCatalogPageFromEntry(
         maxMessages: Math.min(before, limit + 1),
       });
     }
-    const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
-      maxChars: MAX_CATALOG_TEXT_CHARS,
-      // Catalog assistant items contain text/model facts, not forwarded sender labels.
-      resolveCronJobName: () => undefined,
-    });
+    const projected = await projectChatDisplayMessagesAsync(
+      page.events.map(sqliteMessageEventWithSeq),
+      {
+        maxChars: MAX_CATALOG_TEXT_CHARS,
+        // Catalog assistant items contain text/model facts, not forwarded sender labels.
+        resolveCronJobName: () => undefined,
+      },
+    );
     const identities = projected.flatMap((message) => {
       const metadata = asOptionalRecord(message["__openclaw"]);
       const identity =

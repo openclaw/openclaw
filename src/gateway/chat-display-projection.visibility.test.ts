@@ -71,7 +71,7 @@ it.each(["reviewer", "legacy-plugin"])("projects %s steering only on request", (
   expect(capped).not.toHaveProperty(["__openclaw", "pluginSteering", "displayText"]);
 });
 
-it("hides tool handoff resumes from history, live, and pending chat but keeps plugin events", () => {
+it("hides tool handoff resumes from history, live, and pending chat but keeps plugin events", async () => {
   const event = (sourceTool: string, text: string) =>
     buildPersistedUserTurnMessage({
       text,
@@ -89,18 +89,18 @@ it("hides tool handoff resumes from history, live, and pending chat but keeps pl
     { role: "user", content: pluginEvent.content },
     { role: "assistant", content: answer.content },
   ]);
-  const live = (message: unknown) =>
-    projectSessionMessagePayload({ message, sessionKey: "agent:main:main" }).payload;
-  expect(live(resume)).toBeUndefined();
-  expect(live(pluginEvent)?.message).toMatchObject({ content: pluginEvent.content });
+  const live = async (message: unknown) =>
+    (await projectSessionMessagePayload({ message, sessionKey: "agent:main:main" })).payload;
+  expect(await live(resume)).toBeUndefined();
+  expect((await live(pluginEvent))?.message).toMatchObject({ content: pluginEvent.content });
   const pending = (message: typeof resume) =>
     projectPendingInputMessage(
       { id: "event-1", runId: "event-run", message, acceptedAt: 2, state: "queued" },
       20_000,
       (projected) => projected,
     );
-  expect(pending(resume)).toBeUndefined();
-  expect(pending(pluginEvent)).toMatchObject({ content: pluginEvent.content });
+  expect(await pending(resume)).toBeUndefined();
+  expect(await pending(pluginEvent)).toMatchObject({ content: pluginEvent.content });
 });
 
 it("hides attributed child coordination without hiding peer messages or parent answers", () => {

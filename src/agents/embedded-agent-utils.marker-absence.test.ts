@@ -1,6 +1,5 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import * as markdownCodeRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
-import * as markdownOwnership from "../../packages/markdown-core/src/reasoning-tag-parser.js";
 import * as reasoningSyntax from "../../packages/markdown-core/src/reasoning-tag-syntax.js";
 import * as inboundMetadata from "../auto-reply/reply/strip-inbound-meta.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
@@ -16,7 +15,7 @@ import {
 // Observe canonical work across imports, including both code-range entry points:
 // findMarkdownCodeSpans calls its local region binding without crossing an export spy.
 const reasoning = vi.spyOn(reasoningSyntax, "reduceReasoningText");
-const ownership = vi.spyOn(markdownOwnership, "parseMarkdownOwnership");
+const ownership = vi.spyOn(markdownCodeRegions, "findMarkdownCodeOwnership");
 const regions = vi.spyOn(markdownCodeRegions, "findMarkdownCodeRegions");
 const spans = vi.spyOn(markdownCodeRegions, "findMarkdownCodeSpans");
 const canonicalWork = [reasoning, ownership, regions, spans];

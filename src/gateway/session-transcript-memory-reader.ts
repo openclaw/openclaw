@@ -4,8 +4,11 @@ import type { SessionActorMemoryHistoryReads } from "../config/sessions/session-
 import type { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
-import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
-import { isSubagentCoordinationHistoryInput } from "./chat-display-projection.history.js";
+import { prepareChatHistoryRecoveryMessagesAsync } from "./chat-display-projection.async.js";
+import {
+  createSubagentCoordinationHistoryProjection,
+  isSubagentCoordinationHistoryInput,
+} from "./chat-display-projection.history.js";
 import { prepareSessionHistorySubagentFacts } from "./session-history-delta-visibility.js";
 import { filterSessionMessageHistoryVisibility } from "./session-transcript-read-kernel.js";
 import type {
@@ -59,13 +62,12 @@ export function createSessionActorTranscriptReader(
     },
   };
   const prepareVisibility = async (messages: unknown[]) => {
+    const prepared = await prepareChatHistoryRecoveryMessagesAsync(messages);
     const requested = prepareSessionHistorySubagentFacts(
       { isSubagentSession: () => false, isSubagentRunMessage: () => false },
       (recording) => {
-        for (const message of messages) {
-          createChatHistoryRecoveryProjection({ subagentCoordination: recording }).append([
-            message,
-          ]);
+        for (const message of prepared) {
+          createSubagentCoordinationHistoryProjection(recording)([message]);
         }
       },
     );

@@ -60,7 +60,7 @@ function endsWithTokenBeforeIncompleteSurrogate(text: string): boolean {
 }
 
 function projectModelSpecialTokens(text: string) {
-  return projectTokens(text, (source) => findCodeOwnership(source, { includeText: true }));
+  return projectTokens(text, (source) => findCodeOwnership(source));
 }
 
 /**

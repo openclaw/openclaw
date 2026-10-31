@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { extractCanvasShortcodes } from "../chat/canvas-render.js";
@@ -12,6 +13,7 @@ import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import type { resolveAssistantMediaPolicy } from "./assistant-media-policy.js";
+import { runChatTextTask, shouldOffloadChatText } from "./chat-display-projection.async.js";
 import {
   normalizeAssistantMediaSource,
   resolveAssistantMediaSource,
@@ -22,7 +24,7 @@ import { readSessionMessageByIdAsync } from "./session-transcript-readers.js";
 
 type MediaPolicy = NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>;
 
-function messageMediaSources(message: unknown): string[] {
+export function projectAssistantMessageMediaSources(message: unknown): string[] {
   const record = asOptionalRecord(message);
   if (!record) {
     return [];
@@ -114,29 +116,36 @@ export async function prepareAssistantMessageMedia(
     sessionEntry: loaded.entry,
   };
   const identity = mediaIdentity(source, policy);
-  const assertAssociation = (message: unknown) => {
+  const assertAssociation = async (message: unknown) => {
+    let sources: string[];
+    if (shouldOffloadChatText(message)) {
+      const result = await runChatTextTask({ kind: "media-sources", message }, undefined, signal);
+      sources = result.value;
+    } else {
+      sources = projectAssistantMessageMediaSources(message);
+    }
     signal.throwIfAborted();
-    if (
-      !identity ||
-      !messageMediaSources(message).some(
-        (candidate) => mediaIdentity(candidate, policy) === identity,
-      )
-    ) {
+    if (!identity || !sources.some((candidate) => mediaIdentity(candidate, policy) === identity)) {
       throw new FsSafeError("path-mismatch", "Message attachment unavailable");
     }
   };
   if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
     const inputId = messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length);
     // Attachment association needs visibility and media, not forwarded sender labels.
-    const project = (input: Awaited<ReturnType<typeof readSessionPendingInput>>) =>
-      input
-        ? projectPendingInputMessage(input, MAX_PAYLOAD_BYTES, undefined, () => undefined)
-        : undefined;
-    assertAssociation(project(await readSessionPendingInput(scope, inputId)));
+    const input = await readSessionPendingInput(scope, inputId);
+    const message = input
+      ? await projectPendingInputMessage(input, MAX_PAYLOAD_BYTES, undefined, () => undefined)
+      : undefined;
+    await assertAssociation(message);
     return async (publish) => {
       let published = false;
       await readSessionPendingInput(scope, inputId, (current) => {
-        assertAssociation(project(current));
+        signal.throwIfAborted();
+        // Projection can await a worker. Consume its association only while the
+        // live pending-input owner still exposes exactly the same message.
+        if (!current || !input || !isDeepStrictEqual(current.message, input.message)) {
+          throw new FsSafeError("path-mismatch", "Message attachment changed");
+        }
         publish();
         published = true;
       });
@@ -166,7 +175,7 @@ export async function prepareAssistantMessageMedia(
   if (!anchor || !selected?.found || selected.oversized) {
     throw new FsSafeError("path-mismatch", "Message attachment unavailable");
   }
-  assertAssociation(selected.message);
+  await assertAssociation(selected.message);
   return async (publish) => {
     let published = false;
     // Media enrichment can rewrite an existing message ID. The transcript owner

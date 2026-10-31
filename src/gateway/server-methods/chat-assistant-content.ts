@@ -16,7 +16,7 @@ import {
   combineNonStreamingReplyParts,
   trimTextPreservingCode,
 } from "../../shared/text/trim-code-text.js";
-import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
+import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags-batch.js";
 import {
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,

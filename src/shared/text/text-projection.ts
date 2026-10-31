@@ -105,11 +105,11 @@ function createCheckpointTransform(project: CheckpointTransform) {
   let ownership: ReturnType<typeof findCodeOwnership> | undefined;
   const resolveOwnership = (text: string) => {
     const last = ownership?.regions.at(-1);
-    // A new line can advance settlement even when code ranges stay unchanged.
+    // Ordinary paragraph continuation cannot advance settlement; block changes still re-scan.
     if (
       ownership &&
-      !text.includes("\n", ownershipSource.length) &&
-      !text.includes("\r", ownershipSource.length) &&
+      ((ownership.unsettledParagraph && last) ||
+        !/[\r\n]/u.test(text.slice(ownershipSource.length))) &&
       (!last?.block || last.end !== ownershipSource.length || openBlock) &&
       canReuseMarkdownOwnership(ownershipSource, text, ownership)
     ) {

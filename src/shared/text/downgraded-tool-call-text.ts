@@ -3,8 +3,9 @@ import {
   consumeLineBreak,
   skipHorizontalWhitespace,
 } from "../../../packages/tool-call-repair/src/grammar.js";
-import { findCodeRegions, isInsideCode } from "./code-regions.js";
-import { trimTextPreservingCode, type TextFilter } from "./text-projection.js";
+import { findCodeRegions, isInsideCode } from "./code-ranges.js";
+import type { TextFilter } from "./text-projection.js";
+import { trimTextPreservingCode } from "./trim-code-text.js";
 
 function consumeJsonish(input: string, start: number): number | null {
   let index = start;

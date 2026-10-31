@@ -18,7 +18,7 @@ import {
   findCodeRegions,
   isInsideSettledBlockCode,
   projectLinesOutsideCode,
-} from "./code-regions.js";
+} from "./code-ranges.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { orderInternalScaffoldingStages } from "./internal-scaffolding-stages.js";
 import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";

@@ -60,8 +60,8 @@ function mirror(fields: Record<string, unknown> = {}) {
     ...fields,
   };
 }
-const payloadFor = (message: unknown) =>
-  projectSessionMessagePayload({ sessionKey: "agent:main:main", message }).payload;
+const payloadFor = async (message: unknown) =>
+  (await projectSessionMessagePayload({ sessionKey: "agent:main:main", message })).payload;
 function expectPrepared(source: Record<string, unknown>, content: unknown[]) {
   const before = structuredClone(source);
   const expected = [{ ...source, display: true, content }];
@@ -125,11 +125,11 @@ it.each([
     content: [finalText("First part."), image, finalText("Second part."), finalText("")],
     fields: {},
   },
-])("prepares $name once across phased text and media", ({ raw, content, fields, name }) => {
+])("prepares $name once across phased text and media", async ({ raw, content, fields, name }) => {
   const source = assistant({ phase: "final_answer", content: raw, ...fields });
   expectPrepared(source, content);
   if (name === "trailing control line") {
-    expect(payloadFor(source)?.message).toMatchObject({ content });
+    expect((await payloadFor(source))?.message).toMatchObject({ content });
   }
 });
 
@@ -250,7 +250,7 @@ it("preserves error-turn media after a later reply", () => {
 
 const managedUrl = "./attachment-catalog-tiny/demo.jpg";
 const delivery = { mediaUrls: [managedUrl] };
-it("withholds only relative directives from a mixed legacy batch with LF lines", () => {
+it("withholds only relative directives from a mixed legacy batch with LF lines", async () => {
   const visibleLines = [
     "Prepared the mixed batch.",
     "MEDIA:https://cdn.example.test/legacy.jpg",
@@ -261,7 +261,7 @@ it("withholds only relative directives from a mixed legacy batch with LF lines",
     content: [text([...visibleLines, `MEDIA:${managedUrl}`].join("\n"))],
   });
   const before = structuredClone(source);
-  const payload = payloadFor(source);
+  const payload = await payloadFor(source);
   expect(payload?.message).toMatchObject({ content: [text(visibleLines.join("\n"))] });
   expect(JSON.stringify(payload)).not.toContain("attachment-catalog-tiny");
   expect(source).toEqual(before);

@@ -162,6 +162,16 @@ describe("model special token streaming", () => {
     ],
     ["tilde-dense prose", `<|assistant|>${tildeAnswer}`, tildeAnswer],
     ["a quoted token", quotedAnswer, quotedAnswer],
+    [
+      "a quoted token beside a resolved link",
+      "[docs](/url) " + quotedAnswer,
+      "[docs](/url) " + quotedAnswer,
+    ],
+    [
+      "a quoted token beside a resolved image",
+      "![alt](/image) " + quotedAnswer,
+      "![alt](/image) " + quotedAnswer,
+    ],
   ])("scans a bounded prefix with %s", (_name, source, expected) => {
     expect(source.length).toBeGreaterThan(16_000);
     const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));

@@ -12,10 +12,10 @@ import type {
 } from "../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import {
-  projectChatDisplayMessages,
-  projectChatDisplayMessagesWithState,
-  createCurrentUserProfileMessageProjector,
-} from "./chat-display-projection.core.js";
+  projectChatDisplayMessagesAsync,
+  projectChatDisplayMessagesWithStateAsync,
+} from "./chat-display-projection.async.js";
+import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
 import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import {
@@ -215,30 +215,12 @@ export class SessionHistorySseState {
       ...this.sentHistory.messages,
       message,
     ]);
-    // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
-    return () => {
-      memory?.assertCurrent();
-      return this.appendInlineMessage(
-        message,
-        messageSeq,
-        subagentCoordination,
-        resolveCronJobName,
-      );
-    };
-  }
-
-  private appendInlineMessage(
-    message: unknown,
-    messageSeq: number,
-    subagentCoordination: SubagentCoordinationDisplayResolver | undefined,
-    resolveCronJobName: (jobId: string) => string | undefined,
-  ): InlineSessionHistoryAppend | null {
     subagentCoordination?.assertCurrent?.();
     const hadPendingTurnBoundary = this.turnBoundaryPending;
     const nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
       message,
     ])[0];
-    const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
+    const nextProjection = await projectChatDisplayMessagesWithStateAsync([nextMessage], {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
@@ -248,7 +230,7 @@ export class SessionHistorySseState {
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
     // emitting a misleading single SSE item.
-    const projectedMessages = projectChatDisplayMessages(
+    const projectedMessages = await projectChatDisplayMessagesAsync(
       [...this.sentHistory.messages, nextMessage],
       {
         includeCommentaryFallbacks: true,
@@ -257,7 +239,19 @@ export class SessionHistorySseState {
         resolveCronJobName,
       },
     );
-    subagentCoordination?.assertCurrent?.();
+    // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
+    return () => {
+      memory?.assertCurrent();
+      subagentCoordination?.assertCurrent?.();
+      return this.appendInlineMessage(messageSeq, nextProjection, projectedMessages);
+    };
+  }
+
+  private appendInlineMessage(
+    messageSeq: number,
+    nextProjection: Awaited<ReturnType<typeof projectChatDisplayMessagesWithStateAsync>>,
+    projectedMessages: Awaited<ReturnType<typeof projectChatDisplayMessagesAsync>>,
+  ): InlineSessionHistoryAppend | null {
     this.rawTranscriptSeq = messageSeq;
     this.turnBoundaryPending = nextProjection.turnBoundaryPending;
     this.assistantErrorPending = nextProjection.assistantErrorPending;

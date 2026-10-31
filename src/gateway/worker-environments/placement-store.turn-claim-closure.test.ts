@@ -638,15 +638,15 @@ it.each(["root admission", "wrong generation"] as const)(
     const admission =
       scenario === "root admission" ? tryBeginGatewayRootWorkAdmission() : undefined;
     const target = { ...SESSION, storePath: path.join(root, "sessions.json") };
-    const published: unknown[] = [];
+    const publications: ReturnType<typeof projectSessionMessagePayload>[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => {
       if (update.sessionId === SESSION.sessionId) {
-        published.push(
+        publications.push(
           projectSessionMessagePayload({
             ...update,
             message: update.message,
             sessionKey: SESSION.sessionKey,
-          }).payload,
+          }),
         );
       }
     });
@@ -686,6 +686,7 @@ it.each(["root admission", "wrong generation"] as const)(
         },
       });
       expect(result.ok).toBe(true);
+      const published = (await Promise.all(publications)).map(({ payload }) => payload);
       expect(published).toHaveLength(2);
       expect(published[0]).toMatchObject({
         message: { content: [{ type: "text", text: userText }] },
@@ -706,6 +707,7 @@ it.each(["root admission", "wrong generation"] as const)(
       });
     } finally {
       unsubscribe();
+      await Promise.allSettled(publications);
       if (store.validateTurnClaim(claim)) {
         await store.releaseTurn(claim);
       }

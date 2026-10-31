@@ -18,10 +18,10 @@ import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { projectChatDisplayMessageAsync } from "./chat-display-projection.async.js";
 import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
 import { readPluginSteeringId } from "./chat-display-projection.history.js";
-import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
@@ -402,7 +402,9 @@ async function handleTranscriptUpdateBroadcast(
       !hasSessionChangeReceivers(connIds) ||
       (update.message !== undefined &&
         // This probe checks visibility only; it does not publish sender labels.
-        projectChatDisplayMessage(update.message, { resolveCronJobName: () => undefined }))
+        (await projectChatDisplayMessageAsync(update.message, {
+          resolveCronJobName: () => undefined,
+        })))
     ) {
       return;
     }
@@ -505,6 +507,33 @@ async function handleTranscriptUpdateBroadcast(
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
     message === undefined ? [] : [message],
   );
+  const messageProjectionParams =
+    message === undefined
+      ? undefined
+      : {
+          sessionKey,
+          ...(eventAgentId ? { agentId: eventAgentId } : {}),
+          message,
+          resolveCronJobName,
+          transcriptPosition,
+          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+          ...(messageSeq !== undefined ? { messageSeq } : {}),
+          ...(update.runId ? { runId: update.runId } : {}),
+        };
+  const projected =
+    messageProjectionParams && (await projectSessionMessagePayload(messageProjectionParams));
+  const historyReset = message === undefined || projected?.requiresHistoryReset;
+  const controlUiProjection =
+    !historyReset &&
+    !projected?.payload &&
+    messageProjectionParams &&
+    projection &&
+    readPluginSteeringId(message)
+      ? await projectSessionMessagePayload({
+          ...messageProjectionParams,
+          includePluginSteering: true,
+        })
+      : undefined;
   await withPreparedEventRow(
     projection,
     routingAgentId
@@ -572,55 +601,52 @@ async function handleTranscriptUpdateBroadcast(
               })
             : undefined,
       };
-      const messageProjectionParams =
-        message === undefined
-          ? undefined
-          : {
-              sessionKey,
-              ...(eventAgentId ? { agentId: eventAgentId } : {}),
-              message,
-              resolveCronJobName,
-              transcriptPosition,
-              ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-              ...(messageSeq !== undefined ? { messageSeq } : {}),
-              ...(update.runId ? { runId: update.runId } : {}),
-              sessionSnapshot,
-            };
-      const projected =
-        messageProjectionParams && projectSessionMessagePayload(messageProjectionParams);
       // Do not invalidate history for a recoverable attempt: a refetch could
       // publish its durable error row before the owning run settles.
       if (projected?.deferredAssistantError) {
         return;
       }
-      const historyReset = message === undefined || projected?.requiresHistoryReset;
       if (!historyReset && projected?.payload) {
-        params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
+        params.broadcastToConnIds(
+          "session.message",
+          {
+            ...projected.payload,
+            ...sessionSnapshot,
+            ...(update.runId ? { runId: update.runId } : {}),
+          },
+          connIds,
+          broadcastOptions,
+        );
         return;
       }
       if (
         !historyReset &&
         !projected?.payload &&
-        messageProjectionParams &&
+        controlUiProjection &&
         read &&
         projection &&
         readPluginSteeringId(message)
       ) {
-        const controlUiProjection = projectSessionMessagePayload({
-          ...messageProjectionParams,
-          includePluginSteering: true,
-        });
         if (controlUiProjection.payload) {
-          params.broadcastToConnIds("session.message", controlUiProjection.payload, connIds, {
-            sessionEventSubscriptionKeys: broadcastKeys,
-            prepareSessionProjection: prepareSessionEventProjection(projection, read, {
-              ancestors,
-              encodeMessage: true,
-              reuseEnvelope: true,
-              omitMessage,
-              controlUiOnly: true,
-            }),
-          });
+          params.broadcastToConnIds(
+            "session.message",
+            {
+              ...controlUiProjection.payload,
+              ...sessionSnapshot,
+              ...(update.runId ? { runId: update.runId } : {}),
+            },
+            connIds,
+            {
+              sessionEventSubscriptionKeys: broadcastKeys,
+              prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                ancestors,
+                encodeMessage: true,
+                reuseEnvelope: true,
+                omitMessage,
+                controlUiOnly: true,
+              }),
+            },
+          );
         }
       }
 

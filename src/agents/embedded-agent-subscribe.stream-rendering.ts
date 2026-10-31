@@ -5,7 +5,7 @@ import {
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import { parseReasoningTagAt } from "../../packages/markdown-core/src/reasoning-tag-parser.js";
+import { parseReasoningTagAt } from "../../packages/markdown-core/src/reasoning-tag-syntax.js";
 import {
   addReplyPayloadMediaFailures,
   appendReplyMediaFailures,

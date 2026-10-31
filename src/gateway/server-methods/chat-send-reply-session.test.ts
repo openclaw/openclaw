@@ -16,6 +16,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as displayProjection from "../chat-display-projection.async.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { createReplyTranscriptFixture } from "./chat-send-reply-dispatch.test-support.js";
 import { createChatReplySessionReader } from "./chat-send-reply-session.js";
@@ -58,6 +59,26 @@ it("distinguishes committed source replies from terminal deliveries", async () =
       source: "delivered",
       terminal: "delivered",
     });
+  });
+});
+
+it("keeps delivery pending when its snapshot changes while display visibility is prepared", async () => {
+  await withOpenClawTestState({ label: "chat-delivery-visibility-snapshot" }, async () => {
+    const { dispatch, append } = await createReplyTranscriptFixture();
+    dispatch.captureAgentTranscriptStart();
+    await append("answer", { role: "assistant", content: "Committed answer." });
+    const project = displayProjection.projectChatDisplayMessageAsync;
+    using preparation = vi
+      .spyOn(displayProjection, "projectChatDisplayMessageAsync")
+      .mockImplementationOnce(async (...args) => {
+        await append("next-input", { role: "user", content: "Continue with a new turn." });
+        return project(...args);
+      });
+    expect(await dispatch.resolveReplyDeliveryFacts()).toEqual({
+      source: "missing",
+      terminal: "pending",
+    });
+    expect(preparation).toHaveBeenCalledOnce();
   });
 });
 

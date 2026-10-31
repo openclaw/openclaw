@@ -36,10 +36,7 @@ export function projectModelSpecialTokens(
   let codeOwnershipPending =
     ownership?.definitions.some((definition) => definition.end > lastBlank) ?? false;
   const retainStart = ownership?.retainStart ?? text.length;
-  const hasLabelCandidate = ownership?.textSpans.some(
-    ([start, end]) =>
-      end > retainStart && text.slice(Math.max(start, retainStart), end).includes("["),
-  );
+  const hasLabelCandidate = ownership?.hasReferenceCandidate;
   const hasLineBreak = /[\r\n]/.test(text.slice(retainStart));
   let hasRetainedInlineCode = false;
   let out = "";

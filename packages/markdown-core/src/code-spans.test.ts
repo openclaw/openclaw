@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCodeSpanIndex } from "./code-spans.js";
-import { findMarkdownCodeRegions } from "./reasoning-tags.js";
+import { findMarkdownCodeRegions } from "./markdown-code-regions.js";
+import { findMarkdownCodeRegions as findCodeSourceRegions } from "./reasoning-tag-parser.js";
 
 describe("buildCodeSpanIndex", () => {
   it("supports backward queries over inline code that encloses a fence", () => {
@@ -144,7 +145,7 @@ describe("markdown-core code spans", () => {
     "maps authored indented content without container syntax: $text",
     ({ text, value, nested }) => {
       const ordinary = findMarkdownCodeRegions(text);
-      const regions = findMarkdownCodeRegions(text, { includeIndentedSource: true });
+      const regions = findCodeSourceRegions(text, { includeIndentedSource: true });
       expect(regions.map(({ start, end, block }) => ({ start, end, block }))).toEqual(ordinary);
       expect(regions).toHaveLength(1);
       const region = regions[0];
@@ -163,11 +164,11 @@ describe("markdown-core code spans", () => {
 
   it("retains inline source ownership when indented source mapping is also requested", () => {
     const text = "Use `A\nB` here.\n\n    C";
-    const inline = findMarkdownCodeRegions(text, { includeSource: true }).filter(
+    const inline = findCodeSourceRegions(text, { includeSource: true }).filter(
       (region) => !region.block,
     );
     expect(
-      findMarkdownCodeRegions(text, {
+      findCodeSourceRegions(text, {
         includeSource: true,
         includeIndentedSource: true,
       }).filter((region) => !region.block),

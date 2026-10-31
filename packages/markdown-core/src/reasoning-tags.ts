@@ -1,22 +1,19 @@
 // Markdown Core owns block-aware incremental reasoning-tag partitioning.
+import { findMarkdownCodeOwnership } from "./markdown-code-regions.js";
 import {
   findNextLineEnding,
   isInsideCode,
-  parseMarkdownOwnership,
   parseReasoningTagAt,
   parseReasoningTagName,
   reduceReasoningText,
   scanReasoningTags,
   type ReasoningTagTextDelta,
   type ReductionState,
-} from "./reasoning-tag-parser.js";
+} from "./reasoning-tag-syntax.js";
 
-export {
-  findMarkdownCodeRegions,
-  parseMarkdownOwnership,
-  scanReasoningTags,
-} from "./reasoning-tag-parser.js";
-export type { ReasoningTagTextDelta } from "./reasoning-tag-parser.js";
+export { findMarkdownCodeRegions } from "./markdown-code-regions.js";
+export { scanReasoningTags } from "./reasoning-tag-syntax.js";
+export type { ReasoningTagTextDelta } from "./reasoning-tag-syntax.js";
 
 const MARKDOWN_CONTAINER_LINE_RE = /^(?: {0,3}(?:>|[-+*][\t ]|\d{1,9}[.)][\t ]))/mu;
 
@@ -223,7 +220,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           return;
         }
         nonFinalFullParses += 1;
-        const ownership = parseMarkdownOwnership(source.slice(0, limit));
+        const ownership = findMarkdownCodeOwnership(source.slice(0, limit));
         nonFinalCodeSpans = ownership.codeSpans;
         nonFinalCodeSpansEnd = limit;
         nonFinalOpenEndedCode = nonFinalCodeSpans.some(([, spanEnd]) => spanEnd === limit);
@@ -299,7 +296,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
       const block = source.slice(0, end);
       const start = holdStart;
       if (!blockCodeSpans) {
-        const ownership = parseMarkdownOwnership(block);
+        const ownership = findMarkdownCodeOwnership(block);
         blockCodeSpans = ownership.codeSpans;
         blockRetainStart = ownership.retainStart;
       }
@@ -447,7 +444,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           if (!reusableCodeSpans) {
             nonFinalFullParses += 1;
           }
-          const ownership = reusableCodeSpans ? undefined : parseMarkdownOwnership(source);
+          const ownership = reusableCodeSpans ? undefined : findMarkdownCodeOwnership(source);
           nonFinalCloseReparseUsed ||= mayResolveHeldReasoning;
           const codeSpans = reusableCodeSpans ?? ownership?.codeSpans ?? [];
           const retainStart = reusableCodeSpans
@@ -506,7 +503,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         nonFinalFullParses < 1
       ) {
         nonFinalFullParses += 1;
-        const ownership = parseMarkdownOwnership(source);
+        const ownership = findMarkdownCodeOwnership(source);
         const codeSpans = ownership.codeSpans;
         nonFinalRetainStart = ownership.retainStart;
         nonFinalOpenEndedCode = codeSpans.some(([, spanEnd]) => spanEnd === source.length);

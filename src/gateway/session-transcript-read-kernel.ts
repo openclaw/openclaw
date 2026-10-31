@@ -27,15 +27,13 @@ import {
   type TranscriptAnchorPageOptions,
 } from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
-import {
-  createChatHistoryRecoveryProjection,
-  isPendingAssistantError,
-  projectChatDisplayMessagesWithState,
-} from "./chat-display-projection.core.js";
+import { projectChatDisplayMessagesWithStateAsync } from "./chat-display-projection.async.js";
+import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
+import { createAsyncChatHistoryRecoveryProjection } from "./chat-history-recovery.async.js";
 import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   readChatHistoryMessageId,
@@ -341,12 +339,12 @@ export async function filterSessionMessageHistoryVisibility(
         : readers.readSessionMessagesAroundIdWithStatsAsync,
     };
     const createRecovery = () =>
-      createChatHistoryRecoveryProjection({
+      createAsyncChatHistoryRecoveryProjection({
         maxChars: MAX_PAYLOAD_BYTES,
         subagentCoordination: readers.subagentCoordination,
       });
     const recovery = createRecovery();
-    recovery.append([result.message]);
+    await recovery.append([result.message]);
     const context = await readChatHistoryRecoveryContext({
       messages: [result.message],
       createRecovery: () => recovery,
@@ -357,7 +355,7 @@ export async function filterSessionMessageHistoryVisibility(
       sessionStartedAt: visibility.sessionStartedAt,
     });
     // The scanner may stop at a user boundary before appending its final chunk.
-    const projected = projectChatDisplayMessagesWithState([result.message, ...context], {
+    const projected = await projectChatDisplayMessagesWithStateAsync([result.message, ...context], {
       maxChars: MAX_PAYLOAD_BYTES,
       subagentCoordination: readers.subagentCoordination,
       // Visibility does not need names; the response owner prepares forwarded labels.
@@ -372,7 +370,7 @@ export async function filterSessionMessageHistoryVisibility(
     return { ...result, message: projectedMessage };
   }
   if (visibility.requireVisible) {
-    const projected = projectChatDisplayMessagesWithState([result.message], {
+    const projected = await projectChatDisplayMessagesWithStateAsync([result.message], {
       maxChars: MAX_PAYLOAD_BYTES,
       includeCommentaryFallbacks: true,
       subagentCoordination: readers.subagentCoordination,

@@ -4,8 +4,8 @@ import {
   normalizeAssistantPhase,
   parseAssistantTextSignature,
 } from "../chat-message-content.js";
-import { findCodeRegions, isInsideCode } from "./code-regions.js";
-import { toolCallXmlTextFilter } from "./tool-call-xml.js";
+import { findCodeRegions, isInsideCode } from "./code-ranges.js";
+import { stripToolCallXmlTagsInternal } from "./tool-call-xml-transform.js";
 
 /** Display-only text groups; the source message and native calls remain unchanged. */
 export function findNativeToolMarkerTextBlocks(message: unknown): ReadonlySet<number> {
@@ -33,9 +33,11 @@ export function findNativeToolMarkerTextBlocks(message: unknown): ReadonlySet<nu
       block?.type === "toolCall" &&
       !phased &&
       text.includes("<") &&
-      !toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, true)
-        .transform(text.trimEnd())
-        .trim() &&
+      !stripToolCallXmlTagsInternal(
+        text.trimEnd(),
+        { stripFunctionCallsXmlPayloads: true },
+        true,
+      ).trim() &&
       !isInsideCode(
         markdownPrefix.length + text.indexOf("<"),
         findCodeRegions(markdownPrefix + text),

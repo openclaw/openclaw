@@ -179,10 +179,10 @@ it("batches automation names across history reads after rename and deletion with
       );
       expect(projected.payload?.message).toMatchObject(expected[0]!);
     }
-    await measure(() => {
-      expect(() => projectSessionMessagePayload({ message, sessionKey: scope.sessionKey })).toThrow(
-        /prepared/iu,
-      );
+    await measure(async () => {
+      await expect(
+        projectSessionMessagePayload({ message, sessionKey: scope.sessionKey }),
+      ).rejects.toThrow(/prepared/iu);
       expect(projectForwardedMessages([])).toEqual([]);
       const ordinary = [{ role: "user", content: "No automation." }];
       expect(projectForwardedMessages(ordinary)).toBe(ordinary);

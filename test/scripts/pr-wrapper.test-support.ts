@@ -155,7 +155,6 @@ export function linkPrWrapperDependencies(destination: string): void {
   for (const dependency of [
     "mdast-util-from-markdown",
     "mdast-util-gfm-table",
-    "micromark",
     "micromark-extension-gfm-table",
   ]) {
     const linkedDependency = join(destination, "packages/markdown-core/node_modules", dependency);

@@ -18,39 +18,47 @@ const message = {
 const project = (raw: unknown, options: Partial<Omit<ProjectionOptions, "message">> = {}) =>
   projectSessionMessagePayload({ message: raw, sessionKey: mainKey, ...options });
 const metadata = (raw: unknown) => asOptionalRecord(asOptionalRecord(raw)?.["__openclaw"]);
-function projections(raw: unknown, entry: unknown, at: Position, key = mainKey) {
+async function projections(raw: unknown, entry: unknown, at: Position, key = mainKey) {
   return [
     projectChatDisplayMessage(projectEntry(entry, 2, at)),
-    project(raw, { messageId: "entry", messageSeq: 2, transcriptPosition: at, sessionKey: key })
-      .payload?.message,
+    (
+      await project(raw, {
+        messageId: "entry",
+        messageSeq: 2,
+        transcriptPosition: at,
+        sessionKey: key,
+      })
+    ).payload?.message,
   ];
 }
 
-it.each([false, true])("keeps plugin steering audience-specific (delta=%s)", (historyDelta) => {
-  const raw = {
-    role: "user",
-    display: false,
-    content: "Model instructions: be concise",
-    provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
-    __openclaw: {
-      pluginSteering: { pluginId: "reviewer", pluginName: "Reviewer", displayText: "Be concise" },
-    },
-  };
-  const original = structuredClone(raw);
-  expect(project(raw, { historyDelta }).payload).toBeUndefined();
-  expect(project(raw, { historyDelta, includePluginSteering: true }).payload).toHaveProperty(
-    "message.content",
-    [{ type: "text", text: "Be concise" }],
-  );
-  expect(project(raw, { historyDelta }).payload).toBeUndefined();
-  expect(raw).toEqual(original);
-});
+it.each([false, true])(
+  "keeps plugin steering audience-specific (delta=%s)",
+  async (historyDelta) => {
+    const raw = {
+      role: "user",
+      display: false,
+      content: "Model instructions: be concise",
+      provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
+      __openclaw: {
+        pluginSteering: { pluginId: "reviewer", pluginName: "Reviewer", displayText: "Be concise" },
+      },
+    };
+    const original = structuredClone(raw);
+    expect((await project(raw, { historyDelta })).payload).toBeUndefined();
+    expect(
+      (await project(raw, { historyDelta, includePluginSteering: true })).payload,
+    ).toHaveProperty("message.content", [{ type: "text", text: "Be concise" }]);
+    expect((await project(raw, { historyDelta })).payload).toBeUndefined();
+    expect(raw).toEqual(original);
+  },
+);
 
 it.each([
   [[], true],
   [[{ type: "text", text: "Useful partial answer" }], false],
   [[{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }], false],
-] as const)("defers diagnostics: %j", (content, pending) => {
+] as const)("defers diagnostics: %j", async (content, pending) => {
   const raw = {
     role: "assistant",
     stopReason: "error",
@@ -59,7 +67,7 @@ it.each([
     __openclaw: { runId: "recovering-run" },
   };
   const original = structuredClone(raw);
-  const result = project(raw);
+  const result = await project(raw);
   expect(result.deferredAssistantError === true).toBe(pending);
   expect(Boolean(result.payload)).toBe(!pending);
   expect(result.projectionState).toMatchObject({ assistantErrorPending: true });
@@ -71,7 +79,7 @@ it.each([
   expect(raw).toEqual(original);
 });
 
-it("keeps nested activity ownership distinct from entry deduplication in history and live events", () => {
+it("keeps nested activity ownership distinct from entry deduplication in history and live events", async () => {
   const activity = {
     ...createNestedToolActivity({
       runId: "run",
@@ -90,7 +98,7 @@ it("keeps nested activity ownership distinct from entry deduplication in history
     idempotencyKey: "key",
   };
   const expected = { id: "entry", sequence: 2, runId: "run", idempotencyKey: "key", sendId: null };
-  for (const projected of projections(
+  for (const projected of await projections(
     activity,
     { type: "message", id: "entry", message: activity },
     position,
@@ -107,29 +115,32 @@ it.each([
   [position, false],
   [undefined, true],
   [position, true],
-] as const)("uses only reader-supplied placement (%j, custom=%s)", (transcriptPosition, custom) => {
-  const customMessage = {
-    role: "custom",
-    customType: "run-failed-before-reply",
-    content: "This turn ended before a reply.",
-    display: true,
-    details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
-  };
-  const timestamp = "2026-09-08T00:00:00.000Z";
-  const raw = custom ? { ...customMessage, timestamp: Date.parse(timestamp) } : message;
-  const entry = custom
-    ? { ...customMessage, type: "custom_message", id: "entry", timestamp }
-    : { type: "message", id: "entry", message };
-  for (const projected of projections(raw, entry, transcriptPosition)) {
-    expect(metadata(projected)?.transcriptPosition).toEqual(transcriptPosition);
-    expect(metadata(projected)).toMatchObject({ id: "entry", seq: 2 });
-    if (custom) {
-      expect(identity(projected)?.runId).toBe("failed-run");
-      expect(projected).not.toHaveProperty("details");
+] as const)(
+  "uses only reader-supplied placement (%j, custom=%s)",
+  async (transcriptPosition, custom) => {
+    const customMessage = {
+      role: "custom",
+      customType: "run-failed-before-reply",
+      content: "This turn ended before a reply.",
+      display: true,
+      details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
+    };
+    const timestamp = "2026-09-08T00:00:00.000Z";
+    const raw = custom ? { ...customMessage, timestamp: Date.parse(timestamp) } : message;
+    const entry = custom
+      ? { ...customMessage, type: "custom_message", id: "entry", timestamp }
+      : { type: "message", id: "entry", message };
+    for (const projected of await projections(raw, entry, transcriptPosition)) {
+      expect(metadata(projected)?.transcriptPosition).toEqual(transcriptPosition);
+      expect(metadata(projected)).toMatchObject({ id: "entry", seq: 2 });
+      if (custom) {
+        expect(identity(projected)?.runId).toBe("failed-run");
+        expect(projected).not.toHaveProperty("details");
+      }
     }
-  }
-  expect(message["__openclaw"].transcriptPosition.source).toBe("untrusted");
-});
+    expect(message["__openclaw"].transcriptPosition.source).toBe("untrusted");
+  },
+);
 
 it.each(["compaction", "reset"])("keeps %s markers in the physical coordinate space", (type) => {
   const run = { runId: "run-compaction", itemId: "item-compaction" };

@@ -6,7 +6,8 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { resolveAssistantIdentityName } from "../assistant-identity.js";
-import { projectChatDisplayMessage } from "../chat-display-projection.js";
+import { runChatTextTask, shouldOffloadChatText } from "../chat-display-projection.async.js";
+import { projectChatDisplayMessage } from "../chat-display-projection.core.js";
 import {
   readSessionMessageByIdAsync,
   type SessionTranscriptReadScope,
@@ -65,6 +66,26 @@ function extractReplyTargetText(entry: Record<string, unknown>): string | undefi
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
+/** Projection and code-aware cleanup must share the same CPU boundary. */
+export function projectChatSendReplyContextBody(message: unknown) {
+  const displayMessage = projectChatDisplayMessage(message, {
+    // Prompt context discards forwarded sender labels.
+    resolveCronJobName: () => undefined,
+  });
+  if (!displayMessage) {
+    return undefined;
+  }
+  const rawBody = extractReplyTargetText(displayMessage)?.trim();
+  const assistant = displayMessage.role === "assistant";
+  const body =
+    rawBody && assistant
+      ? sanitizeAssistantVisibleTextWithProfile(rawBody, "history").trim()
+      : rawBody;
+  return body
+    ? { body: truncateUtf16Safe(body, REPLY_CONTEXT_BODY_MAX_CHARS), assistant }
+    : undefined;
+}
+
 /** Copies hydrated reply fields onto the inbound context without clobbering unset keys. */
 export function applyChatSendReplyContextFields(
   ctx: MsgContext,
@@ -109,31 +130,20 @@ export async function resolveChatSendReplyContext(
     if (!resolved.found) {
       return fields;
     }
-    // Hydrate only what webchat displays: project the stored message through the
-    // same chat.history display normalization so envelope wrappers, runtime
-    // context, tool payloads, and reasoning-only content stay out of the prompt.
-    const displayMessage = projectChatDisplayMessage(resolved.message, {
-      // Reply context uses the assistant identity below and discards forwarded sender labels.
-      resolveCronJobName: () => undefined,
-    });
-    if (!displayMessage) {
+    let prepared: ReturnType<typeof projectChatSendReplyContextBody>;
+    if (shouldOffloadChatText(resolved.message)) {
+      const result = await runChatTextTask({ kind: "reply-context", message: resolved.message });
+      prepared = result.value;
+    } else {
+      prepared = projectChatSendReplyContextBody(resolved.message);
+    }
+    if (!prepared) {
       return fields;
     }
-    const rawBody = extractReplyTargetText(displayMessage)?.trim();
-    // Assistant targets additionally scrub tool-call markers, thinking tags,
-    // and internal scaffolding, matching stored-message history text handling.
-    const body =
-      rawBody && displayMessage.role === "assistant"
-        ? sanitizeAssistantVisibleTextWithProfile(rawBody, "history").trim()
-        : rawBody;
-    if (!body) {
-      return fields;
-    }
-    fields.ReplyToBody = truncateUtf16Safe(body, REPLY_CONTEXT_BODY_MAX_CHARS);
-    fields.ReplyToSender =
-      displayMessage.role === "assistant"
-        ? (await resolveAssistantIdentityName({ cfg: params.cfg, agentId: params.agentId })).name
-        : params.userSenderLabel?.trim() || "User";
+    fields.ReplyToBody = prepared.body;
+    fields.ReplyToSender = prepared.assistant
+      ? (await resolveAssistantIdentityName({ cfg: params.cfg, agentId: params.agentId })).name
+      : params.userSenderLabel?.trim() || "User";
     return fields;
   } catch (err) {
     params.warn?.(`chat.send reply context hydration failed for ${replyToId}: ${String(err)}`);
