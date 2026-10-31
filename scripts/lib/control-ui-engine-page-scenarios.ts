@@ -11,6 +11,8 @@ import type { UserProfile } from "../../packages/gateway-protocol/src/schema/use
 import type { loadVoiceWakeConfig } from "../../src/infra/voicewake.ts";
 import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
 import { APP_ROUTE_IDS, pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
+import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
+import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import { waitForControlUiRoute } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
@@ -337,8 +339,8 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     action: click("openclaw-channels-page button.channels-item", ".channels-detail"),
   },
   "cloud-workers": {
-    ready: "openclaw-cloud-workers-page .cloud-environments__advanced > summary",
-    rows: { selector: 'openclaw-cloud-workers-page button[aria-label^="Edit"]', minimum: 30 },
+    ready:
+      'openclaw-cloud-workers-page .settings-empty a[href="https://docs.openclaw.ai/gateway/cloud-workers"]',
     action: {
       label: "Expand advanced cloud environment settings and edit a machine profile",
       run: async (page) => {
@@ -347,6 +349,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
         );
         assert.equal(await editor.filter({ visible: true }).count(), 0);
         await page.locator(".cloud-environments__advanced > summary").click();
+        await page.waitForFunction(
+          () =>
+            document.querySelectorAll('openclaw-cloud-workers-page button[aria-label^="Edit"]')
+              .length === 30,
+        );
         await page
           .locator('openclaw-cloud-workers-page button[aria-label^="Edit"]')
           .first()
@@ -524,8 +531,13 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     ready: ".memory-import__collection",
     rows: { selector: ".memory-import__collection", minimum: 10 },
     action: {
-      label: "Deselect one 10-item memory collection and present 90 selected items",
+      label: "Review 10 memory files, then deselect their collection and present 90 selected items",
       run: async (page) => {
+        const review = page.locator(".memory-import__collection details").first();
+        assert.equal(await review.evaluate((element) => element.hasAttribute("open")), false);
+        await review.locator("summary").click();
+        await review.locator("li").last().waitFor({ state: "visible" });
+        assert.equal(await review.locator("li").count(), 10);
         const control = page
           .locator('.memory-import__collection-choice input[type="checkbox"]')
           .first();
@@ -541,7 +553,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
           true,
         );
         await frames(page);
-        return { selectedItems: 90 };
+        return { selectedItems: 90, reviewedFiles: 10 };
       },
     },
   },
@@ -1415,6 +1427,34 @@ async function ready(page: Page, id: RouteId, definition: PageDefinition) {
       definition.rows,
     );
   }
+  if (id === "cloud-workers") {
+    await page.waitForFunction(() => {
+      const reads: { rpcs: ColdLoadRpcRecord[]; pendingMethods: string[]; queued: number } =
+        Reflect.get(window, "__coldLoad").read();
+      const completed = reads.rpcs.filter(
+        (rpc) =>
+          rpc.method === "environments.list" && rpc.responseOk && rpc.dispatchMs !== undefined,
+      );
+      return (
+        reads.queued === 0 &&
+        !reads.pendingMethods.includes("environments.list") &&
+        completed.some(
+          ({ params }) =>
+            params !== null &&
+            typeof params === "object" &&
+            "projection" in params &&
+            params.projection === "profiles",
+        ) &&
+        completed.some(
+          ({ params }) =>
+            params !== null &&
+            typeof params === "object" &&
+            "includePreparedDetails" in params &&
+            params.includePreparedDetails === true,
+        )
+      );
+    });
+  }
   await frames(page);
 }
 export async function collectEnginePageStructure(page: Page): Promise<InteractionEvidence> {
@@ -1458,13 +1498,42 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
                 (row) => row.getAttribute("aria-setsize") === String(rows.minimum),
               ),
             );
+          let cloudReadsReady = true;
+          if (routeId === "cloud-workers") {
+            const reads: { rpcs: ColdLoadRpcRecord[]; pendingMethods: string[]; queued: number } =
+              Reflect.get(window, "__coldLoad").read();
+            const completed = reads.rpcs.filter(
+              (rpc) =>
+                rpc.method === "environments.list" &&
+                rpc.responseOk &&
+                rpc.dispatchMs !== undefined,
+            );
+            cloudReadsReady =
+              reads.queued === 0 &&
+              !reads.pendingMethods.includes("environments.list") &&
+              completed.some(
+                ({ params }) =>
+                  params !== null &&
+                  typeof params === "object" &&
+                  "projection" in params &&
+                  params.projection === "profiles",
+              ) &&
+              completed.some(
+                ({ params }) =>
+                  params !== null &&
+                  typeof params === "object" &&
+                  "includePreparedDetails" in params &&
+                  params.includePreparedDetails === true,
+              );
+          }
           const pageReady =
             snapshot?.routeReady &&
             route?.status === "success" &&
             route.matches[0]?.routeId === landed &&
             route.pendingMatches.length === 0 &&
             visible &&
-            rowsReady;
+            rowsReady &&
+            cloudReadsReady;
           readyFrames = pageReady ? readyFrames + 1 : 0;
           if (readyFrames >= 2) {
             resolve(performance.now() - started);
@@ -1502,6 +1571,17 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       explicitOnly: true,
       route: "/new",
       fixtureOverrides: createPageFixture(definition, id),
+      ...(id === "cloud-workers"
+        ? {
+            initScript: createColdLoadProbeInitScript({
+              ownerProbes: false,
+              sidebarCounters: false,
+              latencyMs: 0,
+              frameGapMs: 0,
+              events: [],
+            }),
+          }
+        : {}),
       ...(id === "workboard" || id === "plugin" ? { fixture: { workboardResources: true } } : {}),
       ...(definition.source?.createRequestHandlers
         ? { createRequestHandlers: definition.source.createRequestHandlers }
@@ -1552,6 +1632,80 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
         return evidence;
       },
     };
+    if (id === "search") {
+      const firstAdvancedOpen: EngineScenario = {
+        ...common,
+        id: "page-search-advanced-open",
+        expected: "First opening of Search Advanced settings presents the config fields.",
+        prepare: enter,
+        run: async (page) => {
+          const advanced = page.locator(".config-advanced-disclosure");
+          const fields = advanced.locator(":scope > .settings-group > .settings-row");
+          const inputs = advanced.locator("input, select, textarea, button");
+          assert.equal(await advanced.getAttribute("open"), null);
+          const mountedFieldsBefore = await fields.count();
+          await advanced.locator(":scope > summary").click();
+          // The base schema has three numeric fields and the native-search object (ten controls).
+          await page.waitForFunction(() => {
+            const details = document.querySelector<HTMLDetailsElement>(
+              ".config-advanced-disclosure",
+            );
+            return (
+              details?.open &&
+              details.querySelectorAll(":scope > .settings-group > .settings-row").length === 4 &&
+              details.querySelectorAll("input, select, textarea, button").length === 10
+            );
+          });
+          await frames(page);
+          return {
+            opened: true,
+            mountedFieldsBefore,
+            mountedFields: await fields.count(),
+            mountedInputs: await inputs.count(),
+          };
+        },
+      };
+      return [visit, action, leave, firstAdvancedOpen];
+    }
+    if (id === "terminal") {
+      const composerInput: EngineScenario = {
+        ...common,
+        id: "page-terminal-composer-input",
+        expected: "Type ten characters and submit through an already running terminal composer.",
+        prepare: async (page, gateway) => {
+          await enter(page);
+          await definition.action!.run(page, gateway);
+          await page.evaluate(() => document.fonts.ready.then(() => undefined));
+          await frames(page);
+        },
+        run: async (page, gateway) => {
+          const command = "echo warm0";
+          const input = page.locator("openclaw-terminal-page .tp-composer input");
+          assert.equal(await input.inputValue(), "");
+          const openedBefore = (await gateway.getRequests("terminal.open")).length;
+          const commandMatch = { data: command };
+          const enterMatch = { data: "\r" };
+          const commandBefore = (await gateway.getRequests("terminal.input", commandMatch)).length;
+          const enterBefore = (await gateway.getRequests("terminal.input", enterMatch)).length;
+          await input.pressSequentially(command);
+          await input.press("Enter");
+          await gateway.waitForRequest("terminal.input", {
+            after: commandBefore,
+            match: commandMatch,
+          });
+          await gateway.waitForRequest("terminal.input", { after: enterBefore, match: enterMatch });
+          await page.waitForFunction(
+            () =>
+              document.querySelector<HTMLInputElement>("openclaw-terminal-page .tp-composer input")
+                ?.value === "",
+          );
+          await frames(page);
+          assert.equal((await gateway.getRequests("terminal.open")).length, openedBefore);
+          return { typedCharacters: command.length, inputSent: true };
+        },
+      };
+      return [visit, action, leave, composerInput];
+    }
     return [visit, action, leave];
   });
 }

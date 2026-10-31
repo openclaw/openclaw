@@ -341,6 +341,13 @@ matching their bundle's Workboard source. Run Chromium at `--cpu-throttle 1` and
 with `--steps page-<route>-visit,page-<route>-action,page-<route>-leave`.
 Use `--pages --page-phases visit` to validate every route's loaded state before
 the `--page-phases action,leave` sweep; the default includes all three phases.
+Measure first-use costs separately with
+`--steps page-agent-selector-first-open,page-search-advanced-open,page-terminal-composer-input`.
+These explicit steps are excluded from normal `--pages` runs. Keep first-open
+results separate from route visits and warm interactions; the Terminal step
+creates its session before timing ten typed characters and submission.
+The Memory Import action now reviews a ten-file collection before deselecting
+it, so its results are not directly comparable with older deselect-only timings.
 Virtualized inventories use their logical row count for readiness, including
 Cron's first 50 loaded jobs, rather than requiring every row to be mounted.
 The page table includes longest observed main-thread task, standard CLS, all
