@@ -9,7 +9,6 @@ import {
   type ProviderContext,
   type ProviderModel,
   type SimpleStreamOptions,
-  type VideoContent,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -29,6 +28,10 @@ import {
   buildGuardedModelFetch,
   consumeGoogleGenerateContentStream,
   projectGoogleMessages,
+  createGoogleVideoPlaceholder,
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
   requiresGoogleToolCallId,
   convertGoogleTools,
   type GoogleStreamChunk as GoogleSseChunk,
@@ -111,10 +114,8 @@ const GOOGLE_NATIVE_VIDEO_MIME: ReadonlySet<string> = new Set([
   "video/wmv",
   "video/3gpp",
 ]);
-const GOOGLE_VIDEO_SLOT_OMISSION = "(video omitted: native video slot unavailable)";
 const GOOGLE_VIDEO_MIME_OMISSION = "(video omitted: unsupported Google video MIME type)";
 const GOOGLE_REQUEST_BYTES_EXCLUSIVE = 20_000_000;
-type GoogleVideoSlots = Map<Record<string, unknown>, VideoContent>;
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
@@ -293,11 +294,8 @@ export function buildGoogleGenerativeAiParams(
     ) as ProviderContext["messages"],
     replay: "managed",
     requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
-    videoPart: (video) => {
-      const placeholder = { text: GOOGLE_VIDEO_SLOT_OMISSION };
-      videoSlots?.set(placeholder, video);
-      return placeholder;
-    },
+    videoPart: (video) =>
+      createGoogleVideoPlaceholder(video, videoSlots, { text: GOOGLE_VIDEO_SLOT_OMISSION }),
   });
   const params: GoogleGenerateContentRequest = { contents };
   const cachedContent =
@@ -529,33 +527,24 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           params = nextParams as GoogleGenerateContentRequest;
         }
         const trustedVideoSlots: Record<string, unknown>[] = [];
-        const visit = (value: unknown): void => {
-          if (Array.isArray(value)) {
-            value.forEach(visit);
-            return;
-          }
-          if (!isRecord(value)) {
-            return;
-          }
-          const video = videoSlots.get(value);
-          if (video) {
+        materializeGoogleVideoSlots(
+          params,
+          videoSlots,
+          (slot, video) => {
             if (!GOOGLE_NATIVE_VIDEO_MIME.has(video.mimeType)) {
-              replaceGooglePartWithText(value, GOOGLE_VIDEO_MIME_OMISSION);
+              replaceGooglePartWithText(slot, GOOGLE_VIDEO_MIME_OMISSION);
               return;
             }
-            Object.keys(value).forEach((key) => Reflect.deleteProperty(value, key));
-            value.inlineData = { mimeType: video.mimeType, data: video.data };
-            trustedVideoSlots.push(value);
-            return;
-          }
-          const inlineData = isRecord(value.inlineData) ? value.inlineData : undefined;
-          if (normalizeLowercaseStringOrEmpty(inlineData?.mimeType).startsWith("video/")) {
-            replaceGooglePartWithText(value, GOOGLE_VIDEO_SLOT_OMISSION);
-            return;
-          }
-          Object.values(value).forEach(visit);
-        };
-        visit(params);
+            slot.inlineData = { mimeType: video.mimeType, data: video.data };
+            trustedVideoSlots.push(slot);
+          },
+          (part) => {
+            const inlineData = isRecord(part.inlineData) ? part.inlineData : undefined;
+            if (normalizeLowercaseStringOrEmpty(inlineData?.mimeType).startsWith("video/")) {
+              replaceGooglePartWithText(part, GOOGLE_VIDEO_SLOT_OMISSION);
+            }
+          },
+        );
         let requestUrl: string;
         if (kind === "google-vertex") {
           const project = encodeURIComponent(resolveGoogleVertexProject(options));

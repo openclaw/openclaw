@@ -48,6 +48,11 @@ import {
   type GoogleApiType,
   type GoogleProviderOptions,
 } from "./google-shared.js";
+import {
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
+} from "./google-video-slots.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 let toolCallCounter = 0;
@@ -109,7 +114,8 @@ export const streamGoogleInteractions: StreamFunction<
       const providerContext = providerInput.includes("video")
         ? await resolveProviderContext(context, options)
         : context;
-      let body = buildGoogleInteractionsParams(model, providerContext, options);
+      const videoSlots: GoogleVideoSlots = new Map();
+      let body = buildGoogleInteractionsParams(model, providerContext, options, videoSlots);
       const nextBody = await options?.onPayload?.(body, model);
       if (nextBody !== undefined) {
         if (!isGoogleInteractionsRequestBody(nextBody)) {
@@ -117,6 +123,39 @@ export const streamGoogleInteractions: StreamFunction<
         }
         body = nextBody;
       }
+      const optionRecord = asRecord(options);
+      const metadata = asRecord(optionRecord.videoMetadata ?? optionRecord.video_metadata);
+      const processing: Record<string, unknown> = {};
+      for (const [camel, snake] of [
+        ["startOffset", "start_offset"],
+        ["endOffset", "end_offset"],
+        ["fps", "fps"],
+      ] as const) {
+        const value = metadata[camel] ?? metadata[snake];
+        if (value !== undefined) {
+          processing[snake] = value;
+        }
+      }
+      materializeGoogleVideoSlots(
+        body,
+        videoSlots,
+        (slot, video) => {
+          Object.assign(slot, {
+            type: "video",
+            mime_type: video.mimeType,
+            data: video.data,
+            ...(Object.keys(processing).length > 0
+              ? { processing: { type: "static", ...processing } }
+              : {}),
+          });
+        },
+        (part) => {
+          if (part.type === "video") {
+            Object.keys(part).forEach((key) => Reflect.deleteProperty(part, key));
+            Object.assign(part, { type: "text", text: GOOGLE_VIDEO_SLOT_OMISSION });
+          }
+        },
+      );
 
       let baseUrl = (model.baseUrl || "https://generativelanguage.googleapis.com/v1beta")
         .trim()

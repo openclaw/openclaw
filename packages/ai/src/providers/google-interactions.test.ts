@@ -9,6 +9,7 @@ import type {
   Model,
   ToolCall,
 } from "../types.js";
+import type { GoogleInteractionsRequestBody } from "./google-interactions-request.js";
 import { streamGoogleInteractions, streamSimpleGoogleInteractions } from "./google-interactions.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 import { makeStallingStream } from "./provider-stream.test-support.js";
@@ -76,36 +77,128 @@ describe("google-interactions provider", () => {
     messages: [{ role: "user", content: "Hello", timestamp: 0 }],
   };
 
-  it("sends native video from the transient provider context handoff", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      sseResponse(completedSse()),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const handoff = vi.fn(async () => ({
-      messages: [
-        {
-          role: "user" as const,
-          timestamp: 0,
-          content: [{ type: "video" as const, mimeType: "video/mp4", data: "dmlkZW8=" }],
+  it.each([
+    { options: {}, processing: undefined },
+    {
+      options: { videoMetadata: { startOffset: 0, endOffset: 10, fps: 0.5 } },
+      processing: { type: "static", start_offset: 0, end_offset: 10, fps: 0.5 },
+    },
+    {
+      options: { video_metadata: { start_offset: 2, end_offset: 5 } },
+      processing: { type: "static", start_offset: 2, end_offset: 5 },
+    },
+  ])(
+    "sends native video from the transient provider context handoff ($options)",
+    async ({ options, processing }) => {
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+        sseResponse(completedSse()),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const handoff = vi.fn(async () => ({
+        messages: [
+          {
+            role: "user" as const,
+            timestamp: 0,
+            content: [{ type: "video" as const, mimeType: "video/mp4", data: "dmlkZW8=" }],
+          },
+        ],
+      }));
+      const stream = streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+        apiKey: "test-key",
+        ...options,
+        [PROVIDER_MODEL_INPUT]: ["text", "image", "video"],
+        [PROVIDER_CONTEXT_HANDOFF]: handoff,
+      });
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(handoff).toHaveBeenCalledOnce();
+      expect(requestJson(fetchMock.mock.calls[0]?.[1]?.body)).toMatchObject({
+        input: [
+          {
+            type: "user_input",
+            content: [
+              {
+                type: "video",
+                mime_type: "video/mp4",
+                data: "dmlkZW8=",
+                ...(processing ? { processing } : {}),
+              },
+            ],
+          },
+        ],
+      });
+    },
+  );
+
+  it.each(["mutate", "replace"] as const)(
+    "isolates native video from payload hooks that %s the request",
+    async (mode) => {
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+        sseResponse(completedSse()),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      let hookPayload: unknown;
+      const stream = streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+        apiKey: "test-key",
+        [PROVIDER_MODEL_INPUT]: ["text", "image", "video"],
+        [PROVIDER_CONTEXT_HANDOFF]: async () => ({
+          messages: [
+            {
+              role: "user",
+              timestamp: 0,
+              content: [0, 1, 2].map(() => ({
+                type: "video" as const,
+                mimeType: "video/mp4",
+                data: "cHJpdmF0ZS12aWRlbw==",
+              })),
+            },
+          ],
+        }),
+        onPayload: (payload) => {
+          hookPayload = structuredClone(payload);
+          // SAFETY: onPayload receives the Interactions request built by this transport.
+          const body = payload as GoogleInteractionsRequestBody;
+          const step = body.input[0];
+          if (step?.type !== "user_input") {
+            throw new Error("expected user input");
+          }
+          const first = step.content[0];
+          const second = step.content[1];
+          if (!first || !second) {
+            throw new Error("expected video slots");
+          }
+          Object.assign(first, { text: "edited placeholder", data: "injected" });
+          step.content[1] = { ...second };
+          step.content[2] = { type: "text", text: "hook replacement" };
+          step.content.push({ type: "video", mime_type: "video/mp4", data: "injected" });
+          return mode === "replace" ? { ...body, input: [...body.input] } : undefined;
         },
-      ],
-    }));
-    const stream = streamGoogleInteractions(makeInteractionsModel(), basicContext, {
-      apiKey: "test-key",
-      [PROVIDER_MODEL_INPUT]: ["text", "image", "video"],
-      [PROVIDER_CONTEXT_HANDOFF]: handoff,
-    });
-    expect((await stream.result()).stopReason).toBe("stop");
-    expect(handoff).toHaveBeenCalledOnce();
-    expect(requestJson(fetchMock.mock.calls[0]?.[1]?.body)).toMatchObject({
-      input: [
-        {
-          type: "user_input",
-          content: [{ type: "video", mime_type: "video/mp4", data: "dmlkZW8=" }],
-        },
-      ],
-    });
-  });
+      });
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(JSON.stringify(hookPayload)).not.toContain("cHJpdmF0ZS12aWRlbw==");
+      expect(hookPayload).toMatchObject({
+        input: [
+          {
+            content: Array.from({ length: 3 }, () => ({
+              type: "text",
+              text: "(video omitted: native video slot unavailable)",
+            })),
+          },
+        ],
+      });
+      expect(requestJson(fetchMock.mock.calls[0]?.[1]?.body)).toMatchObject({
+        input: [
+          {
+            content: [
+              { type: "video", mime_type: "video/mp4", data: "cHJpdmF0ZS12aWRlbw==" },
+              { type: "text", text: "(video omitted: native video slot unavailable)" },
+              { type: "text", text: "hook replacement" },
+              { type: "text", text: "(video omitted: native video slot unavailable)" },
+            ],
+          },
+        ],
+      });
+    },
+  );
 
   it.each(["cachedContent", "cached_content"])(
     "streams with %s configured while keeping system instructions and tools inline",

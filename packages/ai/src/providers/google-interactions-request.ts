@@ -16,6 +16,11 @@ import {
   type GoogleApiType,
   type GoogleProviderOptions,
 } from "./google-shared.js";
+import {
+  createGoogleVideoPlaceholder,
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  type GoogleVideoSlots,
+} from "./google-video-slots.js";
 
 let packageVersionMemo: string | undefined;
 
@@ -99,7 +104,7 @@ export type GoogleInteractionsRequestBody = {
 function convertMessages<T extends GoogleApiType>(
   model: ProviderModel<T>,
   context: ProviderContext,
-  videoMetadata: Record<string, unknown>,
+  videoSlots?: GoogleVideoSlots,
 ): GoogleInteractionsStep[] {
   const steps: GoogleInteractionsStep[] = [];
   const transformed = transformProviderMessages(context.messages, model);
@@ -119,15 +124,13 @@ function convertMessages<T extends GoogleApiType>(
           if (item.type === "text") {
             return { type: "text", text: sanitizeSurrogates(item.text) || " " };
           }
-          if (item.type === "video" && Object.keys(videoMetadata).length > 0) {
-            return {
-              type: "video",
-              mime_type: item.mimeType,
-              data: item.data,
-              processing: Object.assign({ type: "static" }, videoMetadata),
-            };
+          if (item.type === "video") {
+            return createGoogleVideoPlaceholder(item, videoSlots, {
+              type: "text" as const,
+              text: GOOGLE_VIDEO_SLOT_OMISSION,
+            });
           }
-          return { type: item.type, mime_type: item.mimeType, data: item.data };
+          return { type: "image", mime_type: item.mimeType, data: item.data };
         },
       );
       steps.push({
@@ -220,26 +223,9 @@ function convertMessages<T extends GoogleApiType>(
 export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   model: Model<T>,
   context: ProviderContext,
-  options: GoogleProviderOptions &
-    ProviderStreamOptions & {
-      videoMetadata?: Record<string, unknown>;
-      video_metadata?: Record<string, unknown>;
-    } = {},
+  options: GoogleProviderOptions & ProviderStreamOptions = {},
+  videoSlots?: GoogleVideoSlots,
 ): GoogleInteractionsRequestBody {
-  const optionRecord = asRecord(options);
-  const metadata = asRecord(optionRecord.videoMetadata ?? optionRecord.video_metadata);
-  const videoMetadata: Record<string, unknown> = {};
-  for (const [camel, snake] of [
-    ["startOffset", "start_offset"],
-    ["endOffset", "end_offset"],
-    ["fps", "fps"],
-  ] as const) {
-    const value = metadata[camel] ?? metadata[snake];
-    if (value !== undefined) {
-      videoMetadata[snake] = value;
-    }
-  }
-
   const generationConfig: NonNullable<GoogleInteractionsRequestBody["generation_config"]> = {};
   if (options.temperature !== undefined) {
     generationConfig.temperature = options.temperature;
@@ -278,7 +264,7 @@ export function buildGoogleInteractionsParams<T extends GoogleApiType>(
     input: convertMessages(
       { ...model, input: options[PROVIDER_MODEL_INPUT] ?? model.input },
       context,
-      videoMetadata,
+      videoSlots,
     ),
     ...(context.systemPrompt
       ? {

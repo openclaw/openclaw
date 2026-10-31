@@ -86,49 +86,31 @@ describe("buildGoogleInteractionsParams", () => {
     });
   });
 
-  it.each([
-    { options: {}, processing: undefined },
-    {
-      options: { videoMetadata: { startOffset: 0, endOffset: 10, fps: 0.5 } },
-      processing: { type: "static", start_offset: 0, end_offset: 10, fps: 0.5 },
-    },
-    {
-      options: { video_metadata: { start_offset: 2, end_offset: 5 } },
-      processing: { type: "static", start_offset: 2, end_offset: 5 },
-    },
-  ])(
-    "preserves native user video and processing settings ($options)",
-    ({ options, processing }) => {
-      const context: ProviderContext = {
-        messages: [
-          {
-            role: "user",
-            timestamp: 0,
-            content: [
-              text("Describe this clip"),
-              { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
-            ],
-          },
-        ],
-      };
-      const videoInput: ProviderModel["input"] = ["text", "image", "video"];
-      const withVideo = { ...options, [PROVIDER_MODEL_INPUT]: videoInput };
-      expect(buildGoogleInteractionsParams(model, context, withVideo).input).toEqual([
+  it("projects native user video as a private slot placeholder", () => {
+    const context: ProviderContext = {
+      messages: [
         {
-          type: "user_input",
+          role: "user",
+          timestamp: 0,
           content: [
             text("Describe this clip"),
-            {
-              type: "video",
-              mime_type: "video/mp4",
-              data: "dmlkZW8=",
-              ...(processing ? { processing } : {}),
-            },
+            { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
           ],
         },
-      ]);
-    },
-  );
+      ],
+    };
+    const videoInput: ProviderModel["input"] = ["text", "image", "video"];
+    const withVideo = { [PROVIDER_MODEL_INPUT]: videoInput };
+    expect(buildGoogleInteractionsParams(model, context, withVideo).input).toEqual([
+      {
+        type: "user_input",
+        content: [
+          text("Describe this clip"),
+          text("(video omitted: native video slot unavailable)"),
+        ],
+      },
+    ]);
+  });
 
   it("omits user video when the provider-normalized model has no video input", () => {
     const context: ProviderContext = {
