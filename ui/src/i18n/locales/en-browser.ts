@@ -13,6 +13,20 @@ const enBrowser = {
     openPanel: "Open browser panel",
     moreActions: "More actions",
     copyUrl: "Copy URL",
+    copySelection: "Copy selection",
+    copySelectionChecking: "Checking for selected text…",
+    copySelectionEmpty: "Ask the agent to select text in the page first.",
+    copySelectionNoPage: "Open a page to copy its text.",
+    copySelectionNative: "Select text in the Mac tab and press ⌘C.",
+    copyNothingSelected:
+      "Nothing is selected in the page. Ask the agent to select text, then copy again.",
+    copyDisconnected: "Couldn’t copy. Reconnect to the browser and try again.",
+    copyUnavailable:
+      "Copying page text is disabled (browser.evaluateEnabled=false). Enable it to copy from this panel.",
+    copyReadFailed: "Couldn’t read the page selection. Check the browser connection and try again.",
+    copyWriteFailed: "Couldn’t write to your clipboard. Allow clipboard access and try again.",
+    copyTruncated:
+      "Copied. The selection was too long, so only the first {count} characters were copied.",
     openNewTab: "Open in new tab",
     openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",

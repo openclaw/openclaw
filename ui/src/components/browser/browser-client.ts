@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
+import { browserSelectionScript } from "./browser-selection-script.ts";
 import {
   readBrowserTabTarget,
   type BrowserRoute,
@@ -504,6 +505,37 @@ export async function readBrowserPageMetrics(client: BrowserRequestClient, targe
     cssHeight,
     title: stringOrEmpty(result?.title),
     url: stringOrEmpty(result?.url),
+  };
+}
+
+/** UTF-16 units one copy carries; the page cuts longer selections and reports it. */
+export const BROWSER_SELECTION_LIMIT = 1_000_000;
+
+export type BrowserSelection = NonNullable<ReturnType<typeof readBrowserSelectionResult>>;
+
+/** Reads the remote selection; `probeOnly` reports its size without moving its text. */
+export async function readBrowserSelection(
+  client: BrowserRequestClient,
+  params: { targetId: string; probeOnly?: boolean },
+): Promise<BrowserSelection | null> {
+  return readBrowserSelectionResult(
+    await evaluateInBrowser(client, {
+      targetId: params.targetId,
+      fn: `() => { ${browserSelectionScript}\nreturn openclawReadBrowserSelection(${BROWSER_SELECTION_LIMIT}, ${params.probeOnly === true}); }`,
+    }),
+  );
+}
+
+function readBrowserSelectionResult(value: unknown) {
+  const result = asRecord(value);
+  const length = asFiniteNumber(result?.length);
+  if (typeof result?.text !== "string" || length === undefined) {
+    return null;
+  }
+  return {
+    text: result.text,
+    length,
+    truncated: result.truncated === true,
   };
 }
 

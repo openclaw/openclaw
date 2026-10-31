@@ -438,6 +438,7 @@ export function BrowserPanelChrome(
         tabindex="0"
         onKeyDown={(event: KeyboardEvent) => remoteInput()?.handleViewportKeydown(event)}
         onPaste={(event: ClipboardEvent) => remoteInput()?.handleViewportPaste(event)}
+        onCopy={(event: ClipboardEvent) => remoteInput()?.handleViewportCopy(event)}
         aria-busy={props.controller.loading ? "true" : "false"}
       >
         <ViewportContent
