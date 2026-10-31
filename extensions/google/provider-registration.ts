@@ -89,7 +89,7 @@ export function buildGoogleProvider(): ProviderPlugin {
       const input = (ctx.model.input as string[]).filter((type) => type !== "video");
       const supportsVideo =
         ctx.provider === "google" &&
-        ctx.model.api === "google-generative-ai" &&
+        (ctx.model.api === "google-generative-ai" || ctx.model.api === "google-interactions") &&
         isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
         isGoogleNativeVideoModelId(ctx.modelId);
       return {

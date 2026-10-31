@@ -610,8 +610,12 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
     setting wins over the catalog default. To use Interactions on another Gemini
     text model, set `api: "google-interactions"` instead.
 
-    Interactions supports tool calling, thinking levels, image inputs, and
-    streamed replies. This transport is stateless: OpenClaw sends `store: false`,
+    Interactions supports tool calling, thinking levels, image and native video
+    inputs, and streamed replies. Native video remains available on supported
+    Gemini models using the official AI Studio endpoint. Inline video uses
+    base64 data; clipping offsets and frame sampling map to Google's
+    [video processing settings](https://ai.google.dev/gemini-api/docs/video-understanding#customize-video-processing).
+    This transport is stateless: OpenClaw sends `store: false`,
     does not retain a server-side interaction ID, and replays the needed
     conversation context on each request. It relies on implicit caching:
     OpenClaw skips explicit cache creation and ignores configured `cachedContent`

@@ -1,8 +1,14 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import packageManifest from "../../package.json" with { type: "json" };
 import { getAiTransportHost } from "../host.js";
-import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-import type { Context, Model, ModelRequestHeaders } from "../types.js";
+import { transformProviderMessages } from "../provider-transcript-transform.js";
+import {
+  PROVIDER_MODEL_INPUT,
+  type ProviderContext,
+  type ProviderModel,
+  type ProviderStreamOptions,
+} from "../provider-types.js";
+import type { Model, ModelRequestHeaders } from "../types.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -38,7 +44,9 @@ type GoogleInteractionsStep =
   | {
       type: "user_input";
       content: Array<
-        { type: "text"; text: string } | { type: "image"; mime_type: string; data: string }
+        | { type: "text"; text: string }
+        | { type: "image"; mime_type: string; data: string }
+        | { type: "video"; mime_type: string; data: string; processing?: Record<string, unknown> }
       >;
     }
   | {
@@ -89,11 +97,12 @@ export type GoogleInteractionsRequestBody = {
 };
 
 function convertMessages<T extends GoogleApiType>(
-  model: Model<T>,
-  context: Context,
+  model: ProviderModel<T>,
+  context: ProviderContext,
+  videoMetadata: Record<string, unknown>,
 ): GoogleInteractionsStep[] {
   const steps: GoogleInteractionsStep[] = [];
-  const messages = transformMessages(context.messages, model);
+  const messages = transformProviderMessages(context.messages, model);
 
   for (const message of messages) {
     if (message.role === "user") {
@@ -103,10 +112,20 @@ function convertMessages<T extends GoogleApiType>(
           ? [{ type: "text" as const, text: sourceContent }]
           : sourceContent;
       const content: Extract<GoogleInteractionsStep, { type: "user_input" }>["content"] = parts.map(
-        (item) =>
-          item.type === "text"
-            ? { type: "text", text: sanitizeSurrogates(item.text) || " " }
-            : { type: "image", mime_type: item.mimeType, data: item.data },
+        (item) => {
+          if (item.type === "text") {
+            return { type: "text", text: sanitizeSurrogates(item.text) || " " };
+          }
+          if (item.type === "video" && Object.keys(videoMetadata).length > 0) {
+            return {
+              type: "video",
+              mime_type: item.mimeType,
+              data: item.data,
+              processing: Object.assign({ type: "static" }, videoMetadata),
+            };
+          }
+          return { type: item.type, mime_type: item.mimeType, data: item.data };
+        },
       );
       steps.push({
         type: "user_input",
@@ -197,16 +216,25 @@ function convertMessages<T extends GoogleApiType>(
 
 export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   model: Model<T>,
-  context: Context,
-  options: GoogleProviderOptions = {},
+  context: ProviderContext,
+  options: GoogleProviderOptions &
+    ProviderStreamOptions & {
+      videoMetadata?: Record<string, unknown>;
+      video_metadata?: Record<string, unknown>;
+    } = {},
 ): GoogleInteractionsRequestBody {
   const optionRecord = asRecord(options);
-  // Interactions owns implicit caching; GenerateContent cachedContent settings
-  // must not prevent sending the full inline prompt and tools on this transport.
-  if (optionRecord.videoMetadata || optionRecord.video_metadata) {
-    throw new Error(
-      "video_metadata clipping offsets are not supported with the Gemini Interactions API.",
-    );
+  const metadata = asRecord(optionRecord.videoMetadata ?? optionRecord.video_metadata);
+  const videoMetadata: Record<string, unknown> = {};
+  for (const [camel, snake] of [
+    ["startOffset", "start_offset"],
+    ["endOffset", "end_offset"],
+    ["fps", "fps"],
+  ] as const) {
+    const value = metadata[camel] ?? metadata[snake];
+    if (value !== undefined) {
+      videoMetadata[snake] = value;
+    }
   }
 
   const generationConfig: NonNullable<GoogleInteractionsRequestBody["generation_config"]> = {};
@@ -242,7 +270,13 @@ export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   }));
   return {
     model: model.id,
-    input: convertMessages(model, context),
+    // Video admission follows the provider-normalized input (official AI Studio
+    // Flash models), not the canonical text/image model input.
+    input: convertMessages(
+      { ...model, input: options[PROVIDER_MODEL_INPUT] ?? model.input },
+      context,
+      videoMetadata,
+    ),
     ...(context.systemPrompt
       ? {
           system_instruction: sanitizeSurrogates(

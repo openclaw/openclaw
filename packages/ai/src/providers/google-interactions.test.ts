@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
+import { PROVIDER_CONTEXT_HANDOFF, PROVIDER_MODEL_INPUT } from "../provider-types.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -67,6 +68,35 @@ describe("google-interactions provider", () => {
   const basicContext: Context = {
     messages: [{ role: "user", content: "Hello", timestamp: 0 }],
   };
+
+  it("sends native video from the transient provider context handoff", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      sseResponse(completedSse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const handoff = vi.fn(async () => ({
+      messages: [
+        {
+          role: "user" as const,
+          timestamp: 0,
+          content: [{ type: "video" as const, mimeType: "video/mp4", data: "dmlkZW8=" }],
+        },
+      ],
+    }));
+    const stream = streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+      apiKey: "test-key",
+      [PROVIDER_MODEL_INPUT]: ["text", "image", "video"],
+      [PROVIDER_CONTEXT_HANDOFF]: handoff,
+    });
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(handoff).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).input).toEqual([
+      {
+        type: "user_input",
+        content: [{ type: "video", mime_type: "video/mp4", data: "dmlkZW8=" }],
+      },
+    ]);
+  });
 
   it.each(["cachedContent", "cached_content"])(
     "streams with %s configured while keeping system instructions and tools inline",

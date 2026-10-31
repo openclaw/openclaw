@@ -12,6 +12,11 @@ import {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { calculateCost } from "../model-utils.js";
+import {
+  resolveProviderContext,
+  PROVIDER_MODEL_INPUT,
+  type ProviderStreamOptions,
+} from "../provider-types.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
@@ -85,7 +90,7 @@ function isGoogleInteractionsRequestBody(value: unknown): value is GoogleInterac
 
 export const streamGoogleInteractions: StreamFunction<
   "google-interactions",
-  GoogleProviderOptions
+  GoogleProviderOptions & ProviderStreamOptions
 > = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
   const output = createAssistantOutput(model, "google-interactions");
@@ -100,7 +105,11 @@ export const streamGoogleInteractions: StreamFunction<
       if (!apiKey.trim()) {
         throw new Error(`No API key for provider: ${model.provider}`);
       }
-      let body = buildGoogleInteractionsParams(model, context, options);
+      const providerInput = options?.[PROVIDER_MODEL_INPUT] ?? model.input;
+      const providerContext = providerInput.includes("video")
+        ? await resolveProviderContext(context, options)
+        : context;
+      let body = buildGoogleInteractionsParams(model, providerContext, options);
       const nextBody = await options?.onPayload?.(body, model);
       if (nextBody !== undefined) {
         if (!isGoogleInteractionsRequestBody(nextBody)) {
