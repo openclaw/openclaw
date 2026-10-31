@@ -381,6 +381,7 @@ div.chat-thread:where(.chat-thread--annotations) {
 }
 
 .chat-pane__header {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -637,6 +638,11 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   & .chat-pane__connection {
+    /* Outage feedback overlays content without displacing the retained header controls. */
+    position: absolute;
+    inset-block-start: calc(100% + 4px);
+    inset-inline-start: 12px;
+    z-index: 2;
     display: inline-flex;
     align-items: center;
     gap: 16px;
