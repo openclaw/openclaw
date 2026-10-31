@@ -43,9 +43,6 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   withCodexAppServerFastModeServiceTier: (value: unknown) => value,
 }));
-vi.mock("./developer-instruction-sections.js", () => ({
-  joinPresentSections: () => "developer instructions",
-}));
 vi.mock("./turn-params.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./turn-params.js")>()),
   buildCodexParentLocalInstructions: vi.fn(),
@@ -54,8 +51,14 @@ vi.mock("./turn-params.js", async (importOriginal) => ({
     input: [{ type: "text", text: options.promptText, text_elements: [] }],
   }),
 }));
-vi.mock("./trajectory.js", () => ({ recordCodexTrajectoryContext: vi.fn() }));
-vi.mock("./user-prompt-message.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
+vi.mock("./trajectory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./trajectory.js")>()),
+  recordCodexTrajectoryContext: vi.fn(),
+}));
+vi.mock("./user-prompt-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./user-prompt-message.js")>()),
+  buildCodexUserPromptMessage: vi.fn(),
+}));
 
 beforeEach(() => {
   references.delivered = false;
@@ -278,6 +281,22 @@ describe("native acknowledged turn requests", () => {
       expect(cleanup.interrupt).not.toHaveBeenCalled();
     },
   );
+
+  it("records the conversation instruction component in the compiled trajectory context (#188929)", async () => {
+    const { recordCodexTrajectoryContext } = await import("./trajectory.js");
+    const record = vi.mocked(recordCodexTrajectoryContext);
+    record.mockClear();
+    const attempt = await prepare();
+    await expect(attempt.start()).resolves.toMatchObject({
+      turn: { turn: { id: "new-turn" } },
+    });
+    expect(record).toHaveBeenCalled();
+    const developerInstructions = record.mock.calls
+      .map((call) => call[1]?.developerInstructions)
+      .find((text): text is string => typeof text === "string");
+    expect(developerInstructions).toContain("Current OpenClaw conversation instructions");
+    expect(developerInstructions).toContain("Current OpenClaw tool bindings");
+  });
 
   it("rechecks the selected model immediately before writing turn/start", async () => {
     const attempt = await prepare();
