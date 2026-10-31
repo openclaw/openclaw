@@ -561,7 +561,7 @@ it("retains the imported profile and model-access choice after direct refresh fa
   });
 });
 
-it("identifies a config failure after credentials are saved and preserves its cause", async () => {
+it("refreshes saved credentials when the settings write fails and preserves its cause", async () => {
   const cause = new Error("config write failed");
   runProviderAuth.mockResolvedValueOnce({
     profiles: [tokenProfile("openai:saved")],
@@ -577,7 +577,25 @@ it("identifies a config failure after credentials are saved and preserves its ca
     cause,
   });
   expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
-  expect(mocks.callGateway).not.toHaveBeenCalled();
+  expectRefresh();
+});
+
+it("keeps the settings failure when a hosted refresh ends with a cancelled login", async () => {
+  const controller = new AbortController();
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [tokenProfile("openai:saved")],
+    configPatch: { logging: { level: "debug" } },
+  });
+  mocks.updateConfig.mockRejectedValueOnce(new Error("config write failed"));
+  const refreshAfterLogin = vi.fn(async () => {
+    controller.abort(new Error("Login cancelled."));
+    throw new Error("Auth publication failed.");
+  });
+
+  await expect(loginFlow({ refreshAfterLogin, signal: controller.signal })).rejects.toBeInstanceOf(
+    ProviderAuthConfigApplyError,
+  );
+  expect(refreshAfterLogin).toHaveBeenCalledOnce();
 });
 
 it("creates store order for relogin when configured profiles would shadow the new profile", async () => {

@@ -43,10 +43,7 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import {
-  ProviderAuthConfigApplyError,
-  ProviderCredentialsSavedError,
-} from "../../shared/provider-auth-result.js";
+import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
@@ -79,6 +76,7 @@ import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
   refreshProviderAuthAfterLogin,
   refreshRunningGatewayAuthState,
+  throwProviderAuthLoginError,
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
@@ -452,15 +450,7 @@ async function runProviderAuthMethod(
       await login.prompter.note(login.result.notes.join("\n"), "Provider notes");
     }
   } catch (error) {
-    if (persistedProfiles.length > 0 && !(error instanceof ProviderCredentialsSavedError)) {
-      throw new ProviderCredentialsSavedError(
-        error instanceof Error
-          ? `Provider credentials were saved, but sign-in did not finish: ${error.message}`
-          : "Provider credentials were saved, but sign-in did not finish.",
-        { cause: error },
-      );
-    }
-    throw error;
+    return throwProviderAuthLoginError(error, login, persistedProfiles.length > 0);
   }
   if (persistedProfiles.length > 0) {
     await completeLoginModelAccess(params, modelAccess);
