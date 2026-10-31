@@ -13,7 +13,9 @@ import { logVerbose } from "../../globals.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { ReplyRunLifecycleAdmissionBlockedError } from "../../sessions/session-controller.contracts.js";
 import type { ReplyOperation, ReplyTurnKind } from "../../sessions/session-controller.js";
+import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import {
   attachSessionControllerInputOperation,
   bindSessionControllerInputOperation,
@@ -709,6 +711,15 @@ export async function prepareReplyAgentTurn<TConfigured>(
       }
     }
   } catch (error) {
+    if (
+      error instanceof ReplyRunLifecycleAdmissionBlockedError &&
+      mailboxClaim &&
+      !mailboxClaim.operation
+    ) {
+      // The admission owner refused before acquiring an operation; its receipt retains
+      // the exact sources for the existing FIFO drain.
+      deferSessionControllerClaimBeforeExecution(mailboxClaim);
+    }
     if (!existingClaim && mailboxClaim) {
       releaseSessionControllerClaim(mailboxClaim);
     }

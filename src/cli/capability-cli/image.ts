@@ -72,7 +72,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const size = opts.size as string | undefined;
           const aspectRatio = normalizeOptionalString(opts.aspectRatio);
           const { parseAspectRatioValue } =
-            await import("../../media-generation/runtime-shared.js");
+            await import("../../../packages/media-generation-core/src/normalization.js");
           if (aspectRatio && !parseAspectRatioValue(aspectRatio)) {
             throw new Error("--aspect-ratio must be a W:H ratio of positive numbers, like 16:9");
           }

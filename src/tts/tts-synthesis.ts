@@ -1,7 +1,7 @@
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
-import { transcodeAudioBuffer } from "../media/media-services.js";
+import { transcodeAudioBuffer } from "../media/audio-transcode.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";

@@ -234,9 +234,10 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
     canEdit: boolean,
   ): MenuEntry[] {
     if (menu.kind === "jump") {
-      const query = jumpQuery().trim().toLocaleLowerCase();
+      // Canonical NFC so NFD Git paths (macOS) still match NFC queries.
+      const query = jumpQuery().trim().toLowerCase().normalize("NFC");
       const matches = menu.paths.flatMap((path, index) => {
-        if (!path.toLocaleLowerCase().includes(query)) {
+        if (!path.toLowerCase().normalize("NFC").includes(query)) {
           return [];
         }
         const slash = path.lastIndexOf("/");

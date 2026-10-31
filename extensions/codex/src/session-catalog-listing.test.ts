@@ -112,6 +112,9 @@ it("waits for the registered provider's first page and then serves its resident 
   const control = factory.forRequest("main", home);
   const provider = registeredProvider(factory);
   const query = { agentId: "main", hostIds: [home.hostId] };
+  await import("./session-catalog-node-continue.js");
+  // Exercise first-page ordering independently of the cold index's wall-clock startup cost.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   let delivered = false;
   const listed = provider.list(query).then((hosts) => {
     delivered = true;
@@ -134,7 +137,11 @@ it("waits for the registered provider's first page and then serves its resident 
     expect(fixture.commandRpcMocks.codexControlRequest.mock.calls[0]?.[1]).toBe("thread/list");
   } finally {
     pending.resolve({ data: [] });
-    await listed;
+    try {
+      await listed;
+    } finally {
+      vi.useRealTimers();
+    }
   }
 });
 

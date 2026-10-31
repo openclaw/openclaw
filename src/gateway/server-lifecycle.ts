@@ -37,6 +37,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { createGatewayDiagnosticsConfigurator } from "./server-diagnostics.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
+import { createGatewayCloseEntrypoints } from "./server-lifecycle-close.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions, GatewayServerOptions } from "./server-public.js";
@@ -710,11 +711,6 @@ export async function prepareGatewayLifecycle(params: {
     unregisterConnectionDependentSidecar: connectionDependentSidecarStopOwner.remove,
     registerPostReadySidecars: postReadySidecarStopOwner.publish,
     registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
-    prepareClose: async (options?: GatewayCloseOptions) => {
-      const close = await params.sdkResourceHost.run(() => prepareClose(options));
-      return () => params.sdkResourceHost.run(close);
-    },
-    closeOnStartupFailure: (error?: unknown) =>
-      params.sdkResourceHost.run(() => closeOnStartupFailure(error)),
+    ...createGatewayCloseEntrypoints(params.sdkResourceHost, prepareClose, closeOnStartupFailure),
   };
 }

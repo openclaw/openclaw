@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import fs from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializeSystemdEnvironmentFile } from "../../src/daemon/systemd-environment-files.js";
 import { readLoadedSystemdServiceRuntime } from "../../src/daemon/systemd-loaded-runtime.js";
@@ -17,6 +17,7 @@ import { readSystemdServiceRuntime } from "../../src/daemon/systemd-runtime.js";
 import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { readSystemdStopTimeout } from "../../src/infra/systemd-stop-timeout.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fixtureReceiptClientSource,
@@ -137,6 +138,70 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
   });
   afterAll(async () => {
     await receipts.close();
+  });
+
+  it("executes the generated handoff launch contract with exact environment, pipes and exit", () => {
+    const { home, env } = fixture();
+    const directory = join(home, "handoff");
+    mkdirSync(directory);
+    const helper = join(directory, "helper.mjs");
+    const input = join(directory, "handoff.json");
+    const environmentPath = join(directory, "handoff.env");
+    const value = 'file "quoted" \\ $literal `literal` 東京';
+    writeEnvironment(environmentPath, value);
+    writeFileSync(
+      helper,
+      `import fs from "node:fs";
+console.log(JSON.stringify({pid:process.pid,cwd:process.cwd(),value:process.env.FIXTURE_VALUE,input:fs.readFileSync(0,"utf8")}));
+console.error("fixture exit seven"); process.exitCode = 7;`,
+    );
+    const scopeUnit = "openclaw-update-fixture.service";
+    const node = resolveTestNodeExecPath();
+    writeJson(input, {
+      cwd: directory,
+      environmentPath,
+      scopeUnit,
+      action: "update",
+      sensitivePaths: [helper, input],
+    });
+    const args = [
+      "--user",
+      "--pipe",
+      "--wait",
+      "--service-type=exec",
+      "--slice=app-openclaw-update.slice",
+      "--property=KillMode=control-group",
+      "--property=OOMPolicy=stop",
+      `--property=EnvironmentFile=${environmentPath}`,
+      `--working-directory=${directory}`,
+      "--collect",
+      `--unit=${scopeUnit}`,
+      node,
+      helper,
+      input,
+    ];
+    const run = (argv: string[]) =>
+      spawnSync(join(home, "bin/systemd-run"), argv, {
+        env: { ...env, PATH: `${dirname(node)}:${env.PATH}`, FIXTURE_VALUE: "caller value" },
+        encoding: "utf8",
+        input: "go\n",
+        timeout: 10_000,
+      });
+    const result = run(args);
+    expectStatus(result, 7);
+    expect(JSON.parse(result.stdout)).toEqual({
+      pid: result.pid,
+      cwd: directory,
+      value,
+      input: "go\n",
+    });
+    expect(result.stderr).toContain("fixture exit seven");
+    expectStatus(run(["--scope", ...args.slice(1)]), 1);
+    writeFileSync(input, '{"private-fixture-canary":');
+    const malformed = run(args);
+    expectStatus(malformed, 1);
+    expect(malformed.stderr).toContain("inspect the private fixture inputs");
+    expect(malformed.stderr).not.toContain("private-fixture-canary");
   });
 
   it("unloads the deleted service when resetting a first-hop lane", async () => {
@@ -415,7 +480,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
   }) =>
     fixtureLifetime.run(async () => {
       const registry = "http://127.0.0.1:41731";
-      const { home, env, shell, systemctl, paths, inspect, writeUnit } = fixture(registry);
+      const { home, env, shell, systemctl, paths, inspect, writeUnit, unit } = fixture(registry);
       env.NPM_CONFIG_REGISTRY = undefined;
       env.OPENCLAW_SKIP_CHANNELS = undefined;
       env.OPENCLAW_SKIP_PROVIDERS = undefined;
@@ -457,6 +522,21 @@ sendReceipt(${JSON.stringify(record)}, "started");
         await withinTest(receipts.waitFor(record, "started", count), signal);
         expect(records()).toHaveLength(count);
       };
+      const handoffRuntime = () =>
+        Object.fromEntries(
+          output(
+            systemctl(
+              "show",
+              "openclaw-gateway.service",
+              "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID,FragmentPath",
+            ),
+          )
+            .split("\n")
+            .map((line) => {
+              const separator = line.indexOf("=");
+              return [line.slice(0, separator), line.slice(separator + 1)];
+            }),
+        );
       try {
         expect(systemctl("enable", "openclaw-gateway.service").status).toBe(0);
         expect(systemctl("is-enabled", "openclaw-gateway.service")).toMatchObject({
@@ -532,6 +612,16 @@ raise SystemExit(code if code >= 0 else 128 - code)
           systemd: { managerUid: process.getuid?.() },
         });
         expect(firstRuntime.pid).not.toBe(Number(readFileSync(paths.pid, "utf8").trim()));
+        const firstHandoff = handoffRuntime();
+        expect(firstHandoff).toMatchObject({
+          Id: "openclaw-gateway.service",
+          LoadState: "loaded",
+          ActiveState: "active",
+          MainPID: String(records()[0]!.pid),
+          InvocationID: records()[0]!.invocationId,
+          FragmentPath: unit,
+        });
+        expect(Number(firstHandoff.ExecMainStartTimestampMonotonic)).toBeGreaterThan(0);
         expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(0);
         const inspected = await inspect();
         const inheritedEnvironment = {
@@ -600,6 +690,15 @@ raise SystemExit(code if code >= 0 else 128 - code)
         expectStatus(proof);
         expect(records()[1]?.pid).not.toBe(records()[0]?.pid);
         expect(records()[1]!.invocationId).not.toBe(records()[0]!.invocationId);
+        const secondHandoff = handoffRuntime();
+        expect(secondHandoff).toMatchObject({
+          MainPID: String(records()[1]!.pid),
+          InvocationID: records()[1]!.invocationId,
+          FragmentPath: unit,
+        });
+        expect(Number(secondHandoff.ExecMainStartTimestampMonotonic)).toBeGreaterThan(
+          Number(firstHandoff.ExecMainStartTimestampMonotonic),
+        );
         expect(await stopPolicy(records()[1]!.invocationId)).toEqual(expectedStopPolicy);
         expect(await stopPolicy(records()[0]!.invocationId)).toMatchObject({
           timeoutMs: 90_000,
@@ -622,6 +721,13 @@ raise SystemExit(code if code >= 0 else 128 - code)
           }
         }
         expect(existsSync(paths.pid)).toBe(false);
+        expect(handoffRuntime()).toMatchObject({
+          ActiveState: "inactive",
+          MainPID: "0",
+          ExecMainStartTimestampMonotonic: "0",
+          InvocationID: "",
+          FragmentPath: unit,
+        });
         const runtime = await readSystemdServiceRuntime(env);
         expect(runtime).toMatchObject({ status: "stopped" });
         expect(runtime.missingUnit).not.toBe(true);

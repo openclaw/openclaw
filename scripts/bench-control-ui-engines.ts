@@ -21,7 +21,18 @@ import {
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
+import {
+  createChatComposerScenarios,
+  installChatActionObservation,
+  readChatActionObservation,
+} from "./lib/control-ui-chat-composer-scenarios.ts";
+import { createChatMessageScenarios } from "./lib/control-ui-chat-message-scenarios.ts";
+import { createChatPanelScenarios } from "./lib/control-ui-chat-panel-scenarios.ts";
 import { createEngineActionScenarios } from "./lib/control-ui-engine-action-scenarios.ts";
+import {
+  createEngineActionTiming,
+  type EngineActionTiming,
+} from "./lib/control-ui-engine-action-timing.ts";
 import {
   createEngineBootScenarios,
   type EngineScenario,
@@ -195,8 +206,14 @@ type Observation = {
   step: string;
   bundle: number;
   pair: number;
-  status: "passed" | "failed";
+  status: "passed" | "failed" | "skipped";
+  skipReason?: string;
   wallMs?: number;
+  scenarioMs?: number;
+  settleWaitMs?: number;
+  actionTiming?: EngineActionTiming;
+  prepareFrameIntervalMs?: number;
+  settleFrameIntervalMs?: number;
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
   requests?: Record<string, number>;
@@ -249,23 +266,35 @@ try {
   for (const engine of engines) {
     browsers.set(engine, await launchEngine(engine));
   }
-  const ids = values.steps?.split(",");
+  const requestedIds = values.steps?.split(",");
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
+    ...createChatComposerScenarios(),
+    ...createChatMessageScenarios(),
+    ...createChatPanelScenarios().map((scenario) =>
+      Object.assign(scenario, { explicitOnly: true }),
+    ),
     ...createEngineStyleScenarios(),
     ...createEngineMemoryScenarios(),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
     ...interactionScenarios.filter(
       (scenario) =>
-        ids?.includes(scenario.id) ||
+        requestedIds?.includes(scenario.id) ||
         (!scenario.explicitOnly &&
           !scenario.resourceOnly &&
           !scenario.projectionFamily &&
           !scenario.dataPage),
     ),
   ];
+  const ids = requestedIds?.flatMap((id) =>
+    id === "chat-actions"
+      ? catalog
+          .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+          .map((scenario) => scenario.id)
+      : [id],
+  );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
       ? ids.some((selected) => selected === id || (selected === "memory" && memory))
@@ -298,6 +327,13 @@ try {
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
+          "./lib/control-ui-chat-composer-scenarios.ts",
+          "./lib/control-ui-chat-message-scenarios.ts",
+          "./lib/control-ui-chat-panel-scenarios.ts",
+          "./lib/control-ui-engine-action-scenarios.ts",
+          "./lib/control-ui-engine-action-timing.ts",
+          "./lib/control-ui-interaction-scenarios.ts",
+          "./lib/control-ui-interaction-navigation.ts",
           "./lib/control-ui-engine-streaming-scenarios.ts",
           "./lib/control-ui-streaming-reply.ts",
           "./lib/control-ui-streaming-fixture.ts",
@@ -338,18 +374,24 @@ try {
     order:
       "Serial network profile, engine and bundle order alternates each pair; fresh browser context per observation",
     acceptance:
-      "Census ranks >1.5x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+      "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+    frameCadence:
+      "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input/commit makes action timing unavailable.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
-    scenarios: scenarios.map(({ id, route, expected, navigation, memory }) => ({
-      id,
-      route,
-      expected,
-      navigation,
-      memory,
-    })),
+    scenarios: scenarios.map(
+      ({ id, route, expected, navigation, memory, diagnostic, viewports: scenarioViewports }) => ({
+        id,
+        route,
+        expected,
+        navigation,
+        memory,
+        diagnostic,
+        viewports: scenarioViewports,
+      }),
+    ),
   });
   for (const viewport of viewports) {
     for (const item of scenarios) {
@@ -381,6 +423,14 @@ try {
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
             };
+            if (scenario.viewports && !scenario.viewports.some((name) => name === viewport.name)) {
+              observation.status = "skipped";
+              observation.skipReason = "This control is unavailable at this viewport.";
+              observations.push(observation);
+              await writeJson(`${artifactPrefix}.json`, observation);
+              await writeJson("observations.json", observations);
+              continue;
+            }
             if (scenario.memory || !browsers.get(engine)!.isConnected()) {
               await browsers.get(engine)!.close();
               browsers.set(engine, await launchEngine(engine));
@@ -394,7 +444,8 @@ try {
               colorScheme: "light",
             });
             const page = await context.newPage();
-            page.setDefaultTimeout(30_000);
+            page.setDefaultTimeout(scenario.id.startsWith("chat-actions-") ? 15_000 : 30_000);
+            const traceAction = values.trace && !scenario.navigation;
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
             page.on("pageerror", (error: Error) => errors.push({ message: error.message, phase }));
@@ -512,7 +563,7 @@ try {
                 observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
-                await frames(page);
+                observation.prepareFrameIntervalMs = await frames(page);
               }
               const before = (await gateway.getRequests()).length;
               if (values.trace) {
@@ -524,6 +575,13 @@ try {
                 });
                 tracingStarted = true;
               }
+              if (scenario.id.startsWith("chat-actions-")) {
+                await installChatActionObservation(page);
+              }
+              const actionTiming =
+                !scenario.navigation && !scenario.memory
+                  ? await page.evaluateHandle(createEngineActionTiming, traceAction)
+                  : undefined;
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
@@ -534,7 +592,9 @@ try {
                 memory = await createEngineMemoryCollector(page, engine);
                 observation.memory = [];
               }
-              const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+              const timeOrigin = actionTiming
+                ? await actionTiming.evaluate((timing) => timing.start())
+                : await page.evaluate(() => performance.timeOrigin);
               if (memory) {
                 // Bind checkpoints to this document, independently of wall-clock adjustments.
                 await page.evaluate((identity) => {
@@ -585,12 +645,38 @@ try {
                       }
                     : undefined,
                 )) ?? undefined;
-              await frames(page);
+              if (actionTiming) {
+                await actionTiming.evaluate((timing) => timing.endScenario());
+              }
+              if (scenario.id.startsWith("chat-actions-")) {
+                observation.evidence = {
+                  ...observation.evidence,
+                  ...(await readChatActionObservation(page)),
+                };
+              }
+              observation.scenarioMs = performance.now() - start;
+              observation.settleFrameIntervalMs = await frames(page);
               observation.wallMs = performance.now() - start;
+              observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
+              if (actionTiming) {
+                observation.actionTiming = await actionTiming.evaluate((timing) => timing.finish());
+                await actionTiming.dispose();
+              }
               const activeMeasurement = measurement;
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (traceAction) {
+                await writeJson(
+                  `${artifactPrefix}.user-timing.json`,
+                  await page.evaluate(() =>
+                    performance
+                      .getEntriesByType("mark")
+                      .filter(({ name }) => name.startsWith("engine:"))
+                      .map(({ name, startTime }) => ({ name, startTime })),
+                  ),
+                );
+              }
               if (values.trace || values["cpu-only"]) {
                 await writeJson(`${artifactPrefix}.inspector.json`, captured);
               }
@@ -634,6 +720,12 @@ try {
                 }
                 if (pair === 0 || observation.status === "failed") {
                   await page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) });
+                }
+                if (scenario.id.startsWith("chat-actions-") && observation.status === "failed") {
+                  await writeFile(
+                    path.join(artifactDir, `${artifactPrefix}.failure.html`),
+                    await page.content(),
+                  );
                 }
                 if (tracingStarted) {
                   await context.tracing.stop({
@@ -728,9 +820,27 @@ const summary = [...cells.values()].map((cell) => {
     bundle: cell.bundle,
     networkProfile: cell.networkProfile,
     passed: passing.length,
-    failed: rows.length - passing.length,
+    failed: rows.filter((row) => row.status === "failed").length,
+    skipped: rows.filter((row) => row.status === "skipped").length,
     measured: measured.length,
     wallMs: distribution(measured.map((row) => row.wallMs!)),
+    scenarioMs: distribution(measured.flatMap((row) => row.scenarioMs ?? [])),
+    settleWaitMs: distribution(measured.flatMap((row) => row.settleWaitMs ?? [])),
+    actionTiming: Object.fromEntries(
+      (
+        [
+          "driverMs",
+          "applicationMs",
+          "settleMs",
+          "assertionTailMs",
+          "browserSpanMs",
+          "inputCount",
+          "mutationCount",
+        ] as const
+      ).map((key) => [key, distribution(measured.flatMap((row) => row.actionTiming?.[key] ?? []))]),
+    ),
+    prepareFrameIntervalMs: distribution(rows.flatMap((row) => row.prepareFrameIntervalMs ?? [])),
+    settleFrameIntervalMs: distribution(rows.flatMap((row) => row.settleFrameIntervalMs ?? [])),
     evidence: Object.fromEntries(
       [...new Set(measured.flatMap((row) => Object.keys(row.evidence ?? {})))].map((key) => [
         key,
@@ -760,7 +870,43 @@ const summary = [...cells.values()].map((cell) => {
     ),
   };
 });
+const rows = summary
+  .filter(({ engine }) => engine === "chromium")
+  .map((chromium) => {
+    const webkit = summary.find(
+      (row) =>
+        row.engine === "webkit" &&
+        row.step === chromium.step &&
+        row.viewport === chromium.viewport &&
+        row.bundle === chromium.bundle &&
+        row.networkProfile === chromium.networkProfile,
+    );
+    const application = chromium.actionTiming.applicationMs;
+    const webkitApplication = webkit?.actionTiming.applicationMs;
+    const driver = chromium.actionTiming.driverMs;
+    const webkitDriver = webkit?.actionTiming.driverMs;
+    const ratio =
+      application && webkitApplication && application.median > 0
+        ? webkitApplication.median / application.median
+        : null;
+    const driverRatio =
+      driver && webkitDriver && driver.median > 0 ? webkitDriver.median / driver.median : null;
+    const wallRatio =
+      chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
+    return { chromium, webkit, ratio, driverRatio, wallRatio };
+  })
+  .toSorted((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
 await writeJson("summary.json", {
+  headlineMetric: "applicationMs",
+  comparisons: rows.map(({ chromium, ratio, driverRatio, wallRatio }) => ({
+    viewport: chromium.viewport,
+    step: chromium.step,
+    bundle: chromium.bundle,
+    networkProfile: chromium.networkProfile,
+    applicationRatio: ratio,
+    driverRatio,
+    wallRatio,
+  })),
   planned,
   passed: observations.filter((row) => row.status === "passed").length,
   summary,
@@ -781,22 +927,6 @@ await writeJson("summary.json", {
     ),
   ),
 });
-const rows = summary
-  .filter(({ engine }) => engine === "chromium")
-  .map((chromium) => {
-    const webkit = summary.find(
-      (row) =>
-        row.engine === "webkit" &&
-        row.step === chromium.step &&
-        row.viewport === chromium.viewport &&
-        row.bundle === chromium.bundle &&
-        row.networkProfile === chromium.networkProfile,
-    );
-    const ratio =
-      chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
-    return { chromium, webkit, ratio };
-  })
-  .toSorted((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
 await writeFile(
   path.join(artifactDir, "report.md"),
   [
@@ -804,18 +934,25 @@ await writeFile(
     "",
     `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit Inspector counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
     "",
-    `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
+    `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed; ${observations.filter(({ status }) => status === "skipped").length} unsupported-viewport cells skipped. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
     "",
     `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
-    "| Viewport | Scenario | Network | Bundle | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | WebKit/Chromium |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-    ...rows.map(({ chromium, webkit, ratio }) => {
-      const format = (value: ReturnType<typeof distribution> | undefined) =>
+    "Application elapsed is first trusted action event to last observed DOM commit/native value edit before scenario return. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
+    "",
+    "| Viewport | Scenario | Network | Bundle | Chromium application median/p95 (ms) | WebKit application median/p95 (ms) | Application W/C | Driver W/C | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | Wall W/C |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map(({ chromium, webkit, ratio, driverRatio, wallRatio }) => {
+      const format = (
+        value: ReturnType<typeof distribution> | undefined,
+        cell: typeof chromium | undefined,
+      ) =>
         value
           ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} (n=${value.n})`
-          : "failed/absent";
-      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.wallMs)} | ${format(webkit?.wallMs)} | ${ratio?.toFixed(2) ?? "—"} |`;
+          : cell?.skipped
+            ? "unsupported viewport"
+            : "failed/absent";
+      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.actionTiming.applicationMs, chromium)} | ${format(webkit?.actionTiming.applicationMs, webkit)} | ${ratio?.toFixed(2) ?? "—"} | ${driverRatio?.toFixed(2) ?? "—"} | ${format(chromium.wallMs, chromium)} | ${format(webkit?.wallMs, webkit)} | ${wallRatio?.toFixed(2) ?? "—"} |`;
     }),
     "",
     "Memory checkpoints follow two explicit GCs. WebKit snapshot self sizes omit some backing stores; engine categories and browser-tree RSS provide separate native/allocation evidence. RSS includes Inspector overhead and may exclude reparented platform services. Compare warm-to-late checkpoints within an engine, not absolute heap sizes between engines. Detached counts cover JSC wrappers versus V8 native DOM nodes; see per-checkpoint notes and unresolved counts. Memory scenario durations are excluded from the timing table.",

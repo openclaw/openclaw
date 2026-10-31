@@ -286,6 +286,7 @@ export function projectChatTranscript(
     runActive: props.runActive,
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onFindWorkspaceFile: props.onFindWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
     mediaOwner: props.mediaOwner,
     mediaReadAllowed: props.mediaReadAllowed,

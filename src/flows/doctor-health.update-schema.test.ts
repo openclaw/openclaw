@@ -4,12 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import * as originalCapture from "../commands/doctor-original-capture.js";
 import { preflightUpdateDoctorCli } from "../commands/doctor-update-schema-guard.js";
 import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -99,7 +101,9 @@ it.each([
   "orphan with other foreign key",
 ] as const)("backs up orphan-window repairs before a schema upgrade (%s)", async (damage) => {
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+  vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
   await withDoctorState(async (state) => {
+    mocks.packageRoot.mockReturnValue(state.root);
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
     const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
     await closeDatabases();
@@ -182,6 +186,19 @@ it.each([
       });
       expect(readRows(saved)).toEqual(original);
     }
+    const captureRoot = resolveUpdateCaptureRoot(state.stateDir);
+    const capture = fs.readdirSync(captureRoot).find((name) => name.startsWith("doctor-"));
+    const directory = path.join(captureRoot, capture!);
+    const manifest = parseUpdateRecoveryBackupManifest(
+      fs.readFileSync(path.join(directory, "manifest.json"), "utf8"),
+    );
+    const entry = manifest.entries.find((item) => item.sourcePath === agent);
+    expect(entry?.kind).toBe("file");
+    if (entry?.kind !== "file") {
+      throw new Error("Missing original agent recovery image");
+    }
+    using image = new DatabaseSync(path.join(directory, entry.archivePath), { readOnly: true });
+    expect(readRows(image)).toEqual(original);
   });
 });
 
