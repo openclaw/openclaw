@@ -1996,6 +1996,7 @@ jobs:
         id: published_driver_package
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
         run: |
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
           node scripts/package-openclaw-for-docker.mjs --skip-build \
             --allow-unreleased-changelog --output-dir .artifacts/published-driver-package \
             --output-name openclaw-candidate.tgz

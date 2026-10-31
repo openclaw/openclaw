@@ -359,7 +359,7 @@ Notes:
 - `process list`, `poll`, and `log` report `waitingForInput` only when the session still has writable stdin and has been idle longer than the input-wait threshold (default 15000 ms, `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`).
 - `process log` uses line-based `offset`/`limit`. When both are omitted, it returns the last 200 lines with a paging hint. When `offset` is set and `limit` isn't, it returns from `offset` to the end (not capped to 200).
 - `process poll` and `process log` distinguish output discarded at the aggregate retention cap from output merely omitted by the pending buffer or retained tail. Paged logs can inspect only the retained portion; a durable command's separate local log artifact can still contain earlier output.
-- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
+- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000. The wait ends as soon as the process owner records new output or completion.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
 
 Conversational requests can stop an authorized process or remove its retained status by its exact ID without another confirmation. The process owner checks the current record and scope immediately before acting. A stop request does not confirm termination; inspect the resulting process state before reporting it stopped.

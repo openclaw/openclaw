@@ -30,6 +30,7 @@ export function copyFrozenTargetTooling(root: string, extra: string[] = []) {
     "scripts/resolve-fs-safe-native-contract.mjs",
     `${survivorDirectory}/config-recipe.mts`,
     `${survivorDirectory}/config-recipe`,
+    `${survivorDirectory}/installed-recovery-cases.mjs`,
     "scripts/windows-cmd-helpers.mjs",
     "package.json",
     "pnpm-lock.yaml",

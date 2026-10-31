@@ -382,6 +382,7 @@ suite.define(() => {
       await gateway.waitForRequest("projects.list");
       await page.locator("#new-session-project-trigger").click();
       const place = page.locator(".oc-popover.new-session-page__project-popover");
+      await place.locator(".header-search__toggle").click();
       await place.getByRole("searchbox").fill("openclaw");
       await gateway.waitForRequest("projects.searchRemote");
       const remote = place.getByRole("button", { name: /openclaw\/openclaw/u });

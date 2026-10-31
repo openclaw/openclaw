@@ -1,6 +1,10 @@
 import type { BetaContextManagementConfig } from "@anthropic-ai/sdk/resources/beta/messages/messages.js";
 import type { TextBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
-import { supportsClaudeServerCompaction, type Model } from "@openclaw/llm-core";
+import {
+  supportsClaudeServerCompaction,
+  type Model,
+  type PreparedSystemPrompt,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -205,18 +209,41 @@ export function resolveAnthropicCacheOptions(
   };
 }
 
+// Session revisions own these projections; the four cache policies cannot evict each other.
+const normalizedSystemBlocks = new WeakMap<PreparedSystemPrompt, Map<string, TextBlockParam[]>>();
+
 export function buildAnthropicSystemBlocks(
   systemPrompt: string | undefined,
   isOAuthToken: boolean,
   cacheControl: AnthropicEphemeralCacheControl | undefined,
   claudeCodeVersion = ANTHROPIC_CLAUDE_CODE_VERSION,
+  preparedSystemPrompt?: PreparedSystemPrompt,
 ): TextBlockParam[] | undefined {
-  const blocks: TextBlockParam[] = systemPrompt
-    ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }]
-    : [];
-  normalizeAnthropicSystemBlocks(blocks, cacheControl);
-  if (systemPrompt && blocks.length === 0) {
-    blocks.push({ type: "text", text: "" });
+  const revision = preparedSystemPrompt?.text === systemPrompt ? preparedSystemPrompt : undefined;
+  const policy = cacheControl ? (cacheControl.ttl ?? "default") : "none";
+  let variants = revision && normalizedSystemBlocks.get(revision);
+  let blocks = variants?.get(policy);
+  if (!blocks) {
+    blocks = systemPrompt ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }] : [];
+    normalizeAnthropicSystemBlocks(
+      blocks,
+      revision && cacheControl ? { ...cacheControl } : cacheControl,
+    );
+    if (systemPrompt && blocks.length === 0) {
+      blocks.push({ type: "text", text: "" });
+    }
+    if (revision) {
+      variants ??= new Map();
+      variants.set(policy, blocks);
+      normalizedSystemBlocks.set(revision, variants);
+    }
+  }
+  if (revision) {
+    // Payload hooks and OAuth identity blocks remain request-local and editable.
+    blocks = blocks.map((block) => ({
+      ...block,
+      ...(block.cache_control ? { cache_control: { ...block.cache_control } } : {}),
+    }));
   }
   if (isOAuthToken) {
     // The stable application prompt covers the OAuth preamble too; keep slots for history.

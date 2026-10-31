@@ -3,8 +3,12 @@
 // Pair baseline/candidate on interleaved CPUs, then swap placement. Run --allocations
 // and --work-counts separately: their instrumentation is not timing-gate evidence.
 // On Node 26, --work-counts --assert-promise-budget checks promises per native read job.
-// --sample-delay-ms 1 --seconds 30 accelerates only watcher timers for owner CPU/allocation
+// Legacy per-command timer owners: --sample-delay-ms 1 --seconds 30 accelerates owner polling.
+// Shared deadline samplers require real timers; accelerated mode rejects them.
+// Legacy accelerated polling reports CPU/allocation
 // per completed sample. It is not enforcement-latency evidence; run runaway proof separately.
+// For crossover runs, start child-memory-fixture.cjs forest 20 9 <roots.json> once,
+// then use --roots <roots.json> --trees 20 --watched 1|2|4|8|12|20 against each owner.
 // --trees 1 --descendants 9 measures an unchanged ten-process tree. All descendants
 // originate on nonleader threads; normal Node threads remain in every process.
 // --max-allocation-bytes-per-sample <bytes> asserts a measured V8 allocation
@@ -30,8 +34,11 @@ const { values } = parseArgs({
   options: {
     owner: { type: "string" },
     trees: { type: "string", default: "20" },
+    watched: { type: "string" },
+    roots: { type: "string" },
     descendants: { type: "string", default: "2" },
     seconds: { type: "string", default: "60" },
+    "warmup-seconds": { type: "string", default: "5" },
     "sample-delay-ms": { type: "string" },
     "start-file": { type: "string" },
     "gc-log": { type: "string" },
@@ -58,8 +65,31 @@ const integer = (name: "trees" | "descendants" | "seconds", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const trees = integer("trees", 1);
 const descendants = integer("descendants", 1);
+const watched = parseStrictIntegerOption({
+  raw: values.watched,
+  label: "--watched",
+  min: 1,
+  fallback: trees,
+});
+assert.ok(watched <= trees, "--watched cannot exceed --trees");
+assert.ok(!values.runaway || watched === trees, "--runaway requires every tree to be watched");
+const roots: unknown = values.roots ? JSON.parse(fs.readFileSync(values.roots, "utf8")) : undefined;
+assert.ok(
+  roots === undefined ||
+    (Array.isArray(roots) &&
+      roots.length === trees &&
+      roots.every((pid) => Number.isSafeInteger(pid) && pid > 0)),
+  "--roots must contain one positive PID per tree",
+);
+assert.ok(!values.runaway || !roots, "--runaway requires owned fixtures");
 assert.ok(!values.runaway || descendants === 2, "--runaway requires --descendants 2");
 const seconds = integer("seconds", 1);
+const warmupSeconds = parseStrictIntegerOption({
+  raw: values["warmup-seconds"],
+  label: "--warmup-seconds",
+  min: 1,
+  fallback: 5,
+});
 const sampleDelayMs = values["sample-delay-ms"]
   ? parseStrictIntegerOption({
       raw: values["sample-delay-ms"],
@@ -164,46 +194,51 @@ const resourceHook = values["work-counts"]
 try {
   // Prepare each identical tree sequentially. Setup allocation is outside capture.
   for (let index = 0; index < trees; index++) {
-    const child = spawn(process.execPath, [fixture, String(descendants)], {
-      detached: true,
-      stdio: ["pipe", "pipe", "inherit"],
-    });
-    children.push(child);
-    await new Promise<void>((resolve, reject) => {
-      let output = "";
-      const timeout = setTimeout(() => reject(new Error("Fixture readiness timed out")), 30_000);
-      const onExit = () => reject(new Error("Fixture exited during setup"));
-      child.once("error", reject);
-      child.once("exit", onExit);
-      child.stdout!.on("data", (chunk: Buffer) => {
-        output += chunk.toString();
-        if (bursting && index === trees - 1) {
-          const burst = /\{"event":"burst","at":(\d+)\}/.exec(output);
-          if (burst) {
-            burstAt = Number(burst[1]);
+    const child = roots
+      ? undefined
+      : spawn(process.execPath, [fixture, String(descendants)], {
+          detached: true,
+          stdio: ["pipe", "pipe", "inherit"],
+        });
+    if (child) {
+      children.push(child);
+      await new Promise<void>((resolve, reject) => {
+        let output = "";
+        const timeout = setTimeout(() => reject(new Error("Fixture readiness timed out")), 30_000);
+        const onExit = () => reject(new Error("Fixture exited during setup"));
+        child.once("error", reject);
+        child.once("exit", onExit);
+        child.stdout!.on("data", (chunk: Buffer) => {
+          output += chunk.toString();
+          if (bursting && index === trees - 1) {
+            const burst = /\{"event":"burst","at":(\d+)\}/.exec(output);
+            if (burst) {
+              burstAt = Number(burst[1]);
+            }
           }
-        }
-        if (output.includes('"ready"')) {
-          clearTimeout(timeout);
-          child.removeListener("exit", onExit);
-          resolve();
+          if (output.includes('"ready"')) {
+            clearTimeout(timeout);
+            child.removeListener("exit", onExit);
+            resolve();
+          }
+        });
+      });
+      child.on("exit", () => {
+        if (bursting && index === trees - 1) {
+          killedAt = Date.now();
+        } else {
+          failure ??= new Error("Fixture exited during measurement");
         }
       });
-    });
-    child.on("exit", () => {
-      if (bursting && index === trees - 1) {
-        killedAt = Date.now();
-      } else {
-        failure ??= new Error("Fixture exited during measurement");
-      }
-    });
+    }
+    const pid: number | undefined = Array.isArray(roots) ? roots[index] : child?.pid;
     const startWatch = () =>
       watchChildMemory({
-        pid: child.pid,
+        pid,
         limitBytes: Math.max(768, (descendants + 1) * 128) * 1024 ** 2,
         onLimit: () => {
           if (bursting && index === trees - 1) {
-            process.kill(-child.pid!, "SIGKILL");
+            process.kill(-pid!, "SIGKILL");
           } else {
             failure ??= new Error("Idle fixture exceeded its memory bound");
           }
@@ -216,9 +251,12 @@ try {
           }
         },
       });
-    stops.push(sampleDelayMs ? watcherContext.run(true, startWatch) : startWatch());
+    if (index < watched) {
+      // Supervisor callers carry request context in both benchmark arms.
+      stops.push(watcherContext.run(true, startWatch));
+    }
   }
-  await delay(5000);
+  await delay(warmupSeconds * 1000);
   fs.writeSync(
     1,
     `PHASE warmed ${JSON.stringify({ pid: process.pid, trees, ageSeconds: process.uptime() })}\n`,
@@ -265,14 +303,23 @@ try {
     fs.writeFileSync(profilePath, JSON.stringify(profile));
     allocation = allocated(profile);
   }
+  if (Array.isArray(roots)) {
+    for (const pid of roots) {
+      process.kill(pid, 0);
+    }
+  }
   assert.equal(failure, undefined);
-  assert.ok(!sampleDelayMs || completedSamples > 0, "No completed watcher samples were measured");
+  assert.ok(
+    !sampleDelayMs || completedSamples > 0,
+    "Accelerated sampling needs legacy per-command timers; omit --sample-delay-ms for shared samplers",
+  );
   const result = {
     scope: "watchChildMemory with real procfs and worker-spawned descendants",
     timingGateEligible:
       !sampleDelayMs && !values.allocations && !values["gc-log"] && !values["work-counts"],
     acceleratedSampling: sampleDelayMs
       ? {
+          unit: "legacy per-command sample completions",
           delayMs: sampleDelayMs,
           completedSamples,
           requestedIntervals,
@@ -282,9 +329,11 @@ try {
         }
       : null,
     trees,
+    watched,
     descendantsPerTree: descendants,
     processesPerTree: descendants + 1,
     seconds,
+    warmupSeconds,
     treeSeconds: trees * seconds,
     allocation,
     cpuMs: (cpu.user + cpu.system) / 1000,

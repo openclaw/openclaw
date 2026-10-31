@@ -12,6 +12,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
+import type { SessionTranscriptMatchCaller } from "./session-history-read.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -21,6 +22,7 @@ export async function findTranscriptEvent(
   scope: SessionTranscriptReadScope,
   match: SessionTranscriptEventMatch,
   signal?: AbortSignal,
+  caller?: SessionTranscriptMatchCaller,
 ): Promise<{ event: TranscriptEvent } | undefined> {
   signal?.throwIfAborted();
   const selection = { ...match };
@@ -56,7 +58,7 @@ export async function findTranscriptEvent(
     try {
       return await readRestoredSessionTranscriptInWorker(
         { scope: captured, resolved: target, owner, assertCurrent },
-        () => owner.findTranscriptEvent({ target, match: selection }, signal),
+        () => owner.findTranscriptEvent({ target, match: selection, caller }, signal),
       );
     } catch (error) {
       if (

@@ -209,6 +209,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/connect-command.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
+    case "ui/src/components/solid/tabs.tsx":
+    case "ui/src/lib/tabs.ts":
+    case "ui/src/lib/reactive/shadow-styles.ts":
+    case "ui/src/styles/tabs.css":
+      // Both tab renderers already load the owner, adapter, and generic styles together.
+      return "tabs-runtime";
     case "ui/src/components/solid/hub-page-header.tsx":
     case "ui/src/components/solid/settings-workspace.tsx":
     case "ui/src/components/solid/settings-select.tsx":
@@ -531,6 +537,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Cross-route labels must not pull the New Session or Chat renderers.
+                modules.add("ui/src/i18n/locales/en-chat-welcome.ts");
+                modules.add("ui/src/i18n/locales/en-session-people.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
                 // Creation still uses the catalog; Chat constructs its capability owner on demand.

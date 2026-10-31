@@ -279,8 +279,8 @@ describe("ActivityPage gateway lifecycle", () => {
     await i18n.setLocale("en");
     const { gateway: source, current } = activityGateway();
     const { container } = await bindActivity(source, "/control");
-    current().testOptions.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
-    current().testOptions.onEvent?.(toolEvent("read"));
+    current().testOptions.onEvent?.(toolEvent("Mu\u0308nchen", "main", "exec", "live run:a/b"));
+    current().testOptions.onEvent?.(toolEvent("Caf\u00e9"));
     const toolbar = container.querySelector(".activity-live-toolbar");
     expect(
       toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
@@ -324,22 +324,17 @@ describe("ActivityPage gateway lifecycle", () => {
     const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
       ".activity-page .settings-section__actions button",
     );
+    const expansionState = () =>
+      Array.from(
+        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
+        (row) => row.open,
+      );
     expand?.click();
     flush();
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
-        (row) => row.open,
-      ),
-    ).toEqual([true, true]);
+    expect(expansionState()).toEqual([true, true]);
     collapse?.click();
     flush();
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
-        (row) => row.open,
-      ),
-    ).toEqual([false, false]);
+    expect(expansionState()).toEqual([false, false]);
 
     const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
     if (!search) {
@@ -349,10 +344,15 @@ describe("ActivityPage gateway lifecycle", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
-    search.value = "run";
+    search.value = "m\u00fcnchen";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
+    expect(container.textContent).toContain("Mu\u0308nchen output");
+    search.value = "cafe\u0301";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
 
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
     if (!tool) {

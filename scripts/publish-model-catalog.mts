@@ -19,10 +19,10 @@ import {
   type ModelPricingSource,
 } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
-import { ModelInferenceCapabilitiesSchema } from "../packages/model-catalog-core/src/model-inference-capabilities.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogBundleV2,

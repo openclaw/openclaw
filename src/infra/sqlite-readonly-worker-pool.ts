@@ -5,6 +5,7 @@ import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { throwSettledAggregate } from "./error-graph-internal.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { sqliteReadOnlyOperationRequiresProcessRetirement } from "./sqlite-readonly-operation-registry.js";
 import {
   readOnlyWorkerScope,
   type SqliteReadOnlyWorkerScope,
@@ -261,7 +262,9 @@ export function createSqliteReadOnlyWorkerPool(
           options.signal?.throwIfAborted();
           if (
             !stateful &&
-            !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+            ((options.mode === "operation" &&
+              sqliteReadOnlyOperationRequiresProcessRetirement(options.command.type)) ||
+              !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources)
           ) {
             await closeSlot(selected);
           }

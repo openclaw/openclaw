@@ -5,6 +5,7 @@
 import path from "node:path";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
+import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { resolveExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { clearSkillFileHost } from "../../skills/skill-file-host.js";
@@ -19,7 +20,6 @@ import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js"
 import type { SandboxContext } from "../sandbox/types.js";
 import { resolveSessionSkillResourceCatalog } from "../session-placement-skill-resources.js";
 
-const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
 type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
   Partial<
     Pick<
@@ -120,7 +120,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       params.sandbox.containerWorkdir
         ? containerJoin(
             params.sandbox.containerWorkdir,
-            ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
+            ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
     const delivered = resolveSessionSkillResourceCatalog(params.sandbox.readOnlyResourceMounts);

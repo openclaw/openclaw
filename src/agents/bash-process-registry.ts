@@ -241,6 +241,7 @@ export function createProcessSession(
   };
 }
 
+const pollWaiters = new WeakMap<ProcessSession, Set<() => void>>();
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, ProcessSession & { endedAt: number; expiresAt: number }>();
 // Display uses start chronology; retained records are evicted in completion order.
@@ -264,7 +265,7 @@ export function setDurableProcessObserver(observer: (() => Promise<void>) | unde
 }
 type ProcessChange = { sessionKey: string; agentId?: string };
 const changeListeners = new Set<(target: ProcessChange) => void>();
-const pendingChanges = new Map<string, ProcessChange>();
+const pendingChanges = new Map<string, Set<string | undefined>>();
 let changeTimer: NodeJS.Timeout | undefined;
 
 /** Process observation is independent of the creating turn's lifetime. */
@@ -285,21 +286,26 @@ function queueProcessChange(session: ProcessSession) {
   if (!sessionKey || changeListeners.size === 0) {
     return;
   }
-  const target = { sessionKey, agentId: session.agentId };
-  pendingChanges.set(JSON.stringify([sessionKey, session.agentId]), target);
+  const agents = pendingChanges.get(sessionKey);
+  if (agents) {
+    agents.add(session.agentId);
+  } else {
+    pendingChanges.set(sessionKey, new Set([session.agentId]));
+  }
   // Bound chatty output to the former five-second polling cadence. Later writes
   // never postpone the signal, and no command text or output crosses this bus.
   changeTimer ??= runInDetachedAsyncContext(() =>
     setTimeout(() => {
       changeTimer = undefined;
-      const changes = [...pendingChanges.values()];
+      const changes = [...pendingChanges];
       pendingChanges.clear();
-      for (const change of changes) {
-        notifyListeners(changeListeners, change);
+      for (const [changedSessionKey, agentIds] of changes) {
+        for (const agentId of agentIds) {
+          notifyListeners(changeListeners, { sessionKey: changedSessionKey, agentId });
+        }
       }
-    }, 5_000),
+    }, 5_000).unref(),
   );
-  changeTimer.unref();
 }
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
@@ -428,6 +434,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   const previousLength = session.output.length;
   session.output.append(ownedChunk, session.maxOutputChars, chunk.length);
   session.truncated ||= session.output.length < previousLength + chunk.length;
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
   }
@@ -486,9 +493,47 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   };
 }
 
-/** Returns whether a prior poll has output ready for immediate replay. */
-export function hasPendingPollDelivery(session: ProcessSession): boolean {
-  return session.pendingPollDelivery !== undefined;
+function wakeSessionPolls(session: ProcessSession) {
+  const waiters = pollWaiters.get(session);
+  if (waiters) {
+    for (const wake of waiters) {
+      wake();
+    }
+  }
+}
+
+/** Waits for this exact process's output, exit, timeout, or caller cancellation. */
+export function waitForSessionPoll(
+  session: ProcessSession,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (
+    session.exited ||
+    session.pendingPollDelivery ||
+    session.pendingStdoutChars + session.pendingStderrChars > 0 ||
+    session.pendingOutputDropped ||
+    signal?.aborted
+  ) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const waiters = pollWaiters.get(session) ?? new Set<() => void>();
+    const wake = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", wake);
+      waiters.delete(wake);
+      if (waiters.size === 0) {
+        pollWaiters.delete(session);
+      }
+      resolve();
+    };
+    // Retain one timer so a one-shot caller stays alive until the result arrives.
+    const timer = setTimeout(wake, timeoutMs);
+    waiters.add(wake);
+    pollWaiters.set(session, waiters);
+    signal?.addEventListener("abort", wake, { once: true });
+  });
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -516,6 +561,7 @@ export function markExited(
   session.pendingOutputDropped = pending.outputDropped;
   session.output.freeze();
   moveToFinished(session);
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
   }

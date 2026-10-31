@@ -253,10 +253,10 @@ suite.define(() => {
                 };
               });
             };
-            // Composite translucent option fills against the painted menu surface.
+            // The translucent menu surface composites over content, so measure its opaque base.
             const listboxBackground = await picker
               .locator(".picker-select__menu")
-              .evaluate((element) => getComputedStyle(element).backgroundColor);
+              .evaluate((element) => getComputedStyle(element).getPropertyValue("--popover"));
             const assertOptionContrast = async (option: typeof selected) => {
               const paint = await optionPaint(option);
               const optionColors = await page.evaluate(resolveRenderedColors, {

@@ -426,21 +426,27 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
 }
 
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
-  const lower = normalizeLowercaseStringOrEmpty(filter);
+  const lower = normalizeLowercaseStringOrEmpty(filter).normalize("NFC");
   const normalized = lower.replace(/[\s_]+/gu, "-");
   return SLASH_COMMANDS.filter(
     (command) => command.source === "skill" && command.skillModelVisible === true,
   )
     .filter((command) => {
-      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command)).normalize(
+        "NFC",
+      );
       const displayLookup = displayName.replace(/[\s_]+/gu, "-");
-      const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
+      const commandLookup = normalizeLowercaseStringOrEmpty(command.name)
+        .normalize("NFC")
+        .replace(/[\s_]+/gu, "-");
       return (
         !lower ||
         displayName.includes(lower) ||
         displayLookup.includes(normalized) ||
         commandLookup.startsWith(normalized) ||
-        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command))
+          .normalize("NFC")
+          .includes(lower)
       );
     })
     .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));

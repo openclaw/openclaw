@@ -157,14 +157,26 @@ export function* iterateUnindexedTranscriptNavigation(
   const query = unindexedNavigationQuery(projection, options.eventIds)
     .$if(options.controlsOnly === true, (filtered) =>
       filtered.where((eb) =>
-        eb.or([
-          eb(transcriptPredicateSql(projection.database.db, "navigation_valid", "event"), "=", 0),
-          eb(
-            transcriptPredicateSql(projection.database.db, "navigation_last_type", "event"),
-            "in",
-            ["reset", "compaction", "custom_message"],
-          ),
-        ]),
+        // SQLite may evaluate event columns before the anti-join unless identity fences them.
+        eb
+          .case()
+          .when("identity.seq", "is not", null)
+          .then(false)
+          .else(
+            eb.or([
+              eb(
+                transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
+                "=",
+                0,
+              ),
+              eb(
+                transcriptPredicateSql(projection.database.db, "navigation_last_type", "event"),
+                "in",
+                ["reset", "compaction", "custom_message"],
+              ),
+            ]),
+          )
+          .end(),
       ),
     )
     .where("event.seq", "<=", options.maxRawSeq ?? projection.state.indexedSeq)

@@ -7,14 +7,11 @@ import {
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "./compatibility.js";
+import { DecisionContractError } from "./contract-error.js";
+import { validateDecisionResultV2 } from "./result-validation.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionAnswer, DecisionBatch, DecisionBatchResult } from "./types.js";
-import { validateDecisionResultV2 } from "./validation-v2.js";
-import {
-  DecisionContractError,
-  validateDecisionBatch,
-  validateDecisionResult,
-} from "./validation.js";
+import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
 
 const batch: DecisionBatch = {
   state: "synthetic evidence",
@@ -219,11 +216,20 @@ it("refuses to drop abstention, explicit decisions, errors, missing distribution
   }
 });
 
-it("retains the legacy guard semantics after shared-primitives extraction", () => {
+it("keeps legacy resource and result guards at public entry points", () => {
   const answers = { ...result.answers, score: { type: "score", score: 1.3 } };
   for (const patch of [{ answers }, { usage: { costUsd: 1 } }]) {
     expect(validateDecisionResult(batch, { ...result, ...patch })).toBe(false);
   }
-  expect(validateDecisionBatch({ ...batch, state: "x".repeat(1_048_576) })).toBe(false);
+  const oversized = { state: "x".repeat(1_048_576), questions: {} };
+  expect(validateDecisionBatch(oversized)).toBe(false);
+  expect(decisionBatchV1ToV2(oversized)).toBeUndefined();
+  expect(() => decisionBatchV1ToV2({ ...oversized, state: "" })).toThrow(DecisionContractError);
+  for (const count of [256, 257]) {
+    const questions = Object.fromEntries(
+      Array.from({ length: count }, (_, index) => [String(index), { type: "boolean" }]),
+    );
+    expect(decisionBatchV1ToV2({ ...batch, questions }) !== undefined).toBe(count === 256);
+  }
   expect(decisionResultV1ToV2(batch, { ...result, model: "" })).toBeUndefined();
 });

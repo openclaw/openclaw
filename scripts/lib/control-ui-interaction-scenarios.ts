@@ -1504,7 +1504,11 @@ async function inventoryReady(
       .getByText("Interaction 0000", { exact: true })
       .waitFor();
     await page.waitForFunction(
-      () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 25,
+      () =>
+        Number(
+          document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+            document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+        ) === 26,
     );
   } else {
     await gateway.waitForRequest("cron.list", { match: { offset: 0 } });
@@ -1550,10 +1554,14 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
   await page.locator(".data-table-pagination__info").getByText(/1000/).waitFor();
   await toggle.click();
   await filters.waitFor({ state: "hidden" });
-  // The owner sorts 1,000 rows, while the product deliberately renders at most 100 per page.
+  // The owner sorts 1,000 rows; the logical page has 100 even when its DOM is windowed.
   await page.locator(".data-table-pagination__size").selectOption("100");
   await page.waitForFunction(
-    () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 100,
+    () =>
+      Number(
+        document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+          document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+      ) === 101,
   );
   await frames(page);
 }

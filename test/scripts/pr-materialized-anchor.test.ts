@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrRoutingWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -48,7 +48,8 @@ describePosix("materialized PR anchor retirement", () => {
     const root = realpathSync(tempDirs.make("pr-startup-retirement-"));
     const anchor = join(root, "openclaw-pr-anchor-v3.startup");
     mkdirSync(anchor, { mode: 0o700 });
-    copyPrWrapperSources(anchor);
+    copyPrRoutingWrapperSources(anchor);
+    expect(existsSync(join(anchor, "src"))).toBe(false);
     const childStarted = join(root, "child-started");
     writeFileSync(join(anchor, "scripts/pr"), `#!/bin/sh\ntouch '${childStarted}'\n`);
     // Fail after the snapshot is created but before spawning the operation.

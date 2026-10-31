@@ -209,10 +209,11 @@ Reviewing against the old guest HEAD would
 also include upstream-only changes. The operation requires the prepared sandbox
 of the current agent; a direct RPC cannot supply another runtime. Publication
 refuses a pending integration and never silently merges new base changes into
-reviewed files. A retry or restart settles the existing retained source result
-through the workspace journal; host merge ancestry remains outside guest Git
-metadata. Worktree removal is deferred while the host integration is pending;
-finish refresh before retrying archive cleanup. Existing privileged PR actions
+reviewed files. A retry, restart, or later turn resumes the existing retained
+source result from the files it already applied instead of rolling them back, so
+a large refresh interrupted by a turn deadline still finishes; host merge
+ancestry remains outside guest Git metadata. Worktree removal is deferred while
+the host integration is pending; finish refresh before retrying archive cleanup. Existing privileged PR actions
 still require full operator write access.
 
 Finish refresh and conflict resolution before downgrading. An interrupted transfer
@@ -232,7 +233,11 @@ this checkout while capturing or applying changes. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
 are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
-from the live check. OpenClaw records pending results and
+from the live check. Concurrent preparations of the same workspace and session
+generation share queued reconciliation. Once filesystem observation begins,
+later preparations require a fresh check so intervening edits remain visible.
+Completed preparation results are not cached. Each caller retains its own
+cancellation and authority checks. OpenClaw records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not

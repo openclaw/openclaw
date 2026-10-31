@@ -4,9 +4,11 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createDecisionRegistry } from "./contract.test-support.js";
 import type { DecisionEvaluateOptions } from "./execution-types.js";
+import type { ProviderDecisionOutcome } from "./provider-outcomes.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
 import type { DecisionProviderV1 } from "./provider-types.js";
-import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
-import type { DecisionBatch, ProviderDecisionOutcome } from "./types.js";
+import { evaluateDecisionInRegistry } from "./runtime.js";
+import type { DecisionBatch } from "./types.js";
 
 export const batch: DecisionBatch = {
   state: { evidence: "synthetic" },
