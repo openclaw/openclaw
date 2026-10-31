@@ -72,6 +72,9 @@ Usage:
 
 Options: `--channel <channel>`, `--account <accountId>`, `--notify` (send a confirmation back to the requester on the same channel).
 
+For WhatsApp, `--notify` sends the standard approval confirmation through the
+running Gateway, using the approved request's account.
+
 ### Owner bootstrap
 
 If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI also records the approved sender as the command owner. It writes a channel-scoped entry such as `telegram:123456789`. This only bootstraps the first owner - later pairing approvals never replace or expand `commands.ownerAllowFrom`. The Control UI presents this elevation as a separate `operator.admin`-protected checkbox instead of applying it automatically.

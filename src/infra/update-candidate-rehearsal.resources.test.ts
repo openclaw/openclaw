@@ -469,6 +469,16 @@ it("keeps the larger allowance when the candidate omits the copy capability", as
   const f = await capacityFixture(100, true);
   const worker = path.join(f.root, "dist", "infra", "update-candidate-state.worker.js");
   // Exercise the real worker, but present the inventory contract of an older candidate.
+  const run = exec.runUtf8CommandWithTimeout;
+  vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    if (typeof options === "number" || typeof options.input !== "string") {
+      return run(argv, options);
+    }
+    const input = JSON.parse(options.input);
+    // Older workers also ignore the opt-in result transport and reply on stdout.
+    delete input.resultPath;
+    return run(argv, { ...options, input: JSON.stringify(input) });
+  });
   const source = await fs.readFile(worker, "utf8");
   await fs.writeFile(
     worker,

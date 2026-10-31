@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import {
   withWorktreeAllocationLease,
@@ -11,6 +12,7 @@ import {
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
+import { hydrateCommitObjects, missingCommitObjects } from "./object-hydration.js";
 import { createProvisionedSnapshotWriter } from "./provisioned-snapshot-store.js";
 import {
   captureWorktreeRegistryReadGuard,
@@ -66,6 +68,32 @@ export async function captureManagedWorktreeSnapshot(params: {
     if (params.exactState && !exactState) {
       throw new Error("Exact-state capture lacks retirement custody");
     }
+    // Hydrate at the admitted mutation boundary. Snapshot commands stay offline,
+    // including status/index preparation that may need unchanged HEAD blobs.
+    await withContentGitSlot(async () => {
+      const options = {
+        signal: params.signal,
+        beforeRun: params.assertCurrent,
+        lowerPriority: true,
+        env: { GIT_NO_REPLACE_OBJECTS: "1" },
+      };
+      const missing = await missingCommitObjects(record.path, "HEAD", options);
+      if (missing.length > 0) {
+        await hydrateCommitObjects(record.path, "HEAD", missing, options).catch(
+          (cause: unknown) => {
+            params.signal?.throwIfAborted();
+            params.assertCurrent?.();
+            // Keep the cleanup owner's shared-repository backoff on failed hydration.
+            throw new Error(
+              `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
+              { cause },
+            );
+          },
+        );
+      }
+    }, params.signal);
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     return await runGitWorkerOperation(
       {
         type: "worktree.snapshot",

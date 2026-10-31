@@ -5,6 +5,7 @@ const entrypoint = createTestEntrypoint(import.meta.url, "infra");
 
 // Native process probes start their deadlines after the invocation owner prepares these modules.
 export const nativeProcessTestEntrypoints = {
+  acpClient: entrypoint("../acp/client", "acp/client.js"),
   backupDatabaseDiscovery: runtimeProcessEntrypoints.backupDatabaseDiscovery,
   databaseBackup: runtimeProcessEntrypoints.databaseBackup,
   updatePostgresState: runtimeProcessEntrypoints.updatePostgresState,

@@ -180,8 +180,11 @@ adoption uses the PR workspace.
 Initial preparation of an already managed workspace requires a clean workspace without dirty, untracked, or
 unpublished work, except for a PR this conversation published, described above. Otherwise it preserves that work and asks you to keep or finish
 it separately before continuing. A clean workspace receives exactly the verified
-PR head's files, even when the selected project's base is newer. Preparation
-keeps an already managed directory and sandbox scope, and records the original PR
+PR head's files, even when the selected project's published base is newer than
+the base recorded by the PR or comes from a different project branch. Preparation
+verifies that newer history against the project's recorded source branch in its
+original repository; a clean checkout with unpublished commits remains
+protected. Preparation keeps an already managed directory and sandbox scope, and records the original PR
 association. The sandbox's current branch and HEAD remain intact; the source
 files are staged for work on the PR.
 
@@ -212,6 +215,11 @@ If a file has both staged and unstaged changes, commit its staged changes first;
 refresh refuses that case so its index-only version is not lost. The returned review base is the common ancestor of the accepted PR
 head and its base, so an older PR head does not make newer base work appear to be
 deleted.
+
+Content acquisition errors identify the failed Git stage and retain a bounded,
+redacted native reason. A fetch timeout, failed object inventory, and objects
+still missing after a successful fetch are reported separately. Use that reason
+to investigate before retrying `prepare_pr`.
 
 An interrupted preparation retains the same accepted source for retry while
 reconciling the current destination for its review comparison.
@@ -355,7 +363,7 @@ Local session-owned worktrees can use the same **Publish PR** action in the Cont
 
 Automatic shared-publication recovery backs off after an unresolved attempt: one minute, then two, four, eight, sixteen, and at most one attempt every thirty minutes. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The cooldown and latest diagnostic are held in memory and reset when the Gateway restarts. The durable publication receipt and recorded effects remain unchanged.
 
-During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures include bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
+During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures identify the failed stage and native reason, including timeouts, with bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
 
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 

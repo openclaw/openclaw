@@ -10,10 +10,6 @@ import {
   withPluginGenerationMetrics,
 } from "./plugin-generation-metrics.js";
 import {
-  inspectPluginGenerationSources,
-  inspectPluginSourceDependencies,
-} from "./plugin-generation-source-inspection.js";
-import {
   markPluginSourceCaptureOperation,
   type PluginRecoverySource,
 } from "./plugin-generation-source-lookup.js";
@@ -23,6 +19,7 @@ import type {
   GenerationWorkerReply,
   GenerationWorkerCallback,
 } from "./plugin-generation-worker-contract.js";
+import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   nativeAdmissionStateFor,
   settlePluginNativeAdmissions,
@@ -259,6 +256,9 @@ function createPreparationSession(context: CaptureCommand) {
               sentReceipts.set(key, receipt);
             }
             if (command.inspection) {
+              // Inspection's host capture wrapper must stay outside worker bootstrap.
+              const { inspectPluginGenerationSources, inspectPluginSourceDependencies } =
+                await import("./plugin-generation-source-inspection.js");
               const inspection = command.inspection;
               const unresolvedAncestors: Array<{ name: string; importer: string }> = [];
               result = {
@@ -334,7 +334,19 @@ function createPreparationSession(context: CaptureCommand) {
           }
           const exception = failure instanceof Error ? failure : new Error(String(failure));
           return {
-            error: { message: exception.message, name: exception.name, stack: exception.stack },
+            error: {
+              message: exception.message,
+              name: exception.name,
+              stack: exception.stack,
+              ...("code" in exception && typeof exception.code === "string"
+                ? { code: exception.code }
+                : {}),
+            },
+            ...((command.operation === "capture" ||
+              codec.isSourcePreparationCall(command.handle)) &&
+            isPluginSourceAcquisitionError(failure)
+              ? { sourceAcquisitionFailure: true as const }
+              : {}),
             resources: resources.size - orphaned.size,
             released: codec.takeReleasedHandles(),
           };

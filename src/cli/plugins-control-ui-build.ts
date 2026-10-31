@@ -28,7 +28,7 @@ export async function writePluginBuildManifest(
     content: `${JSON.stringify(manifest, null, 2)}\n`,
     mode: 0o666 & ~process.umask(),
     preserveExistingMode: true,
-    dirMode: (await fs.stat(realRootDir)).mode & 0o7777,
+    dirMode: "preserve",
     syncTempFile: true,
     syncParentDir: true,
     throwOnCleanupError: true,

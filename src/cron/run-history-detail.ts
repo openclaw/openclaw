@@ -340,7 +340,8 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
       jobId: record.jobId,
       action: "finished",
       sessionKey: record.sessionKey,
-      runId: typeof record.detail.runId === "string" ? record.detail.runId : undefined,
+      // Public request IDs win; scheduled and on-exit runs still need their receipt-backed ID.
+      runId: typeof record.detail.runId === "string" ? record.detail.runId : record.runId,
     },
     { jobId: record.jobId },
   );

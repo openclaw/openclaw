@@ -89,7 +89,7 @@ subprocess.for([
       : [
           "code-mode",
           "capture",
-          "gateway-subscriptions",
+          "gateway-runtime-config",
           "failure",
           "cancel",
           "excluded",
@@ -116,8 +116,8 @@ subprocess.for([
             ? [codeModeWorker, agentsCoreConfig]
             : mode === "capture"
               ? [discordCapture, e2eConfig]
-              : mode === "gateway-subscriptions"
-                ? [gatewaySubscriptions, gatewayServerConfig]
+              : mode === "gateway-runtime-config"
+                ? ["src/gateway/server-runtime-config.test.ts", gatewayServerConfig]
                 : [coreWorker, infraConfig];
         const compiled = path.join(directory, "compiled.jsonl");
         const launched = path.join(directory, "launched.json");
@@ -272,7 +272,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           "gateway-methods",
           "code-mode",
           "capture",
-          "gateway-subscriptions",
+          "gateway-runtime-config",
         ].includes(mode);
         const prepared = ready || mode === "failure" || mode === "cancel";
         expect(fs.existsSync(compilerReceipt)).toBe(prepared);

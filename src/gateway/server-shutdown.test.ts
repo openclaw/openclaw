@@ -20,9 +20,11 @@ it("omits invalid restart metadata and normalizes the reason", () => {
   });
 });
 
-it.for([false, true])(
-  "bounds a held sidecar and preserves fatal close status (%s)",
-  async (fatal) => {
+it.for(["optional", "fatal", "required"])(
+  "joins required work and preserves fatal close status (%s)",
+  async (mode) => {
+    const fatal = mode === "fatal";
+    const required = mode === "required";
     vi.useFakeTimers();
     const sidecar = createDeferredCore();
     const sidecars = createGatewaySidecarStopOwner();
@@ -36,9 +38,9 @@ it.for([false, true])(
     const noWork = async () => undefined;
     const closing = runGatewayCloseSteps({
       owner: {
-        connectionWork: { drain: noWork },
+        connectionWork: { drain: required ? sidecars.stop : noWork },
         stopConnectionDependentSidecars: noWork,
-        stopRegisteredGatewayLifetimeSidecars: sidecars.stop,
+        stopRegisteredGatewayLifetimeSidecars: required ? noWork : sidecars.stop,
         stopRegisteredPostReadySidecars: noWork,
         runClosePrelude: noWork,
         sealAndJoinRegisteredSidecarStops: noWork,
@@ -49,15 +51,19 @@ it.for([false, true])(
     }).catch((error: unknown) => error);
     try {
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(close).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledTimes(required ? 0 : 1);
+      sidecar.resolve();
       const failure = await closing;
-      expect(hasGatewayCleanupRetainedError(failure)).toBe(true);
-      expect(isGatewayCleanupRetainedError(failure)).toBe(!fatal);
-      expect(failure).toHaveProperty("message", expect.stringContaining("synthetic-held-worker"));
+      if (required) {
+        expect(failure).toBeUndefined();
+        expect(close).toHaveBeenCalledOnce();
+      } else {
+        expect(hasGatewayCleanupRetainedError(failure)).toBe(true);
+        expect(isGatewayCleanupRetainedError(failure)).toBe(!fatal);
+        expect(failure).toHaveProperty("message", expect.stringContaining("synthetic-held-worker"));
+      }
       expect(onError).toHaveBeenCalledWith(
-        expect.stringMatching(
-          /^gateway lifetime sidecars cleanup exceeded 5000ms; resources remain; pending: shutdown\.gateway-lifetime-sidecars=\d+ms, shutdown\.sidecar\.synthetic-held-worker=\d+ms$/,
-        ),
+        expect.stringMatching(/cleanup exceeded 5000ms; resources remain; pending: shutdown\./),
       );
     } finally {
       sidecar.resolve();

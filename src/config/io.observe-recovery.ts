@@ -2,7 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -90,10 +90,9 @@ function createRecoveryCommitEffect(params: {
     filePath: publicationPath,
     content: params.raw,
     dirMode:
-      readExistingStateRootMode(
+      stateRootDirectoryMode(
         path.dirname(publicationPath),
         resolveConfigWriteDirectory(params.configPath, publicationPath, params.deps).path,
-        params.deps.fs,
       ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(params.configPath),

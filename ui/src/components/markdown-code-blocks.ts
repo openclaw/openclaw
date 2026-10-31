@@ -148,14 +148,21 @@ function handleCodeBlockDisclosure(target: Element): void {
 }
 
 export function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
+  measureCodeBlockWidthOverflow(wrapper)?.();
+}
+
+/** Read geometry before applying overflow chrome. */
+export function measureCodeBlockWidthOverflow(wrapper: HTMLElement): (() => void) | undefined {
   const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
   const code = viewport?.querySelector<HTMLElement>("code");
   if (!viewport || !code) {
-    return;
+    return undefined;
   }
   const overflowing =
     !wrapper.classList.contains("is-wrapped") && code.scrollWidth > viewport.clientWidth + 1;
-  wrapper.classList.toggle("has-horizontal-overflow", overflowing);
+  return () => {
+    wrapper.classList.toggle("has-horizontal-overflow", overflowing);
+  };
 }
 
 /** Highlight when available; plain escaped code remains readable while the chunk loads. */
