@@ -114,7 +114,9 @@ if (values.baseline) {
   const source = pathToFileURL(path.resolve(values.baseline));
   registerHooks({
     load(url, context, next) {
-      if (url !== ownerUrl.href) return next(url, context);
+      if (url !== ownerUrl.href) {
+        return next(url, context);
+      }
       const loaded = next(source.href, context);
       return { format: loaded.format, source: loaded.source, shortCircuit: true };
     },
@@ -126,7 +128,9 @@ const digest = (result) =>
     .update(JSON.stringify(result) ?? "undefined")
     .digest("hex");
 let expected;
-if (values.mode !== "plans") expected = digest(read());
+if (values.mode !== "plans") {
+  expected = digest(read());
+}
 const rows = [],
   statements = new Map();
 const decoded = { calls: 0, bytes: 0 };
@@ -140,7 +144,9 @@ try {
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.prepare = (text) => {
       const statement = originalPrepare(text);
-      if (!/^select\b/i.test(text)) return statement;
+      if (!/^select\b/i.test(text)) {
+        return statement;
+      }
       for (const method of ["get", "all", "iterate"]) {
         const execute = statement[method].bind(statement);
         statement[method] = (...bindings) => {
@@ -161,16 +167,24 @@ try {
             if (row) {
               record.rows++;
               for (const value of Object.values(row)) {
-                if (typeof value === "string") record.textBytes += Buffer.byteLength(value);
+                if (typeof value === "string") {
+                  record.textBytes += Buffer.byteLength(value);
+                }
               }
             }
             return row;
           };
           const result = execute(...bindings);
-          if (method === "get") return account(result);
-          if (method === "all") return result.map(account);
+          if (method === "get") {
+            return account(result);
+          }
+          if (method === "all") {
+            return result.map(account);
+          }
           return (function* () {
-            for (const row of result) yield account(row);
+            for (const row of result) {
+              yield account(row);
+            }
           })();
         };
       }
@@ -179,7 +193,9 @@ try {
     const parse = JSON.parse;
     JSON.parse = (...args) => {
       decoded.calls++;
-      if (typeof args[0] === "string") decoded.bytes += Buffer.byteLength(args[0]);
+      if (typeof args[0] === "string") {
+        decoded.bytes += Buffer.byteLength(args[0]);
+      }
       return parse(...args);
     };
     restore = () => {
@@ -190,7 +206,9 @@ try {
   } else {
     for (let warmup = 0; warmup < 3; warmup++) {
       assert.equal(digest(read()), expected);
-      if (baselineRead) assert.equal(digest(baselineRead()), expected);
+      if (baselineRead) {
+        assert.equal(digest(baselineRead()), expected);
+      }
     }
     if (values.mode === "profile") {
       await inspector.post("Profiler.enable");
@@ -199,17 +217,19 @@ try {
     for (let sample = 0; sample < samples; sample++) {
       for (const arm of sample % 2 === 0 ? ["A1", "A2"] : ["A2", "A1"]) {
         global.gc();
-        if (values.mode === "allocation")
+        if (values.mode === "allocation") {
           await inspector.post("HeapProfiler.startSampling", {
             samplingInterval: 32768,
             includeObjectsCollectedByMajorGC: true,
             includeObjectsCollectedByMinorGC: true,
           });
+        }
         const cpu = process.threadCpuUsage(),
           start = performance.now();
         let result;
-        for (let iteration = 0; iteration < iterations; iteration++)
+        for (let iteration = 0; iteration < iterations; iteration++) {
           result = (arm === "A1" && baselineRead ? baselineRead : read)();
+        }
         const wallMs = performance.now() - start,
           used = process.threadCpuUsage(cpu);
         const sampledV8Bytes =
@@ -228,11 +248,12 @@ try {
         });
       }
     }
-    if (values.mode === "profile")
+    if (values.mode === "profile") {
       fs.writeFileSync(
         `${values.output}.cpuprofile`,
         JSON.stringify((await inspector.post("Profiler.stop")).profile),
       );
+    }
   }
   fs.writeFileSync(
     values.output,

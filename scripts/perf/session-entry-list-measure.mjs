@@ -97,7 +97,9 @@ const evidence = {
 };
 const inspector = new Session();
 try {
-  for (const run of operations) check(run());
+  for (const run of operations) {
+    check(run());
+  }
   if (values.mode === "sql") {
     const original = new Map();
     let rows;
@@ -126,14 +128,17 @@ try {
         evidence.sql.push({ arm, queries: rows });
       }
     } finally {
-      for (const [method, implementation] of original)
+      for (const [method, implementation] of original) {
         StatementSync.prototype[method] = implementation;
-    }
-    for (const arm of evidence.sql)
-      for (const row of arm.queries) {
-        if (/^select\b/i.test(row.query))
-          row.plan = database.db.prepare(`EXPLAIN QUERY PLAN ${row.query}`).all();
       }
+    }
+    for (const arm of evidence.sql) {
+      for (const row of arm.queries) {
+        if (/^select\b/i.test(row.query)) {
+          row.plan = database.db.prepare(`EXPLAIN QUERY PLAN ${row.query}`).all();
+        }
+      }
+    }
   } else {
     inspector.connect();
     if (values.mode === "profile") {
@@ -143,16 +148,19 @@ try {
     for (let pair = 0; pair < 5; pair++) {
       for (const arm of pair % 2 ? [1, 0] : [0, 1]) {
         global.gc();
-        if (values.mode === "allocation")
+        if (values.mode === "allocation") {
           await inspector.post("HeapProfiler.startSampling", {
             samplingInterval: 4096,
             includeObjectsCollectedByMajorGC: true,
             includeObjectsCollectedByMinorGC: true,
           });
+        }
         const cpu = process.threadCpuUsage();
         const start = performance.now();
         let result;
-        for (let iteration = 0; iteration < iterations; iteration++) result = operations[arm]();
+        for (let iteration = 0; iteration < iterations; iteration++) {
+          result = operations[arm]();
+        }
         const wallMs = (performance.now() - start) / iterations;
         const used = process.threadCpuUsage(cpu);
         const sample = { pair, arm, wallMs, cpuMs: (used.user + used.system) / 1000 / iterations };
