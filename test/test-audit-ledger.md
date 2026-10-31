@@ -148,5 +148,26 @@ the four production findings are unchanged. Final removal-check results,
 integrated-head proof, and landing: [PR #189212](https://github.com/openclaw/openclaw/pull/189212).
 No test declarations or production code change.
 
+Additional source review (no runtime result claimed):
+
+| Owner scope                                                                     | Suites read     | Decision                                                                                                                                                                              |
+| ------------------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS app                                                                       | 304 Swift files | 2,653 declaration sites: retain 2,635, repair eight proofs, qualify nine consolidations and one decoding-order deletion. Local owners/support read; native execution remains pending. |
+| CLI channel/root, message/device, skills/templates, session/storage             | 98              | Retain 542 declarations; one mock workshop replay may be absorbed by the real persisted CLI/Gateway keeper. Three unreachable fixture branches remain after earlier case removals.    |
+| Auto-reply execution, CLI execution, settlement/presentation, remaining helpers | 52              | Retain 322 declarations; repair one account-isolation case whose differing text hides a broken account discriminator. Queue and other reply scopes remain open.                       |
+| Cohere, Featherless, Groq, LongCat, SGLang, SubQ                                | 12              | Retain all 33 declarations: real payload/replay, discovery, config, credential rotation and cancellation contracts differ. Live suites were read, not executed.                       |
+
+The CLI fixture batch starts at `64daa25640d`. Retire unused config routing in
+`argv-invocation.test.ts`, unused Tailscale setup in `qr-cli.test.ts`, and unused
+preview/rollback/bootstrap controls in `plugin-local-state-owner.test.ts`.
+Keep every active declaration in these suites, including actual lease revocation,
+owner-loss and Tailscale fallback proof. Their removed consumers are evidenced by
+`d331fd73241`, `fb9545ca685`, and `7758bb9cdd7`.
+
+Before removing the workshop mock replay, require the unchanged persisted keeper
+in `skills-cli.workshop-contract.test.ts` to pass through the real CLI and Gateway
+dispatcher, then fail under a temporary local-replay fault. Restore the fault before
+editing tests. Baseline, candidate checks, fresh review and landing remain pending.
+
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
