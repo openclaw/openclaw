@@ -85,10 +85,12 @@ workflows; the final post-drain result does. Abort, timeout, process failure,
 output/parse failure, and other turn failures end the same span with an error.
 
 Claude Code reports per-assistant-message usage and may also report cumulative
-usage on its terminal result. OpenClaw reply accounting continues to use the
-last assistant message so existing cost semantics do not change; the
-turn-level model-call span uses terminal cumulative usage when available,
-including cache-read and cache-creation tokens.
+usage on its terminal result. When the terminal total is available, OpenClaw
+reply and session accounting use it as the turn's billing usage, as for
+embedded runs, and keep the last assistant message's usage as `lastCallUsage`
+for context sizing. The turn-level model-call span also uses terminal
+cumulative usage when available, including cache-read and cache-creation
+tokens.
 
 For these CLI spans, byte and timing fields describe the observable OpenClaw
 CLI boundary:

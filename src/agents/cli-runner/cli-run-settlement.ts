@@ -692,7 +692,11 @@ export function buildCliRunResult(params: {
         provider: runParams.modelProvider ?? runParams.provider,
         model: context.modelId,
         ...preparedContextAgentMeta,
-        usage: output.usage,
+        // Like the embedded runner, billing spans the turn's model calls; only the
+        // latest call sizes context.
+        usage: output.diagnosticUsage
+          ? { ...output.diagnosticUsage, contextUsage: { state: "unavailable" } }
+          : output.usage,
         ...(output.usage ? { lastCallUsage: output.usage } : {}),
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
         ...(persistedCliSessionId
