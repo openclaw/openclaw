@@ -2,9 +2,15 @@ import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/mod
 import type { DecisionReasoning } from "./execution-types.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 
+/** Facts used for input eligibility; route protocol, billing and grounding are host concerns. */
+type DecisionInputCapabilities = Pick<
+  ModelDecisionCapabilities,
+  "input" | "questions" | "reasoning" | "limits"
+>;
+
 /** Match admitted evidence against the selected route without collecting more context. */
 export function supportsDecisionInput(
-  capability: ModelDecisionCapabilities | undefined,
+  capability: DecisionInputCapabilities | undefined,
   batch: DecisionBatchV2,
   reasoning: DecisionReasoning | undefined,
 ): boolean {
