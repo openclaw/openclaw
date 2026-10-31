@@ -12,6 +12,7 @@ it("keeps Sage execution cold through registration and rejected direct calls", a
   const activate = vi.fn(() => {
     throw new Error("Sage execution activated");
   });
+  // mock-isolation: The throwing trap proves registration and rejected calls stay cold.
   vi.doMock("./sage-validation.js", activate);
   const { registerLevantoTestProvider } = await import("./registration.test-support.js");
   const probe = vi.fn(async () => ({ width: 1, height: 1 }));
