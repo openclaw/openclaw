@@ -11,6 +11,7 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
+import { writeHovercardExcerpt } from "./session-hovercard.ts";
 
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
@@ -102,6 +103,50 @@ function attributionSummary(container: ParentNode): string {
     .replace(/\s+/gu, " ")
     .trim();
 }
+
+describe("writeHovercardExcerpt", () => {
+  function clampedElement(maxLength = Number.POSITIVE_INFINITY) {
+    const element = document.createElement("div");
+    Object.defineProperty(element, "clientHeight", { get: () => 54 });
+    Object.defineProperty(element, "scrollHeight", {
+      get: () => ((element.textContent ?? "").length > maxLength ? 72 : 54),
+    });
+    return element;
+  }
+
+  it("keeps text that fits whole, without an ellipsis", () => {
+    const element = clampedElement(40);
+    writeHovercardExcerpt(element, "  Merged and deployed.  ");
+    expect(element.textContent).toBe("Merged and deployed.");
+  });
+
+  it("writes one text node holding only what fits, with paragraphs collapsed inline", () => {
+    const element = clampedElement(21);
+    writeHovercardExcerpt(element, "First paragraph.\n\n- A list item\n\nTail sentence.");
+    expect(element.textContent).toBe("First paragraph. - A…");
+    expect(element.childNodes).toHaveLength(1);
+    expect(element.childElementCount).toBe(0);
+  });
+
+  it("drops punctuation and spaces before the ellipsis", () => {
+    const element = clampedElement(17);
+    writeHovercardExcerpt(element, "First paragraph. Tail sentence.");
+    expect(element.textContent).toBe("First paragraph…");
+  });
+
+  it("does not split a grapheme at the cut", () => {
+    const element = clampedElement(13);
+    writeHovercardExcerpt(element, "Status: 👩‍💻 is working on it");
+    expect(element.textContent).toBe("Status…");
+  });
+
+  it("never hands layout more than the upper bound", () => {
+    const element = clampedElement();
+    writeHovercardExcerpt(element, "word ".repeat(2_000));
+    expect(element.textContent?.length).toBeLessThanOrEqual(320);
+    expect(element.textContent?.endsWith("…")).toBe(true);
+  });
+});
 
 describe("session hovercard", () => {
   it("shows the owning session failure above the notepad", () => {

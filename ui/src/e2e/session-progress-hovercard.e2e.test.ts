@@ -153,6 +153,72 @@ suite.define(() => {
     );
   });
 
+  it("clamps long commentary without scrolling to a focused link past the clamp", async () => {
+    const selectedSessionKey = "agent:main:selected-clamp";
+    const sessionKey = "agent:main:hovered-clamp";
+    const filler = "Review the launch notes and agree on the release window. ".repeat(6);
+
+    await suite.withPage(
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: {
+            "progressCard.get": {
+              card: {
+                markdown: `${filler}[Release review](https://example.com/review)`,
+                revision: 1,
+                sessionKey,
+                updatedAt: 1,
+              },
+            },
+            "sessions.list": chatSessionListResponse([
+              sessionRow(selectedSessionKey, "Selected session", 2),
+              sessionRow(sessionKey, "Hovered session", 1),
+            ]),
+          },
+          sessionKey: selectedSessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        await row.waitFor({ state: "visible" });
+        await row.hover();
+        const commentary = page.locator(
+          ".session-progress-hovercard .session-hovercard__commentary",
+        );
+        await commentary.waitFor({ state: "visible" });
+        const link = commentary.getByRole("link", { name: "Release review" });
+        await link.waitFor({ state: "attached" });
+
+        const measure = () =>
+          commentary.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return {
+              height: node.getBoundingClientRect().height,
+              lineClamp: style.getPropertyValue("-webkit-line-clamp"),
+              lines: node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight),
+              maskImage: style.maskImage,
+              scrollTop: node.scrollTop,
+            };
+          });
+        const resting = await measure();
+        expect(resting).toMatchObject({
+          lineClamp: "3",
+          lines: 3,
+          maskImage: "none",
+          scrollTop: 0,
+        });
+
+        await link.focus();
+        await expect
+          .poll(() => link.evaluate((node) => node === document.activeElement))
+          .toBe(true);
+        expect(await measure()).toEqual(resting);
+      },
+    );
+  });
+
   it("renders safe progress markdown and refreshes the hovered card after a change event", async () => {
     const now = Date.now();
     const selectedSessionKey = "agent:main:selected";
@@ -862,7 +928,7 @@ suite.define(() => {
     const channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
     const successfulChannelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarSessionKey)}`;
     const lastMessagePreview =
-      "The final release notes are ready for review, including <strong>plain text</strong>, rollout details, verification notes, compatibility guidance, and a concise operator checklist.";
+      "The final release notes are ready for review, including <strong>plain text</strong> and rollout details.";
 
     await suite.withPage(
       { hasTouch: false, ...createControlUiE2eContextOptions() },

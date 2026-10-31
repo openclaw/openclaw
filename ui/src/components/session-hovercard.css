@@ -50,23 +50,19 @@
   }
 }
 
+/* Clip rather than hide: a hidden box still scrolls to a link focused past the clamp. */
 .session-hovercard__commentary,
 .session-hovercard__excerpt {
-  --session-hovercard-fade: linear-gradient(to bottom, black calc(100% - 14px), transparent);
-
+  display: -webkit-box;
   max-height: 4.5em;
-  overflow: hidden;
+  overflow: clip;
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   overflow-wrap: anywhere;
-  @supports (animation-timeline: scroll(self block)) {
-    animation-name: session-hovercard-fade;
-    animation-duration: 1s;
-    animation-timing-function: linear;
-    animation-fill-mode: both;
-    animation-timeline: scroll(self block);
-  }
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 .session-hovercard__commentary .session-progress-card__markdown {
