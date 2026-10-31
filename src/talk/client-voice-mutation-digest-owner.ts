@@ -13,6 +13,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -273,7 +274,13 @@ export class ClientVoiceMutationDigestOwner<TContext> {
       // Abort is cooperative, not a wall-clock completion guarantee. An adapter
       // that ignores it keeps this exact slot so repeated retries cannot fan out.
       try {
-        const run = () => this.options.attempt({ ...intent, signal: attempt.signal });
+        const run = () => {
+          const ownerSignal = getAsyncWorkSignal();
+          return this.options.attempt({
+            ...intent,
+            signal: ownerSignal ? AbortSignal.any([ownerSignal, attempt.signal]) : attempt.signal,
+          });
+        };
         const complete = await (settlement ? settlement.run(run) : run());
         if (complete) {
           this.deleteIntent(key, intent);

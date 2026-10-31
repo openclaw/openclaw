@@ -2,6 +2,7 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
+import { GatewayRetainedWorkTimeoutError } from "../shared/async-work-scope.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
@@ -40,6 +41,7 @@ export class GatewayShutdownCleanupRetainedError extends AggregateError {
 export function isGatewayCleanupRetainedError(error: unknown): boolean {
   if (
     error instanceof GatewayShutdownCleanupRetainedError ||
+    error instanceof GatewayRetainedWorkTimeoutError ||
     error instanceof PluginRuntimeCloseRetainedError
   ) {
     return true;
