@@ -6,8 +6,7 @@ import {
 import type * as Video from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock, waitProviderOperationPollIntervalMock } =
-  getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 let provider: Video.VideoGenerationProvider;
 
 beforeAll(async () => {
@@ -132,5 +131,4 @@ it.each<[string, Record<string, unknown>]>([
   fetchWithTimeoutMock.mockResolvedValueOnce(Response.json(payload));
   await expect(generateVideo()).rejects.toThrow(error);
   expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
-  expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
 });

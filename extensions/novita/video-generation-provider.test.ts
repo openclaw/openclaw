@@ -5,8 +5,7 @@ import type * as Video from "openclaw/plugin-sdk/video-generation";
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
-const { postJsonRequestMock, fetchWithTimeoutMock, waitProviderOperationPollIntervalMock } =
-  providerHttp.getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock } = providerHttp.getProviderHttpMocks();
 const prompt = "A lobster waves hello";
 const requestDefaults = { provider: "novita", model: "wan2.6-t2v", prompt, cfg: {} };
 const hailuoModel = "minimax-hailuo-2.3-t2v";
@@ -111,11 +110,12 @@ it("waits through queued and processing tasks before downloading", async () => {
   vi.useFakeTimers();
   try {
     const pending = generateVideo();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
     const result = await pending;
 
     expect(result.videos).toMatchObject([video]);
-    expect(waitProviderOperationPollIntervalMock).toHaveBeenCalledTimes(2);
     const pollUrl = `${baseUrl}/v3/async/task-result?task_id=task-1`;
     expect(fetchWithTimeoutMock.mock.calls.map(([url]) => url)).toEqual([
       pollUrl,
@@ -168,5 +168,4 @@ it.each<[unknown, string]>([
   mockTask(payload);
   await expect(generateVideo()).rejects.toThrow(error);
   expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-  expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
 });
