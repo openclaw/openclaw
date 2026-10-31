@@ -4,7 +4,10 @@ import { createMockApp, createStoredReference } from "./messenger.test-helpers.j
 import { sendMessageMSTeams } from "./send.js";
 
 const state = vi.hoisted(() => ({ context: vi.fn() }));
-vi.mock("./send-context.js", () => ({ resolveMSTeamsSendContext: state.context }));
+vi.mock("./send-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send-context.js")>()),
+  resolveMSTeamsSendContext: state.context,
+}));
 vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/outbound-media")>()),
   loadOutboundMediaFromUrl: async () => ({
