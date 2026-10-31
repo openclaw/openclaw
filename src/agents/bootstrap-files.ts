@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
@@ -15,12 +16,16 @@ import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import { buildBootstrapContextForFiles } from "./embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
-import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
+import {
+  resolveWorkspaceBootstrapPath,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+} from "./workspace-bootstrap-policy.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -224,6 +229,47 @@ type BootstrapFileResolutionParams = {
 // Diagnostics project declared files without executing registered hook handlers.
 type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
 
+/**
+ * Warns when bootstrap-named files sit in the agent's agentDir: bootstrap injection only
+ * reads from the workspace directory, so those files are silently ignored — including
+ * security rules an owner may believe are enforced. See issue #29387.
+ */
+async function warnIgnoredAgentDirBootstrapFiles(
+  params: BootstrapFileResolutionParams,
+): Promise<void> {
+  const { config, workspaceDir, warn } = params;
+  if (!config || !warn) {
+    return;
+  }
+  try {
+    const agentId = params.agentId ?? resolveDefaultAgentId(config);
+    const agentDir = resolveAgentDir(config, agentId);
+    if (path.resolve(agentDir) === path.resolve(workspaceDir)) {
+      return;
+    }
+    const ignored: string[] = [];
+    for (const name of WORKSPACE_BOOTSTRAP_FILENAMES) {
+      try {
+        if ((await fs.stat(path.join(agentDir, name))).isFile()) {
+          ignored.push(name);
+        }
+      } catch {
+        // Absent or unreadable: only report files we can positively see.
+      }
+    }
+    if (ignored.length === 0) {
+      return;
+    }
+    warn(
+      `bootstrap files found in agentDir (${agentDir}) are not loaded into the system prompt: ${ignored.join(", ")}. ` +
+        `Bootstrap files are only read from the workspace directory (${workspaceDir}); ` +
+        "move them to the workspace (or set this agent's workspace) to apply them.",
+    );
+  } catch {
+    // A diagnostic must never break bootstrap resolution.
+  }
+}
+
 /** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
 export async function resolveBootstrapFilesForPreparation(
   params: BootstrapFileResolutionParams,
@@ -262,6 +308,7 @@ async function resolveBootstrapFiles(
   hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
+  await warnIgnoredAgentDirBootstrapFiles(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
     sessionKey,
