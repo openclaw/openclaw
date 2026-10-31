@@ -108,7 +108,7 @@ describe("serializeConversation", () => {
     const content = [textBlock("alpha"), textBlock("end")];
     const message = custom(content, { timestamp: 0 });
     const original = structuredClone(content);
-    expect(serializeConversation(convertToLlm([message]))).toBe("[User]: alpha\nend");
+    expect(serializeConversation(convertToLlm([message]))).toBe("[Synthetic input]: alpha\nend");
     expect(estimateTokens(message)).toBe(3);
     expect(message.content).toEqual(original);
   });

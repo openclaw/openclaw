@@ -176,7 +176,9 @@ it.each<SeedCase>([
           DEFAULT_COMPACTION_SETTINGS,
           "unresolved",
           {
-            preserveFromEntryId: constraints?.pendingUserEntryId,
+            requestBoundary: constraints?.pendingUserEntryId
+              ? { entryId: constraints.pendingUserEntryId, preserve: true }
+              : undefined,
             budget: budget
               ? {
                   ...resolveCompactionRetentionBudget(budget, []),

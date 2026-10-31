@@ -105,8 +105,9 @@ describe("findCutPoint", () => {
     const entries = messages.map(messageEntry);
 
     expect(
-      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: "entry-3" })
-        .firstKeptEntryIndex,
+      findCutPoint(entries, 0, entries.length, 1, {
+        requestBoundary: { entryId: "entry-3", preserve: true },
+      }).firstKeptEntryIndex,
     ).toBe(1);
   });
 
@@ -162,7 +163,9 @@ describe("findCutPoint", () => {
     ];
     expect(findCutPoint(entries, 0, entries.length, 1).firstKeptEntryIndex).toBe(3);
     expect(
-      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: pending.id }),
+      findCutPoint(entries, 0, entries.length, 1, {
+        requestBoundary: { entryId: pending.id, preserve: true },
+      }),
     ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
   });
 

@@ -23,13 +23,17 @@ import {
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
+  clearCompactionPendingAskSection,
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
+  findLatestCompactionUserMessage,
   type FileOperations,
+  formatCompactionUserLabel,
   formatFileOperations,
   getCompactionContent,
   mergeSummaryFileOperations,
+  removeGeneratedCompactionSection,
 } from "./utils.js";
 
 export {
@@ -61,21 +65,12 @@ const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncat
 const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
 const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 
-function latestUserText(messages: AgentMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      const source = getCompactionContent(message.content).text.trim();
-      if (source) {
-        return source;
-      }
-    }
-  }
-  return "";
-}
-
 function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  const source = latestUserText(messages);
+  const message = findLatestCompactionUserMessage(
+    messages,
+    (candidate) => getCompactionContent(candidate.content).text,
+  );
+  const source = message ? getCompactionContent(message.content).text.trim() : "";
   if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
     return source || undefined;
   }
@@ -368,7 +363,9 @@ export interface CompactionPreparation {
   /** Prefix messages summarized separately when compaction splits a turn. */
   turnPrefixMessages: AgentMessage[];
   isSplitTurn: boolean;
-  /** Bounded request that the run owner will resume after compaction. */
+  /** Run-owner selection; absent for legacy callers that infer from transcript history. */
+  requestSelection?: { state: "unresolved"; request: string } | { state: "none" };
+  /** Bounded unresolved request projected for existing extension consumers. */
   latestUnresolvedUserRequest?: string;
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
@@ -439,8 +436,49 @@ export function prepareCompaction(
   const boundaryEnd = effectiveEntries.length;
 
   const contextMessages = buildSessionContext(pathEntries).messages;
-  const latestUnresolvedUserRequest = requestState
-    ? (extractLatestUserRequest(contextMessages) ?? previousLatestUnresolvedUserRequest)
+  // Without an admitted ID, only the latest input belongs to this run; do not revive older work.
+  const requestEntryId = constraints?.requestBoundary?.entryId;
+  const admittedIndex = requestEntryId
+    ? pathEntries.findIndex((entry) => entry.id === requestEntryId)
+    : -1;
+  const admittedEntry = pathEntries[admittedIndex];
+  // Recovery hydrates only the latest semantic window. A processed request may already
+  // be summarized there; unprocessed input must still exist verbatim.
+  const requestWasCompacted = Boolean(
+    requestEntryId &&
+    !admittedEntry &&
+    !constraints?.requestBoundary?.preserve &&
+    pathEntries[prevBoundaryIndex]?.type === "compaction",
+  );
+  if (
+    requestEntryId &&
+    !requestWasCompacted &&
+    (!admittedEntry || getMessageFromEntryForCompaction(admittedEntry)?.role !== "user")
+  ) {
+    return err(
+      new CompactionError("invalid_session", "Compaction cannot find the admitted request."),
+    );
+  }
+  const latestInput = contextMessages.findLast((message) => message.role === "user");
+  const requestStartIndex = requestWasCompacted ? prevBoundaryIndex + 1 : admittedIndex;
+  const requestMessages =
+    requestStartIndex >= 0
+      ? pathEntries.slice(requestStartIndex).flatMap((entry) => {
+          const message = getMessageFromEntryForCompaction(entry);
+          return message ? [message] : [];
+        })
+      : latestInput
+        ? [latestInput]
+        : [];
+  const hasRequestInput = requestMessages.some((message) => message.role === "user");
+  const selectedRequest = requestState
+    ? (extractLatestUserRequest(requestMessages) ??
+      (hasRequestInput && !requestWasCompacted ? undefined : previousLatestUnresolvedUserRequest))
+    : undefined;
+  const requestSelection: CompactionPreparation["requestSelection"] = requestState
+    ? selectedRequest
+      ? { state: "unresolved", request: selectedRequest }
+      : { state: "none" }
     : undefined;
   const contextUsage = estimateContextTokens(contextMessages);
   const tokensBefore = contextUsage.tokens;
@@ -529,7 +567,8 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
-    ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
+    ...(requestSelection ? { requestSelection } : {}),
+    ...(selectedRequest ? { latestUnresolvedUserRequest: selectedRequest } : {}),
     tokensBefore,
     previousSummary,
     previousSummaryDetails,
@@ -637,11 +676,20 @@ export function compactWithoutSummary(
 ): Result<CompactionResult, CompactionError> {
   const droppedCount =
     preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
-  const sourceAsk = preparation.isSplitTurn
-    ? formatRequiredAskContext(latestUserText(preparation.turnPrefixMessages))
+  const sourceMessage = preparation.isSplitTurn
+    ? preparation.turnPrefixMessages.findLast(
+        (message): message is Extract<AgentMessage, { role: "user" }> =>
+          message.role === "user" && Boolean(getCompactionContent(message.content).text.trim()),
+      )
+    : undefined;
+  const sourceText = sourceMessage ? getCompactionContent(sourceMessage.content).text : "";
+  const sourceLabel = sourceMessage ? formatCompactionUserLabel(sourceMessage) : "User";
+  const sourceAsk = sourceMessage
+    ? formatRequiredAskContext(
+        sourceLabel === "User" ? sourceText : `[${sourceLabel}]: ${sourceText}`,
+      )
     : "";
-  // The notice and the already-bounded split-turn source ask are required; only the
-  // carried summary shrinks to fit.
+  // Keep the notice and bounded source ask; shrink only the carried summary.
   const requiredContext =
     `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]\n\n` +
     (sourceAsk ? `## Original request of the current turn\n${JSON.stringify(sourceAsk)}\n\n` : "");
@@ -658,12 +706,24 @@ function previousSummaryWithoutFileOperations(
   preparation: CompactionPreparation,
 ): string | undefined {
   const { previousSummary, previousSummaryDetails } = preparation;
+  const previousRequest = previousSummaryDetails?.latestUnresolvedUserRequest;
+  const previousRequestSection = previousRequest
+    ? `## Latest unresolved user request\n${JSON.stringify(previousRequest)}\n\n`
+    : "";
+  const summaryWithoutRequest =
+    preparation.requestSelection !== undefined && previousRequestSection
+      ? removeGeneratedCompactionSection(previousSummary, previousRequestSection)
+      : previousSummary;
+  const reconciledSummary =
+    preparation.requestSelection?.state === "none" && summaryWithoutRequest
+      ? clearCompactionPendingAskSection(summaryWithoutRequest)
+      : summaryWithoutRequest;
   const previousFileOperations = previousSummaryDetails
     ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
     : "";
-  return previousFileOperations && previousSummary?.endsWith(previousFileOperations)
-    ? previousSummary.slice(0, -previousFileOperations.length)
-    : previousSummary;
+  return previousFileOperations && reconciledSummary?.endsWith(previousFileOperations)
+    ? reconciledSummary.slice(0, -previousFileOperations.length)
+    : reconciledSummary;
 }
 
 function finalizeCompaction(
