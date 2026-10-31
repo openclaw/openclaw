@@ -105,6 +105,7 @@ export const GitHubBaseRefreshSchema = closedObject({
 });
 export const GitHubPublicationEditSchema = closedObject({
   action: Type.Literal("edit"),
+  pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
   requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
   title: Type.Optional(GitHubPublicationTitleSchema),
