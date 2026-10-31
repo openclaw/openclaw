@@ -450,6 +450,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         AppActivation.shared.activate()
         self.requestBrowserProfileImportOfferIfNeeded()
         self.refreshGatewayHealth()
+        self.nativeBrowser.scheduleStatePush()
     }
 
     func closeDashboard() {
