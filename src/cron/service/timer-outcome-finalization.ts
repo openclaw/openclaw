@@ -1,3 +1,4 @@
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
@@ -8,6 +9,7 @@ import { isDeferredCronAdmission } from "./admission-deferred.js";
 import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
+import { wakeCronRunQueues } from "./run-queue-wake.js";
 import {
   applyCronRuntimeRowsToState,
   publishDurableNextRunChanges,
@@ -73,40 +75,73 @@ export async function finalizeCompletedCronRunOutcomes(
         await ensureLoaded(state);
       }
       const observedRevision = getCronJobsStoreRevision(storeKey);
+      const input = {
+        storeKey,
+        snapshot: {
+          nowMs: state.deps.nowMs(),
+          defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+          cronConfig: state.deps.cronConfig,
+          failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
+          outcomes: outcomes.map(
+            ({
+              activeJobMarker,
+              runReceiptContext: _context,
+              executionSettlement,
+              request,
+              ...completed
+            }) => ({
+              ...completed,
+              executionPending: executionSettlement !== undefined,
+              errorReason: resolveCronRunErrorReason(
+                cronRunResultEvent(completed.job, completed).error,
+                completed.provider,
+                completed.errorClassification,
+              ),
+              activeJobMarker: activeJobMarker && {
+                jobRemoved: activeJobMarker.jobRemoved,
+                scheduleMutated: activeJobMarker.scheduleMutated,
+                triggerMutated: activeJobMarker.triggerMutated,
+              },
+              request: request && {
+                preserveCadence: request.preserveCadence,
+                onExitWatcherCompletion: request.onExitWatcherCompletion,
+                scheduleOwnershipAtMs: request.scheduleOwnershipAtMs,
+                runId: request.runId,
+              },
+            }),
+          ),
+        },
+      };
       const { outcome: result } = await executeOpenClawStateWorker(context, {
         type: "cron.finalizeRuns",
-        input: {
-          storeKey,
-          snapshot: {
-            nowMs: state.deps.nowMs(),
-            defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-            cronConfig: state.deps.cronConfig,
-            failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
-            outcomes: outcomes.map(
-              ({ activeJobMarker, runReceiptContext: _context, request, ...completed }) => ({
-                ...completed,
-                errorReason: resolveCronRunErrorReason(
-                  cronRunResultEvent(completed.job, completed).error,
-                  completed.provider,
-                  completed.errorClassification,
-                ),
-                activeJobMarker: activeJobMarker && {
-                  jobRemoved: activeJobMarker.jobRemoved,
-                  scheduleMutated: activeJobMarker.scheduleMutated,
-                  triggerMutated: activeJobMarker.triggerMutated,
-                },
-                request: request && {
-                  preserveCadence: request.preserveCadence,
-                  onExitWatcherCompletion: request.onExitWatcherCompletion,
-                  scheduleOwnershipAtMs: request.scheduleOwnershipAtMs,
-                  runId: request.runId,
-                },
-              }),
-            ),
-          },
-        },
+        input,
       });
       committedSuccessfully = true;
+      for (const [index, outcome] of outcomes.entries()) {
+        if (!outcome.executionSettlement || !outcome.runReceipt) {
+          continue;
+        }
+        void trackAsyncWork(async () => {
+          await Promise.allSettled([outcome.executionSettlement]);
+          await executeOpenClawStateWorker(context, {
+            type: "cron.finalizeRuns",
+            input: {
+              ...input,
+              snapshot: {
+                ...input.snapshot,
+                receiptOnly: true,
+                outcomes: [{ ...input.snapshot.outcomes[index]!, executionPending: false }],
+              },
+            },
+          });
+          wakeCronRunQueues(state);
+        }).catch((error: unknown) => {
+          state.deps.log.warn(
+            { jobId: outcome.jobId, err: String(error) },
+            "cron: execution receipt settlement failed",
+          );
+        });
+      }
       applyCronRuntimeRowsToState(
         state,
         result.upsertedJobs,

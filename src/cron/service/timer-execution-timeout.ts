@@ -30,6 +30,7 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   activeJobMarker?: CronActiveJobMarker;
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
+  executionSettlement?: Promise<unknown>;
   request?: {
     executionJob: CronJob;
     preserveCadence: boolean;

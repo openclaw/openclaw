@@ -440,14 +440,20 @@ async function executeJobCoreWithTimeoutUnfinalized(
     try {
       const first = await Promise.race([runPromise, timeout.promise, operatorCancellation.promise]);
       if (first === operatorCancellationMarker) {
-        return await createInterruptionOutcome(
-          "cancelled",
-          watchdog?.activeExecution() ?? untimedExecution,
-        );
+        return {
+          ...(await createInterruptionOutcome(
+            "cancelled",
+            watchdog?.activeExecution() ?? untimedExecution,
+          )),
+          executionSettlement: runPromise,
+        };
       }
       return "status" in first
         ? first
-        : await createInterruptionOutcome(first, watchdog?.activeExecution(), watchdog);
+        : {
+            ...(await createInterruptionOutcome(first, watchdog?.activeExecution(), watchdog)),
+            executionSettlement: runPromise,
+          };
     } finally {
       watchdog?.dispose();
     }
