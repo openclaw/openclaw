@@ -16,6 +16,7 @@ export function installPaneChromeProbe() {
     regions: Record<Region, Signature>;
     composerHeight: number;
     boxes: Record<Region, number[] | null>;
+    paneFacts: { transcript: boolean; archivedFooter: boolean; genericComposer: boolean };
   };
   const frames: Frame[] = [];
   const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
@@ -164,14 +165,34 @@ export function installPaneChromeProbe() {
   return {
     sample(at: number) {
       sampleDetails(at);
-      if (!dirty) {
-        return;
-      }
+      const root = document.querySelector(".chat-pane-cache__pane--active");
+      const boxes = Object.fromEntries(
+        regions.map((region) => {
+          const box = root?.querySelector(selectors[region])?.getBoundingClientRect();
+          return [region, box ? [box.x, box.y, box.width, box.height] : null];
+        }),
+      ) as Frame["boxes"];
+      const paneFacts = {
+        transcript: Array.from(root?.querySelectorAll(".chat-virtual-row .chat-text") ?? []).some(
+          (element) =>
+            Boolean(element.textContent?.trim()) &&
+            element.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+        ),
+        archivedFooter: Boolean(root?.querySelector(".agent-chat__disabled-banner--replacement")),
+        genericComposer: Boolean(root?.querySelector(".agent-chat__input")),
+      };
+      const geometryChanged =
+        JSON.stringify([boxes, paneFacts]) !==
+        JSON.stringify([frames.at(-1)?.boxes, frames.at(-1)?.paneFacts]);
+      if (!dirty && !geometryChanged) return;
       dirty = false;
       const next = Object.fromEntries(
         regions.map((region) => [region, signature(region)]),
       ) as Frame["regions"];
-      if (regions.every((region) => frames.at(-1)?.regions[region].hash === next[region].hash)) {
+      if (
+        !geometryChanged &&
+        regions.every((region) => frames.at(-1)?.regions[region].hash === next[region].hash)
+      ) {
         return;
       }
       if (frames.length >= 256) {
@@ -181,13 +202,8 @@ export function installPaneChromeProbe() {
       frames.push({
         at,
         regions: next,
-        boxes: Object.fromEntries(
-          regions.map((region) => {
-            const root = document.querySelector(".chat-pane-cache__pane--active");
-            const box = root?.querySelector(selectors[region])?.getBoundingClientRect();
-            return [region, box ? [box.x, box.y, box.width, box.height] : null];
-          }),
-        ) as Frame["boxes"],
+        boxes,
+        paneFacts,
         composerHeight:
           document
             .querySelector(".chat-pane-cache__pane--active .agent-chat__composer-shell")
