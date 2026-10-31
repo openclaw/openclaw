@@ -415,6 +415,14 @@ div.chat-thread:where(.chat-thread--annotations) {
   justify-self: stretch;
 }
 
+.chat-pane__header:not(.chat-pane__header--mobile)
+  > .chat-pane__header-trailing
+  > .chat-pane__actions {
+  flex-grow: 1;
+  align-self: stretch;
+  justify-content: flex-end;
+}
+
 .chat-pane__connection-slot {
   /* The existing flexible header gap holds feedback without moving controls or covering rows. */
   flex: 1 1 0;

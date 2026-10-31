@@ -455,7 +455,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         lastError: sharingSnapshot.lastError,
         onRetry: this.context.gateway.connect,
       },
-      savedConversation: Boolean(this.state?.chatMessages.length && !this.state.connected),
+      savedConversation: Boolean(
+        this.state && !this.state.connected && this.state.chatMessages.length,
+      ),
       title,
       titlePending: !catalog && !title ? true : undefined,
       agent:

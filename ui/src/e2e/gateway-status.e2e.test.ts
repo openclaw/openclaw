@@ -357,7 +357,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Expand sidebar" }).click();
         await connectionStatus.waitFor({ state: "visible" });
         expect(await connectionStatus.count()).toBe(1);
-        expect(await mobileStatus.isVisible()).toBe(false);
+        await mobileStatus.waitFor({ state: "hidden" });
         await identityStatus.click();
         await menu.getByText("Alex", { exact: true }).waitFor();
         expect(await menu.locator('[data-value="command:retry-connect"]').count()).toBe(0);

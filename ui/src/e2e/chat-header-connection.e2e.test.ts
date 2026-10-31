@@ -55,7 +55,8 @@ suite.define(() => {
               const open = indexedDB.open("openclaw-chat-snapshots");
               const db = await new Promise<IDBDatabase>((resolve, reject) => {
                 open.onsuccess = () => resolve(open.result);
-                open.onerror = () => reject(open.error);
+                open.onerror = () =>
+                  reject(open.error ?? new Error("Snapshot database failed to open"));
               });
               try {
                 const read = db.transaction("snapshots").objectStore("snapshots").count();
@@ -67,7 +68,7 @@ suite.define(() => {
                           key.startsWith("openclaw.control.bootRecord.v1:"),
                         ),
                     );
-                  read.onerror = () => reject(read.error);
+                  read.onerror = () => reject(read.error ?? new Error("Snapshot count failed"));
                 });
               } finally {
                 db.close();
