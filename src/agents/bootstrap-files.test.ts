@@ -38,9 +38,9 @@ import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.t
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
+import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "./workspace-bootstrap-policy.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
-import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "./workspace-bootstrap-policy.js";
 import {
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,

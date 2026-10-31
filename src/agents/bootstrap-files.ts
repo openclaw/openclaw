@@ -15,8 +15,8 @@ import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import { buildBootstrapContextForFiles } from "./embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
