@@ -23,8 +23,8 @@ describe("whatsapp public channel actions", () => {
     }
   });
 
-  const withReactions = ["react", "poll", "upload-file"];
-  const withoutReactions = ["poll", "upload-file"];
+  const withReactions = ["react", "poll", "edit", "upload-file"];
+  const withoutReactions = ["poll", "edit", "upload-file"];
   const namedAccount = config({
     reactionLevel: "ack",
     accounts: { work: { reactionLevel: "minimal" } },
@@ -32,6 +32,13 @@ describe("whatsapp public channel actions", () => {
   it.each([
     ["default", config({}), "default", withReactions],
     ["unconfigured", {}, "default", null],
+    ["edit gate on", config({ actions: { editMessage: true } }), "default", withReactions],
+    [
+      "edit gate off",
+      config({ actions: { editMessage: false } }),
+      "default",
+      ["react", "poll", "upload-file"],
+    ],
     ["ack only", config({ reactionLevel: "ack" }), "default", withoutReactions],
     ["active account", namedAccount, "work", withReactions],
     ["any enabled account", namedAccount, undefined, withReactions],
@@ -51,5 +58,17 @@ describe("whatsapp public channel actions", () => {
     } else {
       expect(result?.actions).toEqual(expected);
     }
+  });
+
+  it("routes edit through the gateway behind the host's exact-current gate", () => {
+    expect(actions?.supportsAction?.({ action: "edit" })).toBe(true);
+    expect(actions?.resolveExecutionMode?.({ action: "edit" })).toBe("gateway");
+    expect(actions?.providerOwnedReadGates).toBeUndefined();
+    expect(actions?.writeAuthorityActions).toBeUndefined();
+  });
+
+  it("leaves other actions unsupported and local", () => {
+    expect(actions?.supportsAction?.({ action: "delete" })).toBe(false);
+    expect(actions?.resolveExecutionMode?.({ action: "delete" })).toBe("local");
   });
 });

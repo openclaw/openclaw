@@ -247,6 +247,17 @@ export function createWebSendApi(params: {
       });
       return normalizeWhatsAppSendResult(result, "reaction");
     },
+    editMessage: async (chatJid: string, messageId: string, text: string): Promise<void> => {
+      const jid = resolveOutboundJid(chatJid);
+      const resolved = await resolveMentions(jid, text);
+      const content = addWhatsAppOutboundMentionsToContent(
+        { text: resolved.text, edit: { remoteJid: jid, id: messageId, fromMe: true } },
+        resolved.mentionedJids,
+      );
+      await runAcceptedSend("edit", params.defaultAccountId, async (capture) => {
+        capture(await params.sock.sendMessage(jid, content), "edit");
+      });
+    },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = resolveOutboundJid(to);
       if (isWhatsAppNewsletterJid(jid)) {

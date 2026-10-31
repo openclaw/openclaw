@@ -487,4 +487,63 @@ describe("whatsapp react action messageId resolution", () => {
     expect((err as Error).name).toBe("ToolInputError");
     expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
   });
+
+  describe("edit", () => {
+    const edit = (params: Record<string, unknown>, options?: ActionOptions) =>
+      action("edit", params, options);
+
+    it("forwards the parsed values to the runtime", async () => {
+      await edit({ to: "+1555", messageId: "sent-1", message: "  updated\n" });
+      expect(hoisted.handleWhatsAppAction).toHaveBeenCalledExactlyOnceWith(
+        {
+          action: "edit",
+          chatJid: "+1555",
+          messageId: "sent-1",
+          message: "  updated\n",
+          accountId: "default",
+        },
+        baseCfg,
+      );
+    });
+
+    it("reads content when message is absent and defaults the chat to the current one", async () => {
+      await edit(
+        { messageId: "sent-1", content: "updated" },
+        { toolContext: whatsAppToolContext("+1555", "inbound-1") },
+      );
+      expect(hoisted.handleWhatsAppAction).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ chatJid: "+1555", message: "updated" }),
+        baseCfg,
+      );
+    });
+
+    it("ignores a chatJid the host never checked", async () => {
+      await edit(
+        { chatJid: "+999", messageId: "sent-1", message: "updated" },
+        { toolContext: whatsAppToolContext("+1555", "inbound-1") },
+      );
+      expect(hoisted.handleWhatsAppAction).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ chatJid: "+1555" }),
+        baseCfg,
+      );
+    });
+
+    it("never falls back to the inbound message id", async () => {
+      await edit(
+        { to: "+1555", message: "updated" },
+        { toolContext: whatsAppToolContext("+1555", "inbound-1") },
+      );
+      expect(hoisted.handleWhatsAppAction).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ messageId: undefined }),
+        baseCfg,
+      );
+    });
+  });
+
+  it("rejects unknown actions", async () => {
+    await expect(action("delete", { messageId: "sent-1" })).rejects.toThrow(
+      "Action delete is not supported for provider whatsapp.",
+    );
+    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
+  });
 });

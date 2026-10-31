@@ -13,7 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
-import { cacheInboundMessageMeta } from "../quoted-message.js";
+import { cacheInboundMessageMeta, lookupInboundMessageMeta } from "../quoted-message.js";
 import {
   DEFAULT_RECONNECT_POLICY,
   computeBackoff,
@@ -36,6 +36,7 @@ import {
   toWhatsappJidWithLid,
 } from "../targets-runtime.js";
 import {
+  readWhatsAppBaileysCacheEntry,
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysMessageCache,
 } from "./baileys-cache.js";
@@ -190,6 +191,30 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
+  const rememberEditedOutboundMessage = (
+    remoteJid: string,
+    targetId: string,
+    editedMessage: proto.IMessage,
+  ) => {
+    // Baileys resolves on the socket write and WhatsApp's refusal arrives later, so an edit can
+    // only refresh a message already known to be ours, never establish that it is.
+    const target = lookupInboundMessageMeta(options.accountId, remoteJid, targetId);
+    if (target?.fromMe !== true) {
+      return;
+    }
+    cacheInboundMessageMeta(options.accountId, remoteJid, targetId, {
+      ...target,
+      body: extractText(editedMessage),
+    });
+    const cached =
+      options.recentMessageKeys &&
+      readWhatsAppBaileysCacheEntry(options.recentMessageKeys, `${remoteJid}:${targetId}`);
+    // Retry receipts re-encrypt this proto, so a media message must keep its media fields.
+    if (cached?.conversation != null || cached?.extendedTextMessage) {
+      rememberBaileysMessage(remoteJid, targetId, editedMessage);
+    }
+  };
+
   const rememberOutboundMessage = (remoteJid: string, result: WAMessage | undefined) => {
     const messageId = result?.key?.id;
     if (!messageId) {
@@ -202,6 +227,17 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     });
     const message = result?.message;
     rememberBaileysMessage(remoteJid, messageId, message);
+    const protocolMessage = message?.protocolMessage;
+    if (protocolMessage?.editedMessage) {
+      if (protocolMessage.key?.id) {
+        rememberEditedOutboundMessage(
+          remoteJid,
+          protocolMessage.key.id,
+          protocolMessage.editedMessage,
+        );
+      }
+      return;
+    }
     // Baileys derives the participant for fromMe quotes from its own userJid.
     // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
     cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {

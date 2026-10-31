@@ -242,12 +242,16 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           if (gate("polls")) {
             actions.push("poll");
           }
+          if (gate("editMessage")) {
+            actions.push("edit");
+          }
           actions.push("upload-file");
           return { actions };
         },
-        supportsAction: ({ action }) => action === "react" || action === "upload-file",
+        supportsAction: ({ action }) =>
+          action === "react" || action === "edit" || action === "upload-file",
         resolveExecutionMode: ({ action }) =>
-          action === "react" || action === "upload-file" ? "gateway" : "local",
+          action === "react" || action === "edit" || action === "upload-file" ? "gateway" : "local",
         handleAction: async (params) =>
           await (await loadWhatsAppChannelReactAction()).handleWhatsAppMessageAction(params),
       },

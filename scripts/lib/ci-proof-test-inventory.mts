@@ -1600,6 +1600,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/channels/plugins/contracts/mattermost-read-authority.contract.test.ts",
   "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
   "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+  "src/channels/plugins/contracts/whatsapp-edit-gate.contract.test.ts",
   "src/channels/plugins/message-actions.test.ts",
   "src/channels/plugins/read-only.legacy-workspace.test.ts",
   "src/channels/turn/message-turn-guardrails.test.ts",

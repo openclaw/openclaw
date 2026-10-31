@@ -34,8 +34,18 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
-import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
-import { markdownToWhatsAppChunks, resolveJidToE164, toWhatsappJid } from "./targets-runtime.js";
+import {
+  lookupInboundMessageMetaForTarget,
+  type WhatsAppQuotedMessageKey,
+} from "./quoted-message.js";
+import {
+  markdownToWhatsAppChunks,
+  resolveJidToE164,
+  toWhatsappJid,
+  toWhatsappJidWithLid,
+} from "./targets-runtime.js";
+
+const WHATSAPP_EDIT_TEXT_LIMIT = 4_000;
 
 type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
 
@@ -334,6 +344,52 @@ export async function sendReactionWhatsApp(
     options.fromMe ?? false,
     options.participant,
   );
+}
+
+export async function editMessageWhatsApp(
+  chatJid: string,
+  messageId: string,
+  text: string,
+  options: { accountId?: string; cfg: OpenClawConfig },
+): Promise<void> {
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp edit");
+  const { listener: active, accountId } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  const { authDir } = resolveWhatsAppAccount({ cfg, accountId });
+  const targetJid = toWhatsappJidWithLid(chatJid, { authDir });
+  if (isWhatsAppNewsletterJid(targetJid)) {
+    throw new Error("WhatsApp edit rejected: newsletter messages cannot be edited.");
+  }
+  // Message meta cache keys join JID and id with colons; an id holding one can span into another
+  // chat's entry.
+  if (messageId.includes(":")) {
+    throw new Error("WhatsApp edit rejected: message id is invalid.");
+  }
+  const chunks = markdownToWhatsAppChunks(
+    text,
+    WHATSAPP_EDIT_TEXT_LIMIT,
+    resolveMarkdownTableMode({ cfg, channel: "whatsapp", accountId }),
+  );
+  const [formatted] = chunks;
+  if (!formatted?.trim()) {
+    throw new Error("WhatsApp edit rejected: text is empty.");
+  }
+  if (chunks.length > 1) {
+    throw new Error(
+      `WhatsApp edit rejected: text exceeds ${WHATSAPP_EDIT_TEXT_LIMIT} characters after formatting.`,
+    );
+  }
+  // A cache miss proceeds: the entry may simply be gone, and WhatsApp's own refusal of a foreign
+  // edit arrives after this call has returned, so it never reaches the caller.
+  const cached = lookupInboundMessageMetaForTarget(accountId, targetJid, messageId);
+  if (cached?.fromMe === false) {
+    throw new Error("WhatsApp edit rejected: message was not sent by this account.");
+  }
+  const remoteJid = cached?.remoteJid ?? targetJid;
+  await active.assertSendReady?.(remoteJid);
+  await active.editMessage(remoteJid, messageId, formatted);
 }
 
 export async function sendPollWhatsApp(

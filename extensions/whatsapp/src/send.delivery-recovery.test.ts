@@ -344,6 +344,7 @@ it("keeps pre-connect recovery replayable, then sends exactly once after connect
       sendMessage,
       sendPoll: vi.fn(async () => acceptedSend("poll", "poll")),
       sendReaction: vi.fn(async () => acceptedSend("reaction", "reaction")),
+      editMessage: vi.fn(async () => {}),
     };
     const controller = {
       getActiveListener: () => listener,

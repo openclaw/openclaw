@@ -45,6 +45,7 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
           sendComposingTo: async () => {},
           sendPoll: unexpectedDelivery,
           sendReaction: unexpectedDelivery,
+          editMessage: unexpectedDelivery,
         });
         const bodies = scenario === "timestamps" ? ["first", "second"] : ["ping"];
         try {
@@ -97,6 +98,7 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
         sendComposingTo: async () => {},
         sendPoll: unexpectedDelivery,
         sendReaction: unexpectedDelivery,
+        editMessage: unexpectedDelivery,
       };
       const replyResolver = vi.fn<ReplyResolver>(async () => ({ text: replyText }));
       const boundary = await createReplyBoundary(root, peer, {
