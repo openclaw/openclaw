@@ -63,6 +63,11 @@ window before starting warm reloads. A read-only cache inventory verifies that a
 owned transcript snapshot exists for the exact route; otherwise warm proof stops.
 Its inventory also records the serialized target-record bytes before warm captures
 so baseline/candidate storage growth can be compared outside measurement.
+The sidebar uses a nondefault agent, the involving-me filter, category grouping
+with 97 groups, created ordering, five collapsed groups, hidden empty groups,
+disabled previews, personal pins, and eight expanded parents with retained children.
+Both target conversations are archived. Per-frame sidebar diagnostics and the
+saved sidebar record's size distinguish cache admission from live handoff.
 Cold captures therefore show default Details
 visibility; warm chat captures show the last visit's Details state. Dashboard keeps
 its native closed Details state. The current router uses `/dashboard/...` for the
