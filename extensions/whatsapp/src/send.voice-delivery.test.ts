@@ -54,7 +54,13 @@ const sendComposingTo = vi.fn(async () => {});
 const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));
 const sendPoll = vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll123"));
 const sendReaction = vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction123"));
-const listener = { sendComposingTo, sendMessage, sendPoll, sendReaction };
+const listener = {
+  sendComposingTo,
+  sendMessage,
+  sendPoll,
+  sendReaction,
+  editMessage: vi.fn(async () => {}),
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
