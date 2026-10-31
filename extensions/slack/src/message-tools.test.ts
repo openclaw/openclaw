@@ -281,6 +281,21 @@ describe("Slack message tools", () => {
     ]);
   });
 
+  it("keeps top-level action gates the account did not override", () => {
+    const cfg = slackConfig({
+      botToken: "xoxb-root",
+      actions: createDisabledSlackActions(),
+      accounts: {
+        work: {
+          botToken: "xoxb-work",
+          actions: { reactions: true },
+        },
+      },
+    });
+
+    expect(listSlackMessageActions(cfg, "work")).toEqual(["send", "react", "reactions"]);
+  });
+
   it.each([
     [
       "fileId",
