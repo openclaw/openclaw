@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { RepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { measureGatewayRestartTrace } from "../restart-trace.js";
@@ -36,6 +40,7 @@ const admitRecovery: WorkerPlacementRecoveryAdmission = async (_sessionIds, run)
   await run();
   return true;
 };
+const log = createSubsystemLogger("gateway/worker-placement");
 
 function activePlacementExecutionError(
   placement: WorkerActiveDispatchPlacement,
@@ -106,8 +111,20 @@ export function createPlacementRecoveryActions(
   const reconcileActivePlacement = async (
     placement: WorkerActiveDispatchPlacement,
     mode: "restart" | "runtime",
+    diskAuthority?: RepositoryWorkspaceDiskAuthority,
   ): Promise<void> => {
     const environment = environments.get(placement.environmentId);
+    if (diskAuthority) {
+      try {
+        assertRepositoryWorkspaceDiskIdentity(diskAuthority, environment);
+        if (!isExactAttachedEnvironment(environment, placement)) {
+          throw new Error("Repository workspace disk is not attached to its exact placement");
+        }
+      } catch (error) {
+        log.warn(`Disk-authoritative workspace recovery held: ${String(error)}`);
+        return;
+      }
+    }
     if (mode === "restart" && placement.turnClaim) {
       const claim = projectWorkerSessionTurnClaim(placement);
       if (claim && isExactAttachedEnvironment(environment, placement)) {
@@ -143,25 +160,32 @@ export function createPlacementRecoveryActions(
       return;
     }
     const disappearance = workerDisappearanceError(environment);
-    if (disappearance || (environment && isUnavailableEnvironment(environment))) {
-      await failure.reclaimActive(
-        placement,
-        environment,
-        disappearance ?? new Error(`Active worker environment is ${environment?.state}`),
-      );
-      return;
-    }
-    if (!environment || !isCurrentActiveWorkerEnvironment(placement, environment)) {
-      await failure.reclaimActive(
-        placement,
-        environment,
-        new Error("Active worker placement does not match its environment owner"),
-      );
+    const unavailable = environment && isUnavailableEnvironment(environment);
+    if (
+      disappearance ||
+      unavailable ||
+      !environment ||
+      !isCurrentActiveWorkerEnvironment(placement, environment)
+    ) {
+      const error =
+        disappearance ??
+        (unavailable
+          ? new Error(`Active worker environment is ${environment?.state}`)
+          : new Error("Active worker placement does not match its environment owner"));
+      if (diskAuthority) {
+        log.warn(`Disk-authoritative workspace recovery held: ${error.message}`);
+        return;
+      }
+      await failure.reclaimActive(placement, environment, error);
       return;
     }
     if (mode === "runtime") {
       const executionError = activePlacementExecutionError(placement, environment, environments);
       if (executionError) {
+        if (diskAuthority) {
+          log.warn(`Disk-authoritative workspace recovery held: ${executionError.message}`);
+          return;
+        }
         await failure.failActive(placement, executionError, { forceClaimFence: true });
       }
       return;
@@ -186,6 +210,10 @@ export function createPlacementRecoveryActions(
         ownerEpoch: environment.ownerEpoch,
       });
     } catch (error) {
+      if (diskAuthority) {
+        log.warn(`Disk-authoritative workspace recovery held: ${String(error)}`);
+        return;
+      }
       if (error instanceof WorkerRuntimeRefreshPendingError) {
         // The provider still owns this machine. A failed runtime update closes
         // execution until retry; it is not evidence that the lease must be reclaimed.
@@ -226,6 +254,16 @@ export function createPlacementRecoveryActions(
       stagedOwners?.has(sessionId) ||
       facts.pendingResults.has(sessionId) ||
       facts.workspaceJournalOwnerSessionIds.has(sessionId);
+    const placementOwner = facts.placements.get(sessionId);
+    const diskAuthority = placementOwner
+      ? (await getSessionRepositoryWorkspaceStore().find(placementOwner))?.diskAuthority
+      : undefined;
+    if (diskAuthority && (placementOwner?.state !== "active" || facts.moves.size > 0)) {
+      // Transfer/export and destructive lifecycle support must precede activation.
+      // Recovery never replaces a disk binding with an old mirror or fresh source clone.
+      log.warn("Disk-authoritative workspace transfer or teardown is held for explicit recovery");
+      return;
+    }
     const moveOwners =
       facts.moves.size > 0 ? await deps.recoverPlacementMoves?.(facts, environmentId) : undefined;
     if (blocked || moveOwners?.has(sessionId) || deps.isShuttingDown?.()) {
@@ -242,7 +280,7 @@ export function createPlacementRecoveryActions(
         if (placement.state === "failed") {
           await failure.retryFailedTeardown(placement);
         } else if (placement.state === "active") {
-          await reconcileActivePlacement(placement, "runtime");
+          await reconcileActivePlacement(placement, "runtime", diskAuthority);
         } else if (
           placement.state === "draining" &&
           !placement.turnClaim &&
@@ -283,7 +321,7 @@ export function createPlacementRecoveryActions(
         continue;
       }
       if (placement.state === "active") {
-        await reconcileActivePlacement(placement, "restart");
+        await reconcileActivePlacement(placement, "restart", diskAuthority);
         continue;
       }
       if (placement.state === "failed") {

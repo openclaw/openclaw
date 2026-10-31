@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { loadStatePortDescriptor } from "../../infra/database-engine/state-port-descriptor.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
 import { stateTemplateNamesMigration } from "../../state/openclaw-state-db-schema-v36-template-names.js";
 import {
@@ -62,7 +63,13 @@ it.each(["runtime", "doctor"] as const)(
       using scope = new DatabaseSync(pathname);
       await assertSqliteMigrationScopePreserved(
         scope,
-        ["worker_environments", "schema_meta", "config_machine_state"],
+        [
+          "worker_environments",
+          "session_repository_workspaces",
+          "worker_workspace_pending_results",
+          "schema_meta",
+          "config_machine_state",
+        ],
         () => {
           if (owner === "doctor") {
             expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
@@ -71,7 +78,9 @@ it.each(["runtime", "doctor"] as const)(
         },
       );
       const database = openOpenClawStateDatabase(options);
-      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 37 });
+      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(database.db.prepare("SELECT * FROM worker_environments").get()).toEqual({
         ...before,
         resource_receipt_json: null,

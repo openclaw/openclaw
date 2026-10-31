@@ -19,7 +19,10 @@ import type {
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
-import type { WorkerEnvironmentPreparation } from "./environment-record.js";
+import type {
+  WorkerEnvironmentPreparation,
+  WorkerEnvironmentRecord,
+} from "./environment-record.js";
 import type { WorkerPlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerPlacementMoveSource,
@@ -66,6 +69,7 @@ export type WorkerEnvironmentServiceRecord = {
   profileId: string;
   inference?: "worker";
   leaseId: string | null;
+  resourceReceipt: WorkerEnvironmentRecord["resourceReceipt"];
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;
   state: WorkerEnvironmentState;

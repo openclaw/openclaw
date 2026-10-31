@@ -101,6 +101,7 @@ it.each(["runtime", "doctor"] as const)(
          claw_installs template_installs claw_workspace_files template_workspace_files
          claw_package_refs template_package_refs claw_cron_refs template_cron_refs
          claw_mcp_server_refs template_mcp_server_refs agent_provenance worker_environments
+         session_repository_workspaces worker_workspace_pending_results
          sqlite_stat1 sqlite_stat4`.split(/\s+/),
         () => {
           if (owner === "doctor") {

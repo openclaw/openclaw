@@ -59,10 +59,40 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 35      | Content-addressed local workspace directory packs and source path sets, with compact per-projection file fingerprints                                                                                                                                                                                                                          | Unreleased          |
 | 36      | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged                                                                                                                                                                                             | Unreleased          |
 | 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
+| 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 38
+
+Schema 38 implements the durable authority prerequisite of the
+[accepted disk-authoritative workspace design](https://github.com/openclaw/openclaw/issues/188796).
+It adds nullable `session_repository_workspaces.disk_authority_json` and
+`worker_workspace_pending_results.repository_disk_authority_json` fields.
+The repository owner binds an initialized repository to one exact environment
+and its immutable provider resource receipt. The pending-result owner records
+that authority when it accepts result custody; recovery never infers it from a
+later environment. Binding refuses an active turn or an unsettled mirror result.
+
+Existing repositories and pending results retain `NULL` and their mirrored
+semantics. Disk-bound recovery holds missing or mismatched resources without
+restoring a Gateway checkpoint, replacing the disk, or replaying input. Stored
+file fallback, new publication from an old mirror, and Gateway materialization
+are refused for a disk binding. Previously pinned publication snapshots remain
+usable. There is no user-selectable disk mode in this prerequisite; retained
+lifecycle, explicit export/I/O, and activation are separate implementation steps.
+
+SQLite startup and Doctor add columns only to existing tables; absent first-use
+repository storage remains absent. PostgreSQL supplies the same consecutive
+migration and exact predecessor backup descriptors. No repository or pending
+result payload is rewritten; STRICT validation may scan affected tables. Backup
+scope includes both changed tables and the existing schema/content metadata.
+A refused publication rolls back the DDL and version markers together.
+Older binaries refuse schema 38; rollback restores the verified pre-migration
+backup with its matching binary, not lowered version markers. This step does
+not change the agent schema or delete any provider resource.
 
 ### State schema 37
 

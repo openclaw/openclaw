@@ -35,6 +35,7 @@ import {
   transport,
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
+import { bindRepositoryDiskForTest } from "../worker-environments/repository-disk-authority.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "../worker-environments/session-repository-checkpoints.js";
 import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contract.js";
 import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
@@ -255,6 +256,18 @@ async function persistSessionEntry() {
     },
   );
 }
+
+it("refuses stored file fallback when the repository belongs to a retained disk", async () => {
+  source = await bindRepositoryDiskForTest(source, sessionId, store.path);
+  active = false;
+  for (const operation of ["list", "get", "download"] as const) {
+    await expect(
+      files.request(operation, operation === "list" ? undefined : "changed.txt"),
+    ).rejects.toThrow("repository disk is unavailable");
+  }
+  expect(run).not.toHaveBeenCalled();
+  expect(mocks.workspace).not.toHaveBeenCalled();
+});
 
 it("keeps incognito repository downloads alive after their RPC planning borrow ends", async () => {
   using connection = createSessionFileDownloadClient();

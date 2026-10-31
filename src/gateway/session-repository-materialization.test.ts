@@ -34,6 +34,7 @@ import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { bindRepositoryDiskForTest } from "./worker-environments/repository-disk-authority.test-support.js";
 import * as repositoryGitHubIdentity from "./worker-environments/repository-github-identity.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
@@ -88,6 +89,7 @@ it.each([
   "clone reset",
   "auth failure",
   "unavailable identity",
+  "disk authority",
 ] as const)(
   "keeps the current shared GitHub identity and move authority at clone admission: %s",
   async (scenario) => {
@@ -165,6 +167,9 @@ it.each([
           sessionId,
           repositoryWorkspaceId: repository.workspaceId,
         });
+        if (scenario === "disk authority") {
+          await bindRepositoryDiskForTest(repository, sessionId);
+        }
         let current = true;
         const verify = vi
           .spyOn(githubOAuth, "verifyGitHubCredential")
@@ -222,6 +227,7 @@ it.each([
         });
         const rejections: Partial<Record<typeof scenario, string | RegExp>> = {
           "host mismatch": "configured GitHub host (ghe.example.test)",
+          "disk authority": "requires a fresh disk export",
           "unavailable identity": /reconnect.*GitHub identity/iu,
           revoked: "move authority revoked",
           reset: "Repository workspace changed",
@@ -230,7 +236,7 @@ it.each([
         if (rejection) {
           await expect(operation).rejects.toThrow(rejection);
           expect(clone).not.toHaveBeenCalled();
-          if (scenario === "host mismatch") {
+          if (scenario === "host mismatch" || scenario === "disk authority") {
             expect(verify).not.toHaveBeenCalled();
           }
         } else {

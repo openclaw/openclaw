@@ -1,6 +1,5 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   workerDisappearanceError,
   type WorkerDispatchPlacement,
@@ -17,12 +16,10 @@ import {
   matchesWorkspaceResultClaim,
   isCurrentWorkerWorkspacePendingResultOwner,
 } from "./placement-workspace-result.js";
-import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import {
   createWorkerWorkspaceReconcileRequest,
   recoverSessionWorkspaceCheckpoint,
   sessionWorkspaceRoot,
-  type WorkerSessionWorkspace,
 } from "./session-workspace.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
@@ -33,6 +30,8 @@ import {
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
+  recoverRepositoryDiskResult,
+  resolvePendingResultWorkspace,
 } from "./workspace-result-settlement.js";
 import {
   applyStagedWorkerWorkspaceResult,
@@ -65,31 +64,6 @@ export async function recoverPendingWorkspaceResults(
   environmentId?: string,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
-  const resolveWorkspace = async (
-    placement: WorkerDispatchPlacement,
-    pending: WorkerWorkspacePendingResult,
-    preparedWorkspace?: WorkerSessionWorkspace,
-  ): Promise<WorkerSessionWorkspace> => {
-    const workspace = preparedWorkspace ?? (await deps.resolveWorkspace(placement));
-    if (!pending.repositoryWorkspaceId) {
-      return workspace;
-    }
-    const repository = await getSessionRepositoryWorkspaceStore().get(
-      pending.repositoryWorkspaceId,
-    );
-    if (
-      !repository ||
-      repository.agentId !== placement.agentId ||
-      repository.sessionKey !== placement.sessionKey ||
-      (workspace.kind === "repository" &&
-        workspace.repository.workspaceId !== pending.repositoryWorkspaceId)
-    ) {
-      throw new Error("Pending repository checkpoint lost its exact session workspace owner");
-    }
-    // An explicit Gateway move may already have bound a local worktree. The
-    // result's recorded source still owns its immutable artifact until settlement.
-    return { kind: "repository", repository };
-  };
   const prepareGatewayMove = createPendingGatewayMovePreparation(deps);
   const destroyPendingEnvironment = async (
     placement: WorkerOwnedPendingPlacement,
@@ -149,6 +123,12 @@ export async function recoverPendingWorkspaceResults(
         !turnClaim ||
         !matchesWorkspaceResultClaim(pendingPlacement, pending, turnClaim)
       ) {
+        if (pending.repositoryDiskAuthority) {
+          // Losing the claim does not transfer or discard the only repository copy.
+          throw new Error(
+            "Disk-authoritative workspace result lost its placement; recovery is held",
+          );
+        }
         if (pending.stagedResultRef && pending.workspaceAcceptedAtMs === null) {
           // A staged unaccepted result outlives stale placement ownership. Only
           // explicit operator abandonment may delete its durable Git ref.
@@ -160,7 +140,7 @@ export async function recoverPendingWorkspaceResults(
               `Staged cloud workspace result lost its placement: ${pending.sessionId}`,
             );
           }
-          const workspace = await resolveWorkspace(placement, pending);
+          const workspace = await resolvePendingResultWorkspace(deps, placement, pending);
           if (workspace.kind === "local") {
             await deleteStagedWorkerWorkspaceResult({
               root: workspace.path,
@@ -192,8 +172,26 @@ export async function recoverPendingWorkspaceResults(
         async (recovery) => {
           try {
             let active: WorkerOwnedPendingPlacement = pendingPlacement;
-            const workspace = await resolveWorkspace(active, pending, recovery.workspace);
+            const workspace = await resolvePendingResultWorkspace(
+              deps,
+              active,
+              pending,
+              recovery.workspace,
+            );
             recovery.assertCurrent();
+            if (pending.repositoryDiskAuthority) {
+              await recoverRepositoryDiskResult({
+                deps,
+                placement: active,
+                pending,
+                turnClaim,
+                workspace,
+                assertCurrent: recovery.assertCurrent,
+                authority: pending.repositoryDiskAuthority,
+                hasPendingMove: projection.moves.has(pending.sessionId),
+              });
+              return;
+            }
             if (workspace.kind === "device-folder") {
               // A restart revokes the old turn, but not this device's authoritative files.
               // Join process cleanup without capturing or reconciling the folder.

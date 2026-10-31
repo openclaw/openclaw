@@ -405,6 +405,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-terminal-authority.test.ts",
   "src/cli/update-cli/update-command-terminal-outcome.test.ts",
   "src/state/session-repository-workspaces.test.ts",
+  "src/state/session-repository-workspaces.migration.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
   "src/infra/update-runner-git.test.ts",
   "src/infra/update-run-abandonment.test.ts",

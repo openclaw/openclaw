@@ -1,3 +1,11 @@
+import type { WorkerResourceReceipt } from "../plugins/capability-provider.types.js";
+
+/** The retained resource, not a Gateway checkpoint, owns this repository. */
+export type RepositoryWorkspaceDiskAuthority = {
+  environmentId: string;
+  resourceReceipt: WorkerResourceReceipt;
+};
+
 export type SessionRepositoryWorkspaceRecord = {
   workspaceId: string;
   agentId: string;
@@ -10,6 +18,7 @@ export type SessionRepositoryWorkspaceRecord = {
   branch: string;
   checkpointRef: string | null;
   manifestHash: string | null;
+  diskAuthority?: RepositoryWorkspaceDiskAuthority;
   revision: number;
   createdAtMs: number;
   updatedAtMs: number;
@@ -24,6 +33,9 @@ export type RepositoryWorkspaceCreate = RepositoryWorkspaceOwner & {
   branch?: string;
 };
 export type RepositoryWorkspaceMutation = { workspaceId: string; expectedRevision: number };
+export type RepositoryWorkspaceDiskBinding = RepositoryWorkspaceMutation & {
+  diskAuthority: RepositoryWorkspaceDiskAuthority;
+};
 export type RepositoryWorkspaceBase = RepositoryWorkspaceMutation & {
   baseCommit: string;
   baseManifestHash?: string;

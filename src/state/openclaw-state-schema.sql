@@ -2085,6 +2085,7 @@ CREATE TABLE IF NOT EXISTS session_repository_workspaces (
   revision INTEGER NOT NULL CHECK (revision >= 0),
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
+  disk_authority_json TEXT,
   UNIQUE (agent_id, session_key),
   CHECK (base_manifest_hash IS NULL OR base_commit IS NOT NULL),
   CHECK ((checkpoint_ref IS NULL AND manifest_hash IS NULL)
@@ -2432,6 +2433,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   staged_result_ref TEXT,
   repository_workspace_id TEXT,
   created_at_ms INTEGER NOT NULL,
+  repository_disk_authority_json TEXT,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;
 

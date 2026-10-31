@@ -8,6 +8,7 @@ import {
 import {
   acceptSessionRepositoryWorkspaceCheckpointInDatabase,
   bindSessionRepositoryWorkspaceBaseInDatabase,
+  bindSessionRepositoryWorkspaceDiskInDatabase,
   createSessionRepositoryWorkspaceInDatabase,
   deleteSessionRepositoryWorkspaceInDatabase,
   findSessionRepositoryWorkspaceInDatabase,
@@ -18,6 +19,7 @@ import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceDiskBinding,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
 } from "./session-repository-workspaces.types.js";
@@ -48,6 +50,13 @@ export const repositoryWorkspaceOperations = {
   ) =>
     mutate(open(), "repositoryWorkspaces.acceptCheckpoint", (db) =>
       acceptSessionRepositoryWorkspaceCheckpointInDatabase(db, input, input.nowMs ?? Date.now()),
+    ),
+  "repositoryWorkspaces.bindDisk": (
+    input: RepositoryWorkspaceDiskBinding & { nowMs?: number },
+    { open },
+  ) =>
+    mutate(open(), "repositoryWorkspaces.bindDisk", (db) =>
+      bindSessionRepositoryWorkspaceDiskInDatabase(db, input, input.nowMs ?? Date.now()),
     ),
   "repositoryWorkspaces.delete": (
     input: { workspaceId: string; sessionEntryCurrentSource?: SessionEntryCurrentSource },

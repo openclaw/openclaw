@@ -58,6 +58,7 @@ function environmentFixture(overrides: Partial<Environment> = {}): Environment {
     ownerEpoch: 7,
     state: "attached",
     leaseId: "lease-cloud",
+    resourceReceipt: null,
     nodeDeviceId: null,
     sharedHost: false,
     createdAtMs: 1,

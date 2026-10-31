@@ -35,6 +35,7 @@ import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceDiskBinding,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
   SessionRepositoryWorkspaceRecord,
@@ -308,6 +309,22 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               baseCommit: input.baseCommit,
               baseManifestHash: input.baseManifestHash,
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    // Internal prerequisite only: no session/profile selector activates disk authority yet.
+    async bindDisk(input: Guarded<RepositoryWorkspaceDiskBinding>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.bindDisk",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              diskAuthority: input.diskAuthority,
             },
           },
           input.assertCurrent,

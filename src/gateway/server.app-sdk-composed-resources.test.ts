@@ -77,6 +77,7 @@ async function proveWorkerCreation(): Promise<void> {
   let oc: OpenClaw | undefined;
   try {
     const record: WorkerEnvironmentServiceRecord = {
+      resourceReceipt: null,
       environmentId: "worker-sdk-e2e",
       providerId: "testbox",
       profileId: "development",

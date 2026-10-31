@@ -121,6 +121,11 @@ export async function captureCheckpoint<T>(
     releaseOwner = preparedOwner.release;
     assertCurrent();
     const { workspace } = assertReceiptOwner(row, preparedOwner);
+    if (workspace.diskAuthority) {
+      throw new Error(
+        "GitHub publication requires a fresh snapshot from the repository disk; a stored mirror cannot be used.",
+      );
+    }
     checkpointRef = workspace.checkpointRef ?? null;
     if (!checkpointRef) {
       throw new Error(

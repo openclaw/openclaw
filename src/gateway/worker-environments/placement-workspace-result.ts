@@ -4,6 +4,11 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureRepositoryWorkspacePendingResultSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  assertRepositoryWorkspaceDiskIdentity,
+  requireRepositoryWorkspaceDiskAuthority,
+} from "../../state/session-repository-workspaces.authority.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "../../state/session-repository-workspaces.kernel.js";
+import {
   resolvePlacementTurnEnvironment,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
@@ -14,6 +19,7 @@ import { publishPlacementWorkspaceResultState } from "./placement-turn-authority
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
+import { findWorkerEnvironment } from "./store-row-codec.js";
 export {
   matchesWorkspaceResultClaim,
   isCurrentWorkerWorkspacePendingResultOwner,
@@ -41,6 +47,13 @@ export function pendingResultFromRow(
     workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
     stagedResultRef: row.staged_result_ref,
     ...(row.repository_workspace_id ? { repositoryWorkspaceId: row.repository_workspace_id } : {}),
+    ...(row.repository_disk_authority_json !== null
+      ? {
+          repositoryDiskAuthority: requireRepositoryWorkspaceDiskAuthority(
+            JSON.parse(row.repository_disk_authority_json),
+          ),
+        }
+      : {}),
   };
 }
 
@@ -170,6 +183,34 @@ export function insertWorkerWorkspacePendingResult(
     throw new Error(`Cannot retain stale worker workspace result for ${claim.sessionId}`);
   }
   const { environmentId, ownerEpoch } = environment;
+  const existing = executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_workspace_pending_results")
+      .selectAll()
+      .where("session_id", "=", claim.sessionId),
+  ).rows[0];
+  if (existing) {
+    if (
+      existing.environment_id !== environmentId ||
+      existing.owner_epoch !== ownerEpoch ||
+      existing.placement_generation !== claim.placementGeneration ||
+      existing.claim_id !== claim.claimId ||
+      existing.run_id !== claim.runId
+    ) {
+      throw new Error(`Worker workspace result is already pending for ${claim.sessionId}`);
+    }
+    // A retry retains the originally accepted authority, including a legacy mirror result.
+    return placement;
+  }
+  const repository = findSessionRepositoryWorkspaceInDatabase(db, placement);
+  const authority = repository?.diskAuthority;
+  if (authority) {
+    if (authority.environmentId !== environmentId) {
+      throw new Error("Repository workspace result belongs to a different disk environment");
+    }
+    assertRepositoryWorkspaceDiskIdentity(authority, findWorkerEnvironment(db, environmentId));
+  }
   const result = executeSqliteQuerySync(
     db,
     query(db)
@@ -185,33 +226,21 @@ export function insertWorkerWorkspacePendingResult(
         recovery_requested_at_ms: null,
         workspace_accepted_at_ms: null,
         staged_result_ref: null,
+        ...(authority
+          ? {
+              repository_workspace_id: repository.workspaceId,
+              repository_disk_authority_json: JSON.stringify(authority),
+            }
+          : {}),
         created_at_ms: nowMs,
       })
-      .onConflict((conflict) => conflict.column("session_id").doNothing())
       .returningAll(),
   );
   if (result.rows.length === 1) {
     publishPendingResult(db, placement, result.rows[0]!);
     return placement;
   }
-  const existing = executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom("worker_workspace_pending_results")
-      .selectAll()
-      .where("session_id", "=", claim.sessionId),
-  ).rows[0];
-  if (
-    !existing ||
-    existing.environment_id !== environmentId ||
-    existing.owner_epoch !== ownerEpoch ||
-    existing.placement_generation !== claim.placementGeneration ||
-    existing.claim_id !== claim.claimId ||
-    existing.run_id !== claim.runId
-  ) {
-    throw new Error(`Worker workspace result is already pending for ${claim.sessionId}`);
-  }
-  return placement;
+  throw new Error(`Cannot retain worker workspace result for ${claim.sessionId}`);
 }
 
 const assertPendingClaim = (db: EngineConnection, claim: WorkerSessionTurnClaim) => {
@@ -223,10 +252,11 @@ const assertPendingClaim = (db: EngineConnection, claim: WorkerSessionTurnClaim)
       .selectAll()
       .where("session_id", "=", claim.sessionId),
   ).rows[0];
-  if (!row || !matchesWorkspaceResultClaim(placement, pendingResultFromRow(row), claim)) {
+  const pending = row && pendingResultFromRow(row);
+  if (!row || !pending || !matchesWorkspaceResultClaim(placement, pending, claim)) {
     throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
   }
-  return { row, placement };
+  return { row, pending, placement };
 };
 
 export function recordStagedWorkerWorkspaceResult(
@@ -245,6 +275,9 @@ export function recordStagedWorkerWorkspaceResult(
     ensureRepositoryWorkspacePendingResultSchema(db);
   }
   const { row: pending, placement } = assertPendingClaim(db, claim);
+  if (pending.repository_disk_authority_json !== null) {
+    throw new Error("A disk-authoritative result cannot stage a mirrored checkpoint");
+  }
   if (pending.workspace_accepted_at_ms !== null) {
     throw new Error(`Cannot restage accepted worker workspace result for ${claim.sessionId}`);
   }
@@ -312,7 +345,13 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
 
     acceptWorkspaceResult(claim: WorkerSessionTurnClaim) {
       return write((db) => {
-        const { placement } = assertPendingClaim(db, claim);
+        const { placement, pending } = assertPendingClaim(db, claim);
+        if (pending.repositoryDiskAuthority) {
+          assertRepositoryWorkspaceDiskIdentity(
+            pending.repositoryDiskAuthority,
+            findWorkerEnvironment(db, pending.environmentId),
+          );
+        }
         const result = executeSqliteQuerySync(
           db,
           query(db)
