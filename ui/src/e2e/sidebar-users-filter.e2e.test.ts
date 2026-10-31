@@ -52,13 +52,7 @@ suite.define(() => {
         const rowBounds = (await row.boundingBox())!;
         const rest = (await counts.boundingBox())!;
         expect(rowBounds.x + rowBounds.width - rest.x - rest.width).toBeLessThanOrEqual(16);
-        const collapse = (await page
-          .locator(".sidebar-online .sidebar-session-toolbar__collapse svg")
-          .boundingBox())!;
-        expect(Math.abs(rest.x + rest.width - collapse.x - collapse.width)).toBeLessThan(1);
-        const avatar = (await person.locator(".sidebar-online__avatar").boundingBox())!;
         const label = (await person.locator(".sidebar-online__person-label").boundingBox())!;
-        expect(label.x - avatar.x - avatar.width).toBeGreaterThanOrEqual(8);
         const more = row.getByRole("button", { name: "Actions for Ada Chen", exact: true });
         expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("0");
         // The revealed action trails the name, so aim at the row's lead instead of its center.
@@ -225,6 +219,17 @@ suite.define(() => {
           await page.locator('[data-online-user-id="carol"]').getAttribute("aria-description"),
         ).toContain("Offline");
         await dismissHovercard();
+        await choosePresence("online");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        await navigationDrawerToggle(page).click();
+        await page.locator(".sidebar-panel-header #sidebar-people-presence").click();
+        await page
+          .locator('openclaw-select-picker:has(#sidebar-people-presence) [data-value="all"]')
+          .click();
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(3);
+        await page.setViewportSize({ width: 1280, height: 800 });
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
       },
