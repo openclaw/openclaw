@@ -318,13 +318,15 @@ export async function ensureManagerRuntimeHandle(
     previousMeta.cwd !== nextMeta.cwd ||
     !runtimeOptionsEqual(previousMeta.runtimeOptions, nextMeta.runtimeOptions) ||
     hasLegacyAcpIdentityProjection(previousMeta);
+  let closeOnFailure = false;
   try {
     assertCurrent();
     if (shouldPersistMeta) {
       const control = params.readAcpControl?.();
       const writeLocator = control?.runtimeLocator ?? setupLocator;
       const acpControl = control ? { ...control, runtimeLocator: writeLocator } : undefined;
-      const publication: { refusal?: { error: unknown } } = {};
+      // Control and refused publications keep the handle: it may name state a successor owns.
+      closeOnFailure = !control && !expectedControlBinding;
       const assertPublicationCurrent = () => {
         try {
           assertCurrent();
@@ -336,28 +338,29 @@ export async function ensureManagerRuntimeHandle(
             );
           }
         } catch (error) {
-          publication.refusal ??= { error };
+          closeOnFailure = false;
           throw error;
         }
       };
       assertPublicationCurrent();
-      await params.writeSessionMeta({
-        assertCommitAllowed: assertPublicationCurrent,
-        ...(expectedControlBinding ? { expectedControlBinding, failOnError: true } : {}),
-        ...(acpControl ? { acpControl, failOnError: true } : {}),
-        cfg: params.cfg,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        isCurrentActor,
-        mutate: (_current, entry) => {
-          assertCurrent();
-          return entry ? nextMeta : null;
-        },
-      });
-      // Ordinary writes may log errors; a refused cancellation publication cannot be cached.
-      if (publication.refusal) {
-        throw publication.refusal.error;
-      }
+      // A handle is published only once its identity is durable, so storage errors must surface.
+      requirePersistedAcpMeta(
+        await params.writeSessionMeta({
+          assertCommitAllowed: assertPublicationCurrent,
+          ...(expectedControlBinding ? { expectedControlBinding } : {}),
+          ...(acpControl ? { acpControl } : {}),
+          failOnError: true,
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          isCurrentActor,
+          mutate: (_current, entry) => {
+            assertCurrent();
+            return entry ? nextMeta : null;
+          },
+        }),
+        params.sessionKey,
+      );
     }
     assertCurrent();
     params.runtimeHandles.set(params, {
@@ -382,9 +385,45 @@ export async function ensureManagerRuntimeHandle(
         handle: nextHandle,
         sessionKey: params.sessionKey,
       });
+    } else if (closeOnFailure) {
+      await closeUnpublishedRuntimeHandle({
+        runtime,
+        handle: nextHandle,
+        sessionKey: params.sessionKey,
+        reason: "ensure-meta-failed",
+      });
     }
     throw error;
   }
+}
+
+/** Fails unless the strict metadata write returned the stored ACP entry. */
+export function requirePersistedAcpMeta<T extends { acp?: SessionAcpMeta }>(
+  persisted: T | null,
+  sessionKey: string,
+): asserts persisted is T {
+  if (!persisted?.acp) {
+    throw new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      `Could not persist ACP metadata for ${sessionKey}.`,
+    );
+  }
+}
+
+/** Closes a handle that was never published, keeping any backend-owned state. */
+export async function closeUnpublishedRuntimeHandle(params: {
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  sessionKey: string;
+  reason: string;
+}): Promise<void> {
+  await params.runtime
+    .close({ handle: params.handle, reason: params.reason })
+    .catch((error: unknown) => {
+      logVerbose(
+        `acp-manager: cleanup close failed for ${params.sessionKey} (${params.reason}): ${String(error)}`,
+      );
+    });
 }
 
 export async function closeSupersededRuntimeHandle(params: {

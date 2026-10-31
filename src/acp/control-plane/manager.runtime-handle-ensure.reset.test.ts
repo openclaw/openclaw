@@ -6,11 +6,50 @@ import { baseCfg, createRuntime, readySessionMeta } from "./manager.test-helpers
 import type { WriteManagerSessionMeta } from "./manager.types.js";
 import { createSupersededActorError } from "./manager.utils.js";
 
-describe("reset during ensured runtime metadata publication", () => {
+function ensureFixture(writeSessionMeta: WriteManagerSessionMeta, persisted = readySessionMeta()) {
+  const state = createRuntime();
+  const target = { sessionKey: "agent:codex:acp:ensure-publication", agentId: "codex" };
+  const cache = new ManagerRuntimeHandleCache();
+  const params = {
+    ...target,
+    cfg: baseCfg,
+    meta: persisted,
+    deps: {
+      requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }),
+      loadSessionEntryAsync: async () => null,
+    },
+    runtimeHandles: cache,
+    writeSessionMeta,
+  };
+  return { state, target, cache, params };
+}
+
+describe("ensured runtime metadata publication", () => {
+  it.each([
+    // The real writer swallows storage errors unless the caller asks for them.
+    ["fails", async (input) => (input.failOnError ? Promise.reject(new Error("disk full")) : null)],
+    ["finds no session entry", async () => null],
+  ] satisfies [string, WriteManagerSessionMeta][])(
+    "keeps a handle out of the cache when the identity write %s",
+    async (_name, write) => {
+      const { state, target, cache, params } = ensureFixture(write);
+      state.ensureSession.mockResolvedValue({
+        ...target,
+        backend: "acpx",
+        runtimeSessionName: "runtime-1",
+        backendSessionId: "backend-1",
+      });
+      await expect(ensureManagerRuntimeHandle(params)).rejects.toThrow();
+      expect(cache.get(target)).toBeNull();
+      expect(state.close).toHaveBeenCalledTimes(1);
+      expect(state.close).toHaveBeenCalledWith({
+        handle: expect.objectContaining({ backendSessionId: "backend-1" }),
+        reason: "ensure-meta-failed",
+      });
+    },
+  );
+
   it("closes the unpublished stale handle and retains the concurrently accepted successor", async () => {
-    const state = createRuntime();
-    const target = { sessionKey: "agent:codex:acp:ensure-publication", agentId: "codex" };
-    const cache = new ManagerRuntimeHandleCache();
     const writeEntered = createDeferred();
     const releaseWrite = createDeferred();
     let current = true;
@@ -19,15 +58,6 @@ describe("reset during ensured runtime metadata publication", () => {
     let persisted = readySessionMeta({
       runtimeSessionName: "stored-runtime",
       lastActivityAt: 1,
-    });
-    state.ensureSession.mockImplementation(async () => {
-      const id = ++ensures;
-      return {
-        ...target,
-        backend: "acpx",
-        runtimeSessionName: `runtime-${id}`,
-        backendSessionId: `backend-${id}`,
-      };
     });
     const writeSessionMeta: WriteManagerSessionMeta = async (input) => {
       if (++writes === 1) {
@@ -41,17 +71,16 @@ describe("reset during ensured runtime metadata publication", () => {
       persisted = input.mutate(persisted, entry) ?? persisted;
       return { ...entry, acp: persisted };
     };
-    const params = {
-      ...target,
-      cfg: baseCfg,
-      meta: persisted,
-      deps: {
-        requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }),
-        loadSessionEntryAsync: async () => null,
-      },
-      runtimeHandles: cache,
-      writeSessionMeta,
-    };
+    const { state, target, cache, params } = ensureFixture(writeSessionMeta, persisted);
+    state.ensureSession.mockImplementation(async () => {
+      const id = ++ensures;
+      return {
+        ...target,
+        backend: "acpx",
+        runtimeSessionName: `runtime-${id}`,
+        backendSessionId: `backend-${id}`,
+      };
+    });
     const stale = ensureManagerRuntimeHandle({ ...params, isCurrentActor: () => current });
     const rejected = expect(stale).rejects.toMatchObject({
       detailCode: "SESSION_ACTOR_SUPERSEDED",
