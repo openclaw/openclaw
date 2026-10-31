@@ -210,5 +210,28 @@ The first direct run hit an unchanged text assertion under forced color; the fai
 and unfinished scopes passed with the native wrapper's `NO_COLOR=1 FORCE_COLOR=0`.
 Final removal checks and landing: [PR #189259](https://github.com/openclaw/openclaw/pull/189259).
 
+Additional source-only closure (runtime remains pending unless stated):
+
+| Owner scope                                    | Completed reading                                | Decision                                                                                                                                                                                             |
+| ---------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS                                            | 135 Swift/support files, 1,416 declaration sites | Retain 1,370; qualify 39 proof repairs, six consolidations, one obsolete typography-scanner declaration and one shipping migration-test helper. No native removal applied.                           |
+| Android                                        | 10 suites, 50 declaration sites                  | Retain 48; repair two Wear shared framing/Unicode inputs. Discovery and wire adapters retain all contracts. The remaining 314 declaration files are inventory only.                                  |
+| Voice-call, complete plugin                    | 64 suites, 523 declaration sites                 | Retain 522; repair the pending-state oracle separately. All nine local supports remain live. Three fixture-only assertions can go while preserving actual streamed error and signed webhook results. |
+| Nostr                                          | 14 suites, 112 direct/registered declarations    | Retain all declarations and four live supports. Inline the sole used sanitizer fixture row; four other rows and all row labels are obsolete since `07c8b8dda4d`.                                     |
+| Diagnostics Prometheus                         | Seven suites, 55 declarations                    | Retain all declarations, three supports and two documented benchmark workloads; host admission, exporter authorization and store contracts differ.                                                   |
+| Reply admission/payload and memory/readmission | 40 suites, 220 declaration sites                 | Retain 219; qualify one setup-failure declaration absorbed by the existing shared null-context row. Exact cumulative reply coverage: 286 of 429 suites, with 143 unread.                             |
+
+The CLI batch merged in [PR #189259](https://github.com/openclaw/openclaw/pull/189259):
+exact published-head native proof passed 54 tests across five suites. Unused-file
+checks were clean; four production/two full-tree export findings remain attributed
+to unchanged base source/reference locations and earlier baseline scans, not hidden.
+
+The next private plugin-fixture batch starts at `31af5fa987e`. Preserve Nostr's
+registered outbound sanitizer case with the exact input and empty output while
+retiring the unused shared table. Remove three voice-call assertions on fixed
+surrogate setup and Node-generated JWK shape; retain the exact fragmented-error
+and real signed-request verification assertions. All active declarations and
+production code remain. Baseline, candidate checks and landing are pending.
+
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
