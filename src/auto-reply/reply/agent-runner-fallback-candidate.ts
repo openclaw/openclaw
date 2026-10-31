@@ -142,6 +142,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       preparedRunAdmission: params.preparedRunAdmission,
       modelResolve: {
         prompt: turn.commandBody,
+        onDispatch: () => turn.followupRun.run.internalEventExecution?.onStarted(params.runId),
         awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
         images: params.currentTurnImages.images,
         cwd: turn.followupRun.run.cwd,

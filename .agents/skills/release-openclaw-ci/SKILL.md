@@ -299,23 +299,22 @@ until their dependent enforcement changes land.
   GitHub also reruns dependent jobs. The controller waits only for that child
   before sending the request; it does not retry unrelated failures.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
-  [--max-attempts N]` records one of those bounded reruns. It waits for the
-  child to finish, sends exactly one rerun-failed-jobs request, and returns once
-  the new attempt exists without duplicate jobs. Before the request it prints
-  each failed job's runner labels and the current `OPENCLAW_CI_RUNNER_BACKEND`;
-  afterwards it appends an audit line to
-  `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It refuses a passed
-  child, an artifact producer (use `continue --failed`), and a child past its
-  attempt budget: the default 2 allows one rerun; pass `--max-attempts 3` only
-  for a confirmed flake. When a failed-jobs rerun would re-execute an
-  attempt-bound install-smoke payload consumer (`installer_smoke_update`,
-  `installer_smoke_nonroot`; #161317), it reruns the green
-  producer job and its dependents instead, or the whole child when another
-  failed job is outside that set. `continue --failed` applies the same choice.
-  Reseal with `continue --failed`.
-- `pnpm frv continue --failed --run <parent-run-id>` reruns each failed child
-  as soon as it is terminal, even while the parent or siblings remain active.
-  It adopts active attempts and preserves green children. Once every required
+  [--max-attempts N]` records one bounded exact-job rerun. It waits for the
+  child to finish, requires exactly one blocking failed job, sends one request
+  for that accepted Actions job ID, and returns once the new attempt exists
+  without duplicate jobs. Before the request it prints the failed job's runner
+  labels and the current `OPENCLAW_CI_RUNNER_BACKEND`; afterwards it appends
+  an audit line to `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It
+  refuses a passed child, an artifact producer (use `continue --failed`), a
+  child with multiple blocking failures, and a child past its attempt budget:
+  the default 2 allows one rerun; pass `--max-attempts 3` only for a confirmed
+  flake. Start a fresh all-group FRV when multiple blocking jobs fail. Reseal
+  with `continue --failed`.
+- `pnpm frv continue --failed --run <parent-run-id>` applies the same
+  exact-job restriction to each terminal failed child and failed artifact
+  producer, even while the parent or siblings remain active. It refuses
+  multi-job recovery and directs the operator to a fresh all-group FRV. It
+  adopts active attempts and preserves green children. Once every required
   child is green and the original parent finishes, it reruns the parent once
   to restore the same immutable plan and seal the updated all-group manifest.
   An early retry can invalidate the original Decision/Drain pairing; the final

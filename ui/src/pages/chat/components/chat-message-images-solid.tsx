@@ -30,12 +30,13 @@ import {
   isCanonicalInboundMediaSource,
   isLocalAssistantAttachmentSource,
 } from "./chat-message-local-media.ts";
+import type { MessageMediaAction } from "./chat-message-media-actions.ts";
 import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
   readManagedImageBlob,
 } from "./chat-message-media.ts";
-import type { ImageBlock, ImageRenderOptions, MessageMediaAction } from "./chat-message-media.ts";
+import type { ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 

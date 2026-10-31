@@ -3,13 +3,13 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { createPluginLifecycleLeaseTestClock } from "../gateway/config-reload.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -33,6 +33,7 @@ import {
   type PluginLifecycleLeaseContext,
   type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
 type LeaseChild = ChildProcessWithoutNullStreams;
@@ -45,7 +46,8 @@ type LeaseChildRun = {
   output: () => string;
 };
 
-const pluginModuleUrl = (name: string) => pathToFileURL(path.resolve("src/plugins", name)).href;
+const moduleSpecifier = (name: keyof typeof pluginProcessRuntimeEntrypoints) =>
+  JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints[name]).href);
 
 function expectRejected(outcome: PromiseSettledResult<unknown>, reason: unknown) {
   expect(outcome.status).toBe("rejected");
@@ -91,9 +93,8 @@ async function withLeaseChildren<T>(fn: (children: Set<LeaseChildRun>) => Promis
 
 async function runLeaseChild(
   children: Set<LeaseChildRun>,
-  scriptPath: string,
+  script: string,
   args: string[],
-  env?: NodeJS.ProcessEnv,
 ): Promise<LeaseChildRun> {
   let stdout = "";
   let stderr = "";
@@ -101,9 +102,9 @@ async function runLeaseChild(
   const phaseWaiters = new Map<string, ReturnType<typeof createDeferred<void>>>();
   const started = createDeferred<LeaseChild>();
   const completed = runCliProcessChild({
-    nodeArgs: ["--import", "tsx", scriptPath, ...args],
+    nodeArgs: ["--input-type=module", "--eval", script, "--", ...args],
     nodeArgsPolicy: "caller",
-    env: env ?? process.env,
+    env: process.env,
     onStdout(output) {
       stdout = output;
       for (const line of output.split("\n").slice(0, -1)) {
@@ -428,17 +429,14 @@ describe("plugin lifecycle lease", () => {
   it("reclaims process-bound lifecycle work after its process is killed", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-killed-owner" }, async (state) => {
       await withLeaseChildren(async (children) => {
-        const script = await state.writeText(
-          "killed-lease.mts",
-          `
-          import { withPluginLifecycleLease } from ${JSON.stringify(pluginModuleUrl("plugin-lifecycle-lease.ts"))};
-          const env = { ...process.env, OPENCLAW_STATE_DIR: process.argv[2] };
+        const script = `
+          import { withPluginLifecycleLease } from ${moduleSpecifier("lifecycleLease")};
+          const env = { ...process.env, OPENCLAW_STATE_DIR: process.argv[1] };
           await withPluginLifecycleLease({ env, processBound: true }, async () => {
             process.stdout.write("ready\\n");
             await new Promise(() => {});
           });
-        `,
-        );
+        `;
         const holder = await runLeaseChild(children, script, [state.stateDir]);
         await holder.ready;
         await stopChildProcess(holder.child, 5_000, { force: true });
@@ -454,27 +452,21 @@ describe("plugin lifecycle lease", () => {
   it("reloads install records after waiting for another process", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-record-cache" }, async (state) => {
       await withLeaseChildren(async (children) => {
-        const leaseModuleUrl = pluginModuleUrl("plugin-lifecycle-lease.ts");
-        const recordsModuleUrl = pluginModuleUrl("installed-plugin-index-records.ts");
-        const indexModuleUrl = pluginModuleUrl("installed-plugin-index-store.ts");
-        const writeModuleUrl = pluginModuleUrl("installed-plugin-index-store-write.ts");
         const alphaGoMarker = state.path("alpha-go");
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
         // A missing database skips worker startup, so prime an existing empty index.
         await seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
-        const childScript = await state.writeText(
-          "record-cache-child.mts",
-          `
+        const childScript = `
           import assert from "node:assert/strict";
           import fs from "node:fs/promises";
-          import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
+          import { withPluginLifecycleLease } from ${moduleSpecifier("lifecycleLease")};
           import {
             loadInstalledPluginIndexInstallRecords,
-          } from ${JSON.stringify(recordsModuleUrl)};
-          import { readPersistedInstalledPluginIndex } from ${JSON.stringify(indexModuleUrl)};
-          import { writePersistedInstalledPluginIndex } from ${JSON.stringify(writeModuleUrl)};
-          const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
+          } from ${moduleSpecifier("installedPluginRecords")};
+          import { readPersistedInstalledPluginIndex } from ${moduleSpecifier("installedPluginIndex")};
+          import { writePersistedInstalledPluginIndex } from ${moduleSpecifier("installedPluginIndexWrite")};
+          const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(1);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
           async function waitForMarker(marker) {
@@ -526,8 +518,7 @@ describe("plugin lifecycle lease", () => {
           process.stdout.write("attempted\\n");
           await operation;
           process.stdout.write("released\\n");
-        `,
-        );
+        `;
 
         const alpha = await runLeaseChild(children, childScript, [
           "alpha",

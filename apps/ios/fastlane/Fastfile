@@ -291,6 +291,8 @@ def repair_watch_screenshot_runtime!(runtime)
     images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
       .select { |image| image["runtimeIdentifier"] == runtime }
     report_watch_runtime_images(runtime, images)
+    # CoreSimulator can retain a deleting registration beside its replacement.
+    images.reject! { |image| image["state"] == "Deleting" }
     UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{images.length}.") if images.length > 1
     break if images.empty?
 

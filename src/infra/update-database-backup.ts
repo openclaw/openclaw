@@ -103,6 +103,7 @@ export type UpdateDatabaseBackup = z.infer<typeof UpdateDatabaseBackupSchema> & 
     to: Record<string, string | null>;
   };
   restoreRefusal?: string;
+  restoreRefusalDiagnostics?: string[];
 };
 
 type BackupInput = {

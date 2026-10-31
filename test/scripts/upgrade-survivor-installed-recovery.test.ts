@@ -378,6 +378,15 @@ it("invalidates an earlier PASS before setup and isolates repeated attempts", ()
   expect(fs.readFileSync(helper, "utf8")).toBe("current helper");
 });
 
+it("records the explicit older-runtime proof without changing default retirement coverage", () => {
+  const artifacts = dirs.make("older-runtime-run-");
+  const run = startInstalledRecoveryRun(artifacts, "older-runtime");
+  expect(readJson(run.summary).selectedCuts).toEqual(["older-runtime"]);
+  expect(readJson(startInstalledRecoveryRun(artifacts).summary).selectedCuts).toEqual(
+    retirementCuts,
+  );
+});
+
 it("reads the printed recovery argv without evaluating quoted shell text", () => {
   expect(parseRecoveryCommand(`ordinary output\n${printed}\nordinary error`)).toEqual({
     node: command[0],

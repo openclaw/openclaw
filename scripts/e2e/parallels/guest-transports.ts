@@ -95,6 +95,13 @@ function throwIfFailed(label: string, result: CommandResult, check: boolean | un
   throw new Error(`${label} failed with exit code ${result.status}`);
 }
 
+function isParallelsSdkResultFailure(result: CommandResult): boolean {
+  return (
+    result.status === 255 &&
+    /PrlJob_Get(?:Result|RetCode): Invalid argument/u.test(`${result.stdout}\n${result.stderr}`)
+  );
+}
+
 const PARALLELS_GUEST_SESSION_UNAVAILABLE = "Unable to open new session in this virtual machine.";
 const PARALLELS_VM_NOT_STARTED =
   "This operation can be performed for running virtual machines only.";
@@ -864,28 +871,46 @@ export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
     return ["exec", this.vmName, "--current-user", ...args];
   }
 
-  powershell(script: string, options: GuestExecOptions = {}): string {
+  powershell(script: string, options: GuestExecOptions & { readOnly?: boolean } = {}): string {
     const scriptName = guestScriptName("ps1");
     const writeScript = `$scriptPath = Join-Path $env:TEMP ${JSON.stringify(scriptName)}
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))`;
-    const write = run("prlctl", windowsPowerShellArgs(this.vmName, writeScript, true), {
-      input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
-      timeoutMs: this.phases.remainingTimeoutMs(120_000),
-    });
-    this.phases.append(write.stdout);
-    this.phases.append(write.stderr);
+    const writeArgs = windowsPowerShellArgs(this.vmName, writeScript, true);
+    const input = `${windowsProcessEnvScript(this.getEnv())}\n${script}`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const write = run("prlctl", writeArgs, {
+        check: false,
+        input,
+        timeoutMs: this.phases.remainingTimeoutMs(120_000),
+      });
+      appendCommandResult(this.phases, write);
+      // Rewriting this unique temporary file is idempotent; the command has
+      // not launched yet, so staging recovery cannot replay its effects.
+      if (attempt === 0 && isParallelsSdkResultFailure(write)) {
+        this.phases.append("Retry Windows script write after Parallels transport failure\n");
+        continue;
+      }
+      throwIfFailed("Windows guest script write", write, undefined);
+      break;
+    }
     const scriptPath = `%TEMP%\\${scriptName}`;
     try {
-      return this.exec(
-        [
-          "cmd.exe",
-          "/d",
-          "/s",
-          "/c",
-          `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
-        ],
-        options,
-      );
+      const args = [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
+      ];
+      let result = this.run(args, { ...options, check: false });
+      // Parallels can lose the result after execution. Replay only reads, once,
+      // and only for its known SDK error; guest failures remain terminal.
+      if (options.readOnly && isParallelsSdkResultFailure(result)) {
+        this.phases.append("Retry read-only Windows command after Parallels transport failure\n");
+        result = this.run(args, { ...options, check: false });
+      }
+      throwIfFailed(this.label, result, options.check);
+      return result.stdout.trim();
     } finally {
       this.exec(["cmd.exe", "/d", "/s", "/c", `del /F /Q "${scriptPath}"`], {
         check: false,

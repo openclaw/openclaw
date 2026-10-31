@@ -27,7 +27,8 @@ export function buildExecForegroundResult(params: {
   warningText?: string;
   aggregateOutputDropped?: boolean;
 }): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  const warning = params.warningText?.trim();
+  const warningText = warning ? `${params.warningText}\n\n` : "";
   const retentionCapNote = params.aggregateOutputDropped ? EXEC_RETENTION_CAP_NOTE : "";
   const outcome = params.outcome;
   const details: ExecToolDetails = {
@@ -41,6 +42,7 @@ export function buildExecForegroundResult(params: {
     ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
     noOutputTimedOut: outcome.noOutputTimedOut,
     cwd: params.cwd,
+    ...(warning ? { warningText: warning } : {}),
   };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =

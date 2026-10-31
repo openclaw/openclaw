@@ -44,13 +44,15 @@ objects and their execution wrappers.
 
 ## Exec policy layering
 
-`openclaw/plugin-sdk/exec-approvals-runtime` exports
-`applyExecPolicyLayer(base, layer?)` for layering global and per-agent exec policy.
-An explicit `mode` supplies its corresponding security and approval settings.
+`openclaw/plugin-sdk/agent-harness-runtime` exposes
+`execPolicy.resolveExecModePolicy({ mode?, security, ask })` to resolve an exec
+policy before projecting it into a backend's permission flags.
+
+Layer global and per-agent exec policy before calling the resolver. An explicit
+`mode` supplies its corresponding security and approval settings.
 Otherwise, explicitly supplied `security` or `ask` fields replace those fields
 and clear the inherited mode; unspecified fields retain their inherited values.
-An empty or absent layer preserves the base policy. Resolve the result with
-`resolveExecModePolicy` before projecting it into a backend's permission flags.
+An empty or absent layer preserves the base policy.
 
 ## Sandbox bind parsing
 

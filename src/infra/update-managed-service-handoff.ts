@@ -127,7 +127,7 @@ const { pathToFileURL } = require("node:url");
 
 ${MANAGED_HANDOFF_BOOTSTRAP_SOURCE}
 
-const { parseLaunchctlJob, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, readRestartSentinelRowSync, writeRestartSentinelRowIfRevisionSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches } =
+const { parseLaunchctlJob, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");

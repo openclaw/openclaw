@@ -29,6 +29,7 @@ export type {
 export {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
+  isDecisionBatchV1Representable,
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "../decisions/compatibility.js";

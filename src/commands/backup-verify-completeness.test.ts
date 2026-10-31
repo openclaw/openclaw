@@ -497,6 +497,13 @@ describe("archive PostgreSQL capsule verification", () => {
         const bytes = await fs.readFile(damaged);
         await fs.writeFile(damaged, bytes.subarray(0, -16));
       }
+      const handles: Awaited<ReturnType<typeof fs.open>>[] = [];
+      const open = fs.open;
+      using _ = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        handles.push(handle);
+        return handle;
+      });
       await expect(verifyBackupArchive(damaged)).rejects.toThrow(
         damage === "manifest mismatch"
           ? /missing payload/
@@ -506,6 +513,7 @@ describe("archive PostgreSQL capsule verification", () => {
               ? /unexpected SQLite sidecar/
               : /verification failed/,
       );
+      expect(handles.filter((handle) => handle.fd !== -1)).toEqual([]);
       expect(tar.t).toHaveBeenCalledTimes(readsBefore + 2);
       expect(tar.x).toHaveBeenCalledTimes(extractsBefore);
     },

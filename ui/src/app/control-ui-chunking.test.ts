@@ -39,6 +39,197 @@ function buildFixture(
 }
 
 describe("Control UI build chunking", () => {
+  it("consolidates lazy Settings helpers while keeping validation behind the editor", async () => {
+    const page = modulePath("../pages/config/config-page.tsx");
+    const editor = modulePath("../components/config-form.render.tsx");
+    const lightConsumer = modulePath("../pages/plugins/credential-presentation.tsx");
+    const analyze = modulePath("../components/config-form.analyze.ts");
+    const constraints = modulePath("../components/config-form.constraints.ts");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
+    const shared = modulePath("../components/config-form.shared.ts");
+    const sensitive = modulePath("../../../src/config/sensitive-paths.ts");
+    const utils = modulePath("../lib/config-form-utils.ts");
+    const hints = modulePath("../i18n/lib/config-hint-translation.ts");
+    const items = modulePath("../components/config-form.array-items.ts");
+    const controls = modulePath("../components/solid/settings-ui.tsx");
+    const header = modulePath("../pages/config/settings-section-header.tsx");
+    const copy = modulePath("../i18n/locales/en-settings.ts");
+    const entry = "\0settings-helper-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [
+          entry,
+          `export const settings = () => import(${JSON.stringify(page)}); export const credentials = () => import(${JSON.stringify(lightConsumer)});`,
+        ],
+        [
+          page,
+          `import { analyze } from ${JSON.stringify(analyze)}; import { items } from ${JSON.stringify(items)}; import { header } from ${JSON.stringify(header)}; export const render = () => analyze + items + header; export const edit = () => import(${JSON.stringify(editor)});`,
+        ],
+        [
+          analyze,
+          `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; export const analyze = items + shared + 'analysis';`,
+        ],
+        [
+          constraints,
+          `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; import { validator } from ${JSON.stringify(validator)}; export const constraints = items + shared + validator + 'constraints';`,
+        ],
+        [validator, "export const validator = 'value validation';"],
+        [
+          shared,
+          `import { sensitive } from ${JSON.stringify(sensitive)}; export const shared = sensitive + 'shared';`,
+        ],
+        [sensitive, "export const sensitive = 'sensitive';"],
+        [
+          items,
+          `import { value } from ${JSON.stringify(utils)}; export const items = value + 'items';`,
+        ],
+        [
+          utils,
+          `import { hint } from ${JSON.stringify(hints)}; export const value = hint + 'value';`,
+        ],
+        [hints, "export const hint = 'hint';"],
+        [
+          header,
+          `import { control } from ${JSON.stringify(controls)}; export const header = control + 'header';`,
+        ],
+        [controls, "export const control = 'control';"],
+        [
+          lightConsumer,
+          `import { value } from ${JSON.stringify(utils)}; export const credential = value;`,
+        ],
+        [
+          editor,
+          `import { constraints } from ${JSON.stringify(constraints)}; import { copy } from ${JSON.stringify(copy)}; export const edit = () => constraints + copy;`,
+        ],
+        [copy, "export const copy = 'optional editor copy';"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
+    const reachable = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)!.imports) {
+          reachable(imported, visited);
+        }
+      }
+      return visited;
+    };
+    const analysisChunk = chunkFor(analyze);
+    const utilsChunk = chunkFor(utils);
+    const controlsChunk = chunkFor(controls);
+    for (const [name, chunk, modules] of [
+      ["config-form-analysis-runtime", analysisChunk, [analyze, shared, sensitive]],
+      ["config-form-utils-runtime", utilsChunk, [utils, hints, items]],
+      ["settings-controls-runtime", controlsChunk, [controls, header]],
+    ] as const) {
+      expect(chunk.fileName).toContain(name);
+      expect(modules.every((id) => id in chunk.modules)).toBe(true);
+    }
+    const pageChunk = chunkFor(page);
+    const pageImports = reachable(pageChunk.fileName);
+    const startupImports = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    for (const chunk of [pageChunk, analysisChunk, utilsChunk, controlsChunk]) {
+      expect(pageImports.has(chunk.fileName)).toBe(true);
+      expect(startupImports.has(chunk.fileName)).toBe(false);
+    }
+    const editorChunk = chunkFor(editor);
+    const editorImports = reachable(editorChunk.fileName);
+    for (const id of [editor, constraints, validator, copy]) {
+      expect(pageImports.has(chunkFor(id).fileName)).toBe(false);
+      expect(editorImports.has(chunkFor(id).fileName)).toBe(true);
+    }
+    expect(pageChunk.dynamicImports).toContain(editorChunk.fileName);
+    const lightImports = reachable(chunkFor(lightConsumer).fileName);
+    expect(lightImports.has(utilsChunk.fileName)).toBe(true);
+    for (const chunk of [
+      pageChunk,
+      analysisChunk,
+      controlsChunk,
+      editorChunk,
+      chunkFor(constraints),
+      chunkFor(validator),
+      chunkFor(copy),
+    ]) {
+      expect(lightImports.has(chunk.fileName)).toBe(false);
+    }
+  });
+
+  it("keeps the real schema analyzer independent of the optional value validator", async () => {
+    const analyze = modulePath("../components/config-form.analyze.ts");
+    const constraints = modulePath("../components/config-form.constraints.ts");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
+    const entry = "\0config-analysis-boundary";
+    const result = await build({
+      configFile: false,
+      publicDir: false,
+      logLevel: "silent",
+      resolve: {
+        alias: [
+          {
+            find: /^@openclaw\/normalization-core\/(.+)$/u,
+            replacement: modulePath("../../../packages/normalization-core/src/$1.ts"),
+          },
+        ],
+      },
+      plugins: [
+        {
+          name: "config-analysis-boundary",
+          resolveId: (id) => (id === entry ? id : null),
+          load: (id) =>
+            id === entry
+              ? `export { analyzeConfigSchema } from ${JSON.stringify(analyze)}; export const editor = () => import(${JSON.stringify(constraints)});`
+              : null,
+        },
+      ],
+      build: {
+        write: false,
+        minify: false,
+        rolldownOptions: {
+          input: entry,
+          // Translation content does not affect the schema/validator import boundary.
+          external: /^virtual:openclaw-control-ui-locale/u,
+          preserveEntrySignatures: "allow-extension",
+          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+        },
+      },
+    });
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const modulesFrom = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)?.imports ?? []) {
+          modulesFrom(imported, visited);
+        }
+      }
+      return new Set(
+        chunks
+          .filter((chunk) => visited.has(chunk.fileName))
+          .flatMap((chunk) =>
+            Object.entries(chunk.modules)
+              .filter(([, module]) => module.renderedLength > 0)
+              .map(([id]) => id),
+          ),
+      );
+    };
+    const startup = modulesFrom(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    const editor = modulesFrom(chunks.find((chunk) => constraints in chunk.modules)!.fileName);
+    expect(startup.has(analyze)).toBe(true);
+    for (const id of [constraints, validator]) {
+      expect(startup.has(id)).toBe(false);
+      expect(editor.has(id)).toBe(true);
+    }
+    expect([...startup].some((id) => id.includes("/node_modules/typebox/"))).toBe(false);
+    expect([...editor].some((id) => id.includes("/node_modules/typebox/"))).toBe(true);
+  });
+
   it("keeps the creator runtime and its copy outside shared admission and virtualizer chunks", async () => {
     const owner = modulePath("../pages/templates/creator-owner.ts");
     const flow = modulePath("../pages/templates/creator-flow.ts");
@@ -429,7 +620,7 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/cron/cron-page.tsx"), "cron-page"],
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
-      ["/repo/ui/src/components/config-form.shared.ts", undefined],
+      [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],

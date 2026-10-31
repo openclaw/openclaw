@@ -3,17 +3,17 @@ import path from "node:path";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import {
-  filterRecordsToActive,
-  runActivePluginPayloadSmokeCheck,
-} from "../../../plugins/active-payload-verification.js";
+import { filterRecordsToActive } from "../../../plugins/active-payload-verification.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
 } from "../../../plugins/install-paths.js";
 import { listManagedPluginNpmRootsForInstallRecords } from "../../../plugins/installed-plugin-npm-roots.js";
-import type { PluginPayloadSmokeFailure } from "../../../plugins/payload-verification.js";
+import {
+  runPluginPayloadSmokeCheck,
+  type PluginPayloadSmokeFailure,
+} from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { repairInstalledOpenClawHostLinks } from "../../../plugins/plugin-peer-link.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
@@ -239,12 +239,8 @@ async function runPostCorePluginConvergenceWithLease(
   // selected by `filterRecordsToActive`. Without this filter, a stale install
   // record for an inactive plugin could block the update even though the
   // gateway will never load it.
-  const smoke = await runActivePluginPayloadSmokeCheck({
-    cfg: recovered.config,
-    records,
-    env,
-  });
   const smokeRecords = filterRecordsToActive({ cfg: recovered.config, records, env });
+  const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
   if (repairVersionDrift) {
     for (const drift of detectPluginVersionDrift({
       gatewayVersion: resolveCompatibilityHostVersion(env),

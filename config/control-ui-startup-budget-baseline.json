@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88758,
-  "reason": "Current-main Board containment build measures 88,758 B gzip, 7 B above its matched base, with three startup JavaScript requests and one CSS request; paired CPU qualification demonstrates the rendering win.",
-  "updatedAt": "2026-10-30"
+  "startupJsGzipBytes": 88830,
+  "reason": "Integrated long-tail candidate measures 88,830 B startup gzip, 46 B above its exact base, with unchanged 277,773 B raw JS, three JS requests and one CSS request. Twenty interleaved pairs reduce Skills desktop visit and filter CPU by about 70%; record the measured candidate after main integration.",
+  "updatedAt": "2026-10-31"
 }

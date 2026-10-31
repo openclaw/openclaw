@@ -4,9 +4,12 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { Worker } from "node:worker_threads";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
@@ -47,7 +50,10 @@ import {
 import { resolveSqliteTranscriptArchiveDirectory } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+} from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import {
@@ -174,7 +180,7 @@ async function archiveFixture(fixture: Fixture) {
     expect(
       rows(fixture, `SELECT * FROM ${table} WHERE session_id = ?`, historicalId),
       table,
-    ).toEqual([]);
+    ).not.toHaveLength(0);
   }
   const archivePath = resolveSessionColdArchivePath(
     fixture.scope.storePath,
@@ -389,6 +395,20 @@ describe("cold transcript storage workers", () => {
       getNodeSqliteKysely<DB>(database)
         .selectFrom("transcript_events")
         .select("session_id")
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("session_transcript_cold_archives")
+                .select("session_id")
+                .whereRef(
+                  "session_transcript_cold_archives.session_id",
+                  "=",
+                  "transcript_events.session_id",
+                ),
+            ),
+          ),
+        )
         .distinct(),
     ).rows;
     expect(remaining).toHaveLength(1);
@@ -398,7 +418,12 @@ describe("cold transcript storage workers", () => {
       database.prepare("SELECT COUNT(*) AS count FROM session_transcript_cold_archives").get(),
     ).toEqual({ count: 1 });
     await expectCounts(runSessionColdStorageMaintenance({ config }));
-    expect(database.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()).toEqual({
+    expect(
+      database
+        .prepare(`SELECT COUNT(*) AS count FROM transcript_events
+      WHERE session_id NOT IN (SELECT session_id FROM session_transcript_cold_archives)`)
+        .get(),
+    ).toEqual({
       count: 0,
     });
     expect(
@@ -708,6 +733,72 @@ describe("cold transcript storage workers", () => {
     }
   });
 
+  it("retains background-result placement navigation and restores model order without rewriting accepted bytes", async () => {
+    const fixture = await createFixture();
+    const result = makeAgentAssistantMessage({
+      provider: "openclaw",
+      model: "automation-result",
+      content: [{ type: "text", text: "Accepted background result" }],
+    });
+    const answer = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Foreground answer" }],
+    });
+    await appendTranscriptMessage(fixture.scope, {
+      eventId: "result",
+      parentId: "history-assistant",
+      message: { ...result, excludeFromContext: true, openclawModelPlacement: "pending" },
+    });
+    await appendTranscriptMessage(fixture.scope, {
+      eventId: "answer",
+      parentId: "result",
+      message: answer,
+    });
+    await appendTranscriptEvent(fixture.scope, {
+      ...customEvent("placement", BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE, {
+        afterEntryId: "answer",
+        resultEntryIds: ["result"],
+      }),
+      parentId: "answer",
+    });
+    await waitForSessionTranscriptIndexReconcile(fixture.options);
+    setTranscriptActivity(fixture.options, historicalId);
+    const canonical = loadTranscriptEventsSync(fixture.scope);
+    const { descriptor } = await archiveFixture(fixture);
+    expect(
+      rows(
+        fixture,
+        `SELECT event_json, event_zstd,
+          json_extract(navigation_json, '$.model.message.openclawModelPlacement') AS placement,
+          json_extract(navigation_json, '$.model.data.afterEntryId') AS after_id,
+          json_extract(navigation_json, '$.model.data.resultEntryIds') AS result_ids
+         FROM transcript_events WHERE session_id = ?
+          AND json_extract(navigation_json, '$.model.id') IN ('result', 'placement') ORDER BY seq`,
+        historicalId,
+      ),
+    ).toEqual([
+      {
+        event_json: null,
+        event_zstd: null,
+        placement: "pending",
+        after_id: null,
+        result_ids: null,
+      },
+      {
+        event_json: null,
+        event_zstd: null,
+        placement: null,
+        after_id: "answer",
+        result_ids: '["result"]',
+      },
+    ]);
+    expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(descriptor);
+    await restoreSessionColdTranscript(fixture.scope);
+    const manager = await SessionManager.openModelContextAsync(fixture.scope);
+    expect(manager.buildSessionContext().messages.slice(-2)).toEqual([answer, result]);
+    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+    expect(loadTranscriptEventsSync(fixture.scope)).toEqual(canonical);
+  });
+
   it.each(["file", "sqlite", "missing", "corrupt"] as const)(
     "reads cold %s without restoration, then restores exact projections after reopening",
     async (storage) => {
@@ -737,6 +828,7 @@ describe("cold transcript storage workers", () => {
       const preparedDeletion = await archiveWorkers.materializeSessionStateDeletePlans([hotPlan!]);
       const archived =
         storage === "sqlite" ? await embedFixtureArchive(fixture) : await archiveFixture(fixture);
+      const navigation = transcriptRows(fixture, historicalId);
       if (storage === "missing" || storage === "corrupt") {
         if (storage === "missing") {
           await fs.unlink(archived.archivePath);
@@ -749,7 +841,7 @@ describe("cold transcript storage workers", () => {
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
           archived.descriptor,
         );
-        expect(transcriptRows(fixture, historicalId)).toEqual([]);
+        expect(transcriptRows(fixture, historicalId)).toEqual(navigation);
         await fs.writeFile(archived.archivePath, archived.bytes);
       }
       expect(
@@ -782,7 +874,7 @@ describe("cold transcript storage workers", () => {
         hostSql.restore();
       }
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
-      expect(transcriptRows(fixture, historicalId)).toEqual([]);
+      expect(transcriptRows(fixture, historicalId)).toEqual(navigation);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
       let inspection: ReturnType<typeof openNodeSqliteDatabase> | undefined;

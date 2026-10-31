@@ -90,7 +90,8 @@ export type DetailProps = SharedProps &
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
-    onEditMcp?: () => void;
+    canMcpLogout?: boolean;
+    onMcpLogout?: (serverName: string) => void;
     installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: JSX.Element;
@@ -123,6 +124,7 @@ export function PluginRetryError(props: { error: string; onRetry: () => void }):
     </div>
   );
 }
+const CONNECTION_VERBS = { Account: ["connect", "signOut"], Credential: ["configure", "edit"] };
 function PluginConnectionAction(props: {
   kind: "Account" | "Credential";
   ready: boolean;
@@ -130,7 +132,7 @@ function PluginConnectionAction(props: {
   disabled?: boolean;
   onClick: () => void;
 }) {
-  const verb = () => (props.ready ? "edit" : props.kind === "Account" ? "connect" : "configure");
+  const verb = () => CONNECTION_VERBS[props.kind][props.ready ? 1 : 0];
   return (
     <>
       <button
@@ -632,13 +634,14 @@ function PluginOverview(props: DetailProps): JSX.Element {
                     name={server.serverName}
                     ready={server.state === "authorized"}
                     disabled={
-                      server.state === "authorized"
-                        ? !props.onEditMcp
-                        : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin
+                      props.mcpLoginBusy ||
+                      (server.state === "authorized"
+                        ? !props.canMcpLogout || !props.onMcpLogout
+                        : !props.canMcpLogin || !props.onMcpLogin)
                     }
                     onClick={() =>
                       server.state === "authorized"
-                        ? props.onEditMcp?.()
+                        ? props.onMcpLogout?.(server.serverName)
                         : props.onMcpLogin?.(server.serverName)
                     }
                   />

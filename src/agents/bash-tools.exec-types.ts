@@ -228,6 +228,7 @@ export type ExecToolDetails = {
       noOutputTimedOut?: boolean;
       cwd?: string;
       nodeId?: string;
+      warningText?: string;
     }
   | {
       status: "approval-pending";

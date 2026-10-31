@@ -417,6 +417,24 @@ it.each(["reset", "archive", "lifecycle revision"])(
   },
 );
 
+it("searches stopped repository artifacts using equivalent sigma forms", async () => {
+  const base = await capture();
+  const retainedPath = "ΕΛΕΓΧΟΣ/README.md";
+  fs.mkdirSync(workspaceFile("ΕΛΕΓΧΟΣ"));
+  writeFile(retainedPath, "retained Greek report\n");
+  await publishCheckpoint(base, await capture());
+  active = false;
+  for (const search of ["Σ", "σ", "ς"]) {
+    const found = await files.ok("list", { search });
+    expect(found.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
+      retainedPath,
+    ]);
+    expect(found.browser).not.toHaveProperty("truncated");
+  }
+  expect((await files.ok("get", retainedPath)).file.content).toBe("retained Greek report\n");
+  expect(run).not.toHaveBeenCalled();
+});
+
 it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
   "keeps stopped inspection limited to verified changed artifacts (%s)",
   async (storedName) => {

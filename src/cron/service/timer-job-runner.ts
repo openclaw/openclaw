@@ -343,7 +343,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     }
     const timeout = createDeferredCore<CronRunTimeout>();
 
-    // Ordinary turns retain queue admission separately from their execution deadline.
+    // Ordinary turns report admission separately for the shorter setup watchdog.
     const deferTimeoutUntilExecutionStart =
       job.payload.kind === "agentTurn" ||
       job.payload.kind === "systemEvent" ||

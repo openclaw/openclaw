@@ -649,6 +649,12 @@ enables isolation. Without writable delegation, OpenClaw leaves the cgroup
 layout unchanged and reports the missing prerequisite once at startup.
 
 OpenClaw places host agent-exec process trees in the sibling `agent-exec` cgroup.
+Placement follows the launch caller's typed execution intent: agent tool commands
+and their PTYs enter `agent-exec`; Gateway-internal commands stay in `gateway`.
+This includes managed worktree preparation, base refresh and hydration, Git
+status and diff RPCs, and sandbox synchronization helpers. Executable names,
+arguments, and cleanup ownership do not select the cgroup. Descendants inherit
+their command's placement.
 Its CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
 relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`
 reuses the host exec memory allowance: the smaller of one quarter of available

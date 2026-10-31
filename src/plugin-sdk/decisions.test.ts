@@ -1,8 +1,9 @@
-import { expect, it } from "vitest";
+import { expect, expectTypeOf, it } from "vitest";
 import {
   DecisionContractError,
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
+  isDecisionBatchV1Representable,
   decisionResultV2ToV1,
   validateDecisionBatchV2,
   validateDecisionResultV2,
@@ -24,6 +25,13 @@ it("exposes lossless codecs and bounded validation through the public decision e
     throw new Error("Representable fixture was rejected");
   }
   expect(validateDecisionBatchV2(richer)).toBe(true);
+  if (!isDecisionBatchV1Representable(richer)) {
+    throw new Error("Representable public fixture was rejected");
+  }
+  expectTypeOf(richer.questions).toMatchTypeOf<DecisionBatch["questions"]>();
+  if (richer.state.type === "json") {
+    expectTypeOf(richer.state.value).toMatchTypeOf<DecisionBatch["state"]>();
+  }
   expect(decisionBatchV2ToV1(richer)).toEqual(legacy);
   const result = {
     model: "fixture",
@@ -35,6 +43,7 @@ it("exposes lossless codecs and bounded validation through the public decision e
     ...richer,
     state: { type: "json", value: "explicit fixture" },
   };
+  expect(isDecisionBatchV1Representable(explicitJson)).toBe(false);
   expect(decisionBatchV2ToV1(explicitJson)).toBeUndefined();
   expect(() => validateDecisionBatchV2({ state: null, questions: {} })).toThrow(
     DecisionContractError,

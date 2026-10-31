@@ -415,7 +415,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
-      "<openclaw-app></openclaw-app>",
+      '<openclaw-app><main id="openclaw-boot-shell"></main></openclaw-app>',
       '<link rel="stylesheet" href="/assets/index.css">',
       '<script type="module" src="assets/index.js"></script>',
       '<script type="module" src="https://example.com/assets/ignored.js"></script>',

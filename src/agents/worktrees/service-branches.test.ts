@@ -73,6 +73,8 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-worktree-branches-", await fs.realpath(os.tmpdir()));
+    // Inherited command-line config disables the worker's filesystem cache admission.
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "global.gitconfig"));
     const template = path.join(root, "git-template");

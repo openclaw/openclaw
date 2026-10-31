@@ -20,6 +20,7 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
@@ -102,8 +103,13 @@ function spawnBrokerCommand(
   argv: string[],
   options: ExecaOptions,
   prepared: BrokerExecaOptions,
+  executionIntent: ProcessExecutionIntent,
 ) {
-  const remote = host.spawnExeca(argv, prepared);
+  const remote = host.spawnExeca(
+    argv,
+    prepared,
+    executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined,
+  );
   const child = remote.child;
   const closed = child.waitForClose();
   const onAbort = () => {
@@ -529,6 +535,7 @@ export function shouldSpawnWithShell(params: {
 }
 
 type SpawnCommandOptions = CommandSpawnOptions & {
+  executionIntent?: ProcessExecutionIntent;
   baseEnv?: NodeJS.ProcessEnv;
   executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
@@ -597,6 +604,7 @@ export function spawnCommandWithInvocation<
     cancelSignal,
     executionTimeoutMs,
     inheritScopeCancellation = true,
+    executionIntent = "gateway-internal",
     ...execaOptions
   } = sourceOptions;
   const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
@@ -634,6 +642,7 @@ export function spawnCommandWithInvocation<
           [invocation.command, ...invocation.args],
           commandOptions,
           remoteOptions,
+          executionIntent,
         )
       : runWithMainThreadTask(
           "process:spawn",

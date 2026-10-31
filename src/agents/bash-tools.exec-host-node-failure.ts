@@ -180,6 +180,7 @@ export function formatNodeInvokeFailureToolResult(params: {
       durationMs: Date.now() - params.startedAt,
       aggregated: text,
       cwd: params.cwd,
+      ...(params.warnings?.length ? { warningText: params.warnings.join("\n") } : {}),
     },
   };
 }

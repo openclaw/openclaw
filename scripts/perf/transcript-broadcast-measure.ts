@@ -5498,6 +5498,17 @@ for (const [signal, exitCode] of [
 try {
   await assertPortAvailable(port);
   await assertPortAvailable(mockPort);
+  if (values["team-stress"]) {
+    // Each built revision owns fixture upgrades, before readiness and measurement.
+    const doctor = launch([values.entry, "doctor", "--fix", "--non-interactive"], "doctor", {
+      OPENCLAW_SUPERVISOR_MODE: "external",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    });
+    const [code, signal] = await once(doctor, "close");
+    if (code !== 0) {
+      throw new Error(`Fixture Doctor exited ${code ?? signal}; inspect ${output}/doctor.log`);
+    }
+  }
   await new Promise<void>((resolve, reject) => {
     mock.once("error", reject);
     mock.listen(mockPort, "127.0.0.1", resolve);

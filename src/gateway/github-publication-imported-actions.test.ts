@@ -1,6 +1,7 @@
 // Exercise registered actions through session/requester owners; only GitHub I/O is synthetic.
 // oxfmt-ignore
 import { createPublicationActionFixture, createPublicationActionInvoker, publicationCheckpoint as checkpoint } from "./github-publication-actions.test-support.js";
+import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { SessionGitHubActionResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
@@ -30,7 +31,7 @@ const repository = (id: number, full_name: string, type: string, push: boolean) 
   permissions: { push },
 });
 
-async function fixture(previousPublication = false, prepared = true) {
+async function fixture(previousPublication = false, prepared = true, bound = true) {
   const f = previousPublication
     ? await createPublicationActionFixture()
     : await createRequesterPublicationFixture(checkpoint, "local", {
@@ -43,8 +44,24 @@ async function fixture(previousPublication = false, prepared = true) {
   });
   const base = repository(10, "example/repository", "Organization", true);
   const head = repository(20, "contributor/repository", "User", false);
-  const scope = { agentId: "main", sessionKey: SESSION_KEY };
+  const scope = {
+    agentId: "main",
+    sessionKey: !bound && !previousPublication ? "agent:main:explicit-metadata" : SESSION_KEY,
+  };
+  if (scope.sessionKey !== SESSION_KEY) {
+    await upsertSessionEntryCore(scope, {
+      sessionId: randomUUID(),
+      lifecycleRevision: randomUUID(),
+      updatedAt: 1,
+      sandbox: "required",
+      createdActor: { type: "human", source: "profile", id: f.guestProfile },
+    });
+  }
   const entry = loadSessionEntryReadOnly(scope)!;
+  if (scope.sessionKey !== SESSION_KEY) {
+    expect(entry.worktree).toBeUndefined();
+    expect(entry.repositoryWorkspaceId).toBeUndefined();
+  }
   const binding = {
     url,
     host: "github.com",
@@ -63,16 +80,23 @@ async function fixture(previousPublication = false, prepared = true) {
     },
     preparedHeadCommit: prepared ? headCommit : undefined,
   };
-  await upsertSessionEntryCore(scope, {
-    worktree: { ...entry.worktree!, githubPullRequest: binding },
-  });
+  if (bound) {
+    await upsertSessionEntryCore(scope, {
+      worktree: { ...entry.worktree!, githubPullRequest: binding },
+    });
+  }
+  const headRef: { repo: typeof head | null; ref: string; sha: string } = {
+    repo: head,
+    ref: "topic",
+    sha: headCommit,
+  };
   const state = {
     html_url: url,
     number: 7,
     node_id: "PR_original",
     user: { id: 101, login: "contributor" },
     maintainer_can_modify: true,
-    head: { repo: head, ref: "topic", sha: headCommit },
+    head: headRef,
     base: { repo: base, ref: "main", sha: "b".repeat(40) },
     state: "open",
     draft: true,
@@ -87,6 +111,7 @@ async function fixture(previousPublication = false, prepared = true) {
   const previous = mocks.runCommand.getMockImplementation()!;
   let onRead: ((endpoint: string) => Promise<void>) | undefined;
   let permission = "write";
+  let loseEditResponse = false;
   mocks.runCommand.mockImplementation(async (argv: string[], options) => {
     if (argv[0] !== "gh" || !argv.includes("--method")) {
       return await previous(argv, options);
@@ -131,12 +156,21 @@ async function fixture(previousPublication = false, prepared = true) {
       );
     } else if (endpoint.endsWith("/pulls/7")) {
       Object.assign(state, input);
+      if (loseEditResponse) {
+        throw new Error("Connection lost after GitHub accepted the metadata edit");
+      }
     } else {
       throw new Error(`Unexpected fixture GitHub write: ${endpoint}`);
     }
     return commandResult("{}");
   });
-  const invoke = createPublicationActionInvoker(f);
+  const invokeFrom = createPublicationActionInvoker(f);
+  const invoke: ReturnType<typeof createPublicationActionInvoker> = (
+    actor,
+    input,
+    source,
+    invocation,
+  ) => invokeFrom(actor, input, source ?? scope.sessionKey, invocation);
   return {
     ...f,
     invoke,
@@ -151,6 +185,9 @@ async function fixture(previousPublication = false, prepared = true) {
     onRead(callback: (endpoint: string) => Promise<void>) {
       onRead = callback;
     },
+    loseEditResponse() {
+      loseEditResponse = true;
+    },
     setPermission(value: string) {
       permission = value;
     },
@@ -162,6 +199,194 @@ describe("actions on the imported original PR", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it.each(["unbound", "publication", "binding"])(
+    "edits an explicit verified PR while preserving the session's %s target",
+    async (target) => {
+      const f = await fixture(target === "publication", false, target === "binding");
+      if (target === "binding") {
+        await upsertSessionEntryCore(f.scope, {
+          worktree: {
+            ...loadSessionEntryReadOnly(f.scope)!.worktree!,
+            githubPullRequest: {
+              ...f.binding,
+              number: 8,
+              url: "https://github.com/example/repository/pull/8",
+            },
+          },
+        });
+      }
+      const externalWrites = f.externalWrites.length;
+      const worktree = structuredClone(loadSessionEntryReadOnly(f.scope)?.worktree);
+      const checkpoints = checkpoint.mock.calls.length;
+      const observed = await f.invoke("guest", { action: "edit", pullRequestUrl: url });
+      expect(observed.details).toMatchObject({
+        pullRequest: { url, repository: "example/repository", branch: "topic" },
+        headCommit,
+        title: "Original title",
+      });
+      await f.act("edit", {
+        pullRequestUrl: url,
+        expectedTitle: "Original title",
+        title: "Updated external PR",
+      });
+      expect(f.writes).toEqual([
+        { endpoint: "repos/example/repository/pulls/7", input: { title: "Updated external PR" } },
+      ]);
+      const current = loadSessionEntryReadOnly(f.scope);
+      expect(current?.worktree).toEqual(worktree);
+      expect(current?.repositoryWorkspaceId).toBeUndefined();
+      expect(checkpoint.mock.calls.length).toBe(checkpoints);
+      expect(f.externalWrites).toHaveLength(externalWrites);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps explicit maintainer edits separate from later guest authority (private: %s)",
+    async (privateRepository) => {
+      const f = await fixture(false, false, false);
+      f.base.private = privateRepository;
+      f.head.private = privateRepository;
+      f.state.user = { id: 999, login: "other-contributor" };
+      const result = await f.invoke("admin", {
+        action: "edit",
+        pullRequestUrl: url,
+        expectedHeadCommit: headCommit,
+        title: "Maintainer clarification",
+        expectedTitle: "Original title",
+        body: "Clarified description",
+        expectedBody: "Original contributor description",
+      });
+      expect(result.details).toMatchObject({
+        title: "Maintainer clarification",
+        body: "Clarified description",
+      });
+      await expect(
+        f.act("edit", {
+          pullRequestUrl: url,
+          title: "Guest change",
+          expectedTitle: "Maintainer clarification",
+        }),
+      ).rejects.toThrow(privateRepository ? /could not be verified/ : /not authored/);
+      expect(f.writes).toEqual([
+        {
+          endpoint: "repos/example/repository/pulls/7",
+          input: { title: "Maintainer clarification", body: "Clarified description" },
+        },
+      ]);
+      const current = loadSessionEntryReadOnly(f.scope);
+      expect(current).toMatchObject({
+        sandbox: "required",
+        createdActor: { id: f.guestProfile },
+      });
+      expect(current?.worktree).toBeUndefined();
+      expect(current?.repositoryWorkspaceId).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "edits metadata without source push access (deleted fork: %s)",
+    async (deleted) => {
+      const f = await fixture(false, false, false);
+      f.base.permissions.push = false;
+      f.state.maintainer_can_modify = false;
+      if (deleted) {
+        f.state.head.repo = null;
+      }
+      await f.act("edit", {
+        pullRequestUrl: url,
+        title: "Metadata only",
+        expectedTitle: f.state.title,
+      });
+      expect(f.state.title).toBe("Metadata only");
+      expect(f.writes).toHaveLength(1);
+    },
+  );
+
+  it.each(["author", "repository", "private access", "inaccessible", "host", "receipt"])(
+    "denies an explicit target with invalid %s without any write",
+    async (change) => {
+      const f = await fixture(false, false, false);
+      let pullRequestUrl = url;
+      if (change === "author") {
+        f.state.user.id = 999;
+      }
+      if (change === "repository") {
+        f.state.base.repo = { ...f.base, id: 99 };
+      }
+      if (change === "private access") {
+        f.base.private = true;
+        f.setPermission("none");
+      }
+      if (change === "inaccessible") {
+        pullRequestUrl = url.replace("/7", "/999");
+      }
+      if (change === "host") {
+        pullRequestUrl = url.replace("github.com", "other.example");
+      }
+      await expect(
+        f.act("edit", {
+          pullRequestUrl,
+          title: "Unauthorized change",
+          expectedTitle: "Original title",
+          ...(change === "receipt" ? { requestId: "00000000-0000-4000-8000-000000000001" } : {}),
+        }),
+      ).rejects.toThrow(
+        change === "author"
+          ? /not authored/
+          : change === "host"
+            ? /configured GitHub host/
+            : change === "receipt"
+              ? /no publication requestId/
+              : /could not be verified/,
+      );
+      expect(f.writes).toEqual([]);
+    },
+  );
+
+  it.each(["requester", "head", "title"])(
+    "rechecks explicit-target %s before the write",
+    async (change) => {
+      const f = await fixture(false, false, false);
+      let reads = 0;
+      f.onRead(async (endpoint) => {
+        if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
+          if (change === "requester") {
+            await f.revoke();
+          }
+          if (change === "head") {
+            f.state.head.sha = "f".repeat(40);
+          }
+          if (change === "title") {
+            f.state.title = "New human title";
+          }
+        }
+      });
+      await expect(
+        f.act("edit", {
+          pullRequestUrl: url,
+          title: "Requested title",
+          expectedTitle: "Original title",
+        }),
+      ).rejects.toThrow(
+        change === "requester"
+          ? /role changed/
+          : change === "head"
+            ? /head changed/
+            : /metadata changed/,
+      );
+      expect(f.writes).toEqual([]);
+    },
+  );
+
+  it("reconciles an accepted explicit edit after a lost response without repeating the write", async () => {
+    const f = await fixture(false, false, false);
+    f.loseEditResponse();
+    const input = { pullRequestUrl: url, title: "Accepted title", expectedTitle: "Original title" };
+    expect((await f.act("edit", input)).details).toMatchObject({ title: "Accepted title" });
+    expect((await f.act("edit", input)).details).toMatchObject({ title: "Accepted title" });
+    expect(f.writes).toHaveLength(1);
   });
 
   it("reads the unprepared bound original PR despite an older publication", async () => {

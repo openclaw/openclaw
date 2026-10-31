@@ -105,6 +105,13 @@ A decision request cannot use a legacy-only exchange and returns
 Explicit provider `auth: "none"` skips both hooks. Existing credential ownership
 and caller cancellation checks apply before and after either exchange.
 
+Both exchange contexts accept an optional `signal`. Pass it to token-exchange
+requests and release their resources when it aborts. Embedded runs share their
+existing deadline across credential lookup and exchange, including request-time
+OAuth renewal. A timeout names the provider and auth step and fails the caller;
+it does not install late credentials or continue without authentication. Durable
+OAuth refresh settlement remains owned by the OAuth manager.
+
 <Tabs>
   <Tab title="Token exchange">
     For providers that need a token exchange before each inference call:

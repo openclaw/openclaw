@@ -1042,3 +1042,12 @@ it.each(["lifecycle reset", "replacement session"] as const)(
     }
   },
 );
+
+it.for(["prepare-release", "prepare-cancel"] as const)(
+  "settles attempt preparation behind a reconciliation holder (%s)",
+  async (ending, { signal }) => {
+    const { proveStoppedSandboxAuthority } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedSandboxAuthority(owner, ending, signal);
+  },
+);

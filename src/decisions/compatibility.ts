@@ -1,9 +1,10 @@
 import type { DecisionBatchResultV2, DecisionBatchV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionBatchResult } from "./types.js";
+import type { DecisionBatch, DecisionBatchResult, DecisionEntry } from "./types.js";
 import { finiteJson } from "./validation-common.js";
 import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-v2.js";
 import {
   DecisionContractError,
+  MAX_DECISION_V1_QUESTIONS,
   validateDecisionBatch,
   validateDecisionResult,
 } from "./validation.js";
@@ -27,27 +28,45 @@ export function decisionBatchV1ToV2(batch: unknown): DecisionBatchV2 | undefined
   return validateDecisionBatchV2(converted) ? converted : undefined;
 }
 
-/** Never sends native-only inputs to V1, or changes explicit JSON strings into text. */
-export function decisionBatchV2ToV1(batch: DecisionBatchV2): DecisionBatch | undefined {
+type V1RepresentableBatch = DecisionBatchV2 & {
+  readonly state:
+    | { readonly type: "text"; readonly text: string }
+    | { readonly type: "json"; readonly value: Exclude<DecisionEntry, string> };
+  readonly questions: DecisionBatch["questions"];
+};
+
+/** Validate V2 input and narrow to the losslessly representable V1 subset without conversion. */
+export function isDecisionBatchV1Representable(batch: unknown): batch is V1RepresentableBatch {
   if (!validateDecisionBatchV2(batch)) {
-    return undefined;
+    return false;
   }
   if (batch.state.type !== "text" && batch.state.type !== "json") {
-    return undefined;
+    return false;
   }
   if (
-    Object.values(batch.questions).some(
-      (q) => q.type === "sort" || q.type === "tags" || q.type === "box",
-    )
+    batch.state.type === "json" &&
+    batch.state.value !== null &&
+    typeof batch.state.value !== "object"
   ) {
+    return false;
+  }
+  // V2 validates the same unwrapped JSON/criteria budget. Only kinds and count differ here.
+  const questions = Object.values(batch.questions);
+  return (
+    questions.length <= MAX_DECISION_V1_QUESTIONS &&
+    questions.every((q) => q.type === "boolean" || q.type === "choice" || q.type === "score")
+  );
+}
+
+/** Never sends native-only inputs to V1, or changes explicit JSON strings into text. */
+export function decisionBatchV2ToV1(batch: DecisionBatchV2): DecisionBatch | undefined {
+  if (!isDecisionBatchV1Representable(batch)) {
     return undefined;
   }
-  const state = batch.state.type === "text" ? batch.state.text : batch.state.value;
-  if (batch.state.type === "json" && state !== null && typeof state !== "object") {
-    return undefined;
-  }
-  const converted = { state, questions: batch.questions };
-  return validateDecisionBatch(converted) ? converted : undefined;
+  return {
+    state: batch.state.type === "text" ? batch.state.text : batch.state.value,
+    questions: batch.questions,
+  };
 }
 
 /** Preserve provider estimates and labels verbatim; never threshold or take an argmax. */

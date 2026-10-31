@@ -1016,6 +1016,11 @@ SQLite; it does not promise complete recall beyond that candidate window. The
 separate transcript search API applies its agent/session/role filters before its
 result cap. See [search modes and limits](/reference/database-engines#search-on-postgresql).
 
+Transcript search keeps its agent prefix literal in the prepared query so
+PostgreSQL retains that selectivity estimate when it chooses a generic plan.
+Other query inputs stay parameterized; server-wide plan policy and search
+results are unchanged.
+
 Without pgvector, explicitly select keyword-only memory before opening its store:
 
 ```json5

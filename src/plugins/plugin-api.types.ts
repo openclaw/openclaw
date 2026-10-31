@@ -286,6 +286,10 @@ export type OpenClawPluginApi = {
       shareMaxAgeMs?: number;
     },
   ) => void;
+  /** Register repository preparation policy, selected by gateway.repositoryIntegration. */
+  registerRepositoryIntegration: (
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
+  ) => void;
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */
   registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
   /** Register a sandboxed board widget source kind owned by this plugin. */

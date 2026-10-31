@@ -72,6 +72,39 @@ afterEach(async () => {
   await i18n.setLocale("en");
 });
 
+it("checks default filters once per batch and keeps the first retained row in order", () => {
+  const levelReads = vi.fn(() => true);
+  const props = createProps({
+    status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+    onExport: vi.fn(),
+  });
+  for (const level of Object.keys(props.levelFilters)) {
+    Object.defineProperty(props.levelFilters, level, { get: levelReads });
+  }
+  const lines = Array.from({ length: 84 }, (_, id) => ({
+    id,
+    raw: `line ${id}`,
+    level: "info" as const,
+  }));
+  const [entries, setEntries] = createSignal(lines.slice(0, 64));
+  const view = mountSolid(() => <LogsView {...props} entries={entries()} />);
+  flush();
+  levelReads.mockClear();
+
+  setEntries(lines.slice(20));
+  flush();
+
+  expect(levelReads).toHaveBeenCalledTimes(6);
+  expect(view.container.querySelector('[aria-posinset="1"] .log-message')?.textContent).toBe(
+    "line 20",
+  );
+  view.getByRole("button", { name: "Export visible" }).click();
+  expect(props.onExport).toHaveBeenCalledWith(
+    Array.from({ length: 64 }, (_, index) => `line ${index + 20}`),
+    "visible",
+  );
+});
+
 it("formats only new rows until the locale or effective timezone changes", async () => {
   const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
   const allTimes = [...validTimes, "not a timestamp", "", null, undefined];

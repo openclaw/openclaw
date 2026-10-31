@@ -14967,8 +14967,8 @@ struct ChatHistoryCoalescingTests {
         let replacement = model.handleTransportEvent(.routeChanged)
         await gate.waitUntilBlocked()
         let lease = OpenClawChatTransportRouteLease(
-            sendMessage: { _, _, _, _, _ in throw NSError(domain: "unused-send", code: 1) },
-            requestHistory: { _ in
+            sendTargetedMessage: { _, _, _, _, _, _ in throw NSError(domain: "unused-send", code: 1) },
+            requestTargetedHistory: { _, _ in
                 _ = await confirmations.increment()
                 return historyPayload()
             })

@@ -3,6 +3,7 @@ import { normalizeCapabilities } from "./catalog.test-support.js";
 import {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
+  isDecisionBatchV1Representable,
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "./compatibility.js";
@@ -102,6 +103,7 @@ it("rejects executable caller/provider data at conversion without invoking it", 
     expect(() => decisionResultV1ToV2(input, result)).toThrow(DecisionContractError);
   }
   for (const input of [v2Getter, new Proxy(v2Batch, { get: trap, ownKeys: trap })]) {
+    expect(() => isDecisionBatchV1Representable(input)).toThrow(DecisionContractError);
     expect(() => decisionBatchV2ToV1(input)).toThrow(DecisionContractError);
     expect(() => decisionResultV2ToV1(input, result)).toThrow(DecisionContractError);
   }
@@ -116,6 +118,7 @@ it("does not charge versioned framing against an admitted V1 evidence budget", (
   const size = 1_048_576 - Buffer.byteLength(JSON.stringify({ ...batch, state: "" }));
   const boundary = { ...batch, state: "x".repeat(size) };
   const converted = decisionBatchV1ToV2(boundary);
+  expect(isDecisionBatchV1Representable(converted)).toBe(true);
   expect(converted && decisionBatchV2ToV1(converted)).toEqual(boundary);
   expect(decisionBatchV1ToV2({ ...batch, state: "x".repeat(1_048_576) })).toBeUndefined();
 });
@@ -128,6 +131,7 @@ it("round-trips admitted V1 depth and node boundaries without charging V2 framin
   for (const state of [nested, Array.from({ length: 19_995 }, () => null)]) {
     const boundary: DecisionBatch = { state, questions: { q: { type: "boolean" } } };
     const converted = decisionBatchV1ToV2(boundary);
+    expect(isDecisionBatchV1Representable(converted)).toBe(true);
     expect(converted && decisionBatchV2ToV1(converted)).toEqual(boundary);
     expect(decisionBatchV1ToV2({ ...boundary, state: [state] })).toBeUndefined();
   }
@@ -163,9 +167,24 @@ it("rejects evidence and native operations before legacy dispatch", () => {
     },
   ];
   for (const input of inputs) {
+    expect(isDecisionBatchV1Representable(input)).toBe(false);
     expect(decisionBatchV2ToV1(input)).toBeUndefined();
   }
 });
+
+it.each([256, 257])(
+  "preserves V1 question admission at %i questions without conversion",
+  (count) => {
+    const candidate: DecisionBatchV2 = {
+      ...v2Batch,
+      questions: Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [String(index), { type: "boolean" }]),
+      ),
+    };
+    expect(isDecisionBatchV1Representable(candidate)).toBe(count === 256);
+    expect(decisionBatchV2ToV1(candidate) !== undefined).toBe(count === 256);
+  },
+);
 
 it("refuses to drop abstention, explicit decisions, errors, missing distributions or metadata", () => {
   const selected = { type: "choice" as const, choice: "no", probabilities: { yes: 0.8, no: 0.2 } };

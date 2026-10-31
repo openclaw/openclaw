@@ -97,6 +97,10 @@ export class BackupArchiveSpool {
           }
         }
         await write(bytes);
+        // Minipass may be destroyed during the write, between iterator reads.
+        if (entry.destroyed) {
+          break;
+        }
       }
       if (declaredSize === 0) {
         await write(Buffer.alloc(0));
@@ -243,7 +247,8 @@ export async function listBackupArchiveEntries(
     });
   } catch (error) {
     for (const entry of active.keys()) {
-      entry.destroy(toStringifiedError(error));
+      // Consumers between reads have no error listener; cancel all before joining them.
+      entry.destroy();
     }
     throw error;
   } finally {

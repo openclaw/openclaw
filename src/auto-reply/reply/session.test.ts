@@ -2046,6 +2046,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         modelOverride: "m2.7",
         verboseLevel: "on",
         category: "Channels",
+        icon: "🦞",
+        color: "blue",
         pinnedAt: 123,
         deviceFolder: { deviceId: "rollover-device", path: "/existing/project" },
         authProfileOverride: "20251001",
@@ -2055,6 +2057,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         usageFamilySessionIds: ["ancestor-session", "existing-model-selection"],
       },
       removed: {
+        visibility: "draft",
+        boardFace: "dashboard",
+        boardPresentation: "expanded",
         cliSessionIds: { "claude-cli": "cli-session-123" },
         cliSessionBindings: {
           "claude-cli": { sessionId: "cli-session-123", authProfileId: "anthropic:default" },
@@ -2128,20 +2133,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const expected = {
       ...preserved,
       ...Object.fromEntries(Object.keys(removed).map((key) => [key, undefined])),
+      totalTokens: 0,
+      totalTokensFresh: true,
+      compactionCount: 0,
     };
     for (const { name, result, stored } of cases) {
       expect(result, name).toMatchObject({ isNewSession: true, resetTriggered: true, sessionId });
       expectEntryFields(result.sessionEntry, expected, name);
-      expect(result.sessionEntry).toMatchObject({
-        totalTokens: 0,
-        totalTokensFresh: true,
-        compactionCount: 0,
-      });
-      expect(stored[sessionKey]).toMatchObject({
-        totalTokens: 0,
-        totalTokensFresh: true,
-        compactionCount: 0,
-      });
       expectEntryFields(
         expectDefined(stored[sessionKey], "stored model selection"),
         expected,

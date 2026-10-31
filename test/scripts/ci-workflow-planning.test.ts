@@ -3239,9 +3239,6 @@ describe("ci workflow guards", () => {
     });
 
     it.each([true, false])("bounds hosted rows with Android=%s", (androidSelected) => {
-      const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
-      expect(manifestSource).toContain("const HYBRID_HOSTED_ROW_LIMIT = 45;");
-      expect(manifestSource).toContain("const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;");
       const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
       const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);

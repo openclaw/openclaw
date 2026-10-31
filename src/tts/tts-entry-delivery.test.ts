@@ -32,8 +32,8 @@ const SYNTHETIC_OGG_OPUS_SHA256 =
 
 const converter = vi.hoisted(() => ({ count: 0 }));
 
-vi.mock("../media/media-services.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/media-services.js")>();
+vi.mock("../media/audio-transcode.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/audio-transcode.js")>();
   return {
     ...actual,
     transcodeAudioBuffer: async (params: Parameters<typeof actual.transcodeAudioBuffer>[0]) => {

@@ -84,15 +84,21 @@ startup's temporary database access or wait for model executions to finish.
 ## Graceful shutdown
 
 Once a stop or restart is committed, the Gateway fences new admission, snapshots
-running sessions, writes their markers, and aborts active runs. It waits only a
-short bounded time for in-flight persistence and gives other resource cleanup a
-bounded grace. A long model stream, tool call, or background process does not get
+running sessions, writes their markers, and aborts active runs. It joins accepted
+persistence before retiring state and gives other resource cleanup a bounded
+grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.
 
-After marker persistence and cancellation, process-owned shutdown gives session
-resources five seconds to settle. Leftovers retain their shared databases until
-process exit instead of extending the session-admission wait. Embedded hosts
-still join those resources before reusing the runtime.
+Optional session preview backfill stops scheduling when restart drain begins.
+Queued rows are dropped; an already-admitted database operation settles through
+the existing database drain before retirement. The next Gateway rebuilds any
+missing previews.
+
+After marker persistence and cancellation, process-owned shutdown logs a warning
+when required connection cleanup exceeds five seconds, then keeps joining its
+accepted finalizers before releasing the Gateway lock and state admission. The
+existing process shutdown deadline still bounds this join. Embedded hosts also
+join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

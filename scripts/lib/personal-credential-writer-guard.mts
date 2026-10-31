@@ -1217,6 +1217,8 @@ export function inspectPersonalCredentialWriters(
       );
     };
     const references: ts.Node[] = [];
+    const commandNodes: (readonly [ts.Node, ts.Expression])[] = [];
+    const commandExpressions: ts.Expression[] = [];
     const visit = (node: ts.Node) => {
       if (
         ts.isTypeNode(node) ||
@@ -1231,20 +1233,9 @@ export function inspectPersonalCredentialWriters(
         node.name.text === "type"
       ) {
         const initializer = ts.isPropertyAssignment(node) ? node.initializer : node.name;
-        // Literal command values are already exact; only expressions need semantic resolution.
-        const type = ts.isStringLiteralLikeNode(initializer)
-          ? undefined
-          : checker.getTypeAtLocation(initializer);
-        const commands = ts.isStringLiteralLikeNode(initializer)
-          ? [initializer.text]
-          : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
-              .filter((value) => value.isStringLiteralType())
-              .map((value) => value.value);
-        for (const command of commands) {
-          const owner = credentialCommandOwners.get(command);
-          if (owner && key(file, operation(node)) !== owner) {
-            fail(node, `${command} credential writes require the host publication adapter`);
-          }
+        commandNodes.push([node, initializer]);
+        if (!ts.isStringLiteralLikeNode(initializer)) {
+          commandExpressions.push(initializer);
         }
       }
       if (
@@ -1370,6 +1361,28 @@ export function inspectPersonalCredentialWriters(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
+    // Literal commands need no compiler query; resolve every expression in the
+    // same immutable file together instead of one native round trip per field.
+    const commandTypes = commandExpressions.length
+      ? checker.getTypeAtLocation(commandExpressions)
+      : [];
+    let commandTypeIndex = 0;
+    for (const [node, initializer] of commandNodes) {
+      const type = ts.isStringLiteralLikeNode(initializer)
+        ? undefined
+        : commandTypes[commandTypeIndex++];
+      const commands = ts.isStringLiteralLikeNode(initializer)
+        ? [initializer.text]
+        : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
+            .filter((value) => value.isStringLiteralType())
+            .map((value) => value.value);
+      for (const command of commands) {
+        const owner = credentialCommandOwners.get(command);
+        if (owner && key(file, operation(node)) !== owner) {
+          fail(node, `${command} credential writes require the host publication adapter`);
+        }
+      }
+    }
     const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
     for (const [index, node] of references.entries()) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)

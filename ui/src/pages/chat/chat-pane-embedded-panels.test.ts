@@ -16,6 +16,7 @@ import {
   renderPanelFixture,
   sidebarPanelFixtureParams,
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
+import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
@@ -42,6 +43,7 @@ import {
   getSessionWorkspace,
   loadSessionWorkspace,
   openSessionWorkspacePreview,
+  selectSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
 import {
   createSessionWorkspaceProps,
@@ -144,6 +146,61 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   );
 });
 
+it("finds an oversized attachment in Files without opening a guessed path", async () => {
+  useFakeClock();
+  const { list, mount, rails, renderPanels, sessions, state, query } = createReviewFixture();
+  state.chatMessage = "Keep my unsent question.";
+  list.resolve({
+    sessionKey: state.sessionKey,
+    root: "/synthetic/workspace",
+    files: [],
+    browser: {
+      path: "",
+      search: "orders-large.zip",
+      entries: ["exports/orders-large.zip", "archive/orders-large.zip"].map((path) => ({
+        path,
+        name: "orders-large.zip",
+        kind: "file" as const,
+      })),
+    },
+  });
+  const transcript = document.body.appendChild(document.createElement("div"));
+  const onFindWorkspaceFile = rails().onFindWorkspaceFile;
+  const card = mountSolid(
+    () =>
+      createComponent(AssistantAttachments, {
+        attachments: [
+          {
+            type: "attachment_error",
+            attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+          },
+        ],
+        options: { sessionKey: state.sessionKey, agentId: "main", onFindWorkspaceFile },
+      }),
+    { container: transcript },
+  );
+  onTestFinished(() => card.unmount());
+  buttonWithText(transcript, "Find in Files").click();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
+  await vi.advanceTimersByTimeAsync(160);
+  vi.useRealTimers();
+  await renderPanels();
+  expect(query<HTMLInputElement>('input[type="search"]')?.value).toBe("orders-large.zip");
+  expect(query('[aria-label="exports/orders-large.zip"]')).not.toBeNull();
+  expect(query('[aria-label="archive/orders-large.zip"]')).not.toBeNull();
+  expect(sessions.listFiles).toHaveBeenCalledOnce();
+  expect(sessions.getFile).not.toHaveBeenCalled();
+  expect(state.chatMessage).toBe("Keep my unsent question.");
+  element(mount, '[aria-label="exports/orders-large.zip"]').click();
+  await vi.waitFor(() =>
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(
+      state.sessionKey,
+      "/synthetic/workspace/exports/orders-large.zip",
+      { agentId: "main" },
+    ),
+  );
+});
+
 it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
   for (const [key, value] of Object.entries({
     getClientRects: () => [],
@@ -155,7 +212,7 @@ it("navigates an existing file tab to an explicit line without resetting its edi
       restorePropertyDescriptor(Range.prototype, key, descriptor);
     });
   }
-  const { file, mount, renderPanels, state, sessions, query } = createReviewFixture();
+  const { file, list, mount, rails, renderPanels, state, sessions, query } = createReviewFixture();
   const navigate = async (line?: number) => {
     await openSessionWorkspaceFile(state, {
       path: "navigation.txt",
@@ -195,6 +252,24 @@ it("navigates an existing file tab to an explicit line without resetting its edi
   await renderPanels();
   editor.dispatch({ changes: { from: 0, to: 0, insert: "draft " } });
   const draft = editor.state.doc.toString();
+  const retainedPreview = expectDefined(
+    getSessionWorkspace(state).activePreviewId,
+    "open file tab",
+  );
+  useFakeClock();
+  list.resolve({ sessionKey: state.sessionKey, root: "/synthetic/workspace", files: [] });
+  rails().onFindWorkspaceFile({
+    name: "orders-large.zip",
+    sessionKey: state.sessionKey,
+    agentId: "main",
+  });
+  await vi.advanceTimersByTimeAsync(160);
+  vi.useRealTimers();
+  await renderPanels();
+  selectSessionWorkspacePreview(state, retainedPreview);
+  await renderPanels();
+  expect(query(".cm-editor")).toBe(editorElement);
+  expect(editor.state.doc.toString()).toBe(draft);
   const scroll = vi.spyOn(EditorView, "scrollIntoView");
   onTestFinished(() => scroll.mockRestore());
   await navigate(7);

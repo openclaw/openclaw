@@ -162,7 +162,6 @@ extensions/deepseek/provider-policy-api.ts	2
 extensions/device-pair/index.ts	5
 extensions/diagnostics-otel/src/service-exporter.ts	1
 extensions/diagnostics-otel/src/service-logs.ts	8
-extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
 extensions/diffs/src/config.ts	2
 extensions/diffs/src/language-hints.ts	6
@@ -2069,7 +2068,6 @@ src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	1
 src/plugins/capability-provider-runtime.ts	8
-src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/clawhub.ts	3
 src/plugins/cli-gateway-nodes-runtime.ts	2
@@ -2136,7 +2134,6 @@ src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/registry-registrars-host.ts	1
-src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-runtime-binding.ts	1
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1

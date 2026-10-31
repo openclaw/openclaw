@@ -83,6 +83,7 @@ export function resolveAgentHarnessRunAdmissionError(params: {
  */
 export async function resolveHookModelSelection(params: {
   prompt: string;
+  onDispatch?: () => void;
   attachments?: PluginHookBeforeModelResolveAttachment[];
   provider: string;
   modelId: string;
@@ -114,7 +115,13 @@ export async function resolveHookModelSelection(params: {
       const event: PluginHookBeforeModelResolveEvent = params.attachments
         ? { prompt: params.prompt, attachments: params.attachments }
         : { prompt: params.prompt };
-      const run = () => hookRunner.runBeforeModelResolve(event, params.hookContext);
+      const run = () => {
+        // A registered hook can commit work before native target preparation starts.
+        if (hookRunner.hasHooks("before_model_resolve")) {
+          params.onDispatch?.();
+        }
+        return hookRunner.runBeforeModelResolve(event, params.hookContext);
+      };
       modelResolveOverride = assertCurrent
         ? await withGuardedFetchRequestAuthority(assertCurrent, run)
         : await run();

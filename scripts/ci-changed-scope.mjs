@@ -1,19 +1,11 @@
 import { execFileSync } from "node:child_process";
-import {
-  appendFileSync,
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
   NATIVE_COOWNED_GENERATED_I18N_RE,
   NATIVE_HARD_GENERATED_I18N_RE,
-  NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE,
 } from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
@@ -636,12 +628,6 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   if (sourcePaths.length === 0) {
     return;
   }
-  if (isNativeCanonicalV2Migration(changedPaths, generatedPaths)) {
-    return;
-  }
-  if (isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths)) {
-    return;
-  }
   throw new NativeGeneratedArtifactsMixedError(
     [
       "Native generated locale artifacts must be isolated from source changes.",
@@ -650,70 +636,6 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
       ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
-  );
-}
-
-/**
- * The projection retirement must carry its output-only translations into canonical inputs.
- * Requiring the deleted lookup path confines this exception to the cutover diff.
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @param {string[]} sourcePaths
- */
-function isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths) {
-  const retiredLookup =
-    "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
-  const owners = [
-    ".github/workflows/native-app-locale-refresh.yml",
-    "apps/.i18n/native-source.json",
-    "apps/android/app/build.gradle.kts",
-    "scripts/android-app-i18n.ts",
-    "scripts/native-app-i18n.ts",
-    "scripts/ci-changed-scope.mjs",
-    "test/scripts/android-app-i18n.test.ts",
-    "test/scripts/native-app-i18n.test.ts",
-    "src/scripts/ci-changed-scope.native-i18n.test.ts",
-  ];
-  return (
-    changedPaths.includes(retiredLookup) &&
-    !existsSync(new URL(`../${retiredLookup}`, import.meta.url)) &&
-    owners.every((owner) => changedPaths.includes(owner)) &&
-    sourcePaths.every(
-      (filePath) =>
-        owners.includes(filePath) ||
-        filePath === "package.json" ||
-        filePath === "apps/android/README.md",
-    ) &&
-    generatedPaths.every(
-      (filePath) =>
-        filePath === retiredLookup ||
-        /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/res\/values-[^/]+\/strings\.xml)$/.test(
-          filePath,
-        ),
-    )
-  );
-}
-
-/**
- * One-time v2 native artifact migration escape; remove after the migration PR lands.
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @returns {boolean}
- */
-function isNativeCanonicalV2Migration(changedPaths, generatedPaths) {
-  const requiredOwners = [
-    ".gitattributes",
-    "scripts/ci-changed-scope.mjs",
-    "scripts/native-app-i18n.ts",
-    "scripts/android-app-i18n.ts",
-    "scripts/apple-app-i18n.ts",
-    "test/scripts/native-app-i18n.test.ts",
-    "test/scripts/apple-app-i18n.test.ts",
-    "src/scripts/ci-changed-scope.native-i18n.test.ts",
-  ];
-  return (
-    requiredOwners.every((owner) => changedPaths.includes(owner)) &&
-    generatedPaths.every((filePath) => NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE.test(filePath))
   );
 }
 

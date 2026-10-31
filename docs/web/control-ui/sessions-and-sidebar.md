@@ -520,6 +520,12 @@ Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the
 
 The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
 
+Session metadata filtering and command-palette metadata matches are case-insensitive,
+including the Greek sigma forms **Σ**, **σ**, and **ς**. Title matching also treats
+equivalent Unicode spellings and punctuation-separated words alike. Literal fields,
+such as session keys and model references, retain their punctuation. These rules do
+not change transcript search or which conversations you can access.
+
 During text composition, the command palette pauses searches and leaves Enter, Escape, and arrow keys to the input method.
 
 After token or device-token authentication, the sidebar can show its cached session roster on reload only when the browser will present the Gateway token that authenticated the previous connection, or the paired device token retained from that connection. The cached roster has no live run state and is replaced by the live list after connecting. Other authentication methods wait for the connection; see [Warm reload](/web/control-ui/offline-and-reconnect#warm-reload).

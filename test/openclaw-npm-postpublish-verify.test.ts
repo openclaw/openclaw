@@ -283,7 +283,7 @@ it("rejects a matching provenance payload when Sigstore cannot verify its bundle
 it("retries incomplete or briefly stale provenance while npm publish propagates", async () => {
   const delays: number[] = [];
   const failures = [
-    "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+    "npm registry metadata is incomplete for openclaw@2026.3.23.",
     "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
   ];
   const read = vi
@@ -299,6 +299,22 @@ it("retries incomplete or briefly stale provenance while npm publish propagates"
   ).resolves.toBe("verified");
   expect(read).toHaveBeenCalledTimes(3);
   expect(delays).toEqual([1000, 2000]);
+});
+
+it.each([
+  "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+  "npm registry signature verification timed out after an integrity mismatch.",
+])("does not retry permanent provenance or integrity mismatch: %s", async (message) => {
+  const read = vi.fn<() => Promise<string>>().mockRejectedValue(new Error(message));
+  await expect(
+    retryNpmRegistryProvenanceRead(read, {
+      attempts: 3,
+      delay: async () => {
+        throw new Error("unexpected retry");
+      },
+    }),
+  ).rejects.toThrow(message);
+  expect(read).toHaveBeenCalledOnce();
 });
 
 it("rejects an oversized worker before the full verifier reads its contents", () => {

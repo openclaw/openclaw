@@ -330,7 +330,8 @@ prepare_limit_summary() {
 }
 DOCKER_RUN_USER_ARGS=()
 UPGRADE_ENTRYPOINT=()
-if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
+if [ "$UPDATE_RESTART_MODE" = auto-auth ] ||
+  { [ "$SCENARIO" = package-installed-recovery ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ]; }; then
   # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
   DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
@@ -558,12 +559,14 @@ if [ "$SCENARIO" = "package-installed-recovery" ]; then
     -e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64" \
     -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
     -e OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT="${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" \
+    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts:/tmp/openclaw-release-harness/scripts:ro" \
     ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
     -e OPENCLAW_E2E_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
     "$IMAGE_NAME" \
+    ${UPGRADE_ENTRYPOINT[@]+"${UPGRADE_ENTRYPOINT[@]}"} \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
     bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/installed-recovery.sh
   run_completed="1"

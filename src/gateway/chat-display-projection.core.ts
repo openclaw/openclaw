@@ -37,6 +37,7 @@ import {
   hasTranscriptMediaFacts,
   isAssistantTextContentType,
   isAssistantInternalReasoningContentType,
+  projectReplyMediaFailureText,
 } from "./chat-display-projection.helpers.js";
 import {
   createSubagentCoordinationHistoryProjection,
@@ -632,7 +633,10 @@ export function projectChatDisplayMessagesWithState(
     options?.turnBoundaryPending,
   );
   const displayMessages = sanitizeChatHistoryMessages(
-    mergeTtsSupplementMessages(filtered.messages),
+    mapChatDisplayMessages(
+      mergeTtsSupplementMessages(filtered.messages),
+      projectReplyMediaFailureText,
+    ),
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
     { toolResultMaxChars: options?.toolResultMaxChars },
   );

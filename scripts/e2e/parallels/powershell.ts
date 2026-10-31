@@ -10,6 +10,19 @@ export function encodePowerShell(script: string): string {
   );
 }
 
+export function windowsPackageInstallScript(tgzUrl: string, tempName: string): string {
+  return `$ErrorActionPreference = 'Stop'
+$tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
+# Windows PowerShell treats native stderr notices as errors under Stop.
+$ErrorActionPreference = 'Continue'
+npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
+Invoke-OpenClaw --version
+if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`;
+}
+
 export const windowsScopedEnvFunction = String.raw`function Invoke-WithScopedEnv {
   param(
     [Parameter(Mandatory = $true)][hashtable] $Values,

@@ -22,7 +22,7 @@ import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { SessionOwnerAvatar } from "../../../components/solid/session-owner-chip.tsx";
 import { SettingsToggleRow } from "../../../components/solid/settings-ui.tsx";
-import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/settings.css";
@@ -33,7 +33,7 @@ import {
   type ChatSessionSharingRosterRow,
 } from "./chat-session-sharing-shared.tsx";
 
-registerEnglishCatalog(registerChatSessionOptionalEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 registerEnglishCatalog(registerSessionPeopleEnglish);
 

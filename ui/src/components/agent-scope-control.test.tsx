@@ -2,6 +2,7 @@
 
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { GatewayAgentRow } from "../api/types.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { AgentScopeControl } from "./agent-scope-control.tsx";
@@ -84,4 +85,65 @@ it.each([true, false])("excludes system agents with allowAll=%s", async (allowAl
   });
   expect(select?.value).toBe(allowAll ? "" : "main");
   expect(values(select)).toEqual(allowAll ? ["", "main", "retired", "writer"] : ["main", "writer"]);
+});
+
+it("skips unchanged scope inputs while keeping roster and selection changes live", async () => {
+  const name = vi.fn(() => "Main agent");
+  const selection = createSelection();
+  const agents: GatewayAgentRow[] = [
+    {
+      id: "main",
+      get name() {
+        return name();
+      },
+    },
+    configuredAgents[1]!,
+  ];
+  const [inputs, setInputs] = createSignal({
+    agents,
+    additionalAgentIds: ["retired"],
+    selectedId: "main",
+    allowAll: true,
+  });
+  const { container } = mountSolid(() => <AgentScopeControl {...inputs()} selection={selection} />);
+  flush();
+  const select = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
+  await select.updateComplete;
+  name.mockClear();
+  for (let i = 0; i < 5; i++) {
+    setInputs((previous) => ({ ...previous }));
+    flush();
+    await select.updateComplete;
+  }
+  expect(name).not.toHaveBeenCalled();
+  expect(values(select)).toEqual(["", "main", "retired", "writer"]);
+
+  const update = async (patch: Partial<ReturnType<typeof inputs>>) => {
+    setInputs((previous) => ({ ...previous, ...patch }));
+    flush();
+    await select.updateComplete;
+  };
+  await update({ selectedId: "writer" });
+  expect(select.value).toBe("writer");
+  await update({ allowAll: false });
+  expect(values(select)).toEqual(["main", "retired", "writer"]);
+  select.onSelect("main");
+  expect(selection.set).toHaveBeenCalledWith("main");
+  await update({ additionalAgentIds: ["historical"] });
+  expect(values(select)).toEqual(["historical", "main", "writer"]);
+  await update({ agents: [{ id: "main", name: "Zebra" }, configuredAgents[1]!] });
+  expect(select.options.map((option) => option.label)).toEqual(["historical", "Writer", "Zebra"]);
+  await update({
+    agents: [{ id: "main", name: "Zebra", identity: { emoji: "🐙" } }, configuredAgents[1]!],
+  });
+  expect(
+    select.querySelector('[value="main"] .identity-avatar__text')?.getAttribute("data-avatar"),
+  ).toBe("🐙");
+  await update({ agents: [...inputs().agents, { id: "new", name: "New" }] });
+  expect(values(select)).toEqual(["historical", "new", "writer", "main"]);
+  await update({ selectedId: "selected-history" });
+  expect(select.value).toBe("selected-history");
+  expect(values(select)).toContain("selected-history");
+  await update({ agents: inputs().agents.filter((agent) => agent.id !== "writer") });
+  expect(values(select)).not.toContain("writer");
 });

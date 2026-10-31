@@ -128,7 +128,7 @@ suite.define(() => {
         };
         await prepareComposer();
 
-        for (const width of engine === "webkit" ? [560] : [1100, 1280, 560, 393, 320]) {
+        for (const width of [1100, 1280, 560, 393, 320]) {
           if (width === 560) {
             await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
             await workspace.waitFor({ state: "hidden" });
@@ -185,7 +185,13 @@ suite.define(() => {
           expect(layout.gap).toBeGreaterThanOrEqual(0);
           expect(layout.gap).toBeLessThanOrEqual(8);
           expect(layout.centerOffset).toBeLessThanOrEqual(1);
-          for (const delay of width === 560 ? [100, 0, 16, 32, 64] : [0]) {
+          // Reuse the document through 50 Escape and 50 pointer closes at the
+          // mobile breakpoint. Reloading between presses hid WebKit close hangs.
+          const delays =
+            width === 560
+              ? Array.from({ length: 50 }, (_, i) => [100, 0, 16, 32, 64][i % 5]!)
+              : [0];
+          for (const [cycle, delay] of delays.entries()) {
             for (const [triggerSelector, menuSelector, otherMenuSelector] of [
               ["model", ".chat-controls__model-menu", ".chat-controls__effort-menu"],
               ["thinking", ".chat-controls__effort-menu", ".chat-controls__model-menu"],
@@ -200,21 +206,15 @@ suite.define(() => {
                 )
                 .toBe(true);
               await layoutBox(trigger);
-              // Cross the desktop-to-mobile transition with a real held pointer.
               await trigger.click({ delay });
               await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(true);
               expect(await composer.locator(otherMenuSelector).isVisible()).toBe(false);
-              if (engine === "chromium") {
+              if (cycle % 2 === 0) {
                 await page.keyboard.press("Escape");
-                await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(false);
               } else {
-                // Isolate native activation from WebKit's separate details-close hang.
-                await prepareComposer();
-                await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-                await workspace.waitFor({ state: "hidden" });
-                await page.setViewportSize({ width, height: 729 });
-                await composer.locator("textarea").click();
+                await trigger.click();
               }
+              await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(false);
             }
           }
         }

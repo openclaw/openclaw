@@ -317,6 +317,8 @@ const repositoryScriptEntries = [
   // Installed recovery launches its driver and preloads its fault observer by path.
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery-observer.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.

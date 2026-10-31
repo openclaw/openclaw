@@ -434,6 +434,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ["live-codex-npm-plugin", "e2e/codex-npm-plugin-live-docker.sh"],
       ["upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
       ["published-upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
+      ["package-installed-recovery-older-runtime", "e2e/upgrade-survivor-docker.sh"],
       ["dreaming-cron-doctor", "e2e/upgrade-survivor-docker.sh"],
       ["root-managed-vps-upgrade", "e2e/upgrade-survivor-docker.sh"],
       ["update-migration", "e2e/upgrade-survivor-docker.sh"],
@@ -690,6 +691,48 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
       expect(aggregateLaneNames).not.toContain(laneName);
     }
+  });
+
+  it("keeps packaged older-runtime recovery independent of survivor baseline expansion", () => {
+    const name = "package-installed-recovery-older-runtime";
+    const plan = planFor({
+      selectedLaneNames: [name],
+      upgradeSurvivorBaselines: "2026.9.3 2026.9.4",
+      upgradeSurvivorScenarios: "base",
+    });
+    expect(plan.lanes).toHaveLength(1);
+    expect(plan.lanes[0]).toMatchObject({
+      name,
+      imageKind: "bare",
+      live: false,
+      resources: ["docker", "npm", "service"],
+      stateScenario: "empty",
+    });
+    expect(plan.requiredPrepublishPluginPackages).toEqual([]);
+    expect(plan.credentials).toEqual([]);
+    expect(plan.needs).toMatchObject({
+      bareImage: true,
+      package: true,
+      prepublishPluginRegistry: false,
+    });
+    const lane = requireFirstLane(plan);
+    const fixture = tempDirs.make("older-runtime-lane-");
+    const script = join(fixture, "scripts/e2e/upgrade-survivor-docker.sh");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(
+      script,
+      'printf "%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO" "$OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT" "$OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE" "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC"\n',
+    );
+    const result = execFileSync("/bin/bash", ["-c", lane.command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: fixture,
+        OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
+      },
+    });
+    expect(result).toBe("package-installed-recovery\nolder-runtime\n0\n\n");
   });
 
   it.each([

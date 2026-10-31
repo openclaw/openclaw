@@ -5,6 +5,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
@@ -18,6 +19,7 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 import type { JSX } from "../../types/solid-elements.js";
 
+registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
 
 export type SessionsAdvancedFiltersProps = {

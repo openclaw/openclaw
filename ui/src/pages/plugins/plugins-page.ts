@@ -10,7 +10,6 @@ import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operato
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -132,8 +131,8 @@ export function createPluginsPage(options: {
   const mcpLogin = createPluginMcpLogin(gateway, {
     getDetail: () => state.detail,
     getName: (pluginId) => state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
-    canSignIn: () => canCallGatewayMethod(gateway.snapshot, "mcp.authLogin", "operator.admin"),
     refresh: showDetails,
+    setMessage,
   });
   const discovery = createPluginDiscovery(
     {

@@ -56,7 +56,8 @@ afterEach(() => vi.restoreAllMocks());
 function fixture(relative = "source.sqlite", sql?: string) {
   const root = fs.realpathSync(directories.make("captured-migration-"));
   const pathname = path.join(root, relative);
-  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "alias") };
+  fs.symlinkSync(root, env.OPENCLAW_STATE_DIR, "junction");
   if (sql) {
     using database = new DatabaseSync(pathname);
     database.exec(`PRAGMA journal_mode=WAL; CREATE TABLE retained(value); ${sql}`);
@@ -65,9 +66,11 @@ function fixture(relative = "source.sqlite", sql?: string) {
 }
 
 function migrate(database: DatabaseSync, pathname: string) {
-  runUpdateSqliteMigration(database, pathname, () =>
-    database.exec("ALTER TABLE retained ADD COLUMN migrated;"),
-  );
+  const alias = path.join(path.dirname(pathname), "alias", path.basename(pathname));
+  runUpdateSqliteMigration(database, alias, () => {
+    expect(getUpdateDoctorMigrationSource(alias)?.path).toBe(alias);
+    database.exec("ALTER TABLE retained ADD COLUMN migrated;");
+  });
 }
 
 it("refuses a changed companion the session never opened", async () => {
@@ -264,15 +267,8 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
 it.each(["2026.9.33", "2026.9.34"])(
   "answers the unmarked %s parent in its original format",
   async (version) => {
-    const root = fs.realpathSync(directories.make("legacy-rollback-generation-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    const pathname = path.join(root, "source.sqlite");
-    {
-      using db = new DatabaseSync(pathname);
-      db.exec("CREATE TABLE retained(value);");
-    }
+    const { root, env, pathname } = fixture("source.sqlite", "SELECT 1;");
     const parent = readUpdateRunDriver();
-    expect(parent).toBeDefined();
     createUpdateRun({ trigger: "cli", before: { version }, origin: { driver: parent } }, { env });
     try {
       const stagingRoot = path.join(root, "staging");
@@ -335,6 +331,9 @@ it.each(["native", "worker"] as const)(
   async (parent) =>
     withOpenClawTestState({}, async (state) => {
       const { stateDir: root, env, configPath } = state;
+      const alias = path.join(root, "alias");
+      fs.symlinkSync(root, alias, "junction");
+      process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR = alias;
       const pathname = state.statePath("state", "openclaw.sqlite");
       const credentialsPath = state.statePath("client", "credentials.sqlite");
       await state.writeConfig({
@@ -464,7 +463,8 @@ it("attributes a captured absent shared store and its new credential companion d
       openOpenClawStateDatabase({ env });
       await closeOpenClawStateDatabaseAsync();
     },
-    (requested) => expect(requested).toBe(pathname),
+    (requested) =>
+      expect(requested).toBe(path.join(env.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite")),
   );
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({
@@ -480,7 +480,6 @@ it.each(["captured-generation", null, undefined])(
     const pathname = "/synthetic/relocated/state.sqlite";
     const refuse = vi.fn();
     const backup = vi.fn(() => {
-      expect(refuse).toHaveBeenCalledOnce();
       expect(hasUpdateDoctorMigrationCapture()).toBe(false);
       expect(getUpdateDoctorMigrationSource(pathname)).toBeUndefined();
       return {

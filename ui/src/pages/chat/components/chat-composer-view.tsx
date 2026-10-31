@@ -9,7 +9,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -53,7 +52,6 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
-warmWhenIdle(SlashMenu.preload, SkillMenu.preload, HumanMentionMenuView.preload, EmojiMenu.preload);
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",

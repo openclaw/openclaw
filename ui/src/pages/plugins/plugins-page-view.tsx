@@ -211,7 +211,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           "operator.admin",
         )}
         onMcpLogin={(serverName) => void page().mcpLogin.start(serverName)}
-        onEditMcp={() => page().context.navigate("mcp")}
+        canMcpLogout={canCallGatewayMethod(
+          page().gateway.snapshot,
+          "mcp.authLogout",
+          "operator.admin",
+        )}
+        onMcpLogout={(serverName) => void page().mcpLogin.signOut(serverName)}
         catalog={page().state.detail?.catalog}
         inspectionRead={page().inspectionRead}
         catalogLoading={page().state.detail?.catalogLoading}
