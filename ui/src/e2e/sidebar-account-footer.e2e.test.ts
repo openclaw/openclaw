@@ -98,7 +98,7 @@ suite.define(() => {
       await page.locator(".mobile-nav-toggle:visible").first().tap();
       const card = page.locator(".sidebar-identity-card:visible").first();
       await expect.poll(async () => (await card.boundingBox())?.x).toBeGreaterThanOrEqual(0);
-      await card.tap({ force: true });
+      await card.tap();
       const menu = page.locator(".oc-menu.sidebar-identity-menu");
       const avatar = menu.locator(".sidebar-identity-menu__avatar .viewer-avatar");
       try {
