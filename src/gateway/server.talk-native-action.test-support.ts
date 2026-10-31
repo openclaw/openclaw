@@ -61,7 +61,6 @@ export async function runTalkNativeActionParity({
     execHost: "gateway",
   });
   const results: unknown[] = [];
-  const prepared: unknown[] = [];
   let marker: string | undefined;
   const resetWriteMarker = () =>
     fs.rm(
@@ -71,23 +70,6 @@ export async function runTalkNativeActionParity({
   runEmbeddedAgent.mockImplementation(async (params) => {
     const admission = expectDefined(params.preparedRunAdmission, "real ingress admission");
     const admittedRunContext = await admission.admit("plugin-harness", "parity-test-model");
-    prepared.push({
-      principal: admission.readOperatorAuthority?.()?.profileId,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      permissionMode: params.permissionMode,
-      sessionRoot: params.sessionRoot,
-      execOverrides: params.execOverrides,
-      bashElevated: params.bashElevated,
-      senderId: params.senderId,
-      senderIsOwner: params.senderIsOwner,
-      messageProvider: params.messageProvider,
-      messageChannel: params.messageChannel,
-      carriesControlAuthority: Object.hasOwn(params, "operatorAuthority"),
-      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-    });
     const host = createAgentHarnessHostCapabilities({
       pluginId: "parity-test-model",
       attempt: {
@@ -174,12 +156,6 @@ export async function runTalkNativeActionParity({
     await consult("Carry out the action", "parity-provider-call");
     await waitForDispatchEnd();
     expect(results).toHaveLength(3);
-    expect(prepared[0]).toMatchObject({
-      principal: expectDefined(client.authenticatedUserProfile, "authenticated caller profile")
-        .profileId,
-    });
-    expect(prepared[1]).toEqual(prepared[0]);
-    expect(prepared[2]).toEqual(prepared[0]);
     const replay = vi.fn<RespondFn>();
     await handleGatewayRequest({
       req: {

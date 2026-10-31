@@ -119,6 +119,7 @@ export function retainNativeModelExecution(
   }
   const nativeOwner: ParentOwner = {
     requestCustody: owner.requestCustody,
+    cancelChildProcesses: owner.cancelChildProcesses,
     requesterTurnRunId: owner.requesterTurnRunId,
     requesterAgentId: owner.requesterAgentId,
     requesterSessionKey: owner.requesterSessionKey,
@@ -236,6 +237,7 @@ export function admitNativeChildModelExecution(
   if (!child.modelExecution) {
     child.requesterTurnRunId = owner.requesterTurnRunId;
     child.requestCustody = owner.requestCustody;
+    child.cancelProcesses = owner.cancelChildProcesses;
   }
   child.modelExecution ??= retainNativeModelExecution(
     owner,
@@ -303,6 +305,7 @@ export function bindNativeChildModelAdmission(
     if (!child.terminal && !child.settledWithoutCompletion) {
       child.completionCustody ??= evidence.completionCustody?.retain();
       child.modelExecution ??= retainExecution();
+      child.cancelProcesses = child.modelExecution?.owner.cancelChildProcesses;
     }
   } else {
     return true;
@@ -547,6 +550,7 @@ function executionOwner(
     child.nativeTurnId = request.turnId;
     known.assignment.nativeTurnId = request.turnId;
     child.modelExecution = modelSource;
+    child.cancelProcesses = modelSource.owner.cancelChildProcesses;
     child.completionCustody ??= completionCustody?.retain();
   } else if (pending) {
     pending.modelSource = modelSource;

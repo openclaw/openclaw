@@ -61,13 +61,16 @@ export function listActiveEmbeddedRunSessionIds(): string[] {
 }
 
 /** Resolves the current session id for an active run after resets or compaction. */
-export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
+export function resolveActiveEmbeddedRunSessionId(
+  sessionKey: string,
+  options?: { executionStartedOnly?: boolean },
+): string | undefined {
   const normalizedSessionKey = sessionKey.trim();
   if (!normalizedSessionKey) {
     return undefined;
   }
   return (
-    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
+    resolveActiveReplyRunSessionId(normalizedSessionKey, options) ??
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
   );
 }

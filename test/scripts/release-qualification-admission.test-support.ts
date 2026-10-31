@@ -193,6 +193,8 @@ export function fixture(
         head_sha: publisherSha,
         status: "completed",
         conclusion: "success",
+        started_at: "2026-09-28T00:00:00Z",
+        completed_at: "2026-09-28T00:00:04Z",
         steps: [
           {
             name: QUALIFICATION_ADMISSION_UPLOAD,

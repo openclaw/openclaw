@@ -255,8 +255,15 @@ export async function interruptReplyRunTarget(
   return { aborted, settled };
 }
 
-export function resolveActiveReplyRunSessionId(sessionKey: string): string | undefined {
-  return replyRunRegistry.resolveSessionId(sessionKey);
+export function resolveActiveReplyRunSessionId(
+  sessionKey: string,
+  options?: { executionStartedOnly?: boolean },
+): string | undefined {
+  const operation = getReplyRun(sessionKey);
+  return operation &&
+    (!options?.executionStartedOnly || hasReplyOperationExecutionStarted(operation))
+    ? operation.sessionId
+    : undefined;
 }
 
 /** Cancels the current reply backend only when its native run identity matches exactly. */

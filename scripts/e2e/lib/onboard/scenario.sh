@@ -273,6 +273,8 @@ send_guided_skip_ui_flow() {
     wait_for_log "Use which detected AI?" 120 || return $?
     send $'\r' 0.8
   fi
+  wait_for_log "Set up memory embeddings?" 120 || return $?
+  send $'\r' 0.8
 }
 
 validate_guided_skip_ui_log() {

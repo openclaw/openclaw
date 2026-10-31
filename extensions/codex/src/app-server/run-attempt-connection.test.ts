@@ -620,6 +620,26 @@ describe("prepareCodexAttemptConnection", () => {
     },
   );
 
+  it("uses an isolated app-server client for strict one-shot cleanup", async () => {
+    const sessionFile = path.join(tempDir, "client-ownership-one-shot.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-client-ownership-one-shot");
+    const params = createParams(sessionFile, workspaceDir);
+    params.sandbox = createSandboxContext({});
+    params.oneShotCliRun = true;
+    params.cleanupBundleMcpOnRunEnd = true;
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore: testCodexAppServerBindingStore },
+    });
+    using _ = {
+      [Symbol.dispose]: () => connection.releaseBindingAuthority(),
+    };
+
+    expect(connection.attemptClientFactory).toBe(createIsolatedCodexAppServerClient);
+  });
+
   it("keeps a user-home subscription on native account verification", async () => {
     const sessionFile = path.join(tempDir, "user-home-native-auth.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-user-home-native-auth");

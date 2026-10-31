@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import { withManagedCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
@@ -218,7 +218,7 @@ describe("Codex stdio effective configuration", () => {
         cwd,
         headers: {},
       };
-      const start = withEphemeralCodexAuthStore({
+      const start = withManagedCodexAuthStore({
         startOptions: await resolveManagedCodexAppServerStartOptions(options, {
           pluginRoot: fileURLToPath(new URL("../../", import.meta.url)),
         }),

@@ -58,6 +58,7 @@ function runFirstHop(scenario: string, automatic: boolean) {
         printf 'update\\n' >>"$HOME/events"
         if [ "$FIXTURE_AUTOMATIC" = 1 ]; then touch "$HOME/migrated"; fi
         ;;
+      migrate-baseline-cron-authority) printf 'baseline-cron-doctor\\n' >>"$HOME/events" ;;
       repair-workshop-baseline|repair-workshop-candidate) printf 'explicit-doctor\\n' >>"$HOME/events" ;;
       assert-workshop-published-refusal)
         printf 'refusal\\n' >>"$HOME/events"

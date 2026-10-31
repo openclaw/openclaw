@@ -192,7 +192,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-97 plugins
+98 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `clawhub:@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -317,6 +317,8 @@ Each entry lists the package, distribution route, and description.
 - **[openshell](/plugins/reference/openshell)** (`@openclaw/openshell-sandbox`) - npm or ClawHub: `clawhub:@openclaw/openshell-sandbox`. OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.
 
 - **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - npm or ClawHub: `clawhub:@openclaw/parallel-plugin`. Adds web search provider support.
+
+- **[particle](/plugins/reference/particle)** (`@openclaw/particle-provider`) - npm or ClawHub: `clawhub:@openclaw/particle-provider`. Adds Particle model provider support to OpenClaw.
 
 - **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `clawhub:@openclaw/perplexity-plugin`. Adds web search provider support.
 

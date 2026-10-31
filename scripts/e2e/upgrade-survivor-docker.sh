@@ -791,6 +791,12 @@ echo "Checking dirty-state config before update..."
 CURRENT_PHASE="prepare-state"
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+if [ "$SCENARIO" = "cron-scheduled-authority" ]; then
+  echo "Migrating the retired cron source before update admission..."
+  CURRENT_PHASE="prepare-cron-state"
+  openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/pre-update-doctor.log" 2>&1
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+fi
 configure_clawhub_fixture
 configure_plugin_registry
 install_companion_plugins

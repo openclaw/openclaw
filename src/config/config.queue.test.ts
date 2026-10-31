@@ -9,8 +9,21 @@ describe("queue configuration", () => {
     { byChannel: { x: "invalid" } },
     { debounceMsByChannel: { x: -1 } },
     { debounceMsByChannel: { x: 1.5 } },
+    { allowCollaborativeSteering: "false" },
+    { allowCollaborativeSteering: null },
+    { collaborativeSteeringFallback: "allow" },
   ])("rejects invalid plugin-channel queue values: %j", (queue) => {
     expect(validateConfigObject({ messages: { queue } }).ok).toBe(false);
+  });
+
+  it.each(["queue", "reject"] as const)("preserves collaborative fallback %s", (value) => {
+    const queue = { collaborativeSteeringFallback: value };
+    expect(validateConfigObject({ messages: { queue } })).toMatchObject({
+      ok: true,
+      config: {
+        messages: { queue: { ...queue, allowCollaborativeSteering: true } },
+      },
+    });
   });
 
   it("validates queue channel keys against plugin metadata without rejecting unknown keys", () => {
@@ -44,7 +57,10 @@ describe("queue configuration", () => {
     if (!result.ok) {
       return;
     }
-    expect(result.config.messages?.queue).toEqual(queue);
+    expect(result.config.messages?.queue).toEqual({
+      ...queue,
+      allowCollaborativeSteering: true,
+    });
     expect(result.warnings.filter(({ path }) => path.startsWith("messages.queue."))).toEqual([
       {
         path: "messages.queue.byChannel.telegarm",

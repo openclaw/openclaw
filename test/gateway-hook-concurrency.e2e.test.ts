@@ -1,4 +1,4 @@
-// E2E: hook dispatch uses the shared cron budget without starving older cron work.
+// E2E: hook dispatch and cron complete inside the shared capacity budget.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -93,7 +93,7 @@ describe("Gateway hook concurrency", () => {
   );
 
   it(
-    "bounds hooks and admits an older cron turn before a later hook",
+    "bounds hook admission and completes queued cron and hook turns",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const modelServer = await startHeldModelServer();
@@ -164,13 +164,11 @@ describe("Gateway hook concurrency", () => {
       });
 
       // Saturate the real hook-dispatch lane again, then queue cron inner work
-      // before one later hook. Releasing one held provider request is the exact
-      // production completion edge that previously let the hook lane reclaim
-      // its own slot before the older cron sibling could compete for it.
+      // and a later hook against the same shared capacity.
       modelServer.hold();
       const fairnessRequestStart = modelServer.requestCount();
       const fairnessHooks = Array.from({ length: SHARED_BUDGET }, (_, offset) =>
-        postHook(instance, FAIRNESS_HOOK_OFFSET + offset),
+        postHook(instance, FAIRNESS_HOOK_OFFSET + offset, true),
       );
       await vi.waitFor(
         () => expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET),
@@ -209,53 +207,64 @@ describe("Gateway hook concurrency", () => {
         runId: expect.any(String),
       });
 
-      // cron.run acknowledges after queuing the outer cron task. Give the real
-      // isolated runner time to cross preparation and enqueue cron-nested, then
-      // submit the competing hook. Both remain provider-blocked at this point.
-      await delay(1_000);
-      const lateHook = postHook(instance, FAIRNESS_LATE_HOOK_INDEX);
-      await delay(1_000);
+      // The outer cron acknowledgment is not inner-lane admission. Observe both
+      // contenders queued behind the occupied budget rather than sleeping.
+      await waitForQueuedSharedLane(instance, "cron-nested", 0);
+      const lateHook = postHook(instance, FAIRNESS_LATE_HOOK_INDEX, true);
+      await waitForQueuedSharedLane(instance, "hook-dispatch", SHARED_BUDGET);
       expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET);
       expect(modelServer.active()).toBe(SHARED_BUDGET);
 
       modelServer.release(fairnessRequestStart);
-      const cronProviderRequest = fairnessRequestStart + SHARED_BUDGET;
-      await vi.waitFor(() => expect(modelServer.requestCount()).toBe(cronProviderRequest + 1), {
-        interval: 20,
-        timeout: 30_000,
-      });
-      expect(modelServer.requestBody(cronProviderRequest)).toContain(FAIRNESS_CRON_MARKER);
-      expect(modelServer.requestBody(cronProviderRequest)).not.toContain(
-        `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`,
+      const firstQueuedProviderRequest = fairnessRequestStart + SHARED_BUDGET;
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBe(firstQueuedProviderRequest + 1),
+        {
+          interval: 20,
+          timeout: 30_000,
+        },
       );
-
-      modelServer.release(cronProviderRequest);
-      const lateHookProviderRequest = cronProviderRequest + 1;
-      await vi.waitFor(() => expect(modelServer.requestCount()).toBe(lateHookProviderRequest + 1), {
-        interval: 20,
-        timeout: 30_000,
-      });
-      expect(modelServer.requestBody(lateHookProviderRequest)).toContain(
-        `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`,
+      modelServer.release(firstQueuedProviderRequest);
+      const secondQueuedProviderRequest = firstQueuedProviderRequest + 1;
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBe(secondQueuedProviderRequest + 1),
+        {
+          interval: 20,
+          timeout: 30_000,
+        },
+      );
+      // Hooks are normal priority; cron is background. Exact bounded-priority
+      // ordering is covered with a controlled clock in command-queue.capacity-groups.test.ts.
+      // Here real preparation time may put cron on either side of that boundary,
+      // but each contender must reach the provider exactly once, one freed slot at a time.
+      const lateHookMarker = `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`;
+      const admittedMarkers = [firstQueuedProviderRequest, secondQueuedProviderRequest].map(
+        (index) =>
+          [FAIRNESS_CRON_MARKER, lateHookMarker].filter((marker) =>
+            modelServer.requestBody(index)?.includes(marker),
+          ),
+      );
+      expect(admittedMarkers).toEqual(
+        expect.arrayContaining([[FAIRNESS_CRON_MARKER], [lateHookMarker]]),
       );
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
 
       console.info(
         `[capacity-group-fairness-trace] ${JSON.stringify({
-          afterOneHookRelease: "older-cron",
-          afterCronRelease: "later-hook",
+          admittedMarkers,
           peakProviderConcurrency: modelServer.peak(),
-          queuedOrder: ["cron", "later-hook"],
           saturatedProviderRequests: SHARED_BUDGET,
         })}`,
       );
 
       modelServer.releaseAll();
-      await expect(Promise.all(fairnessHooks)).resolves.toSatisfy((values: HookResponse[]) =>
-        values.every((value) => value.status === 200),
-      );
-      await expect(lateHook).resolves.toMatchObject({ status: 200 });
+      for (const response of await Promise.all([...fairnessHooks, lateHook])) {
+        expect(response.status, response.body).toBe(200);
+        expect(JSON.parse(response.body)).toMatchObject({ ok: true, completion: { status: "ok" } });
+      }
       await waitForCronRun(instance, cronJob.id ?? "", cronRun.runId ?? "");
+      expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET + 2);
+      expect(modelServer.active()).toBe(0);
     },
   );
 });
@@ -313,7 +322,8 @@ async function warmGatewayHook(
     const response = await postHook(instance, -(attempt + 1));
     if (response.status === 200) {
       await vi.waitFor(
-        () => expect(modelServer.requestCount()).toBeGreaterThan(requestCountBefore),
+        () =>
+          expect(modelServer.requestCount(), instance.logs()).toBeGreaterThan(requestCountBefore),
         { interval: 20, timeout: 30_000 },
       );
       await vi.waitFor(() => expect(modelServer.active()).toBe(0), {
@@ -331,7 +341,11 @@ async function warmGatewayHook(
   throw new Error("Gateway hook warmup did not reach the model after three attempts");
 }
 
-async function postHook(instance: OpenClawTestInstance, index: number): Promise<HookResponse> {
+async function postHook(
+  instance: OpenClawTestInstance,
+  index: number,
+  waitForCompletion = false,
+): Promise<HookResponse> {
   const response = await fetch(`http://127.0.0.1:${instance.port}/hooks/agent`, {
     method: "POST",
     headers: {
@@ -345,6 +359,7 @@ async function postHook(instance: OpenClawTestInstance, index: number): Promise<
       sessionKey: `hook:concurrency:${index}`,
       sessionMode: "persistent",
       deliver: false,
+      waitForCompletion,
     }),
   });
   return {
@@ -505,10 +520,29 @@ async function waitForCronRun(
   );
 }
 
-async function delay(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+async function waitForQueuedSharedLane(
+  instance: OpenClawTestInstance,
+  lane: string,
+  activeCount: number,
+): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const result = await instance.cli(["gateway", "call", "diagnostics.lanes", "--json"]);
+      expect(result.code, result.stderr).toBe(0);
+      const diagnostics = JSON.parse(result.stdout) as { lanes: unknown[] };
+      expect(diagnostics.lanes).toContainEqual(
+        expect.objectContaining({
+          lane,
+          activeCount,
+          queuedCount: 1,
+          group: "cron-hooks",
+          groupActive: SHARED_BUDGET,
+          groupBudget: SHARED_BUDGET,
+        }),
+      );
+    },
+    { interval: 200, timeout: 30_000 },
+  );
 }
 
 function writeModelResponse(response: ServerResponse, sequence: number, replyText?: string): void {

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
 import {
   registerSealedRuntimeProcessEntrypoint,
   resolveRuntimeProcessEntrypointUrl,
@@ -156,11 +157,15 @@ function runServiceChildRelay(): void {
     reserveStdioEntry(stdio, "ipc");
     try {
       const executable = resolveLaunchableNodePath();
+      const env = { ...process.env };
+      if (env.NODE_OPTIONS !== undefined) {
+        env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
+      }
       anchor = spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
         stdio,
         detached: true,
         windowsHide: true,
-        env: process.env,
+        env,
       });
     } catch (error) {
       report({

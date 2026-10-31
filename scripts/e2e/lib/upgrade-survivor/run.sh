@@ -2662,6 +2662,11 @@ fi
 phase prepare-update-restart-probe prepare_update_restart_probe
 phase bootstrap-mobile-pairing bootstrap_mobile_pairing
 phase seed-state seed_state
+if [ "$SCENARIO" = "cron-scheduled-authority" ]; then
+  phase migrate-baseline-cron-authority openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1
+  phase assert-migrated-baseline-cron-authority assert_baseline_state
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase configure-baseline-plugin-registry configure_plugin_registry baseline
   phase install-companion-plugin install_companion_plugins

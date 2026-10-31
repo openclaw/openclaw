@@ -188,7 +188,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         const warning = settings.locator('.model-providers__catalog-progress[role="alert"]');
         await expect
           .poll(() => warning.textContent())
-          .toContain("More models could not be discovered.");
+          .toContain("Models from broken could not be discovered.");
         await expect
           .poll(() =>
             settings.locator('[data-provider-id="broken"] .model-providers__head').textContent(),

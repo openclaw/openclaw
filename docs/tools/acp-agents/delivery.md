@@ -24,6 +24,10 @@ work. The delivery path depends on that shape.
     session, and ACP output is delivered back to that same
     channel/thread/topic.
 
+    With `acp.stream.deliveryMode: "live"`, WebChat shows visible ACP output
+    while the turn is running. Its live text uses the same paragraph boundaries
+    as the final reply. Suppressed automatic replies remain private.
+
     Once a prepared ACP turn is accepted for submission, the channel's
     five-minute ingress startup timeout no longer applies. The turn keeps its
     configured execution timeout and can still be stopped explicitly; a slow

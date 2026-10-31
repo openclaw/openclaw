@@ -5,9 +5,33 @@ import type {
   IsolatedCompletionBoundaryFixture,
   IsolatedCompletionBoundaryFixtureParams,
 } from "../agents/isolated-completion.adapter.test-support.js";
+import type { ReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+
+/** Registers a queued reply owner without starting backend execution. */
+export async function withQueuedReplyOperationForTest<T>(
+  params: {
+    sessionKey: string;
+    sessionId: string;
+    agentId?: string;
+    abortSignal?: AbortSignal;
+  },
+  run: (operation: ReplyOperation) => Promise<T>,
+): Promise<T> {
+  const { replyRunRegistry } = await import("../auto-reply/reply/reply-run-registry.js");
+  const operation = replyRunRegistry.begin({
+    ...params,
+    resetTriggered: false,
+    upstreamAbortSignal: params.abortSignal,
+  });
+  try {
+    return await run(operation);
+  } finally {
+    operation.complete();
+  }
+}
 
 /** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
 export async function createTestPluginGatewayRuntime(params: {

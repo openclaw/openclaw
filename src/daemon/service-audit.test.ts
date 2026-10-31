@@ -55,7 +55,7 @@ describe("auditGatewayServiceConfig runtime", () => {
     async (sqliteSelectionError) => {
       const sqliteVersion = sqliteSelectionError ? null : "3.51.2";
       resolveBunRuntimeInfoMock.mockResolvedValue({
-        version: sqliteSelectionError ? "1.4.3" : "1.4.0",
+        version: sqliteSelectionError ? "1.4.4" : "1.4.0",
         sqliteVersion,
         sqliteProbe: {
           available: !sqliteSelectionError,
@@ -73,7 +73,7 @@ describe("auditGatewayServiceConfig runtime", () => {
         expect.objectContaining({
           code: codes.gatewayRuntimeBun,
           message: expect.stringContaining(
-            "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required",
+            "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required",
           ),
           detail: sqliteSelectionError
             ? `/opt/homebrew/bin/bun: ${sqliteSelectionError}`

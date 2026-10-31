@@ -20,7 +20,7 @@ This reference covers supported Node.js lines, why the minimum versions exist, a
 
 The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the documented support policy and the `package.json` engine range used by package managers.
 
-The Bun opt-in runtime requires **Bun 1.4.3+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
+The Bun opt-in runtime requires **Bun 1.4.4+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
 
 ## How the gate decides
 

@@ -37,11 +37,35 @@ type NativeFixtureThread = {
   subscribed: boolean;
 };
 
+export function createLifecycleRequest(
+  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
+) {
+  return vi.fn((method: string, requestParams?: unknown) => {
+    if (method === "config/read") {
+      return Promise.resolve({ config: {}, origins: {}, layers: [] });
+    }
+    if (method === "configRequirements/read") {
+      return Promise.resolve({ requirements: null });
+    }
+    return respond(method, requestParams);
+  });
+}
+
+export function createFixedThreadRequest(threadId: string, methods: string[]) {
+  return createLifecycleRequest(async (method) => {
+    if (methods.includes(method)) {
+      return nativeThreadStartResult(threadId);
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+}
+
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
   persistedThreads?: Array<string | ReturnType<typeof nativeThreadStartResult>>;
   unsubscribe?: (threadId: string) => unknown;
+  unloadImmediatelyOnUnsubscribe?: boolean;
 }) {
   const threads = new Map<string, NativeFixtureThread>();
   const writtenRequests = createCodexRequestRecorder();
@@ -110,6 +134,14 @@ export function createCodexLifecycleHarness(options: {
         (response.status === "unsubscribed" || response.status === "notSubscribed")
       ) {
         current.subscribed = false;
+        if (options.unloadImmediatelyOnUnsubscribe !== false) {
+          current.loaded = false;
+          harness.send({
+            method: "thread/status/changed",
+            params: { threadId, status: { type: "notLoaded" } },
+          });
+          harness.send({ method: "thread/closed", params: { threadId } });
+        }
       }
       return response;
     }
@@ -117,8 +149,7 @@ export function createCodexLifecycleHarness(options: {
       if (!current) {
         throw new Error(`Unseeded synthetic native resume: ${threadId}`);
       }
-      // Stock 0.151.0 retains an unsubscribed loaded cache entry. Full resume overrides
-      // trigger teardown only when no subscriber can still observe that session.
+      // External native servers may retain unsubscribed idle threads until resume.
       if (
         current.loaded &&
         !current.subscribed &&

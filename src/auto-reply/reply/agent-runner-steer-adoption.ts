@@ -35,6 +35,7 @@ import {
 } from "./reply-run-registry.js";
 import { waitForReplyOperationBackend } from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -203,10 +204,25 @@ export async function runActiveReplySteer(
       assertCurrent: assertReadCurrent,
     });
     const steeringDelivery = delivery;
+    const isInboundUserMessage =
+      followupRun.currentInboundEventKind !== "room_event" &&
+      (followupRun.run.inputProvenance?.kind === undefined ||
+        followupRun.run.inputProvenance.kind === "external_user");
+    const caller = resolveInboundReplyToolAuthorityOverlay({
+      ctx: params.sessionCtx,
+      sessionEntry: params.sessionEntry,
+      senderIsOwner: followupRun.run.senderIsOwner === true,
+      operatorAuthority: followupRun.operatorAuthority,
+      toolsAllow: followupRun.toolsAllow,
+      disableTools: followupRun.disableTools === true,
+      allowCollaborativeSteering:
+        followupRun.run.config.messages?.queue?.allowCollaborativeSteering === true,
+    });
     const steeringAuthority = await resolveReplySteeringAuthority(
       followupRun,
       activeReplyOperation,
       assertReadCurrent,
+      caller,
     );
     releaseToolAuthority = steeringAuthority.toolAuthority.release;
     assertReadCurrent();
@@ -266,10 +282,8 @@ export async function runActiveReplySteer(
         }),
       ),
       steeringMode: "all",
-      isInboundUserMessage:
-        followupRun.currentInboundEventKind !== "room_event" &&
-        (followupRun.run.inputProvenance?.kind === undefined ||
-          followupRun.run.inputProvenance.kind === "external_user"),
+      isInboundUserMessage,
+      allowPendingUserInputAnswer: steeringAuthority.allowPendingUserInputAnswer,
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
       personalToolParticipant: {
@@ -304,7 +318,9 @@ export async function runActiveReplySteer(
       ...(followupRun.run.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
         : {}),
-      taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
+      ...(steeringAuthority.continuationKind
+        ? {}
+        : { taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode }),
       ...(followupRun.userTurnTranscriptRecorder
         ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
         : {}),

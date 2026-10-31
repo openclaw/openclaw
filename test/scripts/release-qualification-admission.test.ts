@@ -209,6 +209,12 @@ describe("trusted P qualification admission", () => {
     ).toThrow(/archive bytes/);
   });
 
+  it("accepts GitHub's empty step inventory for a successful exact producer job", () => {
+    const f = fixture();
+    expectDefined(f.jobs.jobs[0], "admission job").steps = [];
+    expect(() => f.verify()).not.toThrow();
+  });
+
   it.each([true])(
     "revalidates current authority without reacquiring immutable evidence (protected=%s)",
     (protectedTag) => {

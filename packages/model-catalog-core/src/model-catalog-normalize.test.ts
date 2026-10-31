@@ -314,6 +314,28 @@ describe("model catalog normalization", () => {
     expect(catalog?.providers?.openai?.models).toEqual([model]);
   });
 
+  it("retains a catalog-owned default thinking level", () => {
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          particle: {
+            models: [
+              {
+                id: "particle-ai/particle-1",
+                compat: { defaultThinkingLevel: "high" },
+              },
+            ],
+          },
+        },
+      },
+      { ownedProviders: new Set(["particle"]) },
+    );
+
+    expect(catalog?.providers?.particle?.models[0]?.compat).toEqual({
+      defaultThinkingLevel: "high",
+    });
+  });
+
   it("retains an explicitly empty supported reasoning effort list", () => {
     const catalog = normalizeModelCatalog(
       {

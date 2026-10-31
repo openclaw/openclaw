@@ -8,7 +8,7 @@ title: "Bun"
 ---
 
 <Warning>
-Node remains OpenClaw's primary, default, and recommended runtime. The latest stable Bun (currently 1.4.3) and pinned OpenClaw fork can run the CLI, Gateway, and managed node host as an explicit opt-in. Older stock Bun releases are rejected; upgrade before running OpenClaw. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
+Node remains OpenClaw's primary, default, and recommended runtime. The latest stable Bun (currently 1.4.4) and pinned OpenClaw fork can run the CLI, Gateway, and managed node host as an explicit opt-in. Older stock Bun releases are rejected; upgrade before running OpenClaw. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
 </Warning>
 
 Desktop apps manage their own runtime: the native macOS app and fresh local
@@ -135,7 +135,7 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
-On macOS, run `brew install sqlite` first: OpenClaw on Bun refuses Apple's system SQLite, which also lacks native vector search. Bun 1.4.3 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
+On macOS, run `brew install sqlite` first: OpenClaw on Bun refuses Apple's system SQLite, which also lacks native vector search. Bun 1.4.4 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 

@@ -185,7 +185,7 @@ describe("gateway minimal boot smoke", () => {
             auth: { mode: "token", token },
             bind: "loopback",
             controlUiEnabled: false,
-            sidecarStartup: "defer",
+            sidecarStartup: "start",
           });
           try {
             const nextVersion = getSkillsSnapshotVersion();
@@ -194,10 +194,11 @@ describe("gateway minimal boot smoke", () => {
               `startup ${startup} must invalidate restored skills`,
             ).toBeGreaterThan(snapshotVersion);
             snapshotVersion = nextVersion;
-            const startupMeasures = (await fs.readFile(timelinePath, "utf8"))
+            const startupEvents = (await fs.readFile(timelinePath, "utf8"))
               .trim()
               .split("\n")
-              .map((line) => JSON.parse(line) as Record<string, unknown>)
+              .map((line) => JSON.parse(line) as Record<string, unknown>);
+            const startupMeasures = startupEvents
               .filter((event) => event.type === "span.start" && event.phase === "startup")
               .map((event) => {
                 const attributes = event.attributes as { traceName?: string } | undefined;
@@ -207,6 +208,20 @@ describe("gateway minimal boot smoke", () => {
             expect(startupMeasures.indexOf("runtime.early")).toBeGreaterThan(
               startupMeasures.indexOf("http.listen"),
             );
+            const postAttachEnd = startupEvents.findIndex(
+              (event) =>
+                event.type === "span.end" &&
+                (event.attributes as { traceName?: string } | undefined)?.traceName ===
+                  "runtime.post-attach",
+            );
+            const readyMark = startupEvents.findIndex(
+              (event) =>
+                event.type === "mark" &&
+                event.phase === "startup" &&
+                event.name === "gateway.ready",
+            );
+            expect(postAttachEnd).toBeGreaterThan(-1);
+            expect(readyMark).toBeGreaterThan(postAttachEnd);
           } finally {
             await server.close({ reason: "minimal boot smoke complete" });
           }

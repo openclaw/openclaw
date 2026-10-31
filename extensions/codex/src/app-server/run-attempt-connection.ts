@@ -128,9 +128,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     },
   };
   // Upstream cannot remove registered environments, so node leases own one disposable client.
+  // Strict one-shot runs also need an attempt-owned process: a shared peer can
+  // legitimately keep the cached client alive after this run has completed,
+  // which makes the required cleanup receipt impossible to prove.
   const attemptClientFactory =
     options.clientFactory ??
-    (isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
+    (isCodexPairedNodeRemoteExecPlacementSandbox(sandbox) ||
+    (params.oneShotCliRun === true && params.cleanupBundleMcpOnRunEnd === true)
       ? createIsolatedCodexAppServerClient
       : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");

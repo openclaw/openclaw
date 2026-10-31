@@ -16,6 +16,20 @@ export function startClockControlledAttempt(params: EmbeddedRunAttemptParams) {
   return { run, started: run.waitForTurnAccepted() };
 }
 
+export function expectResumeRequest(
+  requests: Array<{ method: string; params: unknown }>,
+  params: Record<string, unknown>,
+) {
+  const request = requests.find((entry) => entry.method === "thread/resume");
+  if (!request) {
+    throw new Error("Expected thread/resume request");
+  }
+  const requestParams = request.params as Record<string, unknown> | undefined;
+  for (const [key, value] of Object.entries(params)) {
+    expect(requestParams?.[key]).toEqual(value);
+  }
+}
+
 export function observeAttemptProjectionReady() {
   const activate = attemptActiveTurn.activateCodexAttemptTurn;
   const activated = createDeferred<ReturnType<typeof activate>>();

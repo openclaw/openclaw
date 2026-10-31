@@ -281,6 +281,7 @@ export function probePackageCliNodeRuntime(options = {}) {
  *   bunVersion?: string | null;
  *   engine?: string | null;
  *   execPath?: string | null;
+ *   bunLauncher?: string | null;
  *   probeNodeRuntime?: () => PackageCliNodeRuntime | null;
  * }} [options]
  * @param {(...data: unknown[]) => void} [reportError]
@@ -292,12 +293,18 @@ export function enforceSupportedNodeRuntime(
     bunVersion = process.versions.bun ?? null,
     engine = readPackageNodeEngine(),
     execPath = process.execPath,
+    bunLauncher = process.env.OPENCLAW_PACKAGE_BUN_LAUNCHER ?? null,
     probeNodeRuntime = probePackageCliNodeRuntime,
   } = {},
   reportError = console.error,
 ) {
-  const detectedRuntime = normalizeEnvValue(bunVersion)
-    ? probeNodeRuntime()
+  const activeBunVersion = normalizeEnvValue(bunVersion);
+  const normalizedExecPath = normalizeEnvValue(execPath);
+  const canonicalBunLauncher = normalizeEnvValue(bunLauncher);
+  const detectedRuntime = activeBunVersion
+    ? canonicalBunLauncher && canonicalBunLauncher === normalizedExecPath
+      ? { version: null, bunVersion: activeBunVersion, execPath: normalizedExecPath }
+      : probeNodeRuntime()
     : { version, execPath };
   if (detectedRuntime?.bunVersion) {
     if (
@@ -306,7 +313,7 @@ export function enforceSupportedNodeRuntime(
       return true;
     }
     reportError(
-      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.3+ (detected ${detectedRuntime.bunVersion}).`,
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.4+ (detected ${detectedRuntime.bunVersion}).`,
     );
     return false;
   }

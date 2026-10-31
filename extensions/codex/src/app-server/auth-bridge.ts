@@ -46,7 +46,7 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   withClearedEnvironmentVariables,
-  withEphemeralCodexAuthStore,
+  withManagedCodexAuthStore,
 } from "./auth-start-options.js";
 import type {
   CodexAppServerAuthRequirement,
@@ -118,7 +118,7 @@ export async function bridgeCodexAppServerStartOptions(
     return params.startOptions;
   }
   const scopeStartOptions = () =>
-    withCodexHomeEnvironment(withEphemeralCodexAuthStore(params), params.agentDir);
+    withCodexHomeEnvironment(withManagedCodexAuthStore(params), params.agentDir);
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();

@@ -812,6 +812,9 @@ const config = {
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Focused lifecycle tests call the terminal kernel directly; production reaches it
+    // through the Workboard service while the full-tree scan audits those test consumers.
+    "extensions/workboard/src/lifecycle-sync.ts": ["exports"],
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],

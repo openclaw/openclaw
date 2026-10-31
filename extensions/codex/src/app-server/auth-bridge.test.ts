@@ -20,6 +20,7 @@ import {
   resolveCodexAppServerPreparedAuthHandoff as prepareHandoff,
   resolveCodexAppServerPreparedAuthProfileSnapshot as prepareSnapshot,
 } from "./auth-bridge.js";
+import { MANAGED_AUTH_ARGS } from "./auth-bridge.managed-unload.test-support.js";
 import {
   fingerprintTokenAuthProfileCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
@@ -276,8 +277,6 @@ function createStartOptions(
   };
 }
 
-const EPHEMERAL_AUTH_ARGS = ["-c", 'cli_auth_credentials_store="ephemeral"', "app-server"];
-
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
     await fs.access(filePath);
@@ -446,7 +445,7 @@ describe("Codex auth bridge", () => {
       authRequirement: "api-key",
     });
     expect(startOptions).toMatchObject({
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: { CODEX_HOME: codexHomeDir(agentDir) },
     });
 
@@ -645,7 +644,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: {
         CODEX_HOME: codexHome,
         HOME: nativeHome,
@@ -690,7 +689,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: {
         EXISTING: "1",
         CODEX_HOME: codexHomeDir(agentDir),
@@ -721,7 +720,7 @@ describe("Codex auth bridge", () => {
         });
         expect(bridged).toEqual({
           ...startOptions,
-          args: EPHEMERAL_AUTH_ARGS,
+          args: MANAGED_AUTH_ARGS,
           env: { CODEX_HOME: codexHomeDir(agentDir) },
           clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
         });
@@ -834,7 +833,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: {
         CODEX_HOME: codexHomeDir(agentDir),
       },

@@ -8,6 +8,7 @@ describe("native Codex reasoning-effort config", () => {
     expect(config["features.goals"]).toBe(false);
     expect(config["tools.update_plan.enabled"]).toBe(false);
     if (!nativeCodeModeEnabled) {
+      expect(config["features.shell_tool"]).toBe(false);
       expect(config["features.code_mode"]).toBe(false);
       expect(config["features.code_mode_only"]).toBe(false);
     }

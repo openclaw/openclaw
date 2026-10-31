@@ -19,6 +19,15 @@ import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js
 import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 
 const OPENCLAW_QA_CODEX_API_KEY_HANDOFF = "OPENCLAW_QA_CODEX_API_KEY_HANDOFF";
+const QA_GATEWAY_LOOPBACK_NO_PROXY_HOSTS = ["127.0.0.1", "localhost", "::1"] as const;
+
+function mergeQaGatewayNoProxy(env: NodeJS.ProcessEnv): string {
+  return [env.NO_PROXY, env.no_proxy, ...QA_GATEWAY_LOOPBACK_NO_PROXY_HOSTS]
+    .flatMap((value) => value?.split(",") ?? [])
+    .map((value) => value.trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join(",");
+}
 
 const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
   // QA owns this child; parent service and test-runner markers describe a different process.
@@ -123,6 +132,11 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   delete normalizedEnv.OPENCLAW_SKIP_CRON;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  // QA mock providers and local transport fixtures share the host loopback with this child.
+  // Never let inherited proxy settings divert those owned connections out of the fixture.
+  const noProxy = mergeQaGatewayNoProxy(normalizedEnv);
+  normalizedEnv.NO_PROXY = noProxy;
+  normalizedEnv.no_proxy = noProxy;
   const codexApiKeyHandoff =
     params.providerMode === "live-frontier"
       ? normalizedEnv[OPENCLAW_QA_CODEX_API_KEY_HANDOFF]?.trim()

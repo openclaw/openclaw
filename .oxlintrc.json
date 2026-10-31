@@ -373,6 +373,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -394,6 +395,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -415,6 +417,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -435,6 +438,7 @@
       "excludeFiles": [
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -443,6 +447,224 @@
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    // Stable 2026.10.10 inherited these exact counts before full-tree release lint became blocking.
+    // Keep zero growth headroom; main already carries the structural splits that remove this debt.
+    {
+      "files": ["src/gateway/session-row-projection.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 733, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/infra/sqlite-database-admission.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 704, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/state/openclaw-agent-db-validation-cache.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 748, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["packages/gateway-protocol/src/schema/plugins.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 702, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/codex/src/app-server/session-binding.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 703, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/isolated-completion.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 711, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/command/run-embedded-attempt.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 752, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/infra/net/fetch-guard.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 704, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/node-registry-private.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 710, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/auto-reply/reply/dispatch-from-config.choose-route.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 766, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/openclaw-tools.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 711, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/embedded-agent-runner/run-orchestrator.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 714, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/session-worktree-preparation.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 725, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/server-methods/chat-abort-handler.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 720, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/subagents/registry/subagent-orphan-recovery.restart-integration.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1009, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/server-methods/chat-send-admission.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 703, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/worker-environments/placement-dispatch-startup.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 705, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/agent-turn/agent-run-admission-phase.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 709, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/talk/client-voice-session-write.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 722, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["ui/src/pages/chat/chat-pane-header.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 703, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["ui/src/pages/chat/components/chat-composer-plus-menu.tsx"],
+      "rules": {
+        "max-lines": ["error", { "max": 704, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["ui/src/pages/new-session/draft-place-state.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 715, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/worker-environments/placement-turn-claims.worker.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1007, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["ui/src/pages/chat/components/chat-transcript-controller.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1016, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/agentsapi/agentsapi-harness.persistence.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1202, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/server-methods/projects.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 749, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/state/openclaw-agent-db-validation-cache.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1047, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["ui/src/app/bootstrap.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 738, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/config/sessions/combined-store-gateway.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1002, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/cli/update-cli/update-command-rollback.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1003, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/infra/session-cost-usage-worker-io.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1020, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/flows/doctor-core-checks.runtime.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1002, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/anthropic/cli-runtime.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1002, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["ui/src/app/app-shell-gateway.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1063, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["ui/src/pages/sessions/view.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1003, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/server-kernel.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1008, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

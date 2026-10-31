@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { withQueuedReplyOperationForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -1983,7 +1984,7 @@ describe("codex conversation binding", () => {
     },
   );
 
-  it("moves session history while clamping rootless inherited cwd to the agent workspace", async () => {
+  it("moves queued session history while clamping rootless inherited cwd to the agent workspace", async () => {
     const source = {
       agentId: "main",
       sessionId: "source-session",
@@ -2094,24 +2095,27 @@ describe("codex conversation binding", () => {
       client,
       release: vi.fn(),
     });
-    const { event, ctx } = boundConversationClaim(
-      path.join(tempDir, "session.jsonl"),
-      "agent:main:destination-session",
-    );
-    ctx.pluginBinding.data = {
-      kind: "codex-app-server-session" as const,
-      version: 2 as const,
-      bindingId: "binding-source-transfer",
-      workspaceDir: tempDir,
-      source,
-    };
+    await withQueuedReplyOperationForTest(source, async (operation) => {
+      expect(operation.phase).toBe("queued");
+      const { event, ctx } = boundConversationClaim(
+        path.join(tempDir, "session.jsonl"),
+        source.sessionKey,
+      );
+      ctx.pluginBinding.data = {
+        kind: "codex-app-server-session" as const,
+        version: 2 as const,
+        bindingId: "binding-source-transfer",
+        workspaceDir: tempDir,
+        source,
+      };
 
-    await expect(
-      handleCodexConversationInboundClaim(event, ctx, {
-        config: { session: { store: storePath } },
-        timeoutMs: 500,
-      }),
-    ).resolves.toEqual({ handled: true, reply: { text: "Bound reply" } });
+      await expect(
+        handleCodexConversationInboundClaim(event, ctx, {
+          config: { session: { store: storePath } },
+          timeoutMs: 500,
+        }),
+      ).resolves.toEqual({ handled: true, reply: { text: "Bound reply" } });
+    });
 
     expect(requests.map(({ method }) => method)).toEqual([
       "thread/start",

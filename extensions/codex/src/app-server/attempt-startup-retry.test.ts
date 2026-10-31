@@ -79,6 +79,8 @@ async function createStartupFailureFixture(
       '          : message.method === "skills/list"',
       "            ? { data: [] }",
       `            : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
+      // Managed resume requires an unloaded thread before it can reach the overload rejection.
+      '    if (message.method === "thread/read") result.thread.status = { type: "notLoaded" };',
       "    process.stdout.write(`${JSON.stringify({ id: message.id, result })}\\n`);",
       "  });",
       "}",

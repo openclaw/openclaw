@@ -112,4 +112,5 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
+  waitForUnload: (requireClosed?: boolean) => Promise<boolean>;
 };

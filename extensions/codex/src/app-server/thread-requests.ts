@@ -286,7 +286,11 @@ export function buildCodexRuntimeThreadConfig(
         "features.goals": false,
         "tools.update_plan.enabled": false,
         ...(!enabled
-          ? { "features.code_mode": false, "features.code_mode_only": false }
+          ? {
+              "features.shell_tool": false,
+              "features.code_mode": false,
+              "features.code_mode_only": false,
+            }
           : codeModeOnly
             ? { "features.code_mode_only": true }
             : {}),

@@ -7,10 +7,10 @@ const helper = "scripts/e2e/lib/onboard/first-agent-flow.sh";
 
 describe.skipIf(process.platform === "win32")("guided first-agent prompt handshake", () => {
   it.each([
-    ["legacy", "plain", "provider", 5],
-    ["team", "fragmented", "provider", 6],
-    ["legacy", "fragmented", "configured", 4],
-    ["team", "plain", "configured", 5],
+    ["legacy", "plain", "provider", 6],
+    ["team", "fragmented", "provider", 7],
+    ["legacy", "fragmented", "configured", 5],
+    ["team", "plain", "configured", 6],
   ] as const)(
     "drives the real guided sender through %s %s %s prompts",
     (layout, rendering, modelPrompt, count) => {
@@ -37,6 +37,7 @@ if [[ "$MODEL_PROMPT" == configured ]]; then
 else
   prompts+=("Model/auth provider" "Use which detected AI?")
 fi
+prompts+=("Set up memory embeddings?")
 index=0
 render() {
   "$NODE_BIN" -e 'const fs=require("node:fs"); const text=process.argv[2]; fs.writeFileSync(process.argv[1], process.env.RENDERING === "fragmented" ? text.split("").join("\\n") : text);' "$WIZARD_LOG_PATH" "$1"

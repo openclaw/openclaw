@@ -461,6 +461,20 @@ export class ModelProvidersController extends ModelPageController {
     this.setState("keyDraft", "");
   }
 
+  // A save warns about its own provider listing, not another provider failure.
+  private providerCatalogWarning(provider: string): string | null {
+    const id = canonicalModelAuthProviderId(provider);
+    const own = (this.state.data?.providerOutcomes ?? []).filter(
+      (outcome) => canonicalModelAuthProviderId(outcome.provider) === id,
+    );
+    if (own.length === 0) {
+      return this.state.data?.catalogError ?? null;
+    }
+    return own.some((outcome) => outcome.status !== "ready")
+      ? t("modelProviders.defaults.discoverFailed")
+      : null;
+  }
+
   private async mutateApiKey(
     provider: string,
     configKey: string,
@@ -491,7 +505,7 @@ export class ModelProvidersController extends ModelPageController {
             this.setState("data", previous);
             return warning;
           }
-          return this.state.data?.error ?? this.state.data?.catalogError ?? null;
+          return this.state.data?.error ?? this.providerCatalogWarning(provider) ?? null;
         },
         setBusy: (busy) => this.setBusy(key, busy),
         setMessage: (message) => {

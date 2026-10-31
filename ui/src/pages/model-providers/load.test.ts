@@ -85,7 +85,7 @@ describe("loadModelProvidersData", () => {
     expect(peekModelCatalog(client, { agentId: "main" }, { allowStale: true })?.models).toEqual([
       { provider: "ollama", id: "retained", name: "Retained model", available: true },
     ]);
-    expect(result.catalogError).toBe("More models could not be discovered.");
+    expect(result.catalogError).toBe("Models from ollama could not be discovered.");
     expect(peekModelCatalog(client, { agentId: "main" })).toBeUndefined();
     expect(result.error).toBeNull();
   });

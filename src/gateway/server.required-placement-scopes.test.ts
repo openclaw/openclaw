@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
@@ -17,8 +18,6 @@ import {
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 import * as placementDispatch from "./worker-environments/placement-dispatch.js";
-import * as placementLifecycleStore from "./worker-environments/placement-lifecycle-store.js";
-import * as workerEnvironmentService from "./worker-environments/service.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -64,6 +63,7 @@ test.each([false, true])(
       vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
     }
     await withGatewayServer(async ({ port }) => {
+      await waitForGatewayStartup(port);
       const ws = await openWs(port, {
         origin,
         "x-forwarded-user": email,
@@ -155,9 +155,35 @@ test("required placement survives disconnect but stops setup when committed call
   const setupCalls: string[] = [];
   const dispatchErrors: string[] = [];
   let dispatchSettled: Promise<unknown> | undefined;
+  // Hold dispatch after its durable requested commit. Instrument the concrete owners passed into
+  // the dispatch service; spying on their module factories is too late once Gateway startup has
+  // captured those imports.
+  let hold:
+    | { committed: Deferred; resume: Promise<void>; afterAcknowledgment: boolean }
+    | undefined;
   const createDispatch = placementDispatch.createWorkerPlacementDispatchService;
   vi.spyOn(placementDispatch, "createWorkerPlacementDispatchService").mockImplementation(
     (options) => {
+      const { prepareProjectIntent, createWithRequest } = options.environments;
+      options.environments.prepareProjectIntent = (...args) => {
+        setupCalls.push("prepareProjectIntent");
+        return prepareProjectIntent(...args);
+      };
+      options.environments.createWithRequest = (...args) => {
+        setupCalls.push("createWithRequest");
+        return createWithRequest(...args);
+      };
+      const startDispatch = options.placements.startDispatch.bind(options.placements);
+      options.placements.startDispatch = async (...args) => {
+        const placement = await startDispatch(...args);
+        const current = hold;
+        if (current && !current.afterAcknowledgment && placement.state === "requested") {
+          hold = undefined;
+          current.committed.resolve();
+          await current.resume;
+        }
+        return placement;
+      };
       const service = createDispatch({
         ...options,
         runLocalBarrier: async (params) => {
@@ -182,45 +208,6 @@ test("required placement survives disconnect but stops setup when committed call
       return service;
     },
   );
-  const createService = workerEnvironmentService.createWorkerEnvironmentService;
-  vi.spyOn(workerEnvironmentService, "createWorkerEnvironmentService").mockImplementation(
-    (options) => {
-      const service = createService(options);
-      const { prepareProjectIntent, createWithRequest } = service;
-      service.prepareProjectIntent = (...args) => {
-        setupCalls.push("prepareProjectIntent");
-        return prepareProjectIntent(...args);
-      };
-      service.createWithRequest = (...args) => {
-        setupCalls.push("createWithRequest");
-        return createWithRequest(...args);
-      };
-      return service;
-    },
-  );
-  // Hold dispatch after its durable requested commit. The requested acknowledgment is reported
-  // on resume, leaving the post-acknowledgment recheck as the only fence before setup I/O.
-  let hold:
-    | { committed: Deferred; resume: Promise<void>; afterAcknowledgment: boolean }
-    | undefined;
-  const createLifecycle = placementLifecycleStore.createPlacementLifecycleWorkerOps;
-  vi.spyOn(placementLifecycleStore, "createPlacementLifecycleWorkerOps").mockImplementation(
-    (options) => {
-      const lifecycle = createLifecycle(options);
-      const startDispatch = lifecycle.startDispatch.bind(lifecycle);
-      lifecycle.startDispatch = async (...args) => {
-        const placement = await startDispatch(...args);
-        const current = hold;
-        if (current && !current.afterAcknowledgment && placement.state === "requested") {
-          hold = undefined;
-          current.committed.resolve();
-          await current.resume;
-        }
-        return placement;
-      };
-      return lifecycle;
-    },
-  );
   // The requested acknowledgment and the failed dispatch's final transition each publish once.
   let settled: { remaining: number; done: Deferred } | undefined;
   const emitSessionsChanged = sessionChangeEvent.emitSessionsChanged;
@@ -232,6 +219,7 @@ test("required placement survives disconnect but stops setup when committed call
   });
 
   await withGatewayServer(async ({ port }) => {
+    await waitForGatewayStartup(port);
     const connect = async (email: string, scopes: string[]) => {
       const ws = await openWs(port, {
         origin,

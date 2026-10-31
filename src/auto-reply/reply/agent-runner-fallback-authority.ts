@@ -3,7 +3,12 @@ import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { ReplyOperation, ReplyToolAuthorityRoute } from "./reply-run-registry.contracts.js";
+import type {
+  ReplyOperation,
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRoute,
+} from "./reply-run-registry.contracts.js";
+import { readAuthorizedCrossSurfaceContinuation } from "./reply-tool-authority-inbound.js";
 import { prepareFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 /** Keep selection changes separate from the concrete route and its effective tool authority. */
@@ -11,6 +16,7 @@ export async function resolveReplySteeringAuthority(
   followupRun: FollowupRun,
   operation: ReplyOperation | undefined,
   assertCurrent: () => void = () => {},
+  caller?: ReplyToolAuthorityOverlay,
 ) {
   const activeFingerprint = operation?.toolAuthorityFingerprint;
   const activeRoute = operation?.toolAuthorityRoute;
@@ -46,16 +52,41 @@ export async function resolveReplySteeringAuthority(
     ) {
       throw new Error("Reply steering authority changed during preparation");
     }
-    const authorityMismatch = operation !== undefined && activeFingerprint !== incomingFingerprint;
-    const routeOnlyMismatch =
-      authorityMismatch &&
-      activeFingerprint !== undefined &&
-      incomingAtActiveRoute === activeFingerprint;
     const selectedRoute = operation?.requestedToolAuthorityRoute;
     const selectionChanged =
       selectedRoute !== undefined &&
       (selectedRoute.provider !== followupRun.run.provider ||
         selectedRoute.model !== followupRun.run.model);
+    if (operation && caller && activeFingerprint !== undefined && !selectionChanged) {
+      const projected = await operation.projectToolAuthorityFingerprintAsync(caller);
+      const continuation = readAuthorizedCrossSurfaceContinuation(caller);
+      assertCurrent();
+      if (continuation && projected === activeFingerprint) {
+        retained = incoming;
+        const read = () => {
+          assertCurrent();
+          continuation.assertCurrent();
+          if (operation.projectToolAuthorityFingerprint(caller) !== activeFingerprint) {
+            throw new Error("Cross-surface continuation authority changed");
+          }
+          return activeFingerprint;
+        };
+        return {
+          toolAuthority: { read, release: incoming.release },
+          toolAuthorityFingerprint: activeFingerprint,
+          automaticFallbackRoute: undefined,
+          pendingInputAuthorityFingerprint: undefined,
+          shouldQueueAuthorityMismatch: false,
+          continuationKind: continuation.kind,
+          allowPendingUserInputAnswer: continuation.allowPendingUserInputAnswer,
+        };
+      }
+    }
+    const authorityMismatch = operation !== undefined && activeFingerprint !== incomingFingerprint;
+    const routeOnlyMismatch =
+      authorityMismatch &&
+      activeFingerprint !== undefined &&
+      incomingAtActiveRoute === activeFingerprint;
     const fallbackRoute = operation?.automaticFallbackRoute;
     const fallbackSelection = routeOnlyMismatch
       ? resolveModelFallbackOptions(followupRun.run).modelFallbackAvailability

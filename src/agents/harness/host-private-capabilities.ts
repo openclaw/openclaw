@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityPreparation,
@@ -11,9 +12,45 @@ import type {
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+
+const replyInputChannel = resolveGlobalSingleton(Symbol.for("openclaw.replyInputChannel"), () =>
+  Symbol("replyInputChannel"),
+);
+
+export function bindReplyInputChannel(input: object, channel: string | undefined): void {
+  Object.assign(input, { [replyInputChannel]: channel });
+}
+
+export function readReplyInputChannel(input: object): string | undefined {
+  const channel: unknown = Reflect.get(input, replyInputChannel);
+  return typeof channel === "string" ? channel : undefined;
+}
+
+const sharedGatewayOwnerSources = resolveGlobalSingleton(
+  Symbol.for("openclaw.sharedGatewayOwnerSources"),
+  () => new WeakSet<object>(),
+);
+
+export function bindSharedGatewayOwnerRunAuthority(authority: AdmittedRunOperatorAuthority): void {
+  if (authority.source) {
+    sharedGatewayOwnerSources.add(authority.source);
+  }
+}
+
+export function isSharedGatewayOwnerRunAuthority(
+  authority: AdmittedRunOperatorAuthority | undefined,
+): boolean {
+  return Boolean(
+    authority?.profileId === GATEWAY_OWNER_PROFILE_ID &&
+    authority.source &&
+    sharedGatewayOwnerSources.has(authority.source),
+  );
+}
 
 export type AgentHarnessScheduledToolProjectionFactory = (
   sourceTool: AnyAgentTool,

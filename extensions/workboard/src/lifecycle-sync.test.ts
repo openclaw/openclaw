@@ -585,6 +585,40 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
+  it("settles the exact inactive persistent session from its deferred agent_end result", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:main:dashboard:deferred-agent-end";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-agent",
+      execution: execution(sessionKey, "run-agent"),
+    });
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: true },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 2,
+      allowIdleRunningTerminal: true,
+      readSessions: async () => ({
+        sessions: [
+          {
+            key: sessionKey,
+            status: "running",
+            hasActiveRun: false,
+            updatedAt: card.updatedAt + 1,
+          },
+        ],
+        complete: true,
+      }),
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "review",
+      execution: { status: "review" },
+    });
+  });
+
   it("marks an inactive running session stale and clears it after recovery", async () => {
     const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:main:dashboard:stale";

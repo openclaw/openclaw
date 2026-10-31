@@ -476,6 +476,10 @@ describe("cron one-shot schedule ownership", () => {
           });
         }
         await started.promise;
+        const receipt = expectDefined(
+          inspectActiveCronRunReceipt({ storePath, jobId: original.id }),
+          "original run receipt",
+        );
 
         await expect(cron.remove(original.id)).resolves.toEqual({
           ok: true,
@@ -533,12 +537,16 @@ describe("cron one-shot schedule ownership", () => {
           storeKey: cronStoreKey(storePath),
           jobId: original.id,
         });
+        // Direct runs have no public request ID; history still identifies the canceled run.
+        const runId =
+          finishedEvents[0]?.runId ??
+          `cron:${original.id}:${receipt.startedAtMs}:${receipt.receiptId}`;
         expect(history.entries).toEqual([
           expect.objectContaining({
             status: "error",
             error: "Cron job removed by operator.",
             deliveryStatus: "not-requested",
-            runId: finishedEvents[0]?.runId,
+            runId,
           }),
         ]);
         const receipts = openOpenClawStateDatabase()

@@ -71,7 +71,20 @@ if (args[0] === "fixture-ready") {
   }
   process.exit(0);
 }
-if (args[0] === "config") {
+if (args[0] === "doctor") {
+  assert.deepEqual(args, ["doctor", "--fix", "--non-interactive"]);
+  const legacyPath = path.join(state, "cron", "jobs.json");
+  const jobs = read(legacyPath).jobs;
+  const databasePath = path.join(state, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(databasePath);
+  db.exec("CREATE TABLE cron_jobs (job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+  const insert = db.prepare("INSERT INTO cron_jobs (job_id, job_json) VALUES (?, ?)");
+  for (const job of jobs) insert.run(job.id, JSON.stringify(job));
+  db.close();
+  fs.rmSync(legacyPath);
+} else if (args[0] === "config") {
   assert.deepEqual(args, ["config", "validate"]);
   assert.equal(config, original);
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false);
@@ -154,7 +167,11 @@ if (args[0] === "config") {
     assert.equal(read(path.join(state, "plugin-runtime-deps", plugin, ".openclaw-runtime-deps-stamp.json")).stale, true);
   }
   if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "cron-scheduled-authority") {
-    const jobs = read(path.join(state, "cron", "jobs.json")).jobs;
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"), { readOnly: true });
+    const jobs = db.prepare("SELECT job_json FROM cron_jobs ORDER BY rowid").all()
+      .map((row) => JSON.parse(row.job_json));
+    db.close();
     assert.deepEqual(jobs.map((job) => job.id), ["cron-pre-cap", "cron-ownerless-cap", "cron-owner-session", "cron-encoded-account", "cron-agent-mismatch"]);
     assert.equal(jobs.every((job) => job.scheduledToolPolicy === undefined), true);
     assert.equal(jobs[3].owner.sessionKey, "agent:main:discord:personal:direct:user-1");

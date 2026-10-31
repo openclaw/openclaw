@@ -2244,6 +2244,7 @@
                       },
                       "providers/opencode",
                       "providers/opencode-go",
+                      "providers/particle",
                       "providers/perplexity-provider",
                       "providers/poolside",
                       "providers/qianfan",

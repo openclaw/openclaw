@@ -124,7 +124,10 @@ async function bindToRetiredLeasedOwner() {
     }
     throw new Error(`unexpected method: ${method}`);
   };
-  const owner = createCodexLifecycleHarness({ respond });
+  const owner = createCodexLifecycleHarness({
+    respond,
+    unloadImmediatelyOnUnsubscribe: false,
+  });
   const ownerExitCodesAtResume: Array<number | null> = [];
   const healthy = createCodexLifecycleHarness({
     persistedThreads: ["bound-thread"],

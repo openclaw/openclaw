@@ -83,6 +83,7 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
+  sessionKey?: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionEntry["toolOverrides"];
@@ -90,6 +91,8 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   messageProvider?: string;
   chatType?: ChatType;
   agentAccountId?: string;
+  conversationId?: string;
+  messageThreadId?: string | number;
   conversationToolPolicy?: GroupToolPolicyConfig;
   groupId?: string;
   groupChannel?: string;
@@ -101,7 +104,9 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   senderUsername?: string;
   senderE164?: string;
   senderIsOwner: boolean;
+  gitContributorProfileId?: string;
   inputProvenance?: InputProvenance;
+  allowCollaborativeSteering?: boolean;
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;

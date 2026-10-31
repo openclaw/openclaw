@@ -63,7 +63,7 @@ describe("configured catalog registry composition", () => {
       });
       const { modelCatalog } = prepareCapturedRuntimeFacts({
         agentFacts: { input: { config }, configuredModelRefs: [] },
-        workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
+        workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot },
         templateModelRegistry: registry,
         configuredRuntimeModels: [],
       });
@@ -136,7 +136,7 @@ describe("configured catalog registry composition", () => {
     });
     const { modelCatalog } = prepareCapturedRuntimeFacts({
       agentFacts: { input: { config }, configuredModelRefs: [] },
-      workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
+      workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot },
       templateModelRegistry: registry,
       configuredRuntimeModels: [],
     });
@@ -183,7 +183,7 @@ describe("configured catalog registry composition", () => {
         });
         const { modelCatalog } = prepareCapturedRuntimeFacts({
           agentFacts: { input: { config }, configuredModelRefs: [] },
-          workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
+          workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot },
           templateModelRegistry: registry,
           configuredRuntimeModels: [],
         });
@@ -334,9 +334,7 @@ describe("configured catalog registry composition", () => {
         configuredModelRefs: [{ provider: "donor-fixture", modelId: "selected" }],
       };
       const workspaceFacts = {
-        configuredCatalogEntries: [configured],
         pluginMetadataSnapshot: metadataSnapshot,
-        inlineProviderModels: [],
       };
       const { modelCatalog } = prepareCapturedRuntimeFacts({
         agentFacts,

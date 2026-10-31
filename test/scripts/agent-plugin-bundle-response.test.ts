@@ -13,13 +13,13 @@ type Round = { name: string; args: Record<string, unknown>; value: unknown };
 
 function targetResult(
   text = probeText,
-  details: Partial<{ mcpServer: string; mcpTool: string; status: string }> = {},
+  patch: Partial<{ details: unknown; isError: boolean }> = {},
 ) {
   return {
     tool: { ...target },
     result: {
       content: [{ type: "text", text }],
-      details: { mcpServer: "weather-probe", mcpTool: "weather_probe", ...details },
+      ...patch,
     },
   };
 }
@@ -136,14 +136,8 @@ describe("Agent Plugins bundle mock response", () => {
           2,
           { value: { ...targetResult(), tool: { ...target, id: "other" } } },
         ],
-        [
-          "missing target details",
-          2,
-          { value: { tool: target, result: { content: [{ type: "text", text: probeText }] } } },
-        ],
-        ["wrong MCP server", 2, { value: targetResult(probeText, { mcpServer: "other" }) }],
-        ["wrong MCP operation", 2, { value: targetResult(probeText, { mcpTool: "other" }) }],
-        ["failed target result", 2, { value: targetResult(probeText, { status: "error" }) }],
+        ["leaked internal details", 2, { value: targetResult(probeText, { details: {} }) }],
+        ["failed target result", 2, { value: targetResult(probeText, { isError: true }) }],
         ["missing environment evidence", 2, { value: targetResult("probe ok") }],
         [
           "corrupted probe success field",

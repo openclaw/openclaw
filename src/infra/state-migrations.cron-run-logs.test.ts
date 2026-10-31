@@ -159,7 +159,6 @@ describe("cron run-log task import", () => {
         } finally {
           fixture.close();
         }
-
         expect(await prepareOpenClawStateDatabaseSchema()).toEqual({
           changes: [],
           warnings: [expect.stringMatching(/legacy-cron-run-logs.*doctor --fix/u)],
@@ -206,7 +205,16 @@ describe("cron run-log task import", () => {
           summary,
           error,
         });
-        expect(ledgerEntries.map(publicFields)).toEqual(entries.map(publicFields));
+        const receiptBackedRunIds = new Map<number, string>([
+          [1, "cron-runlog-import:legacy-history-job:2100:1"],
+          [2, "cron-runlog-import:legacy-history-job:2100:2"],
+          [5, "cron:legacy-history-job:4000:mirrored"],
+        ]);
+        expect(ledgerEntries.map(publicFields)).toEqual(
+          entries.map((logEntry, index) =>
+            publicFields({ ...logEntry, runId: logEntry.runId ?? receiptBackedRunIds.get(index) }),
+          ),
+        );
         expect(
           reopened.db
             .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs'")

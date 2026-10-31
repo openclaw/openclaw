@@ -42,7 +42,6 @@ import {
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { FollowupRun } from "./queue/types.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRoute,
@@ -54,101 +53,18 @@ import {
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
 import {
+  applyReplyToolAuthorityOverlay,
+  resolveAuthorizedCrossSurfaceContinuation,
+} from "./reply-tool-authority-inbound.js";
+import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
 } from "./reply-tool-authority-memory.js";
+import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
-export type ReplyToolAuthorityInput = {
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  originatingChannel?: FollowupRun["originatingChannel"];
-  toolsAllow?: string[];
-  disableTools?: boolean;
-  run: Partial<
-    Pick<
-      FollowupRun["run"],
-      | "config"
-      | "sessionKey"
-      | "runtimePolicySessionKey"
-      | "agentId"
-      | "agentDir"
-      | "agentAccountId"
-      | "messageProvider"
-      | "chatType"
-      | "conversationToolPolicy"
-      | "groupId"
-      | "groupChannel"
-      | "groupSpace"
-      | "memberRoleIds"
-      | "spawnedBy"
-      | "senderId"
-      | "senderName"
-      | "senderUsername"
-      | "senderE164"
-      | "senderIsOwner"
-      | "cwd"
-      | "inputProvenance"
-      | "trustedInternalHandoff"
-      | "scheduledToolPolicy"
-      | "runtimePluginToolGrant"
-      | "permissionMode"
-      | "toolOverrides"
-      | "execOverrides"
-      | "elevatedLevel"
-      | "bashElevated"
-      | "traceAuthorized"
-      | "approvalReviewerDeviceId"
-      | "authProfileId"
-      | "authProfileIdSource"
-      | "clientCaps"
-      | "gatewayUiCommandTarget"
-      | "toolBindings"
-    >
-  > &
-    Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
-};
+export type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 export { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
-
-function applyReplyToolAuthorityOverlay(
-  snapshot: ReplyToolAuthorityInput,
-  overlay: ReplyToolAuthorityOverlay,
-): ReplyToolAuthorityInput {
-  return {
-    ...snapshot,
-    originatingChannel: overlay.originatingChannel,
-    operatorAuthority: overlay.operatorAuthority,
-    toolsAllow: overlay.toolsAllow,
-    disableTools: overlay.disableTools,
-    run: {
-      ...snapshot.run,
-      permissionMode: overlay.permissionMode,
-      toolOverrides: overlay.toolOverrides,
-      messageProvider: overlay.messageProvider,
-      chatType: overlay.chatType,
-      agentAccountId: overlay.agentAccountId,
-      conversationToolPolicy: overlay.conversationToolPolicy,
-      groupId: overlay.groupId,
-      groupChannel: overlay.groupChannel,
-      groupSpace: overlay.groupSpace,
-      memberRoleIds: overlay.memberRoleIds,
-      spawnedBy: overlay.spawnedBy,
-      senderId: overlay.senderId,
-      senderName: overlay.senderName,
-      senderUsername: overlay.senderUsername,
-      senderE164: overlay.senderE164,
-      senderIsOwner: overlay.senderIsOwner,
-      inputProvenance: overlay.inputProvenance,
-      trustedInternalHandoff: overlay.trustedInternalHandoff,
-      scheduledToolPolicy: overlay.scheduledToolPolicy,
-      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
-      traceAuthorized: overlay.traceAuthorized,
-      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
-      clientCaps: overlay.clientCaps,
-      gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
-      toolBindings: overlay.toolBindings,
-    },
-  };
-}
 
 function resolveReplyToolSandboxParams(execution: ReplyToolAuthorityInput["run"]) {
   return {
@@ -423,9 +339,22 @@ export function prepareReplyToolAuthority(
       memberRoleIds: run.run.memberRoleIds ? [...run.run.memberRoleIds] : undefined,
     },
   };
+  const resolveContinuation = (overlay?: ReplyToolAuthorityOverlay) =>
+    overlay
+      ? resolveAuthorizedCrossSurfaceContinuation({
+          incumbent: run,
+          snapshot,
+          caller: overlay,
+        })
+      : undefined;
   const projectInput = (overlay?: ReplyToolAuthorityOverlay) => {
-    const incoming = overlay ? applyReplyToolAuthorityOverlay(snapshot, overlay) : snapshot;
-    return incoming;
+    const continuation = resolveContinuation(overlay);
+    continuation?.assertCurrent();
+    return continuation
+      ? snapshot
+      : overlay
+        ? applyReplyToolAuthorityOverlay(snapshot, overlay)
+        : snapshot;
   };
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
@@ -601,7 +530,10 @@ export function prepareReplyToolAuthority(
       return prepared.read();
     },
     projectAsync: async (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
+      const continuation = resolveContinuation(overlay);
+      continuation?.assertCurrent();
       const prepared = await prepare(projectInput(overlay), route);
+      continuation?.assertCurrent();
       projectionRead = prepared;
       return prepared.read();
     },
@@ -621,10 +553,17 @@ export function prepareReplyToolAuthority(
   bindReplyToolAuthorityCallerRead(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
+      const continuation = resolveContinuation(caller);
+      const assertCallerCurrent = () => {
+        assertActive();
+        continuation?.assertCurrent();
+      };
+      assertCallerCurrent();
       if (readMemoryEntry) {
         const projected = projectInput(caller);
-        const policy = await prepareSessionCapabilityRead(() =>
-          [snapshot, projected].every(
+        const policy = await prepareSessionCapabilityRead(() => {
+          assertCallerCurrent();
+          return [snapshot, projected].every(
             (input) =>
               resolvePreparedReplyToolAuthorityFingerprint(
                 input,
@@ -633,8 +572,8 @@ export function prepareReplyToolAuthority(
                 undefined,
                 memoryCapabilities,
               ) === expected,
-          ),
-        );
+          );
+        });
         releases.add(policy.release);
         const prepared = prepareMemoryReplyToolAuthorityCaller(readMemoryEntry, assertActive, () =>
           policy.read(),
@@ -657,7 +596,7 @@ export function prepareReplyToolAuthority(
         throw new Error("Tool authority classification source is unavailable");
       }
       const assertSources = () => {
-        assertActive();
+        assertCallerCurrent();
         plan?.assertCurrent();
       };
       const assertEntry = (entry: SessionEntry | undefined) => {

@@ -510,8 +510,6 @@ describeLive("gateway live trajectory export", () => {
         token,
         workspace: workspaceDir,
       });
-      const runtimeConfig = useLiveTestRuntimeConfig(config);
-      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
       logLiveStep("config-written", { configPath, modelKey, port, workspaceDir });
 
       const server = await startGatewayServer(port, {
@@ -520,6 +518,10 @@ describeLive("gateway live trajectory export", () => {
         controlUiEnabled: false,
       });
       logLiveStep("gateway-started", { port });
+      // Gateway startup prepares its own snapshot. Retain this fixture's exact
+      // config only after startup so later tool reads cannot observe it cleared.
+      const runtimeConfig = useLiveTestRuntimeConfig(config);
+      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
       cleanup.push(async () => {
         await server.close();
       });
@@ -548,7 +550,6 @@ describeLive("gateway live trajectory export", () => {
       });
       logLiveStep("agent-turn:done", { firstReply });
       expect(firstReply.trim()).toBe(replyToken);
-
       const { entry, storePath } = await loadSessionEntryAsync(sessionKey);
       if (!entry?.sessionId) {
         throw new Error(`live trajectory session was not persisted: ${sessionKey}`);
@@ -569,6 +570,9 @@ describeLive("gateway live trajectory export", () => {
       const exportRunId = `chat-export-${randomUUID()}`;
       const exportEventStartIndex = gatewayEvents.length;
       logLiveStep("export:start", { bundleDir, exportRunId });
+      // The native harness retires its runtime-config owner when the first turn
+      // settles. Republish at the follow-up boundary after post-turn reads.
+      useLiveTestRuntimeConfig(config);
       const exportResponse = (await client.request(
         "chat.send",
         {

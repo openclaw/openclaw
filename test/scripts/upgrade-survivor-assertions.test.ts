@@ -2038,6 +2038,73 @@ process.stdout.write(JSON.stringify(result));
     },
   );
 
+  it("reads migrated ACP metadata from its canonical shared-state owner", () => {
+    expect(() =>
+      runSessionStateAssertion(
+        (stateDir) => {
+          writeMigratedSessionState(stateDir);
+          const databaseDir = join(stateDir, "state");
+          mkdirSync(databaseDir, { recursive: true });
+          const db = new DatabaseSync(join(databaseDir, "openclaw.sqlite"));
+          try {
+            db.exec(`
+              CREATE TABLE acp_sessions (
+                session_key TEXT PRIMARY KEY,
+                session_id TEXT,
+                backend TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                runtime_session_name TEXT NOT NULL,
+                identity_json TEXT,
+                resume_agent_session_id TEXT,
+                resume_acpx_session_id TEXT,
+                mode TEXT NOT NULL,
+                runtime_options_json TEXT,
+                cwd TEXT,
+                state TEXT NOT NULL,
+                last_activity_at INTEGER NOT NULL,
+                last_error TEXT,
+                updated_at INTEGER NOT NULL
+              ) STRICT;
+            `);
+            const sessionKey = "agent:main:slack:channel:cupgrade";
+            const databaseKey = `@acp:v1:${Buffer.from(
+              JSON.stringify(["main", sessionKey]),
+              "utf8",
+            ).toString("base64url")}`;
+            db.prepare(
+              `INSERT INTO acp_sessions (
+                session_key, session_id, backend, agent, runtime_session_name,
+                identity_json, mode, runtime_options_json, state, last_activity_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              databaseKey,
+              "upgrade-group-session",
+              "acpx",
+              "codex",
+              "upgrade-acp-session",
+              JSON.stringify({
+                state: "resolved",
+                acpxRecordId: "upgrade-acpx-record",
+                acpxSessionId: "upgrade-acpx-session",
+                agentSessionId: "upgrade-agent-session",
+                source: "ensure",
+                lastUpdatedAt: 1710000000000,
+              }),
+              "persistent",
+              JSON.stringify({ model: "gpt-5.5", runtimeMode: "plan", thinking: "low" }),
+              "idle",
+              1710000000000,
+              1710000000000,
+            );
+          } finally {
+            db.close();
+          }
+        },
+        { scenario: "acpx-openclaw-tools-bridge" },
+      ),
+    ).not.toThrow();
+  });
+
   it.each([
     { stage: "survival", mutation: "none", error: /metadata prompt was not preserved/ },
     { stage: "post-inference", mutation: "none", error: undefined },

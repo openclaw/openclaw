@@ -75,7 +75,7 @@ describe("package runtime compatibility guidance", () => {
   beforeEach(() => {
     vi.mocked(resolveBunRuntimeInfo).mockResolvedValue({
       status: "supported",
-      version: "1.4.3",
+      version: "1.4.4",
       sqliteVersion: "3.51.3",
       nodeSharedSqlite: false,
       sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
@@ -129,7 +129,7 @@ describe("package runtime compatibility guidance", () => {
         ...process,
         env: current ? serviceEnv : processEnv,
         execPath: path.resolve("/fixture/app-runtime"),
-        versions: { ...process.versions, bun: "1.4.3", node: "24.3.0" },
+        versions: { ...process.versions, bun: "1.4.4", node: "24.3.0" },
       });
       if (!current && !homebrew) {
         vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue({
@@ -143,7 +143,7 @@ describe("package runtime compatibility guidance", () => {
       if (!supported) {
         vi.mocked(resolveBunRuntimeInfo).mockResolvedValue({
           status: "probe-failed",
-          error: new Error("Bun 1.4.3+ with WAL-reset-safe node:sqlite is required."),
+          error: new Error("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required."),
         });
       }
       const result = await resolvePackageRuntimePreflight({
@@ -169,7 +169,7 @@ describe("package runtime compatibility guidance", () => {
                 },
               },
             }
-          : { ok: false, error: "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required." },
+          : { ok: false, error: "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required." },
       );
       expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(executable, undefined, runtimeEnv);
       expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
@@ -185,7 +185,7 @@ describe("package runtime compatibility guidance", () => {
     vi.stubGlobal("process", {
       ...process,
       execPath: path.resolve("/fixture/app-runtime"),
-      versions: { ...process.versions, bun: "1.4.3" },
+      versions: { ...process.versions, bun: "1.4.4" },
     });
     vi.mocked(resolveNodeRuntimeInfo).mockImplementation(async (runner) =>
       runner === "/recovered/node"
@@ -232,7 +232,7 @@ describe("package runtime compatibility guidance", () => {
     vi.stubGlobal("process", {
       ...process,
       execPath: path.resolve("/fixture/app-runtime"),
-      versions: { ...process.versions, bun: "1.4.3" },
+      versions: { ...process.versions, bun: "1.4.4" },
     });
     vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
     vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");

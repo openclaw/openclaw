@@ -26,7 +26,7 @@ describe("native Windows database port", () => {
         await state.writeConfig({ database: { engine: "sqlite" } });
         const database = await state.writeText("state/openclaw.sqlite", "retained state bytes");
         const configBefore = await fs.readFile(state.configPath);
-        const filesBefore = await fs.readdir(state.stateDir, { recursive: true });
+        const filesBefore = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
         const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
         try {
           await expect(doctorDatabasePort(options)).rejects.toThrow(
@@ -37,7 +37,9 @@ describe("native Windows database port", () => {
         }
         expect(await fs.readFile(database, "utf8")).toBe("retained state bytes");
         expect(await fs.readFile(state.configPath)).toEqual(configBefore);
-        expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(filesBefore);
+        expect((await fs.readdir(state.stateDir, { recursive: true })).toSorted()).toEqual(
+          filesBefore,
+        );
       });
     },
   );

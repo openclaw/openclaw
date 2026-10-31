@@ -57,6 +57,12 @@ export async function buildMattermostEventPlan(
     threadRootId: params.threadRootId,
   });
   const to = kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
+  const from =
+    kind === "direct"
+      ? `mattermost:${params.senderId}`
+      : kind === "group"
+        ? `mattermost:group:${params.channelId}`
+        : `mattermost:channel:${params.channelId}`;
 
   return {
     channelId: params.channelId,
@@ -70,15 +76,11 @@ export async function buildMattermostEventPlan(
     route,
     thread,
     to,
+    from,
     finalizeContext: <T extends Record<string, unknown>>(context: T) =>
       finalizeInboundContext({
         ...context,
-        From:
-          kind === "direct"
-            ? `mattermost:${params.senderId}`
-            : kind === "group"
-              ? `mattermost:group:${params.channelId}`
-              : `mattermost:channel:${params.channelId}`,
+        From: from,
         To: to,
         SessionKey: thread.sessionKey,
         DmScope: route.dmScope,

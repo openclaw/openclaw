@@ -81,11 +81,15 @@ type WorkboardLifecycleMatchHandler = (input: {
   sessionKey?: string;
 }) => Promise<void>;
 
+type WorkboardAgentEndEvent = { runId?: string; success: boolean };
+type WorkboardAgentEndContext = { runId?: string; sessionKey?: string };
+
 type WorkboardLifecycleService = OpenClawPluginService & {
   stop: () => void;
   onGatewayStart: (abortSignal?: AbortSignal) => void;
   onGatewayStop: () => void;
   readSessions: WorkboardLifecycleSessionReader;
+  onAgentEnd: (event: WorkboardAgentEndEvent, context: WorkboardAgentEndContext) => Promise<void>;
 };
 
 function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
@@ -196,9 +200,10 @@ export async function syncWorkboardSubagentEnded(params: {
 
 export async function syncWorkboardAgentEnded(params: {
   store: WorkboardStore;
-  event: { runId?: string; success: boolean };
-  context: { runId?: string; sessionKey?: string };
+  event: WorkboardAgentEndEvent;
+  context: WorkboardAgentEndContext;
   now?: number;
+  allowIdleRunningTerminal?: boolean;
   readSessions: (
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
@@ -217,7 +222,15 @@ export async function syncWorkboardAgentEnded(params: {
   if (!session) {
     return 0;
   }
-  const observation = lifecycleFromSession(session, now);
+  const observation =
+    params.allowIdleRunningTerminal &&
+    session.status === "running" &&
+    session.hasActiveRun === false
+      ? {
+          state: params.event.success ? ("succeeded" as const) : ("failed" as const),
+          sourceUpdatedAt: session.updatedAt ?? now,
+        }
+      : lifecycleFromSession(session, now);
   if (observation.state !== "succeeded" && observation.state !== "failed") {
     return 0;
   }
@@ -279,6 +292,7 @@ async function syncWorkboardLifecycleSessions(params: {
   sessions: readonly WorkboardLifecycleSession[];
   complete?: boolean;
   now?: number;
+  recoverPreparedBefore?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
@@ -333,6 +347,8 @@ async function syncWorkboardLifecycleSessions(params: {
     ) {
       if (
         params.complete &&
+        (params.recoverPreparedBefore === undefined ||
+          launch.preparedAt < params.recoverPreparedBefore) &&
         (await params.store.failPreparedLaunch(card.id, {
           expectedLaunch: launch,
           reason: "Gateway did not accept the prepared Workboard session before restart.",
@@ -460,6 +476,10 @@ export function createWorkboardLifecycleService(params: {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let begin: (() => void) | undefined;
+  let handleAgentEnd:
+    | ((event: WorkboardAgentEndEvent, context: WorkboardAgentEndContext) => Promise<void>)
+    | undefined;
+  const agentEndRetryTimers = new Set<ReturnType<typeof setTimeout>>();
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
   let serviceReader: WorkboardLifecycleSessionReader | undefined;
@@ -496,6 +516,11 @@ export function createWorkboardLifecycleService(params: {
     removeDrainListener = undefined;
     generation += 1;
     begin = undefined;
+    handleAgentEnd = undefined;
+    for (const retryTimer of agentEndRetryTimers) {
+      clearTimeout(retryTimer);
+    }
+    agentEndRetryTimers.clear();
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
@@ -529,9 +554,14 @@ export function createWorkboardLifecycleService(params: {
       }
       return await reader(options);
     },
+    async onAgentEnd(event, context) {
+      await handleAgentEnd?.(event, context);
+    },
     start(ctx) {
       const owner = ++generation;
+      const recoverPreparedBefore = params.now?.() ?? Date.now();
       serviceReader = AsyncResource.bind(params.readSessions);
+      const readSessions = serviceReader;
       workboardLifecycleGatewayState.readSessions = serviceReader;
       let begun = false;
       const onMatched: WorkboardLifecycleMatchHandler = async (input) => {
@@ -548,7 +578,7 @@ export function createWorkboardLifecycleService(params: {
             }
             if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
               try {
-                const snapshot = await params.readSessions({
+                const snapshot = await readSessions({
                   includeUnknown: cards.some(
                     (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
                   ),
@@ -567,7 +597,7 @@ export function createWorkboardLifecycleService(params: {
                     continue;
                   }
                   (describedIncognitoKeys ??= new Set()).add(sessionKey);
-                  const exact = await params.readSessions({ includeUnknown: false, sessionKey });
+                  const exact = await readSessions({ includeUnknown: false, sessionKey });
                   snapshot.sessions.push(...exact.sessions);
                 }
                 await syncWorkboardLifecycleSessions({
@@ -575,6 +605,7 @@ export function createWorkboardLifecycleService(params: {
                   cards,
                   ...snapshot,
                   now: params.now?.() ?? Date.now(),
+                  recoverPreparedBefore,
                   onMatched,
                 });
                 cards = await params.store.list();
@@ -594,9 +625,62 @@ export function createWorkboardLifecycleService(params: {
           }
         } finally {
           if (generation === owner) {
+            if (timer) {
+              clearTimeout(timer);
+            }
             timer = setTimeout(() => void reconcile(), WORKBOARD_LIFECYCLE_SWEEP_MS);
             timer.unref?.();
           }
+        }
+      };
+      const retryAgentEnd = AsyncResource.bind(
+        (event: WorkboardAgentEndEvent, context: WorkboardAgentEndContext) => {
+          const retryTimer = setTimeout(() => {
+            agentEndRetryTimers.delete(retryTimer);
+            if (generation !== owner) {
+              return;
+            }
+            void params.store
+              .runOperation(async () => {
+                const matched = await syncWorkboardAgentEnded({
+                  store: params.store,
+                  event,
+                  context,
+                  readSessions,
+                  allowIdleRunningTerminal: true,
+                  onMatched,
+                });
+                if (matched > 0) {
+                  await cleanupWorktrees(await params.store.list(), (message) =>
+                    ctx.logger.warn(message),
+                  );
+                }
+              })
+              .catch((error: unknown) => {
+                if (generation === owner) {
+                  ctx.logger.warn(`workboard agent-end retry failed: ${String(error)}`);
+                }
+              });
+          }, 100);
+          agentEndRetryTimers.add(retryTimer);
+          retryTimer.unref?.();
+        },
+      );
+      handleAgentEnd = async (event, context) => {
+        if (generation !== owner) {
+          return;
+        }
+        const matched = await params.store.runOperation(() =>
+          syncWorkboardAgentEnded({
+            store: params.store,
+            event,
+            context,
+            readSessions,
+            onMatched,
+          }),
+        );
+        if (matched === 0 && generation === owner) {
+          retryAgentEnd(event, context);
         }
       };
       begin = () => {

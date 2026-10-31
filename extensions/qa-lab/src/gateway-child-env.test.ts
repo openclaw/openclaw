@@ -29,6 +29,21 @@ describe("QA child service identity", () => {
     ).toBe("1");
   });
 
+  it("bypasses inherited proxies for owned loopback fixtures", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HTTP_PROXY: "http://proxy.example.test",
+        NO_PROXY: "metadata.example.test,localhost",
+        no_proxy: "registry.example.test",
+      }),
+      runtimeEnvPatch: { NO_PROXY: "patched.example.test" },
+    });
+
+    expect(env.NO_PROXY).toBe("patched.example.test,registry.example.test,127.0.0.1,localhost,::1");
+    expect(env.no_proxy).toBe(env.NO_PROXY);
+    expect(env.HTTP_PROXY).toBe("http://proxy.example.test");
+  });
+
   it.each(["parent", "runtime patch"])(
     "keeps %s supervision out of QA-owned children",
     (source) => {

@@ -194,6 +194,11 @@ Integrity revocation and update behavior are unchanged.
 During a one-way Gateway shutdown drain, idle native execution and retained
 reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
+Native snapshot staging cancels unfinished read-only copies before joining their
+workers. Directory allocation and cleanup still settle under their original owner;
+shutdown cancellation does not abandon accepted writes in other native workers.
+Canonical shared-state close seals fresh admission and joins resource leases before
+retiring their shared actor. Global broker retirement joins that same close first.
 External cleanup can still be pending. Cancellation alone never certifies a
 seal: the last lease must still complete its checkpoint and native close.
 Restart recovery markers and reply cancellation precede background-service

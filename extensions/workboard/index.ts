@@ -6,7 +6,6 @@ import { registerWorkboardCommand } from "./src/command.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
-  syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
 import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
@@ -122,17 +121,7 @@ export default definePluginEntry({
         });
       }),
     );
-    api.on("agent_end", (event, context) =>
-      store.runOperation(async () => {
-        await syncWorkboardAgentEnded({
-          store,
-          event,
-          context,
-          readSessions: lifecycleSync.readSessions,
-          onMatched: automationNudge.nudge,
-        });
-      }),
-    );
+    api.on("agent_end", (event, context) => lifecycleSync.onAgentEnd(event, context));
     api.registerTool(
       (context) =>
         guardWorkboardToolsForWorkspaceAccess(

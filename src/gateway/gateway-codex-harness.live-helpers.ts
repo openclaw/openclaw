@@ -5,6 +5,31 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 // soak measures compaction behavior instead of the dependency's output boundary.
 export const CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES = 800_000;
 
+export function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+export function resolveBoundedPositiveIntEnv(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  max: number,
+  min = 1,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
 /**
  * Text matchers shared by live Codex harness tests.
  *

@@ -131,6 +131,16 @@ with native clients. A private supervised binding uses the supervision
 connection regardless of the ordinary harness default. Independent App Server
 processes retain separate live status and approval state.
 
+For managed local app-servers with an agent home, OpenClaw sets
+`thread_unload_delay_secs=0`, overriding native post-unsubscribe retention.
+OpenClaw keeps warm subscriptions and protects active child work itself. When a
+conversation needs new configuration, it waits up to two seconds for that
+thread's unload notification before resuming its history, so a failed thread can
+recover while a sibling continues. If unloading is not confirmed, the binding is
+preserved; failed-thread recovery can replace the client only when no sibling
+work would be interrupted. User homes, stdio proxies, and external socket
+connections keep their native retention settings.
+
 For non-production testing against an already-running app-server, WebSocket
 transport is available:
 

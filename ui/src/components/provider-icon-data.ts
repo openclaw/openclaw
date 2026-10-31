@@ -59,6 +59,7 @@ const PROVIDER_ICON_NAMES = new Set([
   "opencode",
   "opencodego",
   "openrouter",
+  "particle",
   "perplexity",
   "pi",
   "pixverse",

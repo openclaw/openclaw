@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { escape as escapeGlob } from "minimatch";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -812,17 +813,29 @@ describe("managed service update handoff", () => {
         };
         if (systemd) {
           expect(command).toBe(systemd.systemdRunPath);
-          expect(args.slice(0, 4)).toEqual([
+          const environmentPath = path.join(path.dirname(result.logPath), "handoff.env");
+          expect(args.slice(0, 11)).toEqual([
             "--user",
-            "--scope",
+            "--pipe",
+            "--wait",
+            "--service-type=exec",
+            "--slice=app-openclaw-update.slice",
+            "--property=KillMode=control-group",
+            "--property=OOMPolicy=stop",
+            `--property=EnvironmentFile=${escapeGlob(environmentPath)}`,
+            `--working-directory=${path.dirname(result.logPath)}`,
             "--collect",
-            "--unit=openclaw-update-handoff-123.scope",
+            "--unit=openclaw-update-handoff-123.service",
           ]);
-          expect(args.slice(4, 7)).toEqual([
+          expect(args.slice(-3)).toEqual([
             "/usr/local/bin/node",
             expect.stringMatching(/handoff\.cjs$/u),
             expect.stringMatching(/handoff\.json$/u),
           ]);
+          expect(await fs.readFile(environmentPath, "utf8")).toContain("KEEP_ME=1");
+          if (process.platform !== "win32") {
+            expect((await fs.stat(environmentPath)).mode & 0o777).toBe(0o600);
+          }
           expect(helperParams.serviceRecovery).toEqual({
             kind: "systemd",
             unit: "openclaw-gateway.service",

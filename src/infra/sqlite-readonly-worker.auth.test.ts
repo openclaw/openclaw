@@ -65,6 +65,7 @@ it.skipIf(skipBroker)(
     let publication: ReturnType<typeof watchAuthProfileNativeCommits> | undefined;
     let pendingRefresh: Promise<void> | undefined;
     const observed: unknown[] = [];
+    const fallbackObserved = createDeferredCore();
     let refresh = () => read(source, "canonical");
     const unsubscribe = registerAuthProfileFileChangeListener(async ({ directory }) => {
       if (directory !== path.dirname(source)) {
@@ -72,11 +73,16 @@ it.skipIf(skipBroker)(
       }
       const rows = await refresh();
       observed.push(rows.store);
+      if (observed.length === 2) {
+        fallbackObserved.resolve();
+      }
       // Credential publication can replace the observation's refresh callback.
       refresh = () => read(source, "canonical");
     });
     try {
       await broker.ready();
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(29_999);
       const brokerSpawn = vi.spyOn(broker, "spawn");
       vi.mocked(spawn).mockClear();
       runWithSpawnBroker(broker, () => scope.run(() => readAuthProfileDatabaseIdentity(source)));
@@ -84,12 +90,16 @@ it.skipIf(skipBroker)(
         .prepare("UPDATE auth_profile_state SET state_json = ?")
         .run('{"lastGood":{"fixture":"fixture-next"}}');
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      // Exercise the next wall-clock recovery boundary without racing the explicit refreshes.
+      await vi.advanceTimersByTimeAsync(1);
+      await fallbackObserved.promise;
       const rotated = { ...store, profiles: {} };
       writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(rotated));
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
       clearAuthState(source);
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
       expect(observed).toEqual([
+        { status: "readable", raw: store },
         { status: "readable", raw: store },
         { status: "readable", raw: rotated },
         { status: "readable", raw: rotated },
@@ -100,21 +110,22 @@ it.skipIf(skipBroker)(
       pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
       await scope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBeNull();
-      expect(observed).toHaveLength(3);
+      expect(observed).toHaveLength(4);
       runWithSpawnBroker(broker, () => restartedScope.run(bindAuthProfileFileObservationReaders));
       writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(store));
       publication.dispose();
       await pendingRefresh;
-      expect(observed).toHaveLength(4);
-      expect(observed[3]).toEqual({ status: "readable", raw: store });
+      expect(observed).toHaveLength(5);
+      expect(observed[4]).toEqual({ status: "readable", raw: store });
       expect(brokerSpawn).toHaveBeenCalledTimes(1);
       expect(spawn).not.toHaveBeenCalled();
       await restartedScope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBeNull();
       clearAuthState(source);
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
-      expect(observed).toHaveLength(4);
+      expect(observed).toHaveLength(5);
     } finally {
+      vi.useRealTimers();
       publication?.dispose();
       await Promise.allSettled(pendingRefresh ? [pendingRefresh] : []);
       unsubscribe();

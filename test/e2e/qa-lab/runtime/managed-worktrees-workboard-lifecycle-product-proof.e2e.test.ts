@@ -25,6 +25,8 @@ type WorkboardCard = {
   id: string;
   runId?: string;
   status?: string;
+  sessionKey?: string;
+  execution?: unknown;
   metadata?: { automation?: { workspace?: WorkboardWorkspace } };
 };
 type WorkboardCreateResult = { card: WorkboardCard };
@@ -286,12 +288,12 @@ describe("managed worktrees Workboard-owner product proof", () => {
 
       const deadline = Date.now() + 15_000;
       let entries: unknown[] = [];
-      let lifecycleStatus: string | undefined;
+      let lifecycleCard: WorkboardCard | undefined;
       while (Date.now() < deadline) {
         const cards = (await activeHarness.gateway.call("workboard.cards.list", {
           boardId,
         })) as WorkboardListResult;
-        lifecycleStatus = cards.cards.find((entry) => entry.id === card.card.id)?.status;
+        lifecycleCard = cards.cards.find((entry) => entry.id === card.card.id);
         const runs = (await activeHarness.gateway.call("cron.runs", {
           id: addResult.id,
           limit: 5,
@@ -302,9 +304,10 @@ describe("managed worktrees Workboard-owner product proof", () => {
         }
         await sleep(50);
       }
-      expect(entries, `card=${String(lifecycleStatus)}\n${activeHarness.gateway.logs()}`).toEqual([
-        expect.objectContaining({ jobId: addResult.id, status: "ok" }),
-      ]);
+      expect(
+        entries,
+        `card=${JSON.stringify(lifecycleCard)}\n${activeHarness.gateway.logs()}`,
+      ).toEqual([expect.objectContaining({ jobId: addResult.id, status: "ok" })]);
     },
   );
 

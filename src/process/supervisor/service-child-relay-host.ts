@@ -261,17 +261,17 @@ export async function createServiceChildRelayAdapter(
     nextSequence: () => ++outboundSequence,
     startedAt: () => cleanupDeadline.startedAt!,
     anchorGone: () => {
-      if (anchorPid === undefined) {
-        return false;
-      }
       try {
-        return isOwnedProcessGroupGone(anchorPid);
+        // A native certificate leaves only the retained owner, without PGID authority.
+        return useLinuxSubreaper
+          ? closingReceipt === "linux-subreaper"
+          : anchorPid !== undefined && isOwnedProcessGroupGone(anchorPid);
       } catch {
         return false;
       }
     },
     canRetire: () =>
-      !useLinuxSubreaper &&
+      (!useLinuxSubreaper || closingReceipt === "linux-subreaper") &&
       state === "closing" &&
       control?.closed === true &&
       lineage?.readableEnded === true &&
@@ -448,6 +448,9 @@ export async function createServiceChildRelayAdapter(
       closingReceipt = message.descendantsReaped === true ? "linux-subreaper" : "process-group";
       state = "closing";
       cleanupDeadline.begin();
+      if (useLinuxSubreaper && closingReceipt === "linux-subreaper") {
+        retirement.request();
+      }
       retirement.reconcile();
       if (control) {
         // Retire cancellation before acknowledging this exact POSIX receipt.
@@ -582,7 +585,7 @@ export async function createServiceChildRelayAdapter(
     args: params.args,
     argv0: params.argv0,
     cwd: params.cwd,
-    env: params.env ? toStringEnv(params.env) : undefined,
+    env: toStringEnv(params.env ?? process.env),
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
     terminateOnHostLoss: params.terminateOnHostLoss,
@@ -649,7 +652,8 @@ export async function createServiceChildRelayAdapter(
       void stdoutRelay.drain();
       unpipeStderr?.();
       void stderrRelay.drain();
-      stopServiceChildOwner(child, useLinuxSubreaper);
+      // Ready assigns commandPid after native admission; retain transport for its closing/ACK join.
+      stopServiceChildOwner(child, useLinuxSubreaper, commandPid ? kill : undefined);
       throw error;
     } finally {
       removeConstructionAbortListener();

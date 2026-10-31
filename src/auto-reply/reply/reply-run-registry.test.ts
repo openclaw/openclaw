@@ -41,6 +41,7 @@ import {
   expireStaleReplyOperation,
   isReplyRunEvidenceStale,
   lifecycleAdmissionByOperation,
+  markReplyOperationExecutionStarted,
   waitForReplyBarrierSettlement,
 } from "./reply-run-registry.state.js";
 import {
@@ -97,6 +98,23 @@ describe("reply run registry", () => {
 
       await expect(oldWaitPromise).resolves.toBe(true);
     });
+  });
+
+  it("distinguishes queued ownership from started execution, including lane waits", () => {
+    const operation = createTestReplyOperation({ sessionId: "session-queued" });
+    const executing = () =>
+      resolveActiveReplyRunSessionId(operation.key, { executionStartedOnly: true });
+    expect(resolveActiveReplyRunSessionId(operation.key)).toBe(operation.sessionId);
+    expect(executing()).toBeUndefined();
+    operation.markWaitingForGlobalLane();
+    expect(executing()).toBeUndefined();
+    operation.markGlobalLaneWaitEnded();
+    markReplyOperationExecutionStarted(operation);
+    operation.setPhase("running");
+    operation.markWaitingForGlobalLane();
+    expect(executing()).toBe(operation.sessionId);
+    operation.complete();
+    expect(executing()).toBeUndefined();
   });
 
   it("keeps repeated request evidence across reply-operation progress", () => {
