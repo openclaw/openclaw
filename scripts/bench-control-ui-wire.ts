@@ -1,5 +1,6 @@
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 // Real-Gateway wire benchmark. Run with node --import ./scripts/tsx.mjs.
 // Example: --bundle-dir dist/control-ui --pairs 10 --profile remote --output /absolute/proof
 // --compare-source-dir interleaves the frozen source and this checkout; same source is A/A.
@@ -51,6 +52,8 @@ const { values } = parseArgs({
     "controlled-worker": { type: "boolean", default: false },
     screenshots: { type: "boolean", default: false },
     "extended-flows": { type: "boolean", default: false },
+    timeline: { type: "boolean", default: false },
+    "proxy-nagle": { type: "boolean", default: false },
   },
 });
 if (
@@ -113,6 +116,8 @@ type WireFrame = {
   type?: string;
   ok?: boolean;
   digest?: string;
+  streamStart: number;
+  streamEnd: number;
 };
 
 // Observe RFC6455 bytes before forwarding. CDP exposes decompressed messages, so its
@@ -122,12 +127,14 @@ function frameReader(
   connection: number,
   frames: WireFrame[],
   methods: Map<string, string>,
+  requests: Map<number, { method: string; pathname: string }>,
 ) {
   let pending = Buffer.alloc(0);
   let headers = true;
   let upgraded = false;
   let message: WireFrame | undefined;
   let parts: Buffer[] = [];
+  let consumed = 0;
   return (chunk: Buffer, deliveredAtMs: number, receivedAtMs = performance.now()) => {
     pending = Buffer.concat([pending, chunk]);
     if (headers) {
@@ -136,13 +143,26 @@ function frameReader(
         return;
       }
       const header = pending.subarray(0, end).toString("latin1");
+      if (direction === "sent") {
+        const [method, target] = header.split("\r\n", 1)[0]!.split(" ");
+        if (method && target) {
+          // Path only: authentication headers and query values never enter evidence.
+          requests.set(connection, {
+            method,
+            pathname: new URL(target, "http://localhost").pathname,
+          });
+        }
+      }
       upgraded = /upgrade:\s*websocket/iu.test(header);
       headers = false;
       if (!upgraded) {
+        // Browser HTTP traffic here is GET-only; keep observing reused connections.
+        headers = direction === "sent" && header.startsWith("GET ");
         pending = Buffer.alloc(0);
         return;
       }
       pending = pending.subarray(end + 4);
+      consumed += end + 4;
     }
     if (!upgraded) {
       pending = Buffer.alloc(0);
@@ -184,6 +204,8 @@ function frameReader(
           compressed: Boolean(first & 64),
           payloadBytes: 0,
           wireBytes: 0,
+          streamStart: consumed,
+          streamEnd: consumed,
         };
       }
       if (message) {
@@ -197,6 +219,7 @@ function frameReader(
         parts.push(body);
         message.payloadBytes += length;
         message.wireBytes += headerBytes + length;
+        message.streamEnd = consumed + headerBytes + length;
         message.deliveredAtMs = deliveredAtMs;
         if (first & 128) {
           if (message.opcode === 1 || message.opcode === 2) {
@@ -232,12 +255,24 @@ function frameReader(
         }
       }
       pending = pending.subarray(headerBytes + length);
+      consumed += headerBytes + length;
     }
   };
 }
 
 async function startProxy(upstreamPort: number, listenPort: number) {
   const frames: WireFrame[] = [];
+  const packets: Array<{
+    direction: WireFrame["direction"];
+    connection: number;
+    streamStart: number;
+    streamEnd: number;
+    receivedAtMs: number;
+    serialStartMs: number;
+    scheduledWriteMs: number;
+    actualWriteMs?: number;
+    request?: { method: string; pathname: string };
+  }> = [];
   const sockets = new Set<Socket>();
   const linkOptions = {
     latencyMs: networkProfile.latencyMs,
@@ -250,12 +285,17 @@ async function startProxy(upstreamPort: number, listenPort: number) {
   let offline = false;
   let connection = 0;
   const methods = new Map<string, string>();
+  const requests = new Map<number, { method: string; pathname: string }>();
   const server = createServer({ allowHalfOpen: true }, (client) => {
     if (offline) {
       client.destroy();
       return;
     }
     const upstream = connect({ port: upstreamPort, host: "127.0.0.1", allowHalfOpen: true });
+    // The profile supplies latency/bandwidth; loopback delayed ACKs must not add
+    // a second, platform-dependent queue to interactive WebSocket traffic.
+    client.setNoDelay(!values["proxy-nagle"]);
+    upstream.setNoDelay(!values["proxy-nagle"]);
     sockets.add(client);
     sockets.add(upstream);
     client.on("close", () => sockets.delete(client));
@@ -265,9 +305,39 @@ async function startProxy(upstreamPort: number, listenPort: number) {
       [client, upstream, "sent"],
       [upstream, client, "received"],
     ] as const) {
-      const inspect = frameReader(direction, id, frames, methods);
+      const inspect = frameReader(direction, id, frames, methods, requests);
       if (remote) {
-        links[direction].connect(source, target, inspect);
+        let offset = 0;
+        const pendingPackets = new WeakMap<Buffer, (typeof packets)[number]>();
+        links[direction].connect(
+          source,
+          target,
+          (chunk, deliveredAtMs, receivedAtMs) => {
+            const packet = {
+              direction,
+              connection: id,
+              streamStart: offset,
+              streamEnd: offset + chunk.length,
+              receivedAtMs,
+              serialStartMs:
+                deliveredAtMs -
+                networkProfile.latencyMs -
+                (chunk.length * 8) / (networkProfile.megabitsPerSecond! * 1000),
+              scheduledWriteMs: deliveredAtMs,
+              request: requests.get(id),
+            };
+            offset += chunk.length;
+            packets.push(packet);
+            pendingPackets.set(chunk, packet);
+            inspect(chunk, deliveredAtMs, receivedAtMs);
+          },
+          (chunk, atMs) => {
+            const packet = pendingPackets.get(chunk);
+            if (packet) {
+              packet.actualWriteMs = atMs;
+            }
+          },
+        );
       } else {
         source.on("data", (chunk: Buffer) => inspect(chunk, performance.now()));
         source.pipe(target);
@@ -290,6 +360,7 @@ async function startProxy(upstreamPort: number, listenPort: number) {
   }
   return {
     frames,
+    packets,
     url: `http://127.0.0.1:${address.port}`,
     setOffline(value: boolean) {
       offline = value;
@@ -600,6 +671,14 @@ async function runWorker() {
     { env: process.env },
   );
   const gatewayPort = await getFreePort();
+  const gatewayTimeline: Array<Record<string, unknown> & { atMs: number }> = [];
+  const rpcChannel = channel("openclaw.gateway.rpc");
+  const stageChannel = channel("openclaw.gateway.request.stages");
+  const observeGateway = (event: unknown) => {
+    gatewayTimeline.push({ ...(event as Record<string, unknown>), atMs: performance.now() });
+  };
+  rpcChannel.subscribe(observeGateway);
+  stageChannel.subscribe(observeGateway);
   process.chdir(path.join(stateRoot, "workspace"));
   const gateway = await startGatewayServer(gatewayPort, {
     bind: "loopback",
@@ -699,6 +778,8 @@ async function runWorker() {
           }
           // A closed context has no remaining sample to attribute these frames to.
           proxy.frames.length = 0;
+          proxy.packets.length = 0;
+          gatewayTimeline.length = 0;
           const sampleOutput = path.join(output, String(pair + 1).padStart(2, "0"));
           await mkdir(sampleOutput, { recursive: true });
           const context = await browser.newContext({
@@ -728,6 +809,30 @@ async function runWorker() {
           await page.addInitScript({
             content: `const __name = (fn) => fn; (${installReadiness.toString()})();`,
           });
+          if (values.timeline) {
+            await page.addInitScript(() => {
+              const parse = JSON.parse;
+              const samples: Array<{ startedAtMs: number; durationMs: number; bytes: number }> = [];
+              Reflect.set(window, "__wireJsonParses", samples);
+              JSON.parse = (text, reviver) => {
+                const startedAtMs = performance.now();
+                const result = parse(text, reviver);
+                const finishedAtMs = performance.now();
+                if (typeof text === "string" && text.includes('"initialHistory"')) {
+                  samples.push({
+                    startedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                    bytes: new TextEncoder().encode(text).length,
+                  });
+                  performance.measure("wire.history.parse", {
+                    start: startedAtMs,
+                    end: finishedAtMs,
+                  });
+                }
+                return result;
+              };
+            });
+          }
           const cdp = await context.newCDPSession(page);
           await cdp.send("Network.enable");
           type HttpRecord = {
@@ -755,6 +860,7 @@ async function runWorker() {
             name: string;
             requestId?: string;
             digest: string;
+            shape?: unknown;
           };
           const requests = new Map<string, HttpRecord>();
           const decoded: Decoded[] = [];
@@ -861,12 +967,15 @@ async function runWorker() {
               const text = event.response.payloadData;
               let name = "non-json";
               let requestId: string | undefined;
+              let shape: unknown;
               try {
                 const message = JSON.parse(text) as {
                   id?: string;
                   type?: string;
                   method?: string;
                   event?: string;
+                  params?: Record<string, unknown>;
+                  payload?: Record<string, unknown>;
                 };
                 requestId = message.id;
                 if (message.method && requestId) {
@@ -878,6 +987,72 @@ async function runWorker() {
                   (requestId ? methods.get(requestId) : undefined) ??
                   message.type ??
                   "unknown";
+                if (name === "sessions.messages.subscribe" || name === "chat.history") {
+                  const payload = message.params ?? message.payload ?? {};
+                  shape = {
+                    fields: Object.fromEntries(
+                      Object.entries(payload).map(([key, value]) => [
+                        key,
+                        {
+                          bytes: Buffer.byteLength(JSON.stringify(value) ?? ""),
+                          count: Array.isArray(value) ? value.length : undefined,
+                          keys:
+                            value && typeof value === "object" && !Array.isArray(value)
+                              ? Object.keys(value)
+                              : undefined,
+                        },
+                      ]),
+                    ),
+                    sessionKey: message.params?.sessionKey ?? message.params?.key,
+                    initialHistory: message.params?.initialHistory,
+                    includeApprovals: message.params?.includeApprovals,
+                    history: (() => {
+                      const initial = message.payload?.initialHistory as
+                        | { payload?: Record<string, unknown> }
+                        | undefined;
+                      const history =
+                        initial?.payload ?? (name === "chat.history" ? message.payload : undefined);
+                      if (!history) {
+                        return undefined;
+                      }
+                      const rows = Array.isArray(history.messages) ? history.messages : [];
+                      const messageFields: Record<string, number> = {};
+                      for (const row of rows) {
+                        if (!row || typeof row !== "object") {
+                          continue;
+                        }
+                        for (const [key, value] of Object.entries(row)) {
+                          messageFields[key] =
+                            (messageFields[key] ?? 0) +
+                            Buffer.byteLength(JSON.stringify(value) ?? "");
+                        }
+                      }
+                      return {
+                        kind: history.kind ?? "page",
+                        bytes: Buffer.byteLength(JSON.stringify(history)),
+                        fields: Object.fromEntries(
+                          Object.entries(history).map(([key, value]) => [
+                            key,
+                            {
+                              bytes: Buffer.byteLength(JSON.stringify(value) ?? ""),
+                              count: Array.isArray(value) ? value.length : undefined,
+                            },
+                          ]),
+                        ),
+                        messageFields,
+                        metadataFields:
+                          history.metadata && typeof history.metadata === "object"
+                            ? Object.fromEntries(
+                                Object.entries(history.metadata).map(([key, value]) => [
+                                  key,
+                                  Buffer.byteLength(JSON.stringify(value) ?? ""),
+                                ]),
+                              )
+                            : undefined,
+                      };
+                    })(),
+                  };
+                }
               } catch {
                 /* Payload contents never enter the report. */
               }
@@ -889,6 +1064,7 @@ async function runWorker() {
                 name,
                 requestId,
                 digest: createHash("sha256").update(text).digest("hex"),
+                shape,
               });
             });
           }
@@ -903,6 +1079,17 @@ async function runWorker() {
             // keeps the renderer for a navigation; a retained agent accumulates them.
             const performanceSession = await context.newCDPSession(page);
             await performanceSession.send("Performance.enable", { timeDomain: "threadTicks" });
+            const traceEvents: unknown[] = [];
+            const trace = values.timeline && (name === "session-switch" || name === "reconnect");
+            if (trace) {
+              performanceSession.on("Tracing.dataCollected", ({ value }) =>
+                traceEvents.push(...value),
+              );
+              await performanceSession.send("Tracing.start", {
+                categories: "devtools.timeline,v8,blink.user_timing",
+                transferMode: "ReportEvents",
+              });
+            }
             try {
               const gatewayCpuBefore = process.cpuUsage();
               const startedAtMs = performance.now();
@@ -972,6 +1159,17 @@ async function runWorker() {
                 );
               const settledCpu = (await performanceSession.send("Performance.getMetrics")).metrics;
               const settledElapsedMs = performance.now() - startedAtMs;
+              if (trace) {
+                const completed = new Promise<void>((resolve) => {
+                  performanceSession.once("Tracing.tracingComplete", () => resolve());
+                });
+                await performanceSession.send("Tracing.end");
+                await completed;
+                await writeFile(
+                  path.join(sampleOutput, `${name}-trace.json`),
+                  JSON.stringify({ traceEvents }),
+                );
+              }
               const observed = decoded.slice(decodedStart);
               const arrivals = new Map<WireFrame, (typeof observed)[number]>();
               for (const event of observed) {
@@ -1005,6 +1203,29 @@ async function runWorker() {
                       received && transcriptVisibleBrowserTimestampMs !== null
                         ? received.browserTimestampMs <= transcriptVisibleBrowserTimestampMs
                         : false,
+                    shape: received?.shape,
+                    packets: proxy.packets
+                      .filter(
+                        (packet) =>
+                          packet.direction === frame.direction &&
+                          packet.connection === frame.connection &&
+                          packet.streamEnd > frame.streamStart &&
+                          packet.streamStart < frame.streamEnd,
+                      )
+                      .map((packet) => ({
+                        direction: packet.direction,
+                        connection: packet.connection,
+                        request: packet.request,
+                        streamStart: packet.streamStart,
+                        streamEnd: packet.streamEnd,
+                        receivedAtMs: packet.receivedAtMs - startedAtMs,
+                        serialStartMs: packet.serialStartMs - startedAtMs,
+                        scheduledWriteMs: packet.scheduledWriteMs - startedAtMs,
+                        actualWriteMs:
+                          packet.actualWriteMs === undefined
+                            ? undefined
+                            : packet.actualWriteMs - startedAtMs,
+                      })),
                   });
                 });
               if (name === "cold-chat" || name === "session-switch") {
@@ -1095,6 +1316,41 @@ async function runWorker() {
                     }),
                   ),
                 websocket: frames,
+                transportPackets: proxy.packets
+                  .filter((packet) => packet.scheduledWriteMs >= startedAtMs)
+                  .map((packet) => ({
+                    direction: packet.direction,
+                    connection: packet.connection,
+                    request: packet.request,
+                    streamStart: packet.streamStart,
+                    streamEnd: packet.streamEnd,
+                    receivedAtMs: packet.receivedAtMs - startedAtMs,
+                    serialStartMs: packet.serialStartMs - startedAtMs,
+                    scheduledWriteMs: packet.scheduledWriteMs - startedAtMs,
+                    actualWriteMs:
+                      packet.actualWriteMs === undefined
+                        ? undefined
+                        : packet.actualWriteMs - startedAtMs,
+                  })),
+                gatewayTimeline: gatewayTimeline
+                  .filter((event) => event.atMs >= startedAtMs)
+                  .map((event) => Object.assign({}, event, { atMs: event.atMs - startedAtMs })),
+                jsonParses: values.timeline
+                  ? await page.evaluate((startMs) => {
+                      const parseSamples = Reflect.get(window, "__wireJsonParses") as Array<{
+                        startedAtMs: number;
+                        durationMs: number;
+                        bytes: number;
+                      }>;
+                      return parseSamples
+                        .filter((sample) => sample.startedAtMs >= startMs)
+                        .map((sample) => ({
+                          durationMs: sample.durationMs,
+                          bytes: sample.bytes,
+                          startedAtMs: sample.startedAtMs - startMs,
+                        }));
+                    }, readiness.startMs)
+                  : undefined,
                 summary: {
                   ...Object.fromEntries(
                     ["Script", "Stylesheet"].flatMap((type) => {
@@ -1343,6 +1599,8 @@ async function runWorker() {
                   format: "control-ui-real-wire-v1",
                   profile: values.profile,
                   networkProfile,
+                  proxyNagle: values["proxy-nagle"],
+                  timeline: values.timeline,
                   extendedFlows: values["extended-flows"],
                   revision,
                   dirty,
@@ -1401,6 +1659,8 @@ async function runWorker() {
       await proxy.close();
     }
   } finally {
+    rpcChannel.unsubscribe(observeGateway);
+    stageChannel.unsubscribe(observeGateway);
     await gateway.close({ reason: "Wire benchmark complete", exitAfterClose: true });
   }
 }
@@ -1531,6 +1791,12 @@ if (values.worker) {
     }
     if (values["extended-flows"]) {
       args.push("--extended-flows");
+    }
+    if (values.timeline) {
+      args.push("--timeline");
+    }
+    if (values["proxy-nagle"]) {
+      args.push("--proxy-nagle");
     }
     const child = spawn(process.execPath, args, {
       cwd: source,

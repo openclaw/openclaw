@@ -49,6 +49,7 @@ import {
   type GatewayBrowserConnectOptions,
 } from "./gateway-connect-plan.ts";
 import { resolveMaxInboundSilenceMs } from "./gateway-heartbeat-policy.ts";
+import { trackHistoryActivity } from "./gateway-history-activity.ts";
 import { requestTalkCatalog } from "./gateway-talk-catalog.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 export { GatewayRequestError, resolveGatewayErrorDetailCode };
@@ -693,13 +694,15 @@ export class GatewayBrowserClient {
         options?.onSent?.(requestId);
       },
     };
-    return method === "talk.catalog"
-      ? requestTalkCatalog<T>(
-          (retryOptions) => this.chatEvents.request<T>(this.client, method, params, retryOptions),
-          this.catalogRetryAbort.signal,
-          requestOptions,
-        )
-      : this.chatEvents.request<T>(this.client, method, params, requestOptions);
+    const request =
+      method === "talk.catalog"
+        ? requestTalkCatalog<T>(
+            (retryOptions) => this.chatEvents.request<T>(this.client, method, params, retryOptions),
+            this.catalogRetryAbort.signal,
+            requestOptions,
+          )
+        : this.chatEvents.request<T>(this.client, method, params, requestOptions);
+    return trackHistoryActivity(method, request);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {

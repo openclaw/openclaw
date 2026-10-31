@@ -1,0 +1,2 @@
+# Offline installation and deferred downloads yield to history across windows and resume after closure.
+69

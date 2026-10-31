@@ -35,6 +35,19 @@ function isControlUiChatClient(url) {
 // A resumed/BFCache document may have missed activation entirely. Build identity
 // belongs to the running worker, not its potentially old sw.js?v= registration URL.
 self.addEventListener("message", (event) => {
+  if (
+    event.data?.type === "openclaw-history-activity" &&
+    event.source?.type === "window" &&
+    controlUiPathname(new URL(event.source.url)) !== null
+  ) {
+    if (event.data.active === true) {
+      foregroundClients.add(event.source.id);
+      offlineController?.abort();
+      deferredController?.abort();
+    } else if (foregroundClients.delete(event.source.id)) {
+      foregroundSettledAt = Date.now();
+    }
+  }
   if (event.data?.type === "sw-version-probe") {
     event.ports[0]?.postMessage({ type: "sw-updated", version: CACHE_VERSION });
     if (OFFLINE_BOOT) {
@@ -75,6 +88,7 @@ function cacheableResponse(response) {
 }
 
 let offlinePreparation;
+let offlineController;
 function prepareOfflineShell() {
   if (!OFFLINE_BOOT || !self.navigator.onLine) {
     return Promise.resolve();
@@ -84,14 +98,27 @@ function prepareOfflineShell() {
   // Only activation retires caches: an older worker can still answer probes
   // while its replacement is installing.
   if (!offlinePreparation) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
-    offlinePreparation = precacheOfflineShell(controller.signal)
+    offlinePreparation = (async () => {
+      const deadline = Date.now() + 60_000;
+      while (await waitForForeground(deadline)) {
+        const controller = new AbortController();
+        offlineController = controller;
+        const timeout = setTimeout(() => controller.abort(), deadline - Date.now());
+        try {
+          await precacheOfflineShell(controller.signal);
+        } finally {
+          clearTimeout(timeout);
+          offlineController = undefined;
+        }
+        if (!controller.signal.aborted) {
+          return;
+        }
+      }
+    })()
       .catch(() => {
         // Cache storage is optional; updates and notifications must still work.
       })
       .finally(() => {
-        clearTimeout(timeout);
         offlinePreparation = undefined;
       });
   }
@@ -211,6 +238,31 @@ let deferredPreparation;
 let deferredController;
 let foregroundRequests = 0;
 let foregroundSettledAt = 0;
+const foregroundClients = new Set();
+
+async function waitForForeground(deadline, initialQuietUntil = 0) {
+  while (Date.now() < deadline) {
+    if (foregroundClients.size) {
+      // A closed document cannot send its final idle hint, including during installation.
+      const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const liveIds = new Set(clients.map((client) => client.id));
+      for (const id of foregroundClients) {
+        if (!liveIds.has(id)) {
+          foregroundClients.delete(id);
+          foregroundSettledAt = Date.now();
+        }
+      }
+    }
+    const quietMs = Math.max(initialQuietUntil, foregroundSettledAt + 1_000) - Date.now();
+    if (!foregroundClients.size && !foregroundRequests && quietMs <= 0) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(deadline - Date.now(), Math.max(quietMs, 1_000)));
+    });
+  }
+  return false;
+}
 
 function prepareDeferredAssets() {
   if (!deferredPreparation) {
@@ -229,12 +281,8 @@ function prepareDeferredAssets() {
         }
         // Wait for a quiet second after page traffic. Foreground requests abort
         // the batch; verified writes survive and the same batch resumes.
-        const quietMs = Math.max(initialQuietUntil, foregroundSettledAt + 1_000) - Date.now();
-        if (foregroundRequests || quietMs > 0) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, Math.max(quietMs, 1_000));
-          });
-          continue;
+        if (!(await waitForForeground(deadline, initialQuietUntil))) {
+          return;
         }
         const controller = new AbortController();
         deferredController = controller;
@@ -271,6 +319,7 @@ function prepareDeferredAssets() {
 
 function respondToControlUiRequest(event, respond) {
   foregroundRequests++;
+  offlineController?.abort();
   deferredController?.abort();
   event.respondWith(
     respond().finally(() => {

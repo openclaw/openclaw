@@ -506,15 +506,19 @@ export function createSessionCapability(
       // Register events before delaying bulk metadata; its later read reconciles
       // anything observed while the selected transcript was loading.
       void sessionEventSubscription.ensure(scope);
+      // A retained live roster and history can recover together; first boot still favors history.
       void roster
-        .bootstrap({
-          ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
-          agentId: agentSelection.state.selectedId ?? undefined,
-          includeDerivedTitles: true,
-          includeLastMessage: true,
-          backgroundHydrate: true,
-          force: true,
-        })
+        .bootstrap(
+          {
+            ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
+            agentId: agentSelection.state.selectedId ?? undefined,
+            includeDerivedTitles: true,
+            includeLastMessage: true,
+            backgroundHydrate: true,
+            force: true,
+          },
+          Boolean(presentation.result && !presentation.resultCached && !identityChanged),
+        )
         .then(() => {
           if (connection.isCurrent(scope)) {
             // Child jobs own their own slots; never wait for them inside a scheduler slot.

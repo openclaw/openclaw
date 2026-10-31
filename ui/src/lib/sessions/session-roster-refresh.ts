@@ -593,8 +593,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     refresh,
-    bootstrap: (options: SessionRefreshOptions) =>
-      refreshInternal(options, true, undefined, "automatic"),
+    bootstrap: (options: SessionRefreshOptions, foreground = false) =>
+      refreshInternal(options, true, undefined, "automatic", foreground),
     refreshAutomatic: (options: SessionRefreshOptions) =>
       refreshInternal(options, false, undefined, "automatic"),
     refreshReplacement: () =>

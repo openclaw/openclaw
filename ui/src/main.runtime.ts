@@ -1,3 +1,4 @@
+import { reportPendingHistoryActivity } from "./api/gateway-history-activity.ts";
 import { mountOpenClawApp } from "./app/app-root.tsx";
 import type { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { bootstrapApplication } from "./app/bootstrap.ts";
@@ -90,7 +91,10 @@ export async function startControlUi(
     listen(navigator.serviceWorker, "controllerchange", () => void refresh());
     void navigator.serviceWorker
       .register(swUrl, { updateViaCache: "none" })
-      .then(refresh)
+      .then((registration) => {
+        reportPendingHistoryActivity(registration);
+        return refresh();
+      })
       .catch((error: unknown) => {
         console.warn("OpenClaw service worker registration failed.", error);
       });

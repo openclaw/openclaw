@@ -186,6 +186,39 @@ describe("session roster refresh", () => {
     },
   );
 
+  it("recovers an established roster alongside history while preserving cold boot priority", async () => {
+    vi.useFakeTimers();
+    const refreshed = createDeferred<SessionsListResult>();
+    let reads = 0;
+    const { client, coordinator, publish, hold, release, sessions, resolveOnCleanup } = coordinated(
+      listRequest(() => (++reads === 1 ? resultFor("main", 1) : refreshed.promise)),
+    );
+    resolveOnCleanup([refreshed, resultFor("main", 2)]);
+    hold("agent:main:chat");
+    publish(true);
+    await advance();
+    expect(reads).toBe(0);
+    release("agent:main:chat");
+    await advance();
+    expect(reads).toBe(1);
+    expect(sessions.canonicalListReady).toBe(true);
+
+    publish(false);
+    coordinator.synchronize({ client, connected: false });
+    coordinator.synchronize({ client, connected: true });
+    publish(true);
+    await advance();
+    expect(coordinator.foregroundReady).toBe(false);
+    expect(reads).toBe(2);
+    expect(sessions.canonicalListReady).toBe(false);
+    expect(sessions.presentation.result?.ts).toBe(1);
+    refreshed.resolve(resultFor("main", 2));
+    await advance();
+    expect(sessions.canonicalListReady).toBe(true);
+    expect(sessions.presentation.result?.ts).toBe(2);
+    expect(coordinator.foregroundReady).toBe(false);
+  });
+
   it.each([
     { owner: "primary", timing: "the pending RPC" },
     { owner: "managed", timing: "the pending RPC" },

@@ -117,6 +117,21 @@ device and selected synthetic auth mode. The remote and mobile profiles add trus
 attribution so the Gateway negotiates its normal remote compression policy;
 the local profile uses direct-local transport.
 
+The proxy disables Nagle buffering on both loopback sockets so delayed ACKs do
+not add an unconfigured latency term. `--proxy-nagle` restores that buffering for
+diagnosing older captures; record it when comparing results. Every frame includes
+the covering packet intervals: ingress, serialization start, scheduled delivery,
+and actual `socket.write()` time. A write means bytes were enqueued to the local
+socket, not acknowledged by the peer. Gateway RPC and subscription-stage channels
+record admission, queue and handler durations. They do not carry request IDs;
+correlate by method and reconstructed start time, and report overlapping calls as
+ambiguous rather than assigning them arbitrarily. History summaries contain field
+sizes, array counts and synthetic request shape, never message text.
+
+Use `--timeline` for a separate diagnostic run. It writes bounded Chrome traces
+for session switch and reconnect and records initial-history JSON parse intervals.
+Keep those traced runs out of untraced latency comparisons.
+
 Each sample includes `websocketUpgrades` with upgrade request/response timestamps
 and status. HTTP `browserStartedAtMs`, `browserResponseAtMs`, and
 `browserFinishedAtMs`, upgrade browser timestamps, and frame `decodedAtMs` share
