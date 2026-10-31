@@ -35,6 +35,7 @@ import {
   publishManagedList,
 } from "./session-managed-list-refresh.ts";
 import { createSessionPrimaryWindows } from "./session-primary-windows.ts";
+import type { SessionRosterRefreshHost } from "./session-refresh-types.ts";
 import { requestSessionList, sessionListQueryKey } from "./session-requests.ts";
 import { createSessionRosterListReader } from "./session-roster-list-reader.ts";
 import { createSessionMutationRefresh } from "./session-roster-mutation-refresh.ts";
@@ -45,7 +46,6 @@ import type {
   SessionListScope,
   SessionListSnapshot,
   SessionRefreshOptions,
-  SessionRosterRefreshHost,
 } from "./session-types.ts";
 
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {

@@ -17,20 +17,7 @@ import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts"
 import type { SessionGroupSettings } from "./custom-groups.ts";
 import type { GitHubPublicationPresentationBinding } from "./github-publication-owner.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
-import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
 import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
-
-export type SessionRosterRefreshHost = SessionListRefreshHost & {
-  publish: (state: SessionState, errorSource?: "session-observer" | "operation" | "list") => void;
-  onWarmListsRetired: (agentIds: ReadonlySet<string>) => void;
-  observerError: () => string | null;
-  onCanonicalList: (
-    result: SessionsListResult | null,
-    requestRevision: number,
-    agentId?: string,
-    observed?: SessionsListResult | null,
-  ) => void;
-};
 
 export type SessionState = {
   result: SessionsListResult | null;
