@@ -1,2 +1,2 @@
-# Shared start/resume framing, empty withdrawal, and scoped policy handoff regression.
-27
+# Shared start/resume framing, empty withdrawal, scoped handoff, and snapshot coverage.
+33
