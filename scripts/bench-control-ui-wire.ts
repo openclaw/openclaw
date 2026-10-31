@@ -36,6 +36,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.ts";
 import { getControlUiContextHandle } from "../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../ui/src/test-helpers/playwright-chromium.ts";
+import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 import { createControlUiWireLink } from "./lib/control-ui-wire-link.ts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
@@ -843,10 +844,13 @@ async function runWorker() {
       if (approval?.status !== "approved") {
         throw new Error("Synthetic browser pairing was not approved");
       }
-      const browser = await chromium.launch({
-        executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-        headless: true,
-      });
+      const browser =
+        values["reconnect-trigger"] === "visible"
+          ? undefined
+          : await chromium.launch({
+              executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+              headless: true,
+            });
       const commands = values["controlled-worker"]
         ? createInterface({ input: process.stdin, crlfDelay: Infinity })
         : undefined;
@@ -879,16 +883,19 @@ async function runWorker() {
           gatewayTimeline.length = 0;
           const sampleOutput = path.join(output, String(pair + 1).padStart(2, "0"));
           await mkdir(sampleOutput, { recursive: true });
-          const context = await browser.newContext({
-            viewport: { width: 1440, height: 1000 },
-            ...(remote
-              ? {
-                  extraHTTPHeaders: {
-                    "x-forwarded-for": "198.51.100.10",
-                  },
-                }
-              : {}),
-          });
+          // Native visibility requires a default context without Playwright's focus override.
+          const observation = browser
+            ? undefined
+            : await launchTalkObservationBrowser(sampleOutput, false);
+          const context = browser
+            ? await browser.newContext({
+                viewport: { width: 1440, height: 1000 },
+                ...(remote ? { extraHTTPHeaders: { "x-forwarded-for": "198.51.100.10" } } : {}),
+              })
+            : observation!.context;
+          if (observation && remote) {
+            await context.setExtraHTTPHeaders({ "x-forwarded-for": "198.51.100.10" });
+          }
           await context.addInitScript(
             ({ deviceIdentity, tokenKey, token }) => {
               localStorage.setItem("openclaw-device-identity-v1", JSON.stringify(deviceIdentity));
@@ -903,6 +910,9 @@ async function runWorker() {
             },
           );
           const page = await context.newPage();
+          if (observation) {
+            await page.setViewportSize({ width: 1440, height: 1000 });
+          }
           await page.addInitScript({
             content: `const __name = (fn) => fn; (${installReadiness.toString()})();`,
           });
@@ -1920,7 +1930,11 @@ async function runWorker() {
             );
             throw error;
           } finally {
-            await context.close();
+            if (observation) {
+              await observation.close();
+            } else {
+              await context.close();
+            }
           }
           if (commandIterator) {
             console.log(
@@ -1934,7 +1948,7 @@ async function runWorker() {
         }
       } finally {
         commands?.close();
-        await browser.close();
+        await browser?.close();
       }
     } finally {
       await proxy.close();
