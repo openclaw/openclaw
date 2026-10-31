@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
+import { buildCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
 
 function executable(
   rawExecutable: string,
@@ -60,6 +61,27 @@ describe("exec allowlist matching", () => {
 
     expect(matchAllowlist(entries, baseResolution, ["rg", "--json"], "win32")?.pattern).toBe("rg");
     expect(matchAllowlist(entries, baseResolution, ["rg", "--files"], "win32")).toBeNull();
+  });
+
+  it.each(["rg", "/opt/homebrew/bin/rg"])("restricts wildcard arguments for %s", (raw) => {
+    const resolution = executable(raw, "/opt/homebrew/bin/rg");
+    const entry = { pattern: "*", argPattern: "^--version$" };
+    const argv = [raw, "--version"];
+    expect(matchAllowlist([entry], resolution, argv)).toBe(entry);
+    expect(matchAllowlist([entry], resolution, [raw, "--help"])).toBeNull();
+    expect(matchAllowlist([entry], resolution)).toBeNull();
+    expect(matchAllowlist([{ ...entry, argPattern: "[invalid" }], resolution, argv)).toBeNull();
+    for (const argPattern of [entry.argPattern, buildCwdBoundHashedArgPattern(argv, "/tmp")]) {
+      expect(
+        matchAllowlist(
+          [{ pattern: "*", argPattern, source: "allow-always" }],
+          resolution,
+          argv,
+          undefined,
+          "/tmp",
+        ),
+      ).toBeNull();
+    }
   });
 
   describe("argPattern path matches", () => {

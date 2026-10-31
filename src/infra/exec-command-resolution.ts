@@ -354,14 +354,18 @@ export function matchAllowlist(
       continue;
     }
     const pathSelector = hasPathSelector(pattern);
-    if (!pathSelector && (pattern === "*" || !allowBasename)) {
+    const wildcard = pattern === "*";
+    // Generated argument hashes do not bind the executable selected by a wildcard.
+    if (wildcard ? entry.source === "allow-always" : !pathSelector && !allowBasename) {
       continue;
     }
     const { matches, argRegex } = prepareAllowlistEntry(entry, pattern);
-    const patternMatches = pathSelector
-      ? matches(trustPath)
-      : (resolution.executableName && matches(resolution.executableName)) ||
-        matches((resolvedBasename ??= path.basename(resolution.resolvedPath)));
+    const patternMatches =
+      wildcard ||
+      (pathSelector
+        ? matches(trustPath)
+        : (resolution.executableName && matches(resolution.executableName)) ||
+          matches((resolvedBasename ??= path.basename(resolution.resolvedPath))));
     if (!patternMatches) {
       continue;
     }

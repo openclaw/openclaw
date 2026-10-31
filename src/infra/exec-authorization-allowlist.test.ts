@@ -25,6 +25,19 @@ function evaluate(
 
 describe("authorization-backed exec allowlist", () => {
   it.each([
+    ["--version", true],
+    ["--help", false],
+  ] as const)("applies wildcard argument restrictions to %s", async (argument, allowed) => {
+    const result = await evaluate(`"${process.execPath}" ${argument}`, {
+      allowlist: [{ pattern: "*", argPattern: "^--version$" }],
+    });
+    expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: allowed });
+    expect(requiresExecApproval({ ask: "on-miss", security: "allowlist", ...result })).toBe(
+      !allowed,
+    );
+  });
+
+  it.each([
     { command: `echo "$HOME"; python3 -c 'print(1)'`, analysisOk: false, first: ["echo", "$HOME"] },
     { command: `sh -c 'echo ok; python3 -c "print(1)"'`, analysisOk: true, first: ["echo", "ok"] },
   ])("keeps inline-eval segments visible for $command", async ({ command, analysisOk, first }) => {
