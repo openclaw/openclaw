@@ -6,7 +6,10 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import * as sessionGenerations from "../config/sessions/session-delivery-generation.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -15,6 +18,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -378,6 +382,66 @@ it("batches creating-conversation reads while preserving each generation and ref
       reads.mockRestore();
     }
   }));
+
+it.each(["file", "memory"] as const)(
+  "releases each %s source generation once per preview",
+  (storage) =>
+    withOpenClawTestState({ layout: "home" }, async (state) => {
+      const memory = storage === "memory";
+      const storePath = memory
+        ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" })
+        : path.join(state.sessionsDir(), "sessions.json");
+      const sessionKey = `agent:main:dashboard:${memory ? "incognito-" : ""}preview-release`;
+      const sessionId = "preview-release";
+      await upsertSessionEntryCore(
+        { agentId: "main", storePath, sessionKey },
+        { sessionId, updatedAt: 1, ...(memory ? { incognito: true } : {}) },
+      );
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        session: { store: storePath },
+      };
+      const jobs = ["first", "second"].map((id) =>
+        Object.assign(
+          makeCronJob({
+            id,
+            agentId: "main",
+            sessionTarget: "isolated",
+            delivery: { mode: "announce" },
+          }),
+          { sourceConversation: { sessionKey, sessionId } },
+        ),
+      );
+      const releases: Array<() => void> = [];
+      const prepare = sessionGenerations.prepareSessionGenerationFactsBatch;
+      vi.spyOn(sessionGenerations, "prepareSessionGenerationFactsBatch").mockImplementation(
+        async (inputs) => {
+          const generations = await prepare(inputs);
+          for (const generation of generations) {
+            if (generation.ok) {
+              releases.push(vi.spyOn(generation.value, "release"));
+            }
+          }
+          return generations;
+        },
+      );
+      try {
+        expect(await resolveCronDeliveryPreviews({ cfg, jobs })).toEqual({
+          first: conversationPreview("creating conversation"),
+          second: conversationPreview("creating conversation"),
+        });
+        expect(releases).toHaveLength(jobs.length);
+        for (const release of releases) {
+          expect(release).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        vi.restoreAllMocks();
+        if (memory) {
+          memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+        }
+      }
+    }),
+);
 
 it("does not rebind implicit delivery when the public session key changes", () =>
   withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {

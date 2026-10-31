@@ -193,7 +193,9 @@ export async function resolveDeliveryTarget(
       try {
         generation.assertCurrent();
       } finally {
-        generation.release();
+        if (!preparedGeneration) {
+          generation.release();
+        }
       }
     } catch (error) {
       return {
