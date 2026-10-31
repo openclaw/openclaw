@@ -1,11 +1,11 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowCondition } from "./ci-workflow.test-support.js";
+import { evaluateWorkflowCondition, runWorkflowCommand } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -100,7 +100,7 @@ function git(directory: string, ...args: string[]) {
 }
 
 function runShell(script: string, env: NodeJS.ProcessEnv, cwd?: string) {
-  return spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+  return runWorkflowCommand("bash", ["--noprofile", "--norc", "-c", script], {
     encoding: "utf8",
     cwd,
     env: { ...process.env, ...env },
@@ -275,7 +275,8 @@ docker/login-action@
 
 it("keeps one full install path and the dependency failure gates", () => {
   expect(workflow.jobs["install-smoke-fast"]).toBeUndefined();
-  expect(Object.keys(workflow.jobs)).toHaveLength(14);
+  expect(workflow.jobs["docker-e2e-fast"]).toBeUndefined();
+  expect(Object.keys(workflow.jobs)).toHaveLength(13);
   for (const retired of [
     "docs_only",
     "run_install_smoke",

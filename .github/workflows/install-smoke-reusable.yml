@@ -1493,29 +1493,3 @@ jobs:
             ${{ runner.temp }}/bun-only-runtime-smoke/*.log
           retention-days: 14
           if-no-files-found: ignore
-
-  docker-e2e-fast:
-    needs: [preflight]
-    runs-on: *linux_runner_ubuntu
-    timeout-minutes: 12
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-    steps:
-      - name: Checkout CLI
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          persist-credentials: false
-
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
-        with:
-          cache-key: scripts/e2e/Dockerfile
-
-      - name: Setup Node environment for package smoke
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-          install-deps: "true"
