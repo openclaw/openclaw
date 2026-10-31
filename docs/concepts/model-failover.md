@@ -611,6 +611,8 @@ Outside group and channel conversations, OpenClaw sends a status notice in the s
 ↪️ Model Fallback: <fallback> (selected <primary>; <reason>)
 ```
 
+When more than one candidate failed before the fallback answered, `<reason>` names each failed model with its reason (`<provider/model> <reason>; <provider/model> <reason>`), up to three, followed by `(+N more attempts)` for the rest. A long model reference is shortened in the middle so its reason stays visible. A single failed candidate shows only its reason.
+
 When a later check succeeds and the session returns to the selected primary, OpenClaw sends:
 
 ```text
