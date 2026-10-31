@@ -44,6 +44,10 @@ follow their separate session scopes.
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
+Select **Dismiss** to hide the banner. This browser remembers dismissal for that
+Gateway until the notice text or its **Learn more** URL changes. Dismissal does not
+allow configuration changes. If browser storage is unavailable, the banner stays
+hidden until you reload the page.
 
 By default, the banner tells operators to update the configuration file or
 deployment settings for this Gateway. To direct them to your own workflow, set

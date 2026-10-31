@@ -123,6 +123,11 @@
   overflow-wrap: anywhere;
 }
 
+.shell-config-read-only > button {
+  /* Keep the icon button from increasing the notice's text-led height. */
+  margin-block: -9px;
+}
+
 .shell--nav-collapsed:not(.shell--mobile-nav) .shell-config-read-only {
   padding-inline-start: var(--shell-chrome-safe-area-left);
 }

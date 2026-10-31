@@ -192,6 +192,70 @@ it("shows the read-only banner only for the serving Gateway while its configurat
   expect(getBanner()).toBeNull();
 });
 
+it("remembers a dismissed read-only notice across remounts, but shows changed guidance", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch");
+  const load = async (shell: Awaited<ReturnType<typeof mountShell>>, notice?: string) => {
+    fetch.mockResolvedValueOnce(
+      Response.json({ configReadOnly: true, configReadOnlyNotice: notice }),
+    );
+    await shell.runtime.context.config.refresh();
+    shell.refresh();
+  };
+  const guidance =
+    "To make changes, update the configuration file or deployment settings for this Gateway.";
+  const first = await mountShell();
+  await load(first, guidance);
+  const dismiss = first.query<HTMLButtonElement>(
+    '.shell-config-read-only button[aria-label="Dismiss"]',
+  );
+  expect(dismiss).not.toBeNull();
+  dismiss!.click();
+  first.refresh();
+  expect(first.query(".shell-config-read-only")).toBeNull();
+  expect(document.activeElement).toBe(first.query("#control-ui-main"));
+  first.route("settings");
+  await load(first, guidance);
+  expect(first.query(".shell-config-read-only")).toBeNull();
+
+  // A fresh shell reads the browser receipt, as it does after a page reload.
+  const reloaded = await mountShell();
+  // The same rendered guidance also matches when it comes from the default copy.
+  await load(reloaded);
+  expect(reloaded.query(".shell-config-read-only")).toBeNull();
+  await load(reloaded, "Use the administration console.");
+  expect(reloaded.query(".shell-config-read-only")?.textContent).toContain(
+    "Use the administration console.",
+  );
+  reloaded
+    .query<HTMLButtonElement>('.shell-config-read-only button[aria-label="Dismiss"]')!
+    .click();
+  reloaded.refresh();
+  await load(reloaded, "Use the administration console. https://docs.example.org/new-workflow");
+  expect(reloaded.query(".shell-config-read-only a")?.getAttribute("href")).toBe(
+    "https://docs.example.org/new-workflow",
+  );
+});
+
+it("can dismiss the read-only notice when browser storage is blocked", async () => {
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("blocked");
+  });
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("blocked");
+  });
+  const shell = await mountShell();
+  vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json({ configReadOnly: true }));
+  await shell.runtime.context.config.refresh();
+  shell.refresh();
+  const dismiss = shell.query<HTMLButtonElement>(
+    '.shell-config-read-only button[aria-label="Dismiss"]',
+  );
+  expect(dismiss).not.toBeNull();
+  dismiss!.click();
+  shell.refresh();
+  expect(shell.query(".shell-config-read-only")).toBeNull();
+});
+
 it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
   const { owner, runtime } = await mountShell();
   const initial = runtime.context.runtimeConfig.state;
