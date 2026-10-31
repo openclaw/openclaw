@@ -1,3 +1,4 @@
+import { hasErrnoCode } from "../infra/errno.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -50,7 +51,7 @@ export async function recoverForegroundGatewayForService(
     try {
       process.kill(owner.pid, "SIGTERM");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+      if (!hasErrnoCode(error, "ESRCH")) {
         throw error;
       }
     }
