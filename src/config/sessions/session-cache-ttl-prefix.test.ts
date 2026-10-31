@@ -57,9 +57,14 @@ function prefixAt(
   );
 }
 
-it.each([false, true])(
-  "selects cache-TTL dependencies without scanning messages (analyzed=%s)",
-  async (analyzed) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "selects cache-TTL dependencies without repeated identity scans (analyzed=%s, legacy=%s)",
+  async (analyzed, legacy) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { database, scope } = createSessionCompoundWorkerFixture();
       const marker = checkpoint("checkpoint", null, {
@@ -81,6 +86,12 @@ it.each([false, true])(
             [{ type: "session", id: scope.sessionId, version: 3 }, marker, ...messages],
             { scheduleProjectionReconcile: false },
           );
+          if (legacy) {
+            // Imported prefixes can have a canonical header without an auxiliary identity.
+            database.db
+              .prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND seq = 0")
+              .run(scope.sessionId);
+          }
           if (analyzed) {
             // The same type-index seek must cover transcripts admitted without a backfill.
             database.db
@@ -136,7 +147,16 @@ it.each([false, true])(
         const drivingSearch = plan.find(
           ({ detail }) => typeof detail === "string" && detail.startsWith("SEARCH "),
         )?.detail;
-        expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
+        if (legacy) {
+          expect(
+            plan.some(
+              ({ detail }) =>
+                typeof detail === "string" && detail.includes("(session_id=? AND seq=?) LEFT-JOIN"),
+            ),
+          ).toBe(true);
+        } else {
+          expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
+        }
       } finally {
         spy.mockRestore();
       }

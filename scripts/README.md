@@ -341,6 +341,13 @@ matching their bundle's Workboard source. Run Chromium at `--cpu-throttle 1` and
 with `--steps page-<route>-visit,page-<route>-action,page-<route>-leave`.
 Use `--pages --page-phases visit` to validate every route's loaded state before
 the `--page-phases action,leave` sweep; the default includes all three phases.
+Measure first-use costs separately with
+`--steps page-agent-selector-first-open,page-search-advanced-open,page-terminal-composer-input`.
+These explicit steps are excluded from normal `--pages` runs. Keep first-open
+results separate from route visits and warm interactions; the Terminal step
+creates its session before timing ten typed characters and submission.
+The Memory Import action now reviews a ten-file collection before deselecting
+it, so its results are not directly comparable with older deselect-only timings.
 Virtualized inventories use their logical row count for readiness, including
 Cron's first 50 loaded jobs, rather than requiring every row to be mounted.
 The page table includes longest observed main-thread task, standard CLS, all
@@ -411,7 +418,9 @@ omits DOM snapshots so snapshot traversal does not dominate attribution.
 
 Streaming coverage is selectable with `--steps streaming-645-deltas`,
 `streaming-645-deltas-slow`, `streaming-large-transcript`, `streaming-two-panes`,
-and `streaming-tool-code`. The slow case delivers the same 645 snapshots at
+and `streaming-tool-code`. `streaming-two-panes` is desktop-only: narrow layouts
+present only the active pane, so mobile observations record a viewport skip.
+The slow case delivers the same 645 snapshots at
 15 Hz instead of 30 Hz; this throttles delivery, not CPU (WebKit has no matching
 Chromium CPU-throttling API). Every pane must retain native typing, render the
 complete reply, and follow its growing tail; the tool/code case keeps its tool
@@ -498,6 +507,12 @@ profiling and report median, p95, and min–max; every cell over 20% worse is ma
 for review. These are report-only measurements, not timing gates. Wall time is
 automation-to-assertion time, not INP. Keep failed attempts alongside successful
 captures and compare only runs with the same fixture, viewport, and collection mode.
+
+`bench-control-ui-reconnect.ts` measures recovery from synthetic transport loss,
+sleep, restart, and update. Its `manifest.json` records each input bundle's directory,
+build metadata, and `indexSha256`: the SHA-256 of the original `index.html` bytes,
+before any synthetic update rewrite. Match these hashes to the intended saved
+bundles when comparing results.
 
 Heavy-content steps use `heavy-<fixture>-<action>` IDs. Fixtures are `code`
 (5,000 TypeScript lines), `auto-code` (5,000 language-free lines), `diff`

@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as backoff from "../infra/backoff.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
@@ -15,6 +16,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { acquireOpenClawStateLease } from "./openclaw-state-lease-acquisition.js";
 import { releaseOpenClawStateLease } from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
@@ -36,6 +38,42 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["holder", "sqlite"] as const)(
+  "reports one wait across changing holders and SQLite contention (%s first)",
+  async (first) => {
+    vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue(undefined);
+    warn.mockClear();
+    const acquired = vi.fn();
+    for (const label of ["first waiter", "second waiter"]) {
+      let attempt = 0;
+      await acquireOpenClawStateLease({
+        label,
+        waitMs: 5_000,
+        assertCurrent: () => {},
+        acquired,
+        acquire: async () => {
+          attempt++;
+          if (attempt === 5) {
+            return { kind: "acquired", expiresAt: 60_000 };
+          }
+          if (attempt === (first === "sqlite" ? 1 : 3)) {
+            throw Object.assign(new Error("database is locked"), { errcode: 5 });
+          }
+          return {
+            kind: "held",
+            holder: { owner: `owner-${attempt}`, epoch: attempt, expiresAt: 60_000 },
+          };
+        },
+      });
+    }
+    expect(acquired).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining("Waiting for first waiter"),
+      expect.stringContaining("Waiting for second waiter"),
+    ]);
+  },
+);
 
 function leaseFixture(beforeCommit = () => {}) {
   const env = { OPENCLAW_STATE_DIR: dirs.make("lease-diagnostics-") };

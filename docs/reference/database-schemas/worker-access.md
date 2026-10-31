@@ -3366,7 +3366,9 @@ discovery. These changes preserve current-row predicates and final effect checks
 
 Initial manager hydration, persisted-user replay, and bootstrap message presence
 share one fresh history cohort. A context window starting at active position zero
-has no preceding cache-TTL prefix and skips that query. A message in the bounded payload proves physical
+has no preceding cache-TTL prefix and skips that query. Imported prefixes use the
+existing session/sequence identity index for each cache-TTL candidate, avoiding
+a repeated whole-session identity scan. A message in the bounded payload proves physical
 message presence in that snapshot; a window without messages still uses the
 physical-history probe because resets can hide retained messages. After hooks or compaction, replay acquires its
 next cohort at synchronous prompt admission. Bounded model context retains its separate
@@ -6367,7 +6369,10 @@ Request aliases still follow current configuration; preparing history never
 rekeys an existing row or redirects its stored lineage.
 
 Spawn preparation discovers durable session stores and reads selected listing
-rows through the existing read workers. Candidate selection retains physical
+rows through the existing read workers. Worker and synchronous listings share
+the selected-row query: only requested entries load saved prompt snapshots,
+while pending sibling metadata still undergoes canonical-key validation.
+Candidate selection retains physical
 reader custody and preserves stored-row sibling validation, aliases, and deleted
 main owners. Requester generations are captured before child admission, and live
 caller authority is rechecked after awaited preparation. Contributor inheritance

@@ -2,6 +2,7 @@ import fs, { existsSync, renameSync } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
@@ -389,7 +390,7 @@ describe("Gateway owner lease", () => {
         withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
       ).rejects.toThrow("openclaw gateway recover-lock");
       expect(run).not.toHaveBeenCalled();
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       if (condition === "quarantined") {
         expect(() => readGatewayOwnerLease({ env })).toThrow("synthetic index damage");
       } else if (condition === "current") {
@@ -457,7 +458,7 @@ describe("Gateway owner lease", () => {
         ambiguous ? "ambiguous during maintenance" : "openclaw gateway recover-lock",
       );
       expect(run).not.toHaveBeenCalled();
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       expect(readQuarantine()).toContain(reason);
     },
   );
@@ -489,7 +490,7 @@ describe("Gateway owner lease", () => {
         await expect(inspection).rejects.toThrow("openclaw gateway recover-lock");
         expect(run).not.toHaveBeenCalled();
       }
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       expect(readQuarantine()).toContain(reason);
       expect(() => readGatewayOwnerLease({ env, current: true })).toThrow(reason);
     },

@@ -165,6 +165,11 @@ error; cancellation still stops it immediately. A single large file or a silent
 object lookup can still reach the idle timeout. Registration and other Git
 operations retain their existing execution deadlines.
 
+The `managed worktree preparation` log reports `errorClass` and `errorPhase`
+when preparation throws, including the innermost failed timed phase. Failures
+outside a timed phase use `unattributed`. The receipt omits error messages and
+command output.
+
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
 If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
@@ -178,6 +183,12 @@ Live owner leases protect active runs. If creation would require evicting an act
 Eviction preserves source repositories and Git storage needed by other managed checkouts, including objects borrowed through `git clone --shared`. Creation and snapshot restoration also hold source custody, so freeing their slot cannot purge the object donor they need.
 
 Lowering the setting applies the eviction policy to existing checkouts. Disk-space checks still apply independently: raising the count does not bypass the measured allocation and snapshot reserves. See [`worktreeMaxCount`](/gateway/config-runtime#worktreemaxcount).
+
+Creation hydrates only the selected commit's missing contents. It does not scan
+every promisor pack to classify missing objects; that proof belongs to snapshot
+removal, where lost locally authored data must preserve the checkout. Successful
+default-base hydration is already shared by commit while the Git worker remains
+active. Hydration failures are not cached.
 
 ## Filesystem acceleration
 

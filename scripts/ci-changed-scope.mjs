@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
@@ -517,9 +517,6 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
   if (sourcePaths.length === 0) {
     return;
   }
-  if (isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths)) {
-    return;
-  }
   throw new ControlUiGeneratedArtifactsMixedError(
     [
       "Control UI generated locale artifacts must be isolated from source changes.",
@@ -528,65 +525,6 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
   );
-}
-
-/**
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @returns {boolean}
- */
-function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
-  const requiredOwners = [
-    ".gitattributes",
-    "scripts/ci-changed-scope.mjs",
-    "scripts/control-ui-i18n.ts",
-    "scripts/control-ui-i18n-verify.ts",
-    "scripts/lib/control-ui-i18n-catalog.ts",
-    "scripts/lib/control-ui-i18n-catalog-values.ts",
-    "scripts/lib/control-ui-i18n-sync-plan.ts",
-    "ui/AGENTS.md",
-    "ui/config/control-ui-locales.ts",
-    "ui/vite.config.ts",
-  ];
-  if (!requiredOwners.every((owner) => changedPaths.includes(owner))) {
-    return false;
-  }
-
-  const assetsDir = new URL("../ui/src/i18n/.i18n/", import.meta.url);
-  const locales = readdirSync(assetsDir)
-    .filter((fileName) => fileName.endsWith(".tm.jsonl"))
-    .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
-  const requiredGeneratedPaths = [
-    "ui/src/i18n/.i18n/catalog-fallbacks.json",
-    ...locales.flatMap((locale) => [
-      `ui/src/i18n/.i18n/${locale}.tm.jsonl`,
-      `ui/src/i18n/.i18n/${locale}.meta.json`,
-    ]),
-  ];
-  if (
-    generatedPaths.length !== requiredGeneratedPaths.length ||
-    !requiredGeneratedPaths.every((filePath) => generatedPaths.includes(filePath))
-  ) {
-    return false;
-  }
-
-  return locales.every((locale) => {
-    const adapterPath = `ui/src/i18n/locales/${locale}.ts`;
-    if (!changedPaths.includes(adapterPath)) {
-      return false;
-    }
-    let source;
-    try {
-      source = readFileSync(new URL(`../${adapterPath}`, import.meta.url), "utf8").trim();
-    } catch {
-      return false;
-    }
-    const exportName = locale.replaceAll("-", "_");
-    return (
-      source ===
-      `export { default as ${exportName} } from "virtual:openclaw-control-ui-locale/${locale}";`
-    );
-  });
 }
 
 /**

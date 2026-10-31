@@ -49,6 +49,10 @@ import {
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import {
+  proveConcurrentWorkspacePreparation,
+  provePreparationObservationBoundary,
+  provePreparationWaiterAuthority,
+  proveWorkspaceIncarnationRecovery,
   proveWarmWorkspaceConflictRecovery,
   proveWarmWorkspaceReuse,
   proveWarmWorkspaceReuseFailure,
@@ -174,6 +178,22 @@ it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints
 
 it("keeps unchanged sandbox turns running and reconciles later guest and host edits", () =>
   proveWarmWorkspaceReuse(owner));
+
+it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
+  proveConcurrentWorkspacePreparation(owner));
+
+it("observes edits made before a later preparation while an earlier scan is in flight", () =>
+  provePreparationObservationBoundary(owner));
+
+it.each([
+  "cancel waiter",
+  "revoke waiter",
+  "cancel producer",
+  "failed producer",
+  "other session",
+] as const)("retains independent preparation authority: %s", (mode) =>
+  provePreparationWaiterAuthority(owner, mode),
+);
 
 it.each(["read", "authority", "observation", "cancel"] as const)(
   "retries only read failures during warm reuse (%s)",
@@ -775,6 +795,9 @@ it.for([false, true])(
         execution.abort(stop);
         projection[Symbol.dispose]();
       }
+      // This fixture proves ordering and authority, not elapsed interrupt time.
+      // Keep its deadline under the test clock instead of racing a busy host.
+      vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
       commands.push(cleanup.terminate(), cleanup.interrupt(1000));
       const outcomes = Promise.allSettled(commands);
       settle.resolve();
@@ -1020,27 +1043,10 @@ it("preserves later inputs from an older archive without admitting new caches", 
 
 it.each(["lifecycle reset", "replacement session"] as const)(
   "preserves pending bytes across a %s without transferring session authority",
-  async (change) => {
-    const projection = await prepare();
-    await writeText(projection, "source.txt", "unaccepted edit\n");
-    if (change === "lifecycle reset") {
-      const resumed = { ...owner, lifecycleRevision: randomUUID() };
-      expect(await withLocalWorkspaceProjection(resumed, (state) => state.prepare())).toBe(
-        projection,
-      );
-      await expectText(canonical, "source.txt", "unaccepted edit\n");
-      expect((await readProjection())?.lifecycle_revision).toBe(resumed.lifecycleRevision);
-    } else {
-      await expect(
-        withLocalWorkspaceProjection({ ...owner, sessionId: randomUUID() }, (state) =>
-          state.prepare(),
-        ),
-      ).rejects.toThrow("different session incarnation");
-      await expectText(projection, "source.txt", "unaccepted edit\n");
+  (change) =>
+    proveWorkspaceIncarnationRecovery(owner, change, () => {
       revoked = true;
-      await expect(prepare()).rejects.toThrow("revoked");
-    }
-  },
+    }),
 );
 
 it.for(["prepare-release", "prepare-cancel"] as const)(

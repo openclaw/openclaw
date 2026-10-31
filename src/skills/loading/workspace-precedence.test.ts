@@ -1,4 +1,6 @@
+import nativeFs from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as cryptoDigest from "../../infra/crypto-digest.js";
@@ -12,7 +14,7 @@ import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import * as frontmatter from "./frontmatter.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
-import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadWorkspaceSkills, prepareWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 const buildWorkspaceSkillsPrompt = async (
@@ -74,6 +76,53 @@ function refresh(workspaceDir: string, options: Parameters<typeof loadWorkspaceS
 }
 
 describe("buildWorkspaceSkillsPrompt", () => {
+  it("reuses prepared roots without resolving paths or replaying shadow reports", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("alternating-execution");
+    const executionWorkspaceDir = path.join(workspaceDir, "project");
+    await skill(path.join(workspaceDir, "skills", "guide"), "guide", "Agent instructions");
+    await skill(
+      path.join(executionWorkspaceDir, "skills", "guide"),
+      "guide",
+      "Project instructions",
+    );
+    const info = captureLogger();
+    const options = {
+      config: { plugins: { enabled: false } },
+      watch: false,
+      bundledSkillsDir: "",
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      pluginSkillsDir: path.join(workspaceDir, "plugins"),
+    };
+    await withEnvAsync(
+      { HOME: workspaceDir, OPENCLAW_STATE_DIR: path.join(workspaceDir, "state") },
+      async () => {
+        const read = async (execution?: string) => {
+          const entries = await prepareWorkspaceSkills(workspaceDir, {
+            ...options,
+            executionWorkspaceDir: execution,
+          });
+          expect(entries.find((entry) => entry.skill.name === "guide")?.skill.description).toBe(
+            "Agent instructions",
+          );
+        };
+        await read(executionWorkspaceDir);
+        await read();
+        const realpath = vi.spyOn(nativeFs, "realpathSync");
+        syncBuiltinESMExports();
+        try {
+          await read(executionWorkspaceDir);
+          await read();
+          await read(executionWorkspaceDir);
+          expect(realpath).not.toHaveBeenCalled();
+        } finally {
+          realpath.mockRestore();
+          syncBuiltinESMExports();
+        }
+      },
+    );
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
   it("aggregates 30 differing skills per root pair and stays silent on unchanged refresh", async () => {
     const root = await fixtureSuite.createCaseDir("aggregate-collisions");
     const info = captureLogger();

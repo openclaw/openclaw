@@ -249,6 +249,36 @@ describe("installed plugin index mutation receipts", () => {
     },
   );
 
+  it("refuses a malformed predecessor when cohort publication needs its record preimage", async () => {
+    const f = makeFixture();
+    const { env } = f;
+    await withLease({ env }, async (lease) => {
+      f.sql(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        stateKey,
+        "true",
+        9_007,
+      );
+      const before = f.row();
+      expect(() =>
+        refreshIndexSync({
+          reason: "source-changed",
+          installRecords: {},
+          env,
+          candidates: [],
+          lease,
+          pluginCohort: {
+            runId: "221230eb-2b13-4b27-899f-9b3c98d21ed9",
+            transactionId: "ab460a3d-62f0-4ac2-832f-0f3662893baf",
+            installKey: env.OPENCLAW_STATE_DIR,
+          },
+        }),
+      ).toThrow("Persisted plugin install records are invalid");
+      expect(f.row()).toEqual(before);
+      lease.assertCurrent();
+    });
+  });
+
   it.each([
     { operation: "refresh", stage: "transaction" },
     { operation: "refresh", stage: "commit" },

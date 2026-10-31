@@ -19,6 +19,7 @@ import type { PluginCapabilityConsentHandler } from "../../../plugins/capability
 import { computeDeclaredSurfaceHash } from "../../../plugins/capability-summary.js";
 import {
   attachPluginInstallTransaction,
+  requestDeferredPluginInstall,
   resolvePluginInstallTransactionRequest,
 } from "../../../plugins/install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "../../../plugins/install-types.js";
@@ -648,6 +649,40 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   );
 
   setupPluginInstallSuite();
+
+  it("returns a cohort repair plan without publishing its pending baseline", async () => {
+    const root = tempDirs.make("openclaw-doctor-cohort-plan-");
+    const env = { ...testEnv, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const cfg = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    await useRealInstallIndexWrites();
+    const records = { retained: { source: "npm" as const, spec: "retained@1.0.0" } };
+    const baseline = { replacement: { source: "npm" as const, spec: "replacement@2.0.0" } };
+    try {
+      await seedInstalledPluginIndex(records, { env, config: cfg, candidates: [] });
+      const before = await readPersistedInstalledPluginIndex({ env });
+      const { runPostCorePluginConvergence } = await import("./post-core-plugin-convergence.js");
+      const result = await runPostCorePluginConvergence(
+        requestDeferredPluginInstall(
+          { cfg, env, baselineInstallRecords: baseline },
+          undefined,
+          undefined,
+          undefined,
+          {
+            forceFreshGeneration: true,
+            deferRecordPublication: true,
+            beforeManagedNpmPublish: async () => {
+              throw new Error("Disabled fixture plugins must not install packages");
+            },
+          },
+        ),
+      );
+      expect(result.installRecords).toEqual(baseline);
+      expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
+      expect(before?.installRecords).toEqual(records);
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+    }
+  });
 
   it("fences baseline persistence when authority is revoked after the async callback returns", async () => {
     const root = tempDirs.make("openclaw-doctor-index-fence-");
