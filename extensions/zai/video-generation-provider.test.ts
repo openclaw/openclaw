@@ -6,7 +6,8 @@ import {
 import type * as Video from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock, waitProviderOperationPollIntervalMock } =
+  getProviderHttpMocks();
 let provider: Video.VideoGenerationProvider;
 
 beforeAll(async () => {
@@ -118,7 +119,12 @@ it.each<[string, Partial<Video.VideoGenerationRequest>]>([
 });
 
 it.each<[string, Record<string, unknown>]>([
-  ["Generation rejected", { task_status: "FAIL", error: { message: "Generation rejected" } }],
+  ["Generation rejected", { task_status: "FAIL", error: { message: "  Generation rejected  " } }],
+  [
+    "Z.AI video generation failed",
+    { task_status: "FAIL", error: {}, message: "do not use the outer message" },
+  ],
+  ["outer failure", { task_status: "FAIL", error: "malformed", message: "  outer failure  " }],
   ["completed without a video URL", { task_status: "SUCCESS", video_result: [] }],
   ["missing or unknown task_status", {}],
 ])("Z.AI reports unusable task results: %s", async (error, payload) => {
@@ -126,4 +132,5 @@ it.each<[string, Record<string, unknown>]>([
   fetchWithTimeoutMock.mockResolvedValueOnce(Response.json(payload));
   await expect(generateVideo()).rejects.toThrow(error);
   expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
+  expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
 });

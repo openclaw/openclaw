@@ -5,7 +5,8 @@ import type * as Video from "openclaw/plugin-sdk/video-generation";
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = providerHttp.getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock, waitProviderOperationPollIntervalMock } =
+  providerHttp.getProviderHttpMocks();
 const prompt = "A lobster waves hello";
 const requestDefaults = { provider: "novita", model: "wan2.6-t2v", prompt, cfg: {} };
 const hailuoModel = "minimax-hailuo-2.3-t2v";
@@ -102,6 +103,31 @@ it.each<[string, Partial<Video.VideoGenerationRequest>, unknown]>([
   expect(result).toMatchObject({ model: route, videos: [video], metadata: { taskId: "task-1" } });
 });
 
+it("waits through queued and processing tasks before downloading", async () => {
+  for (const status of ["TASK_STATUS_QUEUED", "TASK_STATUS_PROCESSING"]) {
+    fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ task: { status } }));
+  }
+  mockTask();
+  vi.useFakeTimers();
+  try {
+    const pending = generateVideo();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pending;
+
+    expect(result.videos).toMatchObject([video]);
+    expect(waitProviderOperationPollIntervalMock).toHaveBeenCalledTimes(2);
+    const pollUrl = `${baseUrl}/v3/async/task-result?task_id=task-1`;
+    expect(fetchWithTimeoutMock.mock.calls.map(([url]) => url)).toEqual([
+      pollUrl,
+      pollUrl,
+      pollUrl,
+      "https://example.com/out.mp4",
+    ]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it.each<[Partial<Video.VideoGenerationRequest>, string]>([
   [{ model: "wan2.6-i2v" }, "requires one input image"],
   [
@@ -128,13 +154,19 @@ it.each<[Partial<Video.VideoGenerationRequest>, string]>([
 
 it.each<[unknown, string]>([
   [
-    { task: { status: "TASK_STATUS_FAILED", reason: "content rejected" } },
+    { task: { status: "TASK_STATUS_FAILED", reason: "  content rejected  " } },
     "Novita video generation failed: content rejected",
   ],
+  [
+    { task: { status: "TASK_STATUS_FAILED", reason: " \t " } },
+    "Novita video generation failed: task failed",
+  ],
+  [{ task: null }, "Novita video status response missing task."],
   [{ task: { status: "TASK_STATUS_SUCCEED" }, videos: [] }, "completed without a video URL"],
   [{ task: { status: "unknown" } }, "unknown task status"],
 ])("reports unsuccessful task responses: %j (%s)", async (payload, error) => {
   mockTask(payload);
   await expect(generateVideo()).rejects.toThrow(error);
   expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+  expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
 });
