@@ -42,6 +42,14 @@ export const matrixPluginBase = {
     media: true,
   },
   reload: { configPrefixes: ["channels.matrix"], noopPrefixes: ["messages.ackReactionScope"] },
+  lifecycle: {
+    // channels remove loads the setup plugin; a removed account must not hand its cached
+    // login to a later account with the same id.
+    onAccountRemoved: async ({ accountId }: { accountId: string }) => {
+      const { clearMatrixCredentials } = await import("./matrix/credentials.js");
+      await clearMatrixCredentials(process.env, accountId);
+    },
+  },
   configSchema: MatrixChannelConfigSchema,
   config: {
     ...createScopedChannelConfigAdapter<
