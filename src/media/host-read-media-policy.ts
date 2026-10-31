@@ -16,6 +16,8 @@ const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
   "text/csv",
   "text/markdown",
   "text/plain",
+  "text/x-sql",
+  "application/sql",
   "application/json",
   "application/yaml",
 ]);

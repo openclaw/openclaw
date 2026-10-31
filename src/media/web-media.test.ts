@@ -390,6 +390,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     ["notes.txt", ",,,,,,,,,,\n", "text/plain"],
+    ["query.sql", "SELECT name FROM widgets;\n", "text/x-sql"],
     ["legacy.csv", Buffer.from("caf\xe9,ni\xf1o\n", "latin1"), "text/csv"],
     ["report.html", "<!doctype html><title>Report</title><h1>Report</h1>\n", "text/html"],
   ] as const)("allows validated host-read %s", async (name, body, contentType) => {
@@ -399,6 +400,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     ["debug.log", "plain text\n"],
+    ["binary.sql", Buffer.from([0x00, 0xff, 0x10, 0x80])],
     ["secret.pdf", "secret"],
     ["report.html", "status,value\nok,1\n"],
     [
