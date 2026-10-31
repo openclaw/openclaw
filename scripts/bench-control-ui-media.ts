@@ -185,6 +185,19 @@ type Result = {
   status: "passed" | "failed";
   error?: string;
   errors?: string[];
+  consoleErrors?: Array<{
+    type: string;
+    message: string;
+    url: string;
+    lineNumber: number;
+    columnNumber: number;
+  }>;
+  failedRequests?: Array<{
+    url: string;
+    method: string;
+    resourceType: string;
+    errorText: string;
+  }>;
   loadMs?: number;
   scrollMs?: number;
   stable?: MediaSnapshot;
@@ -251,6 +264,8 @@ try {
         const serverRequestOffset = slot.server.requests.length;
         let mediaTransferAt = 0;
         const errors: string[] = [];
+        const consoleErrors: NonNullable<Result["consoleErrors"]> = [];
+        const failedRequests: NonNullable<Result["failedRequests"]> = [];
         const events: Array<Record<string, unknown>> = [];
         let tracing = false;
         page.on("pageerror", (error) => errors.push(error.message));
@@ -270,10 +285,23 @@ try {
           pendingMedia.add(request);
         });
         page.on("requestfinished", (request) => pendingMedia.delete(request));
-        page.on("requestfailed", (request) => pendingMedia.delete(request));
+        page.on("requestfailed", (request) => {
+          pendingMedia.delete(request);
+          failedRequests.push({
+            url: request.url(),
+            method: request.method(),
+            resourceType: request.resourceType(),
+            errorText: request.failure()?.errorText ?? "",
+          });
+        });
         page.on("console", (message) => {
           if (message.type() === "error") {
             errors.push(message.text());
+            consoleErrors.push({
+              type: message.type(),
+              message: message.text(),
+              ...message.location(),
+            });
           }
         });
         page.on("response", (response) => {
@@ -921,6 +949,8 @@ try {
             .catch(() => undefined);
         } finally {
           releaseMedia();
+          result.consoleErrors = consoleErrors;
+          result.failedRequests = failedRequests;
           if (tracing && cdp) {
             await cdp.send("Tracing.end").catch(() => undefined);
           }
