@@ -1111,13 +1111,14 @@
       },
       {
         "deferLoading": true,
-        "description": "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions. Other system changes: use openclaw tool.",
+        "description": "Read gateway config/schema and update status. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions. Other system changes: use openclaw tool.",
         "inputSchema": {
           "properties": {
             "action": {
               "enum": [
                 "config.get",
                 "config.schema.lookup",
+                "update.status",
                 "update.run",
                 "restart",
                 "update.cleanup"
