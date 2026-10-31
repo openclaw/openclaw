@@ -51,6 +51,7 @@ describe("channel-owned voice selection RPC", () => {
         call: handle.unregister,
         speaker: () => speaker.abort(new Error("Speaker authorization changed")),
       },
+      currentVoice: () => voice,
     };
   }
 
