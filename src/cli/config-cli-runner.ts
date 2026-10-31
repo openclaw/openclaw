@@ -115,6 +115,7 @@ export async function runConfigOperations(params: {
   successMode: "set" | "patch";
   currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
+  beforeCommit?: () => Promise<void>;
   databaseOnly?: true;
   /**
    * Replaces the local file write when another process owns the state root.
@@ -517,6 +518,7 @@ export async function runConfigOperations(params: {
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
       env: resolutionEnv,
     });
+    await params.beforeCommit?.();
     committedHint = await params.commit(change);
     if (change.clearedSessionStoreOwner) {
       // The local writer reports this itself; the Gateway's writer reports only to its own log.
@@ -532,6 +534,14 @@ export async function runConfigOperations(params: {
       writeOptions: {
         ...mutationStart.writeOptions,
         auditOrigin: "cli",
+        ...(params.beforeCommit
+          ? {
+              beforeCommit: async () => {
+                await mutationStart.writeOptions.beforeCommit?.();
+                await params.beforeCommit?.();
+              },
+            }
+          : {}),
         ...(assertCurrentExpectation || params.beforePersistentApply
           ? {
               assertConfigPathForWrite: () => {

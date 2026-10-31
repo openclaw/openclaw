@@ -316,6 +316,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/run-settlement.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.incomplete.test.ts",
   "src/system-agent/audit.test.ts",
+  "src/system-agent/inference-fallback.configured-chain.test.ts",
+  "src/system-agent/verified-inference.fallback.test.ts",
   "src/system-agent/operations.test.ts",
   "src/system-agent/operations.setup.test.ts",
   "src/system-agent/rescue-message.test.ts",

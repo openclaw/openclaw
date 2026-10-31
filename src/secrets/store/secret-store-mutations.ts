@@ -21,16 +21,29 @@ type WorkerWriteOptions = {
 export type SecretStoreWriteParams = Omit<KernelWriteParams, "database"> & WorkerWriteOptions;
 export type SecretStoreBatchWriteParams = Omit<KernelBatchParams, "database"> & WorkerWriteOptions;
 
-function admission(context: OpenClawStateWorkerContext, assertCallerCurrent?: () => void) {
+function admission(
+  context: OpenClawStateWorkerContext,
+  assertCallerCurrent?: () => void,
+  beforeCommit?: () => Promise<void>,
+) {
   const assertCurrent = () => {
     context.admission.assertCurrent();
     assertCallerCurrent?.();
   };
   return {
     assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-      context.admission.databasePath,
-    ]),
+    createAdmission: createSqliteWorkerWriteAdmission(
+      assertCurrent,
+      [context.admission.databasePath],
+      undefined,
+      beforeCommit
+        ? async (request) => {
+            if (request.stage === "commit") {
+              await beforeCommit();
+            }
+          }
+        : undefined,
+    ),
   };
 }
 
@@ -168,6 +181,8 @@ export async function writeSecretStoreEntryForConfigRef(params: {
   value: string;
   updatedBy: string;
   assertCurrent?: () => void;
+  /** Host-side domain validation before releasing the native commit grant. */
+  beforeCommit?: () => Promise<void>;
   database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
 }): Promise<string> {
   registerSecretValueForRedaction(params.value);
@@ -185,7 +200,7 @@ export async function writeSecretStoreEntryForConfigRef(params: {
           now: Date.now(),
         },
       }),
-    admission(context, () => params.assertCurrent?.()),
+    admission(context, () => params.assertCurrent?.(), params.beforeCommit),
   );
   return name;
 }

@@ -64,6 +64,29 @@ function utilityConfig(primary?: string): OpenClawConfig {
 }
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
+  it("preserves the literal namespace of a configured fallback", async () => {
+    const config = devConfig();
+    const fallbackModelRef = "openrouter/openrouter/fusion";
+    config.agents!.defaults!.model = {
+      primary: "openai/gpt-5.5",
+      fallbacks: [fallbackModelRef],
+    };
+    config.models!.providers!.openrouter = {
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:9/v1",
+      apiKey: "synthetic-openrouter-key",
+      models: [model("openrouter/fusion")],
+    };
+
+    const route = await resolveRoute(config, "dev", { fallbackModelRef });
+
+    expect(route).toMatchObject({
+      modelLabel: "openrouter/openrouter/fusion",
+      model: "openrouter/fusion",
+      fallbackModelRef,
+    });
+  });
+
   it("does not directly load completion execution to select a configured route", () => {
     const source = readFileSync(new URL("./inference-route.ts", import.meta.url), "utf8");
     expect(source).not.toContain("../agents/simple-completion-runtime.js");

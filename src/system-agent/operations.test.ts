@@ -397,6 +397,22 @@ describe("system agent operations", () => {
       expect(runConfigSet).not.toHaveBeenCalled();
     });
 
+    it("writes no secret when inference ownership is lost before store admission", async () => {
+      vi.mocked(runConfigSet).mockImplementation(async ({ beforeCommit }) => {
+        await beforeCommit?.();
+      });
+      await expect(
+        run(operation, {
+          approved: true,
+          beforeConfigCommit: async () => {
+            throw new Error("The configured fallback no longer owns inference");
+          },
+        }),
+      ).rejects.toThrow("no longer owns inference");
+      expect(await storedEntries()).toEqual([]);
+      expect(runConfigSet).not.toHaveBeenCalled();
+    });
+
     it("keeps the key's configured store provider when rotating it", async () => {
       mockConfig.setConfig({
         secrets: { providers: { vault: { source: "store" }, team: { source: "store" } } },

@@ -521,10 +521,10 @@ export async function writeConfigFileFromContext(
       onDestinationState: writeGuard.onDestinationState,
     });
     await assertAgentDeletionTargetsUnchanged(snapshot.config, sourceConfigForPreflight, deps.env);
-    await options.beforeCommit?.();
     const healthBaselineCapture = databaseAccessAllowed
       ? await captureConfigHealthBaselineForWrite(deps, configPath)
       : null;
+    await options.beforeCommit?.();
     const publish = () => {
       options.assertBeforePublish?.();
       const published = preparedFile.publish();

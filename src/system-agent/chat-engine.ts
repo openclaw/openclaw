@@ -116,9 +116,7 @@ export class SystemAgentChatEngine {
     this.agentSession = createSystemAgentSession(binding);
     this.wizard = new ChatWizardHost({
       surface: options.surface,
-      beforePersistentApply: async (runtime) => {
-        await this.requirePersistentApplyInference(runtime);
-      },
+      beforePersistentApply: this.requirePersistentApplyInference,
     });
   }
 
@@ -299,18 +297,18 @@ export class SystemAgentChatEngine {
     );
   }
 
-  private async requirePersistentApplyInference(runtime: RuntimeEnv) {
+  private readonly requirePersistentApplyInference = async (runtime: RuntimeEnv) => {
     const binding = this.verifiedInference;
     if (this.agentSession.verifiedInference !== binding) {
-      return this.throwInferenceUnavailable();
+      this.throwInferenceUnavailable();
     }
-    return await requireSystemAgentPersistentApplyInference({ binding, runtime }, (failures) =>
+    await requireSystemAgentPersistentApplyInference({ binding, runtime }, (failures) =>
       this.throwInferenceUnavailable(
         isSystemAgentInferenceUnavailableError(failures[0]) ? failures[0].failures : failures,
         false,
       ),
     );
-  }
+  };
 
   private rebindVerifiedInference(binding: SystemAgentVerifiedInferenceBinding): void {
     if (binding.execution.agentId !== this.verifiedInference.execution.agentId) {
@@ -693,6 +691,7 @@ export class SystemAgentChatEngine {
           : {}),
         deps: this.commandDeps(),
         beforePersistentApply,
+        beforeConfigCommit: () => this.requirePersistentApplyInference(capture),
         onVerifiedInferenceChanged: (binding) => this.rebindVerifiedInference(binding),
       });
     } catch (error) {

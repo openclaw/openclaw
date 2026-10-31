@@ -534,6 +534,7 @@ describe("SystemAgentChatEngine approval", () => {
           cliOptions: {},
           runtime: expect.objectContaining({ exit: expect.any(Function) }),
           throwOnError: false,
+          beforeCommit: expect.any(Function),
         });
         expect(applied?.text).toContain("[openclaw] done: config.set");
         expect(observedInputs[1]).toContain("was approved");

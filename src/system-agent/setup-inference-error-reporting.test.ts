@@ -150,7 +150,8 @@ async function observeScenario(scenario: FailurePhase, json: boolean) {
       const payload = JSON.parse(text);
       expect(payload).toMatchObject({
         ok: false,
-        status: scenario === "capture" ? "unavailable" : "auth",
+        // A reply followed by uncertain ownership must stop the fallback ladder.
+        status: scenario === "capture" ? "unavailable" : "unknown",
       });
       expect(payload).not.toHaveProperty("binding");
       message = payload.error;

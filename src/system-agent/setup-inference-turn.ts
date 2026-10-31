@@ -31,6 +31,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
+  systemAgentRouteOptions,
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
@@ -63,6 +64,7 @@ import {
   captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
   hasCurrentSystemAgentOwnerPluginArtifacts,
+  readSystemAgentInferenceConfigSnapshot,
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentOwnerPluginArtifactSnapshot,
   type SystemAgentVerifiedInferenceBinding,
@@ -178,6 +180,8 @@ export async function runSetupInferenceTurn(params: {
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
         retryConnectionErrors: false,
+        // Bound admission owns the ladder: a nested winner cannot replace this candidate.
+        ...(params.requireExecutionOwner ? { modelFallbacksOverride: [] } : {}),
         preparedModelRuntimeMode: "isolated-read-only",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
@@ -213,7 +217,7 @@ export async function runSetupInferenceTurn(params: {
     }
     if (route.authProfileId && successfulAuth?.authProfileId !== route.authProfileId) {
       return failed(
-        "auth",
+        "unknown",
         `The inference run used profile "${successfulAuth?.authProfileId ?? "unknown"}" instead of the configured profile "${route.authProfileId}".`,
       );
     }
@@ -402,6 +406,7 @@ export async function revalidateStableSetupInferenceOwner(params: {
 export type SetupInferenceRequestParams = {
   agentId?: string;
   modelTarget?: "primary" | "utility";
+  fallbackModelRef?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
 };
@@ -420,7 +425,7 @@ export function verifySetupInference(
 export async function verifySetupInference(
   params: VerifySetupInferenceParams & { bindSession?: boolean },
 ): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
-  const readSnapshot = (await import("../config/config.js")).readConfigFileSnapshot;
+  const readSnapshot = readSystemAgentInferenceConfigSnapshot;
   const snapshot = await readSnapshot();
   if (!snapshot.exists) {
     return {
@@ -433,7 +438,7 @@ export async function verifySetupInference(
     return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };
   }
   const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
-  const routeOptions = { modelTarget: params.modelTarget };
+  const routeOptions = systemAgentRouteOptions(params);
   const baselineRoute = await projectInferenceRoute(cfg, params.agentId, routeOptions);
   let verifiedBinding: SystemAgentVerifiedInferenceBinding | undefined;
   const verification = await verifySetupInferenceConfig({
@@ -448,7 +453,7 @@ export async function verifySetupInference(
     },
     runtime: params.runtime,
     requireExecutionOwner: params.bindSession === true,
-    ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
+    ...routeOptions,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     onVerifiedExecution: params.bindSession
@@ -519,6 +524,9 @@ export async function resolvePersistentApplyInference(params: {
     runtime: params.runtime,
     bindSession: true,
     agentId: params.binding.execution.agentId,
+    ...(params.binding.execution.fallbackModelRef !== undefined
+      ? { fallbackModelRef: params.binding.execution.fallbackModelRef }
+      : {}),
   });
   if (
     !live.ok ||
@@ -560,9 +568,7 @@ export async function verifySetupInferenceConfig(
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
-    {
-      modelTarget: params.modelTarget,
-    },
+    systemAgentRouteOptions(params),
     params.configSnapshot,
   );
   if (!configuredRoute) {
@@ -581,7 +587,7 @@ export async function verifySetupInferenceConfig(
   const requireExecutionOwner =
     params.requireExecutionOwner === true || params.onVerifiedExecution !== undefined;
   const baselineRoute = requireExecutionOwner
-    ? await projectInferenceRoute(params.config, route.agentId, { modelTarget: params.modelTarget })
+    ? await projectInferenceRoute(params.config, route.agentId, systemAgentRouteOptions(params))
     : undefined;
   let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
   if (requireExecutionOwner) {
@@ -623,18 +629,18 @@ export async function verifySetupInferenceConfig(
       const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
         currentConfig,
         route.agentId,
-        {
-          modelTarget: params.modelTarget,
-        },
+        systemAgentRouteOptions(params),
         currentSnapshot,
       );
       if (
         !currentRoute ||
         !isDeepStrictEqual(
           baselineRoute!,
-          await projectInferenceRoute(currentConfig, route.agentId, {
-            modelTarget: params.modelTarget,
-          }),
+          await projectInferenceRoute(
+            currentConfig,
+            route.agentId,
+            systemAgentRouteOptions(params),
+          ),
         )
       ) {
         throw new Error(
@@ -648,7 +654,8 @@ export async function verifySetupInferenceConfig(
       });
       params.onVerifiedExecution?.(binding);
     } catch (error) {
-      return { ok: false, status: "auth", error: await redactSetupInferenceError(error) };
+      // A successful response followed by owner drift is not a retryable auth outage.
+      return { ok: false, status: "unknown", error: await redactSetupInferenceError(error) };
     }
   }
   return {

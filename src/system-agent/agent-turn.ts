@@ -374,6 +374,8 @@ export async function runSystemAgentTurn(
         systemAgentTool,
         disableMessageTool: true,
         agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
+        // Session reuse must keep the exact inference owner that admission verified.
+        modelFallbacksOverride: [],
         sandboxSessionKey: policySessionKey,
         ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
         ...(plan.authProfileId ? { authProfileIdSource: "user" as const } : {}),

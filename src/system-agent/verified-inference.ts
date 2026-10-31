@@ -41,14 +41,12 @@ import {
 } from "../plugins/providers.js";
 import {
   projectInferenceRoute,
+  systemAgentRouteOptions,
+  systemAgentRouteIdentity,
+  type SystemAgentConfiguredRouteIdentity,
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
-  SystemAgentConfiguredRoute,
-  "runConfig" | "sourceConfig" | "authProfileId"
->;
 type SystemAgentVerifiedExecutionRoute =
   | Extract<SystemAgentConfiguredRoute, { runner: "cli" }>
   | (Extract<SystemAgentConfiguredRoute, { runner: "embedded" }> & {
@@ -138,18 +136,6 @@ async function validateAgentHarnessRuntimeArtifact(params: {
   } catch {
     return false;
   }
-}
-
-function systemAgentRouteIdentity(
-  route: SystemAgentConfiguredRoute,
-): SystemAgentConfiguredRouteIdentity {
-  const {
-    runConfig: _runConfig,
-    sourceConfig: _sourceConfig,
-    authProfileId: _authProfileId,
-    ...identity
-  } = route;
-  return identity;
 }
 
 function loadRouteAuthProfileStore(
@@ -265,9 +251,11 @@ async function projectVerifiedExecutionFingerprint(
   route: SystemAgentVerifiedExecutionRoute,
   ownerPluginIds: readonly string[],
 ) {
-  const projection = await projectInferenceRoute(config, route.agentId, {
-    modelTarget: route.modelTarget,
-  });
+  const projection = await projectInferenceRoute(
+    config,
+    route.agentId,
+    systemAgentRouteOptions(route),
+  );
   const { authProfileId: _authProfileId, ...routeIdentity } = projection.route ?? {};
   return {
     route: projection.route ? routeIdentity : null,
@@ -662,13 +650,17 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   };
 }
 
+/** Verification must not enqueue health writes behind a transaction awaiting it. */
+export async function readSystemAgentInferenceConfigSnapshot(): Promise<ConfigFileSnapshot> {
+  return (await import("../config/config.js")).readConfigFileSnapshot({ observe: false });
+}
+
 /** Re-hash plugin-owned runtime files only at a persistent side-effect boundary. */
 export async function hasCurrentSystemAgentOwnerPluginArtifacts(
   binding: SystemAgentVerifiedInferenceBinding,
   capturedSnapshot?: ConfigFileSnapshot,
 ): Promise<boolean> {
-  const snapshot =
-    capturedSnapshot ?? (await (await import("../config/config.js")).readConfigFileSnapshot());
+  const snapshot = capturedSnapshot ?? (await readSystemAgentInferenceConfigSnapshot());
   if (!snapshot.exists || !snapshot.valid) {
     return false;
   }
@@ -700,7 +692,7 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
 export async function resolveSystemAgentVerifiedInferenceState(
   binding: SystemAgentVerifiedInferenceBinding,
 ): Promise<SystemAgentVerifiedInferenceState | null> {
-  const snapshot = await (await import("../config/config.js")).readConfigFileSnapshot();
+  const snapshot = await readSystemAgentInferenceConfigSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return null;
   }
@@ -708,7 +700,7 @@ export async function resolveSystemAgentVerifiedInferenceState(
   const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     config,
     binding.execution.agentId,
-    undefined,
+    systemAgentRouteOptions(binding.execution),
     snapshot,
   );
   if (

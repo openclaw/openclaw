@@ -202,6 +202,8 @@ export type ExecuteOptions = {
    * immediately followed by the persistent effect it authorizes.
    */
   beforePersistentApply?: () => void;
+  /** Revalidate inference before secret persistence and final config publication. */
+  beforeConfigCommit?: () => Promise<void>;
   /** Adopt the exact final binding after a verified model-route write commits. */
   onVerifiedInferenceChanged?: (binding: SystemAgentVerifiedInferenceBinding) => void;
 };
@@ -217,6 +219,7 @@ type PersistentApplyContext = {
   deps?: SystemAgentCommandDeps;
   /** Synchronous authority guard for the owner immediately before mutation. */
   assertPersistentApply?: () => void;
+  beforeConfigCommit?: () => Promise<void>;
   /** Re-check authority, then enter one persistent side-effect boundary. */
   commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
@@ -255,6 +258,7 @@ export async function applyPersistentOperation(params: {
     runtime,
     deps: opts.deps,
     ...(assertPersistentApply ? { assertPersistentApply } : {}),
+    ...(opts.beforeConfigCommit ? { beforeConfigCommit: opts.beforeConfigCommit } : {}),
     commit,
   });
   const after = await readConfigFileSnapshot();
@@ -293,6 +297,7 @@ export async function runConfigSetOperation(params: {
   const beforePersistentApply = ctx.assertPersistentApply
     ? { beforePersistentApply: ctx.assertPersistentApply }
     : {};
+  const beforeCommit = ctx.beforeConfigCommit ? { beforeCommit: ctx.beforeConfigCommit } : {};
   if (operation.kind === "config-set" || operation.secret === undefined) {
     await ctx.commit(() =>
       runConfigSet({
@@ -309,6 +314,7 @@ export async function runConfigSetOperation(params: {
               },
             }),
         ...beforePersistentApply,
+        ...beforeCommit,
       }),
     );
     return {};
@@ -336,15 +342,18 @@ export async function runConfigSetOperation(params: {
   // Every save gets a fresh entry and no entry is ever overwritten or deleted
   // here: another config key or auth profile may use, or start using, any
   // entry at any time. The new ref is picked up by the normal config reload.
-  const storeEntry = await ctx.commit(() =>
-    writeSecretStoreEntryForConfigRef({
+  // Saving the secret is a persistent effect even if publishing its ref later fails.
+  const storeEntry = await ctx.commit(async () => {
+    await ctx.beforeConfigCommit?.();
+    return await writeSecretStoreEntryForConfigRef({
       baseName: operation.id,
       value: secret,
       updatedBy: "openclaw",
       // The worker re-checks the requester at transaction and commit admission.
       ...(ctx.assertPersistentApply ? { assertCurrent: ctx.assertPersistentApply } : {}),
-    }),
-  );
+      ...(ctx.beforeConfigCommit ? { beforeCommit: ctx.beforeConfigCommit } : {}),
+    });
+  });
   try {
     await runConfigSet({
       runtime: createNoExitRuntime(ctx.runtime),
@@ -352,6 +361,7 @@ export async function runConfigSetOperation(params: {
       path: operation.path,
       cliOptions: { refProvider, refSource: "store", refId: storeEntry },
       ...beforePersistentApply,
+      ...beforeCommit,
     });
   } catch (error) {
     // The writer can fail after publication and can decline or fail rollback.
