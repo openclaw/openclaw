@@ -268,6 +268,12 @@ as untrusted.
 ## Message behavior
 
 - Text is chunked at 5000 characters.
+- `channels.line.historyLimit` bounds the automatic group-history context included
+  with a reply. Account overrides use `channels.line.accounts.<accountId>.historyLimit`;
+  otherwise the channel setting falls back to `messages.groupChat.historyLimit`, then
+  50 messages. The automatic window is capped at 200 messages, and the JSON integer
+  maximum (`9007199254740991`) selects the 50-message default. Set `0` to disable this
+  extra context; it does not erase the session transcript.
 - Markdown formatting is stripped. Code blocks and tables are converted into Flex
   cards when possible.
 - Streaming responses are buffered. LINE receives full chunks. The loading
