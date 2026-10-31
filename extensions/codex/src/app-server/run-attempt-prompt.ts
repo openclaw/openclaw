@@ -25,7 +25,7 @@ import {
   type CodexProjectedImageGroup,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
+import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
@@ -457,13 +457,17 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildRenderedCodexDeveloperInstructions = () =>
     inferenceInstructions !== undefined
       ? joinPresentSections(
-          turnState.promptBuild.threadDeveloperInstructions ??
-            turnState.promptBuild.developerInstructions,
+          renderCodexThreadPolicy(
+            turnState.promptBuild.threadDeveloperInstructions ??
+              turnState.promptBuild.developerInstructions,
+          ),
           inferenceInstructions,
         )
       : joinPresentSections(
-          turnState.promptBuild.developerInstructions,
-          refreshableInstructions,
+          renderCodexThreadPolicy(
+            turnState.promptBuild.developerInstructions,
+            refreshableInstructions,
+          ),
           buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
         );
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {

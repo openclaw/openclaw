@@ -155,10 +155,10 @@ async function canonicalSource(fixture: CanonicalForkFixture, prompt: string) {
 function expectPolicyHandoff(
   calls: CanonicalForkFixture["native"]["calls"],
   threadId: string,
-  body: unknown,
+  policy: unknown,
 ) {
-  if (typeof body !== "string") {
-    throw new Error("Expected the complete generic policy, including an explicit empty body");
+  if (typeof policy !== "string") {
+    throw new Error("Expected the complete delimited native policy");
   }
   const refreshes = calls.filter((call) => call.method === "thread/inject_items");
   expect(refreshes).toHaveLength(1);
@@ -171,7 +171,7 @@ function expectPolicyHandoff(
         content: [
           {
             type: "input_text",
-            text: expect.stringContaining(body || "current OpenClaw generic policy is empty"),
+            text: expect.stringContaining(policy),
           },
         ],
       },
@@ -609,8 +609,9 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.find((call) => call.method === "thread/resume"),
           "cold configuration",
         );
-        expect(resume.params.developerInstructions).toBe(body);
-        expectPolicyHandoff(calls, binding.threadId, body);
+        const policy = `<openclaw_thread_policy>\n${body}\n</openclaw_thread_policy>`;
+        expect(resume.params.developerInstructions).toBe(policy);
+        expectPolicyHandoff(calls, binding.threadId, policy);
         expect(calls.findIndex((call) => call.method === "thread/inject_items")).toBeLessThan(
           calls.findIndex((call) => call.method === "turn/start"),
         );
