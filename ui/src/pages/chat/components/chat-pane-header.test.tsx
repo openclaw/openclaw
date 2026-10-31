@@ -227,11 +227,12 @@ describe("chat pane header", () => {
     expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
     update({ gatewayStatus: { kind: "offline", onRetry } });
     expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
-    expect(text(container, '[role="status"]')).toContain("Disconnected");
+    expect(text(container, ".chat-pane__connection-state")).toContain("Disconnected");
+    expect(container.querySelector('.chat-pane__connection [role="status"]')).toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-pane__connection-retry")!.click();
     expect(onRetry).toHaveBeenCalledOnce();
     update({ gatewayStatus: { kind: "restoring", onRetry } });
-    expect(text(container, '[role="status"]')).toContain("Restoring");
+    expect(text(container, ".chat-pane__connection-state")).toContain("Restoring");
     expect(container.querySelector(".chat-pane__connection-retry")).toBeNull();
     update({ gatewayStatus: { kind: null, onRetry } });
     expect(container.querySelector(".chat-pane__connection")).toBeNull();

@@ -375,7 +375,8 @@ function ChatPaneHeaderChrome(
                       }
                     >
                       <div class="chat-pane__connection">
-                        <span class="chat-pane__connection-state" role="status" aria-live="polite">
+                        {/* Visual only: the app shell's live region owns connection announcements. */}
+                        <span class="chat-pane__connection-state">
                           <span
                             class={[
                               "chat-pane__connection-icon",
