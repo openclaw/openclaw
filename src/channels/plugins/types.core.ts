@@ -706,6 +706,11 @@ export type ChannelMessageActionContext = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
   assertDirectAdapterHandoff?: () => void;
+  /**
+   * Host-owned cancellation for the originating invocation. Plugins may drop
+   * work that was never issued; platform I/O already dispatched settles normally.
+   */
+  abortSignal?: AbortSignal;
   /** Ephemeral-authority sends must not enter replayable recovery. */
   skipQueue?: boolean;
 };

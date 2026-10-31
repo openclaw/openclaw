@@ -38,7 +38,18 @@ type GuildActionParams = {
   values: Record<string, unknown>;
   accountId?: string;
   cfg: OpenClawConfig;
+  /** Invocation cancellation for preparation lookups made before the action itself. */
+  callerSignal?: AbortSignal;
 };
+
+/** Options for permission and metadata lookups that run before an action's own send options. */
+function guildActionOptions(params: Pick<GuildActionParams, "cfg" | "accountId" | "callerSignal">) {
+  return createDiscordActionOptions({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    ...(params.callerSignal ? { extra: { callerSignal: params.callerSignal } } : {}),
+  });
+}
 
 const expressionPermissions = [
   PermissionFlagsBits.ManageGuildExpressions,
@@ -133,7 +144,7 @@ async function resolveGuildIdForGuildAdminAction(
 
   const channel = await discordGuildActionRuntime.fetchChannelInfoDiscord(
     channelLikeId,
-    createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
+    guildActionOptions(params),
   );
   return "guild_id" in channel ? channel.guild_id : undefined;
 }
@@ -152,7 +163,7 @@ async function resolveGuildAdminActionPermissions(
 
   const channel = await discordGuildActionRuntime.fetchChannelInfoDiscord(
     channelId,
-    createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
+    guildActionOptions(params),
   );
   const channelType = "type" in channel ? channel.type : undefined;
   if (!isDiscordThreadChannelType(channelType)) {
@@ -185,10 +196,7 @@ async function verifySenderGuildAdminPermission(params: GuildActionParams) {
     throw new Error(`Guild id required to authorize Discord guild action: ${params.action}`);
   }
 
-  const actionOptions = createDiscordActionOptions({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  const actionOptions = guildActionOptions(params);
   const targetChannelId =
     guard?.permissionScope === "channel" || params.action === "eventCreate"
       ? readStringParam(
@@ -278,7 +286,13 @@ export async function handleDiscordGuildAction(
     }
   };
   assertActionEnabled();
-  await verifySenderGuildAdminPermission({ action, values: params, accountId, cfg });
+  await verifySenderGuildAdminPermission({
+    action,
+    values: params,
+    accountId,
+    cfg,
+    ...(options?.callerSignal ? { callerSignal: options.callerSignal } : {}),
+  });
   const readTargetGate = createDiscordMessagingActionContext({
     action,
     input: params,
@@ -286,12 +300,18 @@ export async function handleDiscordGuildAction(
     cfg,
     options,
   });
-  const withOpts = () => createDiscordActionOptions({ cfg, accountId });
+  const withOpts = () =>
+    createDiscordActionOptions({
+      cfg,
+      accountId,
+      ...(options?.callerSignal ? { extra: { callerSignal: options.callerSignal } } : {}),
+    });
   // Sender-scoped media policy must reach every guild action that reads a host-local source.
   const mediaPolicyOptions = {
     mediaAccess: options?.mediaAccess,
     mediaLocalRoots: options?.mediaLocalRoots,
     mediaReadFile: options?.mediaReadFile,
+    ...(options?.callerSignal ? { callerSignal: options.callerSignal } : {}),
   };
   const readRequiredString = (key: string) => readStringParam(params, key, { required: true });
   const readMetadataGuildId = async (guildId = readRequiredString("guildId")) => {
@@ -328,7 +348,11 @@ export async function handleDiscordGuildAction(
       const member = await discordGuildActionRuntime.fetchMemberInfoDiscord(
         guildId,
         userId,
-        createDiscordActionOptions({ cfg, accountId: effectiveAccountId }),
+        guildActionOptions({
+          cfg,
+          accountId: effectiveAccountId,
+          ...(options?.callerSignal ? { callerSignal: options.callerSignal } : {}),
+        }),
       );
       const presence = getPresence(effectiveAccountId, userId);
       const activities = presence?.activities;
@@ -356,7 +380,12 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("reactions")) {
         throw new Error("Discord reactions are disabled.");
       }
-      const guildId = await resolveGuildIdForGuildAdminAction({ values: params, accountId, cfg });
+      const guildId = await resolveGuildIdForGuildAdminAction({
+        values: params,
+        accountId,
+        cfg,
+        ...(options?.callerSignal ? { callerSignal: options.callerSignal } : {}),
+      });
       if (!guildId) {
         throw new Error("Discord emoji listing requires guildId or a server channel.");
       }

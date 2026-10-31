@@ -288,6 +288,9 @@ export function createChannelActionContext(params: {
     cfg: params.ctx.cfg,
     params: params.ctx.params,
     ...(params.reply ? { reply: params.reply } : {}),
+    // The message tool owns the turn's cancellation; hand it to channel actions so
+    // their transports can drop queued work instead of waiting out a rate limit.
+    ...(params.ctx.abortSignal ? { abortSignal: params.ctx.abortSignal } : {}),
     ...(mediaAccess ? { mediaAccess } : {}),
     mediaLocalRoots: mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile,

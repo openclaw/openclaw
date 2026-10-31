@@ -349,4 +349,32 @@ describe("handleDiscordMessageAction", () => {
       );
     },
   );
+
+  it("forwards the host abort signal to the channel action options", async () => {
+    const controller = new AbortController();
+    await runAction(
+      "send",
+      { to: "channel:123", message: "hello" },
+      { abortSignal: controller.signal },
+    );
+    expect(handleDiscordActionMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      callerSignal: controller.signal,
+    });
+  });
+
+  it.each([
+    ["member-info", { guildId: "guild-1", userId: "user-1" }],
+    ["timeout", { guildId: "guild-1", userId: "user-2", durationMin: 5 }],
+  ] as const)("forwards the host abort signal for %s", async (action, params) => {
+    const controller = new AbortController();
+    await runAction(action, params, {
+      cfg: discordConfig({ moderation: true, channels: true }),
+      requesterSenderId: "trusted-sender-id",
+      toolContext: discordContext,
+      abortSignal: controller.signal,
+    });
+    expect(handleDiscordActionMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      callerSignal: controller.signal,
+    });
+  });
 });

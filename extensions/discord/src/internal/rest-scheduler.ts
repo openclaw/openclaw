@@ -10,6 +10,13 @@ import {
 
 export type RequestPriority = "critical" | "standard" | "background";
 export type RequestQuery = Record<string, string | number | boolean>;
+
+/**
+ * Cancellation may drop work only before its first dispatch. A dispatched write
+ * keeps its normal outcome (#149277), so state decides instead of a flag.
+ */
+type ScheduledRequestState = "queued" | "dispatched" | "settled";
+
 type ScheduledRequest<TData> = {
   method: string;
   path: string;
@@ -18,8 +25,11 @@ type ScheduledRequest<TData> = {
   query?: RequestQuery;
   routeKey: string;
   retryCount: number;
+  state: ScheduledRequestState;
+  signal?: AbortSignal;
+  detachAbort?: () => void;
   resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
+  reject: (reason: Error) => void;
 };
 
 type LaneQueues<TData> = Record<RequestPriority, Array<ScheduledRequest<TData>>>;
@@ -76,24 +86,74 @@ export class RestScheduler<TData> {
     data?: TData;
     priority: RequestPriority;
     query?: RequestQuery;
+    signal?: AbortSignal;
   }): Promise<unknown> {
     if (this.queuedRequests >= MAX_QUEUE_SIZE) {
       throw new Error("Discord request queue is full");
     }
+    const signal = params.signal;
+    if (signal?.aborted) {
+      return Promise.reject(abortReason(signal));
+    }
     const routeKey = createRouteKey(params.method, params.path);
     const bucket = this.getBucket(this.routeBuckets.get(routeKey) ?? routeKey);
     return new Promise((resolve, reject) => {
-      this.queuedRequests += 1;
-      this.queuedByLane[params.priority] += 1;
-      bucket.pending[params.priority].push({
+      const request: ScheduledRequest<TData> = {
         ...params,
         routeKey,
         retryCount: 0,
-        resolve,
-        reject,
-      });
+        state: "queued",
+        resolve: (value) => {
+          this.settleRequest(request);
+          resolve(value);
+        },
+        reject: (reason) => {
+          this.settleRequest(request);
+          reject(reason);
+        },
+      };
+      if (signal) {
+        const onAbort = () => this.cancelQueuedRequest(request);
+        signal.addEventListener("abort", onAbort, { once: true });
+        request.detachAbort = () => signal.removeEventListener("abort", onAbort);
+      }
+      this.queuedRequests += 1;
+      this.queuedByLane[params.priority] += 1;
+      bucket.pending[params.priority].push(request);
       this.drainQueues();
     });
+  }
+
+  /** Settles each request once, whether it completed, failed, or was cancelled. */
+  private settleRequest(request: ScheduledRequest<TData>): void {
+    if (request.state === "settled") {
+      return;
+    }
+    request.state = "settled";
+    request.detachAbort?.();
+    request.detachAbort = undefined;
+    this.queuedRequests = Math.max(0, this.queuedRequests - 1);
+  }
+
+  /** Drops a caller-cancelled request that was never issued; dispatched work settles normally. */
+  private cancelQueuedRequest(request: ScheduledRequest<TData>): void {
+    if (request.state !== "queued") {
+      return;
+    }
+    for (const bucket of this.buckets.values()) {
+      for (const lane of requestPriorities) {
+        const queue = bucket.pending[lane];
+        const index = queue.indexOf(request);
+        if (index < 0) {
+          continue;
+        }
+        queue.splice(index, 1);
+        this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
+        request.reject(abortReason(request.signal));
+        return;
+      }
+    }
+    request.reject(abortReason(request.signal));
   }
 
   private getBucket(key: string): BucketState<TData> {
@@ -249,6 +309,7 @@ export class RestScheduler<TData> {
         if (!queued) {
           continue;
         }
+        queued.state = "dispatched";
         this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
         this.laneCursor = (this.laneCursor + laneOffset + 1) % laneSchedule.length;
         return { bucket, queued };
@@ -261,37 +322,43 @@ export class RestScheduler<TData> {
     queued: ScheduledRequest<TData>,
     bucket: BucketState<TData>,
   ): Promise<void> {
-    let requeued = false;
     try {
       queued.resolve(await this.executor(queued));
     } catch (error) {
       if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued)) {
-        requeued = true;
         return;
       }
-      queued.reject(error);
+      // A caller that cancelled during the issued attempt still learns the real
+      // transport outcome rather than a synthetic abort.
+      queued.reject(error instanceof Error ? error : new Error(String(error)));
     } finally {
       bucket.active = Math.max(0, bucket.active - 1);
       this.activeWorkers = Math.max(0, this.activeWorkers - 1);
-      if (!requeued) {
-        this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-      }
       this.drainQueues();
     }
   }
 
   private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
-    if (queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
+    // A caller that aborted while the attempt was in flight must not have its
+    // never-issued retry queued again.
+    if (queued.signal?.aborted || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
       return false;
     }
     const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
-    this.getBucket(bucketKey).pending[queued.priority].push({
-      ...queued,
-      retryCount: queued.retryCount + 1,
-    });
+    queued.retryCount += 1;
+    queued.state = "queued";
+    this.getBucket(bucketKey).pending[queued.priority].push(queued);
     this.queuedByLane[queued.priority] += 1;
     return true;
   }
+}
+
+/** Promise rejections always carry an Error; a non-Error abort reason uses the standard shape. */
+function abortReason(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error
+    ? reason
+    : new DOMException("The operation was aborted.", "AbortError");
 }
 
 function isGlobalRateLimit(parsed: unknown): boolean {
