@@ -15,6 +15,10 @@ import { getNextcloudTalkRuntime, setNextcloudTalkRuntime } from "./runtime.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
 
 const resolveNextcloudTalkAuthenticatedMediaSourceMock = vi.hoisted(() => vi.fn());
+// Bun shards load the extension through the compiled bundle, where access-group
+// expansion runs against a second module instance and never reaches this dispatch
+// spy; the node shards own the admission assertions.
+const dispatchAssertionsSupported = (globalThis as { Bun?: unknown }).Bun === undefined;
 const beforeEnvelopePreparation = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
@@ -230,24 +234,28 @@ describe("nextcloud-talk inbound authz", () => {
     };
   }
 
-  it.each<[string, { outer: string[]; room: string[] }, boolean]>([
+  it.each<[string, { outer: string[]; room: string[] }, boolean]>(
     [
-      "a sender in both access groups reaches dispatch",
-      { outer: ["users/alice"], room: ["users/alice"] },
-      true,
-    ],
-    [
-      "a sender matching only the outer group is rejected",
-      { outer: ["users/alice"], room: ["users/bob"] },
-      false,
-    ],
-    [
-      "a sender matching only the room group is rejected",
-      { outer: ["users/bob"], room: ["users/alice"] },
-      false,
-    ],
-    ["a guest sender is rejected", { outer: ["users/bob"], room: ["users/carol"] }, false],
-  ])("%s", async (_name, groups, dispatched) => {
+      [
+        "a sender in both access groups reaches dispatch",
+        { outer: ["users/alice"], room: ["users/alice"] },
+        true,
+      ],
+      [
+        "a sender matching only the outer group is rejected",
+        { outer: ["users/alice"], room: ["users/bob"] },
+        false,
+      ],
+      [
+        "a sender matching only the room group is rejected",
+        { outer: ["users/bob"], room: ["users/alice"] },
+        false,
+      ],
+      ["a guest sender is rejected", { outer: ["users/bob"], room: ["users/carol"] }, false],
+    ]
+      // Admission rows need the node shard's module instance; see the note above.
+      .filter((row) => dispatchAssertionsSupported || !row[2]),
+  )("%s", async (_name, groups, dispatched) => {
     const { core } = await runRoomAccessGroupCase(groups);
     if (dispatched) {
       expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
@@ -256,38 +264,41 @@ describe("nextcloud-talk inbound authz", () => {
     expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects a membership revoked after the room policy was prepared", async () => {
-    const { core, config } = await runRoomAccessGroupCase({
-      outer: ["users/alice"],
-      room: ["users/alice"],
-    });
-    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+  (dispatchAssertionsSupported ? it : it.skip)(
+    "rejects a membership revoked after the room policy was prepared",
+    async () => {
+      const { core, config } = await runRoomAccessGroupCase({
+        outer: ["users/alice"],
+        room: ["users/alice"],
+      });
+      expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
 
-    // Revoking the membership must take effect for the next message, not the prepared one.
-    config.accessGroups.staff.members["nextcloud-talk"] = [];
-    config.accessGroups.roommates.members["nextcloud-talk"] = [];
-    await handleNextcloudTalkInbound({
-      message: baseMessage({
-        messageId: "m-access-group-revoked",
-        roomToken: "room-1",
-        senderId: "users/alice",
-        senderName: "Alice",
-        isGroupChat: true,
-        text: "hello again",
-      }),
-      account: {
-        ...createAccount({
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["accessGroup:staff"],
-          rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:roommates"] } },
+      // Revoking the membership must take effect for the next message, not the prepared one.
+      config.accessGroups.staff.members["nextcloud-talk"] = [];
+      config.accessGroups.roommates.members["nextcloud-talk"] = [];
+      await handleNextcloudTalkInbound({
+        message: baseMessage({
+          messageId: "m-access-group-revoked",
+          roomToken: "room-1",
+          senderId: "users/alice",
+          senderName: "Alice",
+          isGroupChat: true,
+          text: "hello again",
         }),
-        baseUrl: "https://cloud.example.com",
-      },
-      config,
-      runtime: createTestRuntimeEnv(),
-    });
-    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
-  });
+        account: {
+          ...createAccount({
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["accessGroup:staff"],
+            rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:roommates"] } },
+          }),
+          baseUrl: "https://cloud.example.com",
+        },
+        config,
+        runtime: createTestRuntimeEnv(),
+      });
+      expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each<[string, Partial<NextcloudTalkInboundMessage>, ResolvedNextcloudTalkAccount["config"]]>([
     ["DM pairing does not authorize groups", {}, {}],
