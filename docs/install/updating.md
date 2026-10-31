@@ -53,6 +53,11 @@ backup.
 
 ## Update implementation contract
 
+Ordinary Git updates build runnable artifacts without declaration-only builds by
+default. An explicit `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` remains honored. This
+policy must be present in the installed updater; immutable release build policy
+is unchanged.
+
 While a live update run holds the installation lease, the running Gateway leaves
 replacement handling to that updater instead of restarting itself mid-update.
 A Gateway left on the old build checks again after the lease is released. Lease
