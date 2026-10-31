@@ -12,24 +12,31 @@ import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.t
 export type ChatTranscript = ReturnType<typeof createChatTranscript>;
 
 export function createChatTranscript(
-  notify: () => void,
   scrollPaneId: () => string,
   callbacks: TranscriptCallbacks = {},
 ) {
   let activeSessionKey: string | null = null;
   let sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   let connected = false;
+  const listeners = new Set<() => void>();
+  const publish = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
 
   return {
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     get renderedSessionKey(): string | null {
       return activeSessionKey;
     },
     renderSession<T>(sessionKey: string, render: (transcript: ChatTranscriptSession) => T): T {
-      if (
-        !sessionVirtualizer ||
-        activeSessionKey === null ||
-        !areUiSessionKeysEquivalent(activeSessionKey, sessionKey)
-      ) {
+      if (!sessionVirtualizer || !areUiSessionKeysEquivalent(activeSessionKey, sessionKey)) {
         sessionVirtualizer?.dispose();
         // Presentation identities include the session; the cache is instead
         // bounded by physical panes, with a separate session LRU inside each pane.
@@ -40,7 +47,7 @@ export function createChatTranscript(
           : (savedPosition?.scrollTop ?? null);
         activeSessionKey = sessionKey;
         sessionVirtualizer = new ChatSessionVirtualizerHost(
-          notify,
+          publish,
           initialOffset,
           (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
           callbacks,
@@ -77,6 +84,9 @@ export function createChatTranscript(
     },
     get scrollElement(): HTMLDivElement | null {
       return sessionVirtualizer?.scrollElement ?? null;
+    },
+    get messageElements() {
+      return sessionVirtualizer?.messageElements;
     },
     syncViewportGeometry(): void {
       sessionVirtualizer?.syncViewportGeometry();

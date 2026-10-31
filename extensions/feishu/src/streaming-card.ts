@@ -1,12 +1,17 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
-import { readFeishuJsonResponse } from "./json-response.js";
+import { sendFeishuMessage } from "./message-send.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
+import {
+  createFeishuPartialReplyDeliveryError,
+  createFeishuReplyDeliveryResult,
+  type FeishuReplyDeliveryResult,
+} from "./reply-delivery-result.js";
 import type { CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -26,29 +31,6 @@ type CardState = {
 };
 
 type CardKitResponse = { code?: number; msg?: string };
-
-type FeishuStreamingCloseResult = {
-  visibleReplySent: boolean;
-  content?: string;
-  messageId?: string;
-  /**
-   * False when the card rejected the final text (for example after CardKit closed
-   * streaming mode). Earlier accepted preview text may still be visible, but it is
-   * not the completed answer, so the dispatcher must deliver that answer another way.
-   */
-  finalTextAccepted?: boolean;
-};
-
-/** Provider finalization failed after a streaming card may already be visible. */
-export class FeishuStreamingFinalizationError extends Error {
-  readonly result: FeishuStreamingCloseResult;
-
-  constructor(cause: unknown, result: FeishuStreamingCloseResult) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-    this.name = "FeishuStreamingFinalizationError";
-    this.result = result;
-  }
-}
 
 type StreamingStartOptions = {
   replyToMessageId?: string;
@@ -116,7 +98,7 @@ async function assertSuccessfulCardKitResponse(
     cancelUnreadResponseBody(response);
     throw new Error(`${action} failed with HTTP ${response.status}`);
   }
-  const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
+  const data = await readProviderJsonResponse<CardKitResponse>(response, auditContext);
   if (data.code !== 0) {
     throw new Error(`${action} failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`);
   }
@@ -152,7 +134,7 @@ async function getToken(creds: Credentials): Promise<string> {
       cancelUnreadResponseBody(response);
       throw new Error(`Token request failed with HTTP ${response.status}`);
     }
-    data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
+    data = await readProviderJsonResponse(response, "feishu.streaming-card.token");
   } finally {
     await release();
   }
@@ -178,34 +160,6 @@ function shouldPushStreamingUpdate(previousText: string, nextText: string): bool
     /[\n。！？!?；;：:]$/.test(nextText) ||
     nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS
   );
-}
-
-/** Merges cumulative or overlapping streaming snapshots without duplicating content. */
-export function mergeStreamingText(
-  previousText: string | undefined,
-  nextText: string | undefined,
-): string {
-  const previous = previousText ?? "";
-  const next = nextText ?? "";
-  if (!next) {
-    return previous;
-  }
-  if (!previous || next === previous) {
-    return next;
-  }
-  if (next.includes(previous)) {
-    return next;
-  }
-  if (previous.includes(next)) {
-    return previous;
-  }
-  const maxOverlap = Math.min(previous.length, next.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (previous.slice(-overlap) === next.slice(0, overlap)) {
-      return `${previous}${next.slice(overlap)}`;
-    }
-  }
-  return `${previous}${next}`;
 }
 
 export class FeishuStreamingSession {
@@ -305,7 +259,7 @@ export class FeishuStreamingSession {
           cancelUnreadResponseBody(response);
           throw new Error(`Create card request failed with HTTP ${response.status}`);
         }
-        return await readFeishuJsonResponse<{
+        return await readProviderJsonResponse<{
           code: number;
           msg: string;
           data?: { card_id: string };
@@ -322,28 +276,9 @@ export class FeishuStreamingSession {
     // reliably routes streaming cards into Feishu topics, whereas
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
-    const sendOptions = options ?? {};
-    const sendRes = await requestFeishuApi(
-      () =>
-        sendOptions.replyToMessageId
-          ? this.client.im.message.reply({
-              path: { message_id: sendOptions.replyToMessageId },
-              data: {
-                msg_type: "interactive",
-                content: cardContent,
-                ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-              },
-            })
-          : this.client.im.message.create({
-              params: { receive_id_type: receiveIdType },
-              data: {
-                receive_id: receiveId,
-                msg_type: "interactive",
-                content: cardContent,
-                // The SDK omits root_id from its types, but Feishu accepts it at runtime.
-                ...(sendOptions.rootId ? { root_id: sendOptions.rootId } : {}),
-              },
-            }),
+    const sendRes = await sendFeishuMessage(
+      { client: this.client, receiveId, receiveIdType },
+      { ...options, content: cardContent, msgType: "interactive" },
       "Send card failed",
     );
     if (sendRes.code !== 0) {
@@ -490,7 +425,7 @@ export class FeishuStreamingSession {
   async closeWithResult(
     finalText?: string,
     options?: { note?: string },
-  ): Promise<FeishuStreamingCloseResult> {
+  ): Promise<FeishuReplyDeliveryResult> {
     if (!this.state || this.closed) {
       return { visibleReplySent: false };
     }
@@ -554,10 +489,13 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
-    const result: FeishuStreamingCloseResult = {
-      visibleReplySent: visibleContentSent,
-      ...(visibleContentSent ? { content: finalState.sentText } : {}),
-      ...(finalState.messageId ? { messageId: finalState.messageId } : {}),
+    const result: FeishuReplyDeliveryResult = {
+      ...createFeishuReplyDeliveryResult({
+        results: [finalState],
+        visibleReplySent: visibleContentSent,
+        ...(visibleContentSent ? { content: finalState.sentText } : {}),
+        kind: "card",
+      }),
       ...(finalWriteError === undefined ? {} : { finalTextAccepted: false }),
     };
     if (finalWriteError !== undefined || closeError !== undefined) {
@@ -568,12 +506,12 @@ export class FeishuStreamingSession {
               "Feishu streaming card finalization failed",
             )
           : (finalWriteError ?? closeError);
-      throw new FeishuStreamingFinalizationError(cause, result);
+      throw createFeishuPartialReplyDeliveryError(cause, result);
     }
     return result;
   }
 
-  async discard(): Promise<FeishuStreamingCloseResult> {
+  async discard(): Promise<FeishuReplyDeliveryResult> {
     if (!this.state || this.closed) {
       return { visibleReplySent: false };
     }

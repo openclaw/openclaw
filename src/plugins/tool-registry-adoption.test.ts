@@ -32,6 +32,8 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { adoptRuntimeToolRegistrations } from "./tool-registry-adoption.js";
+import { makeTool } from "./tools.optional.test-helpers.js";
+import { createToolLoadContext } from "./tools.test-support.js";
 
 const workspaceDir = "/synthetic";
 const recordOptions = {
@@ -43,18 +45,19 @@ const recordOptions = {
 };
 
 function setLoadContext(registry: PluginRegistry, config: OpenClawConfig) {
-  setPluginRuntimeLoadContext(registry, {
-    rawConfig: config,
-    config,
-    activationSourceConfig: config,
-    autoEnabledReasons: {},
-    workspaceDir,
-    env: process.env,
-    logger: { info() {}, warn() {}, error() {} },
-  });
+  setPluginRuntimeLoadContext(registry, createToolLoadContext(config, workspaceDir));
 }
 
-function createAdoptionPair(config: OpenClawConfig) {
+const runtimes = new Set<PluginRegistry>();
+afterEach(() => {
+  for (const runtime of runtimes) {
+    markPluginRegistryRetired(runtime);
+  }
+  runtimes.clear();
+  resetPluginRuntimeStateForTest();
+});
+
+function createAdoptionPair(config: OpenClawConfig = {}) {
   const runtime = createEmptyPluginRegistry();
   const target = createEmptyPluginRegistry();
   const record = createPluginRecord(recordOptions);
@@ -63,6 +66,7 @@ function createAdoptionPair(config: OpenClawConfig) {
   target.plugins.push(localRecord);
   setLoadContext(runtime, config);
   markPluginRegistryActive(runtime);
+  runtimes.add(runtime);
   const tool = (names: string[], optional = false): PluginToolRegistration => ({
     pluginId: record.id,
     source: record.source,
@@ -70,90 +74,68 @@ function createAdoptionPair(config: OpenClawConfig) {
     names,
     optional,
   });
-  return { runtime, target, record, localRecord, tool };
+  const adopt = (nextConfig = config) => adoptRuntimeToolRegistrations(target, runtime, nextConfig);
+  return { runtime, target, localRecord, tool, adopt };
 }
 
 it("keeps discovery tools when the Gateway source, config, or lifetime does not match", () => {
   const config = { plugins: { entries: { owner: { config: { account: "original" } } } } };
-  const { runtime, target, record, localRecord, tool: createTool } = createAdoptionPair(config);
-  const tool = createTool(["owner_tool"]);
-  runtime.tools.push(tool);
-  const localTool = { ...tool, factory: () => null };
-  target.tools.push(localTool);
-  try {
-    expect(adoptRuntimeToolRegistrations(target, runtime, config).tools).toEqual([tool]);
-    expect(target.tools).toEqual([localTool]);
-    expect(
-      adoptRuntimeToolRegistrations(target, runtime, {
-        plugins: { entries: { owner: { config: { account: "other" } } } },
-      }),
-    ).toBe(target);
-    localRecord.source = "/workspace/shadow.ts";
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-    localRecord.source = record.source;
-    localRecord.enabled = false;
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-    localRecord.enabled = true;
-    markPluginRegistryRetired(runtime);
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-  } finally {
-    markPluginRegistryRetired(runtime);
-  }
+  const { runtime, target, localRecord, tool, adopt } = createAdoptionPair(config);
+  runtime.tools.push(tool(["owner_tool"]));
+  target.tools.push(tool(["owner_tool"]));
+  expect(adopt().tools[0]).toBe(runtime.tools[0]);
+  expect(
+    adopt({
+      plugins: { entries: { owner: { config: { account: "other" } } } },
+    }),
+  ).toBe(target);
+  localRecord.source = "/workspace/shadow.ts";
+  expect(adopt()).toBe(target);
+  localRecord.source = recordOptions.source;
+  localRecord.enabled = false;
+  expect(adopt()).toBe(target);
+  localRecord.enabled = true;
+  markPluginRegistryRetired(runtime);
+  expect(adopt()).toBe(target);
 });
 
 it("substitutes exact declared identities without widening or reordering discovery tools", () => {
-  const config = {};
-  const { runtime, target, tool } = createAdoptionPair(config);
+  const { runtime, target, tool, adopt } = createAdoptionPair();
   const x = tool(["x"]);
-  const y = tool(["y"]);
-  runtime.tools.push(y, x);
+  runtime.tools.push(tool(["y"]), x);
   const localX = tool(["x"]);
-  target.tools.push(localX);
-  try {
-    expect.soft(adoptRuntimeToolRegistrations(target, runtime, config).tools).toEqual([x]);
-    const unnamed = tool([]);
-    const optional = tool(["x"], true);
-    const grouped = tool(["second", "first"]);
-    const ownedGroup = tool(["first", "second", "first"]);
-    const unmatched = tool(["missing"]);
-    runtime.tools.push(tool([]), ownedGroup);
-    target.tools = [unnamed, grouped, optional, localX, unmatched];
-    expect
-      .soft(adoptRuntimeToolRegistrations(target, runtime, config).tools)
-      .toEqual([unnamed, ownedGroup, optional, x, unmatched]);
-    expect(target.tools).toEqual([unnamed, grouped, optional, localX, unmatched]);
+  const unnamed = tool([]);
+  const optional = tool(["x"], true);
+  const grouped = tool(["second", "first"]);
+  const ownedGroup = tool(["first", "second", "first"]);
+  const unmatched = tool(["missing"]);
+  runtime.tools.push(tool([]), ownedGroup);
+  target.tools = [unnamed, grouped, optional, localX, unmatched];
+  expect.soft(adopt().tools).toEqual([unnamed, ownedGroup, optional, x, unmatched]);
+  expect(target.tools).toEqual([unnamed, grouped, optional, localX, unmatched]);
 
-    // A null-returning fallback may share its declared name with the registration that supplies it.
-    const fallback = tool(["z"]);
-    const supplier = tool(["z"]);
-    runtime.tools.push(fallback, supplier);
-    target.tools = [tool(["z"]), tool(["z"])];
-    const [first, second] = adoptRuntimeToolRegistrations(target, runtime, config).tools;
-    expect.soft(first).toBe(fallback);
-    expect.soft(second).toBe(supplier);
-    target.tools = [tool(["z"])];
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-  } finally {
-    markPluginRegistryRetired(runtime);
-  }
+  // A null-returning fallback may share its declared name with the registration that supplies it.
+  const fallback = tool(["z"]);
+  const supplier = tool(["z"]);
+  runtime.tools.push(fallback, supplier);
+  target.tools = [tool(["z"]), tool(["z"])];
+  const [first, second] = adopt().tools;
+  expect.soft(first).toBe(fallback);
+  expect.soft(second).toBe(supplier);
+  target.tools = [tool(["z"])];
+  expect(adopt()).toBe(target);
 });
 
 it("matches tools without entering unrelated plugin metadata", async () => {
-  const { runtime, target, tool } = createAdoptionPair({});
+  const { runtime, target, tool, adopt } = createAdoptionPair();
   const donor = tool(["owner_tool"]);
   const unrelated = new PluginInstance("unrelated");
   const foreign = { ...tool(unrelated.wrap(["foreign_tool"])), pluginId: "unrelated" };
   runtime.tools.push(foreign, donor);
   target.tools.push(tool(["owner_tool"]), foreign);
   await unrelated.dispose();
-  try {
-    expect(adoptRuntimeToolRegistrations(target, runtime, {}).tools).toEqual([donor, foreign]);
-  } finally {
-    markPluginRegistryRetired(runtime);
-  }
+  expect(adopt().tools).toEqual([donor, foreign]);
 });
-
-afterEach(() => resetPluginRuntimeStateForTest());
 
 it("executes only the admitting Gateway's current service and skips unowned turns", async () => {
   const config = { plugins: { allow: ["owner"], slots: { memory: "none" } } };
@@ -176,10 +158,8 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     const call = vi.fn(() => marker);
     api.registerTool(
       () => ({
-        name: "owner_tool",
+        ...makeTool("owner_tool"),
         label: "Owner",
-        description: "Read owning service",
-        parameters: { type: "object", properties: {} },
         async execute() {
           return { content: [{ type: "text", text: store.getRuntime().call() }], details: {} };
         },
@@ -206,7 +186,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
   const ownerA = createPluginRegistryOwner(requestRegistry);
   setActivePluginRegistry(a.registry);
   ownerA.publish(a.registry);
-  const services: PluginServicesHandle[] = [];
+  let service: PluginServicesHandle | undefined;
   const acquired: Awaited<ReturnType<typeof acquireAgentRuntimePluginRegistry>>[] = [];
   const selected: ReturnType<typeof create>[] = [];
   const prepare = () => {
@@ -234,7 +214,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
       workspaceDir,
       throwOnStartError: true,
       onHandle: (handle) => {
-        services.push(handle);
+        service = handle;
       },
     });
     const owned = await withPluginRuntimeRegistryScope(requestRegistry, prepare);
@@ -269,9 +249,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
         lease.releaseWork();
       }
     }
-    for (const service of services) {
-      await service.stop({ strict: true });
-    }
+    await service?.stop({ strict: true });
     await ownerA.close();
     for (const local of selected) {
       await local.instance.dispose();

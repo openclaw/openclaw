@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
@@ -24,12 +24,9 @@ vi.mock("../../agents/worktrees/service.js", () => ({
 }));
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
-const createParams = {
-  repoRoot: "/repo",
-  name: "plugin-owned",
-  ownerKind: "workboard" as const,
-  ownerId: "card-1",
-};
+const owner = { ownerKind: "workboard" as const, ownerId: "card-1" };
+const createParams = { ...owner, repoRoot: "/repo", name: "plugin-owned" };
+const request = { ...createParams, path: "/checkout" };
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("plugin-worktree-owner-"));
@@ -50,55 +47,42 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("plugin worktree state ownership", () => {
-  it.each(["create", "release", "removeIfLossless"] as const)(
-    "refuses %s before domain effects when another process owns the state",
-    async (operation) => {
-      const worktrees = createPluginRuntime().worktrees;
-      const pending =
-        operation === "create"
-          ? worktrees.create(createParams)
-          : operation === "release"
-            ? worktrees.release({ path: "/checkout" })
-            : worktrees.removeIfLossless({
-                path: "/checkout",
-                ownerKind: "workboard",
-                ownerId: "card-1",
-              });
-      await expect(pending).rejects.toMatchObject({
-        code: "OWNER_UNAVAILABLE",
-        message: expect.stringContaining("No local mutation was attempted"),
-      });
-      for (const effect of Object.values(effects)) {
-        expect(effect).not.toHaveBeenCalled();
-      }
-    },
-  );
+it.each(["create", "release", "removeIfLossless"] as const)(
+  "refuses %s before domain effects when another process owns the state",
+  async (operation) => {
+    await expect(createPluginRuntime().worktrees[operation](request)).rejects.toMatchObject({
+      code: "OWNER_UNAVAILABLE",
+      message: expect.stringContaining("No local mutation was attempted"),
+    });
+    for (const effect of Object.values(effects)) {
+      expect(effect).not.toHaveBeenCalled();
+    }
+  },
+);
 
-  it("preserves the plugin guard and rejects authority loss after awaited creation", async () => {
-    let current = true;
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("owner retired");
-      }
-    };
-    vi.mocked(gatewayOwner.captureGatewayStateOwner).mockReturnValue({
-      ownerId: "hosted-owner",
-      role: "gateway",
-      assertCurrent,
-      signal: new AbortController().signal,
-    });
-    effects.create.mockImplementationOnce(async (params: { commitGuard: () => void }) => {
-      params.commitGuard();
-      current = false;
-      return { id: "worktree-1", path: "/checkout", branch: "plugin-owned" };
-    });
-    const pluginGuard = vi.fn();
-    await expect(
-      createPluginRuntime().worktrees.create({ ...createParams, commitGuard: pluginGuard }),
-    ).rejects.toThrow("owner retired");
-    expect(pluginGuard).toHaveBeenCalled();
-    expect(effects.create).toHaveBeenCalledOnce();
-    expect(effects.acquire).not.toHaveBeenCalled();
+it("preserves the plugin guard and rejects authority loss after awaited creation", async () => {
+  let current = true;
+  const assertCurrent = () => {
+    if (!current) {
+      throw new Error("owner retired");
+    }
+  };
+  vi.mocked(gatewayOwner.captureGatewayStateOwner).mockReturnValue({
+    ownerId: "hosted-owner",
+    role: "gateway",
+    assertCurrent,
+    signal: new AbortController().signal,
   });
+  effects.create.mockImplementationOnce(async (params: { commitGuard: () => void }) => {
+    params.commitGuard();
+    current = false;
+    return { id: "worktree-1", path: "/checkout", branch: "plugin-owned" };
+  });
+  const pluginGuard = vi.fn();
+  await expect(
+    createPluginRuntime().worktrees.create({ ...createParams, commitGuard: pluginGuard }),
+  ).rejects.toThrow("owner retired");
+  expect(pluginGuard).toHaveBeenCalled();
+  expect(effects.create).toHaveBeenCalledOnce();
+  expect(effects.acquire).not.toHaveBeenCalled();
 });

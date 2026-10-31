@@ -46,6 +46,7 @@ export function createIsolatedCompletionBoundaryFixture(
         inlineProviderModels: [],
         configuredCatalogEntries: [],
       },
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: async () => {},
     });
   let modelCalls = 0;

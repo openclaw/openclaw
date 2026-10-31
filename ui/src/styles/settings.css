@@ -113,7 +113,6 @@ openclaw-appearance-background {
 .settings-background-visibility {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -190,6 +189,7 @@ openclaw-appearance-background {
 
 openclaw-appearance-background > .settings-background-preview {
   display: none;
+  pointer-events: none;
 }
 
 .content[data-background-preview] openclaw-appearance-background > .settings-background-preview {
@@ -239,7 +239,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .content-header + .settings-workspace,
-.settings-workspace__body > * + * {
+.settings-workspace__body > :where(:not(:first-child)) {
   margin-top: var(--space-5);
 }
 
@@ -788,8 +788,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   cursor: var(--cursor-action);
 }
 
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-select {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
   width: auto;
   min-width: min(220px, 100%);
 }
@@ -811,12 +810,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-input,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-secret,
-.settings-row:not(.settings-row--stacked)
-  .settings-row__control
-  > .lit-content
-  > .settings-phone-presentation,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
   width: 340px;
 }
@@ -842,8 +835,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   overflow-wrap: anywhere;
 }
 
-.settings-row--stacked .settings-row__control > .settings-phone-presentation,
-.settings-row--stacked .settings-row__control > .lit-content > .settings-phone-presentation {
+.settings-row--stacked .settings-row__control > .settings-phone-presentation {
   flex: 1 1 auto;
   width: 100%;
 }
@@ -852,10 +844,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
    text width turns −/+ stepper rows into a stretched bar. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
-  > input[type="number"].settings-input,
-.settings-row:not(.settings-row--stacked)
-  .settings-row__control
-  > .lit-content
   > input[type="number"].settings-input {
   width: 110px;
 }
@@ -864,18 +852,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
    quiet-hours window into two bars. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
-  > input[type="time"].settings-input,
-.settings-row:not(.settings-row--stacked)
-  .settings-row__control
-  > .lit-content
   > input[type="time"].settings-input {
   width: auto;
 }
 
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
-.settings-row--stacked .settings-row__control > .settings-secret,
-.settings-row--stacked .settings-row__control > .lit-content > .settings-secret {
+.settings-row--stacked .settings-row__control > .settings-secret {
   flex: 1 1 auto;
 }
 
@@ -982,6 +965,27 @@ textarea.settings-input {
   .settings-status {
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+}
+
+/* Narrow screens stack the Recovery row, so its actions get the full width.
+   Whole buttons wrap and grow to fill each line; the primary retry leads on
+   its own line. Wide screens keep the single right-aligned row. */
+@media (max-width: 768px) {
+  .updates-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+
+    > .btn {
+      flex: 1 1 auto;
+      min-height: 40px;
+    }
+
+    > .btn.primary {
+      flex-basis: 100%;
+      order: -1;
+    }
   }
 }
 
@@ -1173,8 +1177,10 @@ textarea.settings-input {
   :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) {
     --settings-control-height: 44px;
 
+    /* The shell topbar keeps one size on every route; resizing it here shifts
+       the page when navigation enters or leaves Settings. */
     :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(
-      :not([role="tab"])
+      :not([role="tab"], .topbar *)
     ) {
       min-width: 44px;
       min-height: 44px;
@@ -1205,15 +1211,13 @@ textarea.settings-input {
     padding-inline: var(--space-3);
   }
 
-  .shell--settings .content:not(.content--custodian),
-  .content.content--hub-header {
+  .shell--settings .content:not(.content--custodian) {
     --content-inline-padding: var(--space-3);
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
   }
 
   .shell--settings .content.content--settings-workspace .content-header,
-  .content.content--hub-header .content-header,
   .shell--settings .settings-page,
   .content.content--hub-header .settings-page,
   .shell--settings .config-content,
@@ -1390,4 +1394,273 @@ textarea.settings-input {
 
 .quiet-hours-window .settings-row {
   padding-top: 0;
+}
+
+/* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
+.settings-sidebar__esc {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: calc(10px * var(--control-ui-text-scale));
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Inside the drawer there is no Escape key to hint at. */
+.shell--mobile-nav .settings-sidebar__esc {
+  display: none;
+}
+
+.settings-sidebar__agent openclaw-agent-select {
+  display: block;
+  min-width: 0;
+}
+
+.settings-sidebar__agent .agent-select__trigger {
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 14px;
+}
+
+:root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger {
+  background: transparent;
+}
+
+.settings-sidebar__agent .agent-select__trigger:hover:not(:disabled),
+.settings-sidebar__agent .agent-select__trigger[aria-expanded="true"],
+:root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger:hover:not(:disabled),
+:root[data-theme-mode="light"]
+  .settings-sidebar__agent
+  .agent-select__trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+@media (pointer: coarse) {
+  .settings-sidebar__agent .agent-select__trigger {
+    min-height: 44px;
+  }
+}
+
+.settings-sidebar__search::after {
+  content: "";
+  position: absolute;
+  inset-inline: -12px;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--border) 62%, transparent);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--text) 14%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__search--scrolled::after {
+  opacity: 1;
+}
+
+.settings-sidebar__search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  z-index: 1;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.settings-sidebar__search-icon svg,
+.settings-sidebar__search-clear svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.7px;
+}
+
+.settings-sidebar__search-input {
+  --control-ui-touch-input-size: calc(12.5px * var(--control-ui-text-scale));
+
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding-block: 0;
+  padding-inline: 32px 34px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.settings-sidebar__search-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.settings-sidebar__search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: var(--focus-ring);
+}
+
+/* Forced colors suppress the normal shadow-only focus indicator. */
+@media (forced-colors: active) {
+  .settings-sidebar__search-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
+.settings-sidebar__search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.settings-sidebar__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  position: absolute;
+  inset-inline-end: 5px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-sidebar__group-label {
+  padding: 0 9px;
+  margin: 0 0 4px;
+  font-size: calc(10.5px * var(--control-ui-text-scale));
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-sidebar__item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  opacity: 0.72;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__item:hover .settings-sidebar__item-icon,
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  opacity: 1;
+}
+
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  color: var(--navigation-selected-icon, var(--accent));
+}
+
+.settings-sidebar__item-label {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-inline-start: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.settings-sidebar__subitem:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.settings-sidebar__subitem--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+}
+
+.settings-sidebar__subitem-label {
+  font-size: calc(12.5px * var(--control-ui-text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-height: var(--shell-sidebar-footer-height);
+  padding: 12px 21px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  color: var(--muted);
+}
+
+.settings-sidebar__footer > openclaw-sidebar-build-chip {
+  display: contents;
+}
+
+.settings-sidebar__connection {
+  min-height: 1lh;
+}
+
+openclaw-settings-save-indicator {
+  min-width: 0;
+}
+
+openclaw-settings-save-indicator:empty {
+  display: none;
+}
+
+.settings-save-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-save-indicator--recovery,
+.settings-save-indicator--rejected {
+  flex-direction: column;
+  align-items: flex-start;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.settings-save-indicator--danger {
+  color: var(--danger);
+}
+
+.settings-save-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-sidebar__footer .sidebar-footer-build {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }

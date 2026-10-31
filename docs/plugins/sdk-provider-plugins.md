@@ -39,6 +39,37 @@ with the accepted harness IDs. Model Setup stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
 
+## Checklist before you open a provider PR
+
+- **Live listing.** If the vendor has a model-list API, the provider lists the
+  account's models live, so new vendor models need no OpenClaw release. See
+  [live model discovery](/plugins/sdk-provider-plugins/model-catalogs#live-model-discovery).
+  `src/plugins/contracts/provider-live-listing.contract.test.ts` enforces this
+  for bundled hosted providers.
+- **Thinking from catalog data.** Put the profile on the manifest row:
+  `compat.defaultThinkingLevel` makes the row own it, and `thinkingLevelMap`,
+  `compat.supportedReasoningEfforts`, `compat.adaptiveThinking`,
+  `compat.thinkingRequired` and `compat.thinkingLevelLabels` shape the ladder. Do
+  not add a `resolveThinkingProfile` hook for a model its row can describe. Add
+  the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
+  Use `compat.thinkingLevels` when the offered ladder differs from what the map implies.
+- **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  Without the manifest half, the Gateway never refreshes the provider and only
+  catalog rows appear.
+- **Row IDs match the listing.** Use the ID the vendor's model list returns.
+  `modelIdNormalization` aliases only fold what users type.
+- **Connection-only setup.** Onboarding saves the endpoint and credential through
+  `createProviderConnectionPresetAppliers`. Outside `models.mode: "replace"`, which
+  keeps its documented exception, it never copies catalog rows into config. See
+  [model catalogs](/plugins/sdk-provider-plugins/model-catalogs).
+- **Docs.** Add `docs/providers/<id>.md` and list the provider in alphabetical
+  order on the provider index.
+- **Proof.** Run a real agent turn on an isolated Gateway with a real key before
+  the PR opens. API calls and mocked transports do not replace it.
+- **New model for an existing provider.** Add catalog data, not code. Search
+  every provider for the predecessor model ID before adding an exact-ID rule.
+
 ## Import an existing credential during sign-in
 
 An auth method can declare `credentialImport` with a `migrationProviderId`,
@@ -63,6 +94,31 @@ source before persistence, and reject a changed credential. Login passes
 Unavailable storage or an unusable matching OAuth profile continues to interactive
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
+
+## Read a selected personal account
+
+`isUserModelAuthProfileId` and `withPersonalAuthProfileStore` from
+`openclaw/plugin-sdk/provider-auth-runtime` route an explicitly selected personal
+account through its credential owner. The ID predicate recognizes a storage
+locator; it does not authorize access.
+
+Inside the store callback, await `owner.read()` to prepare the selected credential.
+Before using that credential or disclosing an account-specific result, compare it
+with `owner.readCurrentCredential()`. This synchronous check uses owner-published
+facts without SQL. Reconnects, ownership changes, and unresolved writes invalidate
+the retained authority. Keep the asynchronous operation inside the callback and
+retain the caller's current-client and cancellation checks at each external effect.
+
+For an agent or shared auth store, `withAuthProfileStoreAtEffect` on the same
+runtime surface retains the admitted read sources for its callback. It requires
+a live shared-state owner. Each read groups the selected sources into one worker
+request. Await
+`reader.read()` at disclosure to read current worker-owned rows, then compare the
+selected credential or account with the prepared request. This read bypasses
+runtime snapshots and the row cache. Call `reader.assertCurrent()` immediately
+before the effect to reject intervening owner writes without SQL. Keep caller
+authorization and cancellation checks there too; a prepared store alone does not
+authorize disclosure. The reader expires when the callback returns.
 
 ## Loopback OAuth callbacks
 
@@ -196,6 +252,14 @@ the caller explicitly supplies the existing retry options.
 Keep `postJsonRequest` for streaming or binary responses, custom response/error
 parsers, and code that needs to retain the response transport. Those callers
 must release it in `finally`.
+
+Use `fetchWithProviderHttpGuard` from `openclaw/plugin-sdk/provider-http` when
+the provider owns its request admission, response parsing, and release lifetime.
+It accepts guarded-fetch options and returns the response and `release` callback.
+Always release in `finally`. Eligible direct requests share the host's bounded
+provider connection pool after fresh DNS and SSRF validation on every request.
+Proxy and custom TLS routes retain their existing transport policy. Plugins do
+not retain or close the shared pool; the Gateway owns its shutdown.
 
 ## Walkthrough
 
@@ -399,7 +463,7 @@ must release it in `finally`.
     that govern deprecated surfaces named on this page and its child pages.
 
     To read runtime auth profiles, await `loadAuthProfileStoreForRuntimeAsync`
-    from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
+    from `openclaw/plugin-sdk/provider-auth`. It reads persisted profiles in a
     database worker and preserves the optional third `env` argument for
     service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
     is deprecated through 2026-12-31 and will be removed in the first January 2027 stable release.
@@ -599,6 +663,41 @@ for the phase to settle, then merges model rows and provider outcomes in provide
 label order. Hooks retain their individual discovery deadlines; completion order
 does not change catalog precedence.
 
+## Per-request credentials in custom transports
+
+`createStreamFn` receives an optional `requestAuth` capability with `version: 1`
+and `resolve({ signal }): Promise<{ apiKey: string; assertCurrent(): void }>`.
+The embedded run's auth owner supplies it for a selected stored OAuth profile.
+Await it immediately before **every physical request**, including provider-private
+continuation and stream-recovery requests, then call the result's `assertCurrent()`
+and check cancellation again before dispatch. Do not cache the returned bearer
+or fall back to `StreamOptions.apiKey` on rejection.
+
+The capability re-reads the canonical credential owner and uses the existing
+OAuth refresh/rotation machinery. It stays bound to the selected profile,
+provider, account and automation authorization, and rejects after the run closes,
+the auth selection advances, or cancellation. Closure during awaited preparation
+also prevents returning credentials. An already-claimed OAuth refresh retains
+its existing independent settlement owner.
+
+This is additive: older hosts, other completion entrypoints, and calls without a
+selected stored OAuth profile may omit it. Bounded auth views such as
+`openclaw agent exec` with state-database shared auth, and env-only scopes, omit
+it because those views cannot supply canonical account authorization. Their
+existing local-credential and shared-OAuth exclusion rules remain unchanged.
+Setup-owned verification of a replacement OAuth sign-in also omits the capability:
+it uses the exact active setup credential scope, not ambient account authorization.
+The replacement stays unavailable outside that scope until verified activation.
+Runtime-only external OAuth profiles also omit the capability: the external
+credential source retains ownership, without requiring a canonical stored row.
+Persisted external profiles retain canonical capture and retirement checks.
+Absence retains the existing static `apiKey` behavior, not a guarantee of renewal
+during an attempt. Static API keys are unchanged. Account-less legacy OAuth
+credentials may keep the same refresh
+grant; a rotated grant without account identity fails closed rather than assuming
+it belongs to the same account. This capability does not retry HTTP 401, replay
+conversations, or transfer refresh grants to a transport.
+
 ## Provider stream decorators
 
 `wrapStreamFn` receives optional request context for provider-owned behavior:
@@ -618,12 +717,39 @@ MiMo reasoning replay and final-answer handling. Without the flag, a replacement
 stream keeps the existing behavior of taking ownership of those compatibility
 policies. Returning the original stream or no wrapper also preserves them.
 
+Providers routing OpenAI Responses through a proxy can opt into
+`buildProviderStreamFamilyHooks("openai-responses-service-tier")` from
+`openclaw/plugin-sdk/provider-stream-family`. Apply it only after qualifying the
+upstream as OpenAI and the selected API as `openai-responses`, not merely because
+an endpoint is OpenAI-compatible. The family shares native Fast/Standard and
+service-tier precedence, samples timed Auto once per request, and preserves
+explicit payload tiers, provider identity, credentials, and cancellation. It does
+not attach native OpenAI headers or unrelated Responses defaults.
+
+ClawRouter qualifies these routes from the OpenAI provider's Responses catalog
+entries and preserves exact `pricing.serviceTiers[].id` values in private route
+metadata. Its lightweight picker policy and runtime hook share those facts: Fast
+requires advertised `priority`, and explicit Ultrafast requires `ultrafast`.
+Missing tier metadata never enables Fast by model name. Pricing tiers describe
+model capability, not key entitlement; the service remains authoritative and
+returns an unallowed-tier error without silently downgrading the request.
+
 Bundled adapters share `wrapProviderPayloadHook` and `mapAssistantMessageStream`
 through the existing private `provider-stream-shared` seam. Payload composition
 runs defaults before the caller hook and wire constraints after its result settles;
 each adapter keeps its own replacement/null policy. The stream mapper preserves
 synchronous returns without importing the embedded runner. These are bundled
 implementation helpers, not new third-party SDK contracts.
+
+`applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
+policy with pass-through adapters through that private seam. Callers qualify
+the endpoint and normalize vendor-prefixed model IDs before applying it.
+
+Bundled transports use `recordSuppressedReasoning` from that same private seam
+when a model marked `reasoning: false` returns thought fields. It records only
+their presence and returns an error for a completed response with no visible
+answer or tool call. Transports publish that error through their ordinary error
+terminal; the host owns per-session warning limits and status hints.
 
 Injected-client adapters also reuse the Anthropic thinking and output-cap owners
 through the private `provider-transport-runtime` seam. Client creation and

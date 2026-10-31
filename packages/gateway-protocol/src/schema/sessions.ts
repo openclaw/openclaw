@@ -1,13 +1,17 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES } from "../canvas-limits.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
+import {
+  SESSIONS_FILES_ASSETS_MAX_REFS,
+  SESSIONS_FILES_ASSET_REF_MAX_CHARS,
+} from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
-import { ErrorShapeSchema } from "./frames.js";
+import { ErrorShapeSchema } from "./error-shape.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
-import { ChatAttachmentsSchema } from "./logs-chat.js";
-import { PluginJsonValueSchema } from "./plugins.js";
+import { ChatAttachmentsSchema, ChatHistoryParamsSchema } from "./logs-chat.js";
+import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 import { SessionOwnerSchema } from "./sessions-row.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -25,11 +29,11 @@ export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
 export {
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionOwnerSessionCountSchema,
   type SessionsListParams,
   type SessionOwnerSessionCount,
 } from "./sessions-list.js";
-export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export {
   SessionParticipantIdentitySchema,
   SessionParticipantSchema,
@@ -138,6 +142,14 @@ export const SessionsCompanionAskParamsSchema = closedObject({
     Type.String({ minLength: 1, maxLength: SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS }),
   ),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  /** Side chat model for this question; omitted uses the agent's utility model. */
+  model: Type.Optional(NonEmptyString),
+  /** Reasoning level for this question; omitted uses the model default. */
+  thinkingLevel: Type.Optional(NonEmptyString),
+  /** Speed for this question; omitted uses the model default. */
+  fastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
 });
 
 /** Companion answer returned only to the requesting operator. */
@@ -154,6 +166,8 @@ export const SessionsCompanionStateParamsSchema = closedObject({
 
 export const SessionsCompanionStateResultSchema = closedObject({
   exchanges: Type.Array(SessionCompanionExchangeSchema, { maxItems: 24 }),
+  /** Model Side chat answers with when a question names none; absent when unavailable. */
+  defaultModel: Type.Optional(NonEmptyString),
 });
 
 /** Selects the in-memory companion thread to clear. */
@@ -245,14 +259,25 @@ export const SessionsFilesListResultSchema = closedObject({
 });
 
 /** Reads one session-referenced file by path. */
-export const SessionsFilesGetParamsSchema = closedObject({
+const sessionFilePathProperties = {
   sessionKey: NonEmptyString,
   path: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+};
+export const SessionsFilesGetParamsSchema = closedObject({
+  ...sessionFilePathProperties,
+  messageEntryId: Type.Optional(NonEmptyString),
+});
+
+const SessionFileSourceSchema = closedObject({
+  workspaceId: NonEmptyString,
+  root: Type.Union([NonEmptyString, Type.Null()]),
+  fileRoot: Type.Union([NonEmptyString, Type.Null()]),
 });
 
 export const SessionsFilesGetResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  source: Type.Optional(SessionFileSourceSchema),
   root: Type.Optional(NonEmptyString),
   file: SessionFileEntrySchema,
 });
@@ -268,11 +293,14 @@ export const SessionsFilesDownloadResultSchema = closedObject({
   expiresAt: NonEmptyString,
 });
 
-export const SESSIONS_FILES_ASSETS_MAX_REFS = 64;
+export { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
 export const SESSIONS_FILES_ASSET_MAX_BYTES = 1024 * 1024;
 export const SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
-const sessionFileAssetRefSchema = Type.String({ minLength: 1, maxLength: 4096 });
+const sessionFileAssetRefSchema = Type.String({
+  minLength: 1,
+  maxLength: SESSIONS_FILES_ASSET_REF_MAX_CHARS,
+});
 
 /** Reads relative HTML resources under the session's current file-read authority. */
 export const SessionsFilesAssetsParamsSchema = closedObject({
@@ -302,9 +330,31 @@ export const SessionsFilesAssetsResultSchema = closedObject({
   ),
 });
 
-/** Overwrites one existing session workspace file with hash-based CAS. */
-export const SessionsFilesSetParamsSchema = closedObject({
+/** A bounded authored-CSP preview; resources retain the issuing reader's authority. */
+export const SessionsFilesPreviewParamsSchema = closedObject({
   ...SessionsFilesGetParamsSchema.properties,
+  html: Type.String({ maxLength: CANVAS_DOCUMENT_PREVIEW_MAX_BYTES }),
+  allowScripts: Type.Optional(Type.Boolean()),
+});
+export const SessionsFilesPreviewResultSchema = closedObject({
+  status: stringLiteralUnion(["ready", "unsupported"]),
+  html: Type.String(),
+  omitted: Type.Integer({ minimum: 0 }),
+  previewId: Type.Optional(NonEmptyString),
+  sandboxPath: Type.Optional(NonEmptyString),
+});
+export const SessionsFilesPreviewReleaseParamsSchema = closedObject({
+  ...SessionsFilesGetParamsSchema.properties,
+  previewId: Type.String({ minLength: 1, maxLength: 256 }),
+});
+export const SessionsFilesPreviewReleaseResultSchema = closedObject({
+  released: Type.Boolean(),
+});
+
+/** Overwrites an existing file with content and optional managed-source preconditions. */
+export const SessionsFilesSetParamsSchema = closedObject({
+  ...sessionFilePathProperties,
+  expectedSource: Type.Optional(SessionFileSourceSchema),
   content: Type.String(),
   expectedHash: SessionFileHashSchema,
 });
@@ -357,6 +407,10 @@ export const SessionsDiffParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   scope: Type.Optional(SessionDiffScopeSchema),
   commit: Type.Optional(NonEmptyString),
+  /** File metadata and line counts only; skip patches and branch history. */
+  summaryOnly: Type.Optional(Type.Boolean()),
+  /** Return a computing result while a shared checkout read is pending. */
+  poll: Type.Optional(Type.Boolean()),
 });
 
 /** Branch + working-tree diff for one session checkout. */
@@ -376,6 +430,8 @@ export const SessionsDiffResultSchema = closedObject({
   additions: Type.Integer({ minimum: 0 }),
   deletions: Type.Integer({ minimum: 0 }),
   truncated: Type.Optional(Type.Boolean()),
+  /** Poll again for the completed diff; empty files do not mean no changes. */
+  computing: Type.Optional(Type.Boolean()),
   unavailableReason: Type.Optional(
     stringLiteralUnion(["unknown_session", "not_git", "unknown_commit", "workspace_stopped"]),
   ),
@@ -409,6 +465,7 @@ export const SessionsPreviewParamsSchema = closedObject({
 export const SessionsDescribeParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  includeNativeSubagents: Type.Optional(Type.Boolean()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
@@ -454,6 +511,17 @@ export const SessionsMessagesSubscribeParamsSchema = closedObject({
   mode: Type.Optional(Type.Literal("narration")),
   /** Opt in to sanitized durable approval events for this session and its descendants. */
   includeApprovals: Type.Optional(Type.Literal(true)),
+  /** Read the first transcript snapshot after this observer is admitted. */
+  initialHistory: Type.Optional(
+    closedObject({
+      cursor: ChatHistoryParamsSchema.properties.cursor,
+      knownState: ChatHistoryParamsSchema.properties.knownState,
+      limit: ChatHistoryParamsSchema.properties.limit,
+      maxBytes: ChatHistoryParamsSchema.properties.maxBytes,
+      toolResultMaxChars: ChatHistoryParamsSchema.properties.toolResultMaxChars,
+      inputRunIds: ChatHistoryParamsSchema.properties.inputRunIds,
+    }),
+  ),
 });
 
 /** Latest bounded assistant text for a background narration subscriber. */
@@ -727,8 +795,6 @@ export type SessionsBranchesSwitchParams = Static<typeof SessionsBranchesSwitchP
 export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
-export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
-export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionNarrationEvent = Static<typeof SessionNarrationEventSchema>;
@@ -770,6 +836,14 @@ export type SessionsFilesDownloadResult = Static<typeof SessionsFilesDownloadRes
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
 export type SessionsFilesAssetsParams = Static<typeof SessionsFilesAssetsParamsSchema>;
 export type SessionsFilesAssetsResult = Static<typeof SessionsFilesAssetsResultSchema>;
+export type SessionsFilesPreviewParams = Static<typeof SessionsFilesPreviewParamsSchema>;
+export type SessionsFilesPreviewResult = Static<typeof SessionsFilesPreviewResultSchema>;
+export type SessionsFilesPreviewReleaseParams = Static<
+  typeof SessionsFilesPreviewReleaseParamsSchema
+>;
+export type SessionsFilesPreviewReleaseResult = Static<
+  typeof SessionsFilesPreviewReleaseResultSchema
+>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
 export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;

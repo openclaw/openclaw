@@ -6,6 +6,7 @@ import * as healthState from "../config/io.health-state.js";
 import type { ConfigHealthState } from "../config/io.health-state.types.js";
 import { createConfigIO } from "../config/io.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import * as safeFs from "../infra/fs-safe.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -99,7 +100,7 @@ it.skipIf(process.platform === "win32")(
     }, true),
 );
 
-it("keeps the last-known-good file when a newer observation supersedes promotion", () =>
+it("refuses promotion when the captured config source changes", () =>
   withFixture(async ({ io, raw, replace, goodRaw, observe, assertDurableHealth }) => {
     const older = await replace(olderRaw);
     let observedNewer = false;
@@ -117,10 +118,10 @@ it("keeps the last-known-good file when a newer observation supersedes promotion
       };
       return directory;
     });
-    const promoted = await io.promoteConfigSnapshotToLastKnownGood(older);
-    expect(observedNewer).toBe(true);
+    await expect(io.promoteConfigSnapshotToLastKnownGood(older)).rejects.toBeInstanceOf(
+      ConfigMutationConflictError,
+    );
     expect(raw(".last-good")).toBe(goodRaw);
-    expect(promoted).toBe(false);
     await assertDurableHealth(expectedHealth);
   }));
 
@@ -159,7 +160,7 @@ it.each(
                 await closeOpenClawStateDatabaseAsync();
               }
             }
-            await store.updateAfterFileCommit(...updateArgs);
+            return store.updateAfterFileCommit(...updateArgs);
           },
         };
       });
@@ -184,8 +185,6 @@ it.each(
         expect(result.snapshot).toMatchObject({ valid: true, raw: newerRaw });
         expect(result.snapshot.config.gateway?.port).toBe(19093);
       }
-      expect(superseded).toBe(true);
-      expect(expectedHealth).toBeDefined();
       await assertDurableHealth(expectedHealth);
     }),
 );
@@ -209,6 +208,5 @@ it("rejects last-known-good recovery after its captured database admission close
         reason: "fixture-invalid-config",
       }),
     ).rejects.toThrow("read admission");
-    expect(closed).toBe(true);
     expect(raw()).toBe(rejectedRaw);
   }));

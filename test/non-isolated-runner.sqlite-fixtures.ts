@@ -14,7 +14,6 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts
 // Literal resolver calls keep generated imports visible to CI's dependency graph.
 export function sqliteLifecycleFixtureFiles(): Record<string, string> {
   const readPoolFixture = `
-import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
 const readPool = vi.hoisted(() => ({ close: vi.fn(async () => {}) }));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))}, () => ({
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///synthetic/state-read.worker.js"),
@@ -22,9 +21,9 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.t
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))}, () => ({
   WorkerTaskError: class extends Error {},
   createOwnedWorkerTaskPool: () => ({
-    startTask: () => ({
-      ...startAwaitedReadMock(async () => ({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] })),
-      release: () => startAwaitedReadMock(async () => {}),
+    runTask: () => ({
+      result: Promise.resolve({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
+      close: async () => {},
     }),
     close: readPool.close,
     closeResources: async () => {},
@@ -47,9 +46,9 @@ async function useReadPool() {
       },
       location: "/synthetic/state.sqlite",
       checkFreshAdmission: false,
-    }, authority).result).toMatchObject({ value: { ok: true, type: "backup.runs" } });
+    }, authority)).toMatchObject({ value: { ok: true, type: "backup.runs" } });
   } finally {
-    await transport.startClose().result;
+    await transport.startClose();
   }
 }
 `;
@@ -59,6 +58,7 @@ async function useReadPool() {
     ...subagentRetirementFixtureFiles(),
     ...retiredOwnerGenerationFixtureFiles(),
     ...stateReadPoolFixtureFiles(),
+    ...publicationRegistrationFixtureFiles(),
     ...failedDrainFixtureFiles(readPoolFixture),
     "11-a-sqlite-owner.test.ts": `
 import { afterAll, expect, it, vi } from "vitest";
@@ -86,12 +86,13 @@ it("retains a real shared-state owner after host admission is refused", async ()
   });
   const retained = { database, drains: 0 };
   Reflect.set(globalThis, drainKey, retained);
-  registerOpenClawStateDatabaseAsyncResource({ async close() {
+  const unregister = registerOpenClawStateDatabaseAsyncResource({ async close() {
     expect(Reflect.get(globalThis, drainKey)).toBe(retained);
     expect(database.db.isOpen).toBe(false);
     expect(retained.drains).toBe(0);
     await Promise.resolve();
     retained.drains++;
+    unregister();
   } });
 });
 afterAll(() => {
@@ -310,7 +311,8 @@ import { afterAll, expect, it, vi } from "vitest";
 ${unavailableSharedStateWorkerFixture}
 import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
 import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
-import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync, retainAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
+import { retainAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-borrower.ts"))};
+import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
 import { registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
 import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
@@ -422,7 +424,6 @@ function stateReadPoolFixtureFiles(): Record<string, string> {
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
 import { executeExistingOpenClawStateRead } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-readonly.ts"))};
 import { readWorkspaceStateSnapshot } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-store.ts"))};
 import { createWorkspaceStateIdentity } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-identity.ts"))};
@@ -438,14 +439,14 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts")
 }));
 edge.close.mockImplementation(async () => { probe.closes.push(generation); });
 edge.create.mockImplementation(() => ({
-  startTask: () => {
+  runTask: () => {
     probe.reads.push(generation);
     return {
-      ...startAwaitedReadMock(async () => generation === "c" ? {
+      result: Promise.resolve(generation === "c" ? {
         ok: true, type: "workspace.snapshot", sourceAdmitted: true,
         snapshot: { identity: createWorkspaceStateIdentity("/fixture/workspace"), setupExists: false, setup: { version: 1 } },
       } : { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
-      release: () => startAwaitedReadMock(async () => {}),
+      close: async () => {},
     };
   },
   close: edge.close,
@@ -612,6 +613,110 @@ it("prevents an old registry tick from recreating a worker against a retired cac
     expect(previous.runs.size).toBe(0);
   } finally {
     Reflect.deleteProperty(globalThis, key);
+  }
+});
+`,
+  };
+}
+
+function publicationRegistrationFixtureFiles(): Record<string, string> {
+  const shared = `
+import path from "node:path";
+import { afterAll, expect, it } from "vitest";
+import ${JSON.stringify(import.meta.resolve("../src/agents/auth-profiles/sqlite-read-pool.ts"))};
+import ${JSON.stringify(import.meta.resolve("../src/config/sessions/session-history-budget-state.ts"))};
+import { onSqliteWalCheckpoint, publishSqliteWalCheckpointObservation } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-wal-checkpoint.ts"))};
+import { createPluginStateSyncKeyedStore } from ${JSON.stringify(import.meta.resolve("../src/plugin-state/plugin-state-store.ts"))};
+import { ensurePluginStateNamespace, readCommittedPluginStateNamespace } from ${JSON.stringify(import.meta.resolve("../src/plugin-state/plugin-state-namespace-owner.ts"))};
+import { captureOpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.ts"))};
+const probeKey = Symbol.for("fixture.publicationRegistrations");
+const probe = Reflect.get(globalThis, probeKey) ?? {
+  counts: undefined as Record<string, number> | undefined,
+  afterAllReached: false,
+  wal: [] as string[],
+};
+Reflect.set(globalThis, probeKey, probe);
+const options = {
+  namespace: "publication-retirement",
+  maxEntries: 10,
+  env: { OPENCLAW_STATE_DIR: path.join(import.meta.dirname, "publication-state") },
+};
+const native = createPluginStateSyncKeyedStore<string>("runner-retirement", options);
+async function warmNamespace(): Promise<void> {
+  const context = captureOpenClawStateWorkerContext({ env: options.env });
+  await ensurePluginStateNamespace(context.admission.identity.key, {
+    pluginId: "runner-retirement", namespace: options.namespace,
+  }, async () => native.entries().map(({ key, value, createdAt, expiresAt }) => ({
+    entry_key: key, value_json: JSON.stringify(value),
+    created_at: createdAt, expires_at: expiresAt ?? null,
+  })));
+}
+function cachedValue(): unknown {
+  const context = captureOpenClawStateWorkerContext({ env: options.env });
+  const view = readCommittedPluginStateNamespace(context.admission.identity.key, {
+    pluginId: "runner-retirement", namespace: options.namespace,
+  });
+  expect(view).toBeDefined();
+  const row = view?.get("session");
+  return row ? JSON.parse(row.value_json) : undefined;
+}
+function listenerCounts(): Record<string, number> {
+  const readers = Reflect.get(globalThis, Symbol.for("openclaw.agentDatabaseReaders"));
+  const wal = Reflect.get(globalThis, Symbol.for("openclaw.sqliteWalCheckpointListeners"));
+  const publication = Reflect.get(globalThis, Symbol.for("openclaw.stateDomainPublication.plugin-state"));
+  return { readers: readers.closers.size, wal: wal.size, facts: publication.facts.size };
+}
+function publishCheckpoint(): void {
+  publishSqliteWalCheckpointObservation(path.join(import.meta.dirname, "publication-checkpoint.sqlite"), {
+    health: {
+      state: "complete", observedAtMs: 1, walBytes: 0, databaseBytes: 0,
+      logFrames: 0, checkpointedFrames: 0, lastCompletedAtMs: 1,
+      consecutiveBlocked: 0, warning: false,
+    },
+    observedAtNs: 1n,
+    lastCompletedAtNs: 1n,
+  });
+}
+`;
+  return {
+    "10-g-publication-producer.test.ts": `${shared}
+onSqliteWalCheckpoint(() => probe.wal.push("a"));
+it("keeps production publication subscriptions live until file retirement", async () => {
+  native.register("session", "original");
+  await warmNamespace();
+  expect(cachedValue()).toBe("original");
+  probe.counts = listenerCounts();
+  for (const count of Object.values(probe.counts)) expect(count).toBeGreaterThan(0);
+});
+afterAll(() => {
+  publishCheckpoint();
+  expect(probe.wal).toEqual(["a"]);
+  probe.afterAllReached = true;
+});
+`,
+    "10-h-publication-observer.test.ts": `${shared}
+onSqliteWalCheckpoint(() => probe.wal.push("b"));
+it("rebinds production publications without accumulating prior-file registrations", async () => {
+  try {
+    expect(probe.afterAllReached).toBe(true);
+    expect(probe.counts).toBeDefined();
+    expect(native.lookup("session")).toBe("original");
+    await warmNamespace();
+    // Real commits must update the complete namespace owner used by async reads.
+    // Retiring only the bus leaves its surviving singleton owner unsubscribed.
+    native.register("session", "replacement");
+    expect(cachedValue()).toBe("replacement");
+    expect(native.delete("session")).toBe(true);
+    expect(cachedValue()).toBeUndefined();
+    for (const [kind, count] of Object.entries(listenerCounts())) {
+      expect(count, kind + " registrations accumulated across files").toBeLessThanOrEqual(probe.counts![kind]);
+      expect(count, kind + " registrations were not reinstalled").toBeGreaterThan(0);
+    }
+    const before = probe.wal.length;
+    publishCheckpoint();
+    expect(probe.wal.slice(before)).toEqual(["b"]);
+  } finally {
+    Reflect.deleteProperty(globalThis, probeKey);
   }
 });
 `,

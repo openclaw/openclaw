@@ -16,7 +16,7 @@ import {
   assertImmutableServiceStoppedCurrent,
   inspectImmutableActivationService,
   controlImmutableService,
-  verifyImmutableService,
+  readImmutableService,
 } from "./update-immutable-service.js";
 
 vi.mock("node:fs", async (original) => {
@@ -77,7 +77,7 @@ it.each(["stateDir", "configPath", "profile"] as const)(
   "refuses adoption when the supplied %s does not match the effective service",
   async (key) => {
     service[key] = key === "profile" ? "other" : "/unrelated";
-    await expect(verifyImmutableService(service, root, generation, node)).rejects.toThrow(
+    await expect(readImmutableService(service, root, generation, node)).rejects.toThrow(
       "effective environment",
     );
   },
@@ -89,7 +89,7 @@ it("refuses a current symlink redirected to another generation", async () => {
   await fs.writeFile(path.join(other, "dist", "index.js"), "");
   await fs.unlink(path.join(root, "current"));
   await fs.symlink(other, path.join(root, "current"));
-  await expect(verifyImmutableService(service, root, generation, node)).rejects.toThrow(
+  await expect(readImmutableService(service, root, generation, node)).rejects.toThrow(
     "current immutable generation",
   );
 });
@@ -175,7 +175,7 @@ describe("immutable activation service", () => {
         if (!alive) {
           throw Object.assign(new Error("exited"), { code: "ENOENT" });
         }
-        return `${pid} (openclaw-gateway) S ${"0 ".repeat(18)}${ticks}`;
+        return `${path.basename(path.dirname(String(file)))} (openclaw-gateway) S ${"0 ".repeat(18)}${ticks}`;
       }
       if ([pid, currentPid].some((candidate) => String(file) === `/proc/${candidate}/cgroup`)) {
         return `0::${controlGroup}\n`;
@@ -321,9 +321,9 @@ describe("immutable activation service", () => {
         "gateway",
       ];
       command.workingDirectory = generation;
-      await expect(
-        verifyImmutableService(service, root, generation, node),
-      ).resolves.toBeUndefined();
+      await expect(readImmutableService(service, root, generation, node)).resolves.toMatchObject({
+        command,
+      });
       await expect(inspect()).rejects.toThrow("packaged stable Gateway launcher");
       expect(lifecycle.stopSystemdService).not.toHaveBeenCalled();
       expect(lifecycle.startSystemdService).not.toHaveBeenCalled();

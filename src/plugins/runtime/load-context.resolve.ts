@@ -12,7 +12,7 @@ import {
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginLogger } from "../types.js";
-import { createPluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
+import { pluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
 
 type PluginRuntimeLoadContextOptions = {
   config?: OpenClawConfig;
@@ -80,7 +80,7 @@ export function resolvePluginRuntimeLoadContext(
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env,
-    logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
+    logger: options?.logger ?? pluginRuntimeLoaderLogger,
     ...(manifestRegistry ? { manifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,

@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import * as pluginResources from "../plugins/doctor-contract-registry.js";
 import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
@@ -20,18 +22,43 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
+import * as doctorAdmission from "./doctor-maintenance-admission.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function withDoctorRehearsalState<T>(run: (state: OpenClawTestState) => Promise<T>): Promise<T> {
+  return withOpenClawTestState({ scenario: "minimal" }, (state) => {
+    const cleanup = state.cleanup;
+    let cleanupPromise: Promise<void> | undefined;
+    // Rehearsal TMPDIR contains the retained broker's socket. Keep it until native custody joins.
+    state.cleanup = () =>
+      (cleanupPromise ??= Promise.resolve().then(async () => {
+        await state.restoreEnv();
+        const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+        expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
+        expect(await source.retireIdleBroker()).toBe(true);
+        await cleanup();
+      }));
+    return run(state);
+  });
+}
 
 it("keeps config and declared plugin resources while excluding disposable core images and aliases", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withDoctorRehearsalState(async (state) => {
     const stateDir = await fs.realpath(state.stateDir);
     await withEnvAsync(
       {
@@ -56,13 +83,11 @@ it("keeps config and declared plugin resources while excluding disposable core i
         await fs.mkdir(plugin);
         await fs.mkdir(declared);
         const pluginDatabase = path.join(plugin, "plugin.sqlite");
-        const db = new DatabaseSync(pluginDatabase);
-        try {
+        {
+          using db = new DatabaseSync(pluginDatabase);
           db.exec(
             "CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES('plugin recovery');",
           );
-        } finally {
-          db.close();
         }
         const skill = path.join(declared, "SKILL.md");
         await fs.writeFile(skill, "retain declared repair input");
@@ -85,13 +110,14 @@ it("keeps config and declared plugin resources while excluding disposable core i
         );
         // Synthetic declarations isolate plugin execution; discovery, native custody,
         // snapshots, file traversal, manifests and publication use production code.
+        const warning = {
+          kind: "undeclared-migration-resources" as const,
+          pluginId: "synthetic-legacy",
+          message: "Synthetic legacy resources are undeclared",
+        };
         vi.spyOn(pluginResources, "preparePluginDoctorMigrationBackupResources").mockImplementation(
           async (params) => {
-            params.warnings.push({
-              kind: "undeclared-migration-resources",
-              pluginId: "synthetic-legacy",
-              message: "Synthetic legacy resources are undeclared",
-            });
+            params.warnings.push(warning);
             const canvas = await preparePluginDoctorMigrationResources(
               stateMigrations.map((migration) => ({ pluginId: "canvas", migration })),
               {
@@ -117,13 +143,12 @@ it("keeps config and declared plugin resources while excluding disposable core i
           },
         );
         const messages: string[] = [];
+        const log = (...args: unknown[]) => {
+          messages.push(args.map(String).join(" "));
+        };
         const runtime: RuntimeEnv = {
-          log: (...args) => {
-            messages.push(args.map(String).join(" "));
-          },
-          error: (...args) => {
-            messages.push(args.map(String).join(" "));
-          },
+          log,
+          error: log,
           exit: () => {
             throw new Error("Doctor exited unexpectedly");
           },
@@ -136,9 +161,9 @@ it("keeps config and declared plugin resources while excluding disposable core i
         });
         expect(maintenance).toBeDefined();
         try {
-          await maintenance!.run(async () => {
+          const captureResult = await maintenance!.run(async () => {
             const scope = getOpenClawDatabaseMaintenanceScope()!;
-            await preserveDoctorOriginalState({
+            const result = await preserveDoctorOriginalState({
               root: process.cwd(),
               env: process.env,
               runtime,
@@ -150,13 +175,14 @@ it("keeps config and declared plugin resources while excluding disposable core i
               pendingDatabasePaths: [agent],
               databasePaths: [agent],
             });
+            return result;
           });
           const names = (await fs.readdir(captures)).filter((name) => name.startsWith("doctor-"));
           expect(names, messages.join("\n")).toHaveLength(1);
           const directory = path.join(captures, names[0]!);
-          const manifest = parseUpdateRecoveryBackupManifest(
-            await fs.readFile(path.join(directory, "manifest.json"), "utf8"),
-          );
+          const manifestPath = path.join(directory, "manifest.json");
+          const manifestBytes = await fs.readFile(manifestPath);
+          const manifest = parseUpdateRecoveryBackupManifest(manifestBytes.toString());
           expect(manifest.databases).toEqual([]);
           expect(manifest.entries).toContainEqual({
             kind: "missing",
@@ -186,23 +212,28 @@ it("keeps config and declared plugin resources while excluding disposable core i
             sqlite: false,
             directory: true,
           });
-          expect((manifest.warnings ?? []).some((warning) => warning.pluginId === "canvas")).toBe(
+          expect((manifest.warnings ?? []).some((entry) => entry.pluginId === "canvas")).toBe(
             false,
           );
-          const captured = new DatabaseSync(payload(pluginDatabase), { readOnly: true });
-          try {
+          {
+            using captured = new DatabaseSync(payload(pluginDatabase), { readOnly: true });
             expect(captured.prepare("SELECT value FROM payload").all()).toEqual([
               { value: "plugin recovery" },
             ]);
-          } finally {
-            captured.close();
           }
-          expect(manifest.warnings).toContainEqual({
-            kind: "undeclared-migration-resources",
-            pluginId: "synthetic-legacy",
-            message: "Synthetic legacy resources are undeclared",
-          });
-          expect(messages).toContain("Synthetic legacy resources are undeclared");
+          expect(manifest.warnings).toContainEqual(warning);
+          expect(captureResult.findings).toContainEqual(
+            expect.objectContaining({
+              category: "recommended",
+              errorCode: "undeclared-migration-resources",
+              message:
+                "synthetic-legacy migration recovery coverage is unknown because no backup inventory was declared.",
+              fixHint: expect.any(String),
+              docsUrl: expect.any(String),
+            }),
+          );
+          expect(captureResult.warnings).toContain("Synthetic legacy resources are undeclared");
+          expect(messages).not.toContain("Synthetic legacy resources are undeclared");
           for (const file of [shared, agent]) {
             expect(
               (await fs.readdir(path.dirname(file))).some(
@@ -210,6 +241,49 @@ it("keeps config and declared plugin resources while excluding disposable core i
               ),
             ).toBe(false);
           }
+          const laterWorkspace = state.path("later-declared-workspace");
+          const workspaceFile = path.join(laterWorkspace, "document.txt");
+          await fs.mkdir(laterWorkspace);
+          await fs.writeFile(workspaceFile, "workspace omitted from the original inventory");
+          expect(manifest.entries.some((entry) => entry.sourcePath === laterWorkspace)).toBe(false);
+          vi.mocked(pluginResources.preparePluginDoctorMigrationBackupResources).mockResolvedValue({
+            resources: [{ path: laterWorkspace, kind: "directory" }],
+            deferredPluginIds: new Set(),
+            notices: [],
+            assertCurrent() {},
+          });
+          vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+          await maintenance!.run(async () => {
+            const scope = getOpenClawDatabaseMaintenanceScope()!;
+            vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
+              assertCurrent: scope.assertAdmission,
+              readContinuation: () => undefined,
+              recordContinuation() {},
+            });
+            await preserveDoctorOriginalState({
+              root: process.cwd(),
+              env: process.env,
+              runtime,
+              signal: maintenance!.signal,
+              assertCurrent: scope.assertAdmission,
+              writeAuthority: {
+                inputHash: "synthetic-config-hash",
+                assertCurrent: scope.assertAdmission,
+                originalRecoveryCapture: {
+                  runId: manifest.runId,
+                  installRoot: process.cwd(),
+                  ref: { directory, manifestPath, manifestSha256: sha256Hex(manifestBytes) },
+                },
+              },
+            });
+          });
+          expect((await fs.readdir(captures)).filter((name) => name.startsWith("doctor-"))).toEqual(
+            names,
+          );
+          expect(await fs.readFile(manifestPath)).toEqual(manifestBytes);
+          expect(await fs.readFile(workspaceFile, "utf8")).toBe(
+            "workspace omitted from the original inventory",
+          );
         } finally {
           await maintenance?.release();
           await fs.rm(captures, { recursive: true, force: true });
@@ -225,7 +299,7 @@ it("keeps config and declared plugin resources while excluding disposable core i
 });
 
 it("refuses to seal exclusions when the rehearsal environment changes during capture", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withDoctorRehearsalState(async (state) => {
     const stateDir = await fs.realpath(state.stateDir);
     const env: NodeJS.ProcessEnv = {
       ...buildUpdateRehearsalPathEnv(stateDir),

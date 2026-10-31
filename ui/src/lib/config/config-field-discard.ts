@@ -18,20 +18,19 @@ export function createConfigFieldDiscard(options: {
 }) {
   const { state } = options;
   const pending = new Set<{ path: Array<string | number>; current: boolean }>();
-  const invalidate = (path?: Array<string | number>) => {
-    for (const intent of pending) {
-      if (
-        !path ||
-        path
-          .slice(0, Math.min(path.length, intent.path.length))
-          .every((part, index) => part === intent.path[index])
-      ) {
-        intent.current = false;
-      }
-    }
-  };
   return {
-    invalidate,
+    invalidate: (path?: Array<string | number>) => {
+      for (const intent of pending) {
+        if (
+          !path ||
+          path
+            .slice(0, Math.min(path.length, intent.path.length))
+            .every((part, index) => part === intent.path[index])
+        ) {
+          intent.current = false;
+        }
+      }
+    },
     discard: async (path: Array<string | number>): Promise<boolean> => {
       const client = state.client;
       const epoch = currentConfigConnectionEpoch(state);

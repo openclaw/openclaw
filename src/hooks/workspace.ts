@@ -1,15 +1,18 @@
+import fs from "node:fs";
 import path from "node:path";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { fileURLToPath } from "node:url";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { iteratePluginRootContributions } from "../plugins/plugin-root-contributions.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
-import { resolveBundledHooksDir } from "./bundled-dir.js";
 import {
   loadHookEntriesFromDir,
   type DiscoveredHookEntry,
   type HookDiscoveryRoot,
 } from "./discovery.js";
-import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { resolveHookEntries } from "./policy.js";
 import type { HookEntry, HookPolicyEntry } from "./types.js";
 
@@ -23,26 +26,93 @@ type HookDiscoveryOptions = {
   bundledHooksDir?: string;
 };
 
+function resolveBundledHooksDir(): string | undefined {
+  const override = process.env.OPENCLAW_BUNDLED_HOOKS_DIR?.trim();
+  if (override) {
+    return override;
+  }
+
+  // Search compiled executables, npm packages, then source checkouts in that order.
+  for (const resolveCandidate of [
+    () => path.join(path.dirname(process.execPath), "hooks", "bundled"),
+    () => path.join(path.dirname(fileURLToPath(import.meta.url)), "bundled"),
+    () => path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../src/hooks/bundled"),
+  ]) {
+    try {
+      const candidate = resolveCandidate();
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // A failed candidate does not prevent later installation layouts from resolving.
+    }
+  }
+  return undefined;
+}
+
+function resolvePluginHookDirs(params: {
+  workspaceDir: string | undefined;
+  config?: OpenClawConfig;
+}): HookDiscoveryRoot[] {
+  const workspaceDir = (params.workspaceDir ?? "").trim();
+  if (!workspaceDir) {
+    return [];
+  }
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
+    workspaceDir,
+    config: params.config,
+    env: process.env,
+  });
+  const seen = new Set<string>();
+  const resolved: HookDiscoveryRoot[] = [];
+
+  for (const { record, roots } of iteratePluginRootContributions({
+    metadataSnapshot,
+    config: params.config,
+    contribution: "hooks",
+  })) {
+    for (const root of roots) {
+      const candidate = path.resolve(record.rootDir, root);
+      if (seen.has(candidate)) {
+        continue;
+      }
+      seen.add(candidate);
+      resolved.push({
+        dir: candidate,
+        pluginId: record.id,
+        rootDir: record.rootDir,
+        source: "openclaw-plugin",
+      });
+    }
+  }
+
+  return resolved;
+}
+
 function resolveHookDiscoveryRoots(
   workspaceDir: string,
   opts?: HookDiscoveryOptions,
 ): HookDiscoveryRoot[] {
   const bundledHooksDir = opts?.bundledHooksDir ?? resolveBundledHooksDir();
   return [
-    ...normalizeTrimmedStringList(opts?.config?.hooks?.internal?.load?.extraDirs).map((dir) => ({
-      dir: resolveUserPath(dir),
-      source: "openclaw-managed" as const,
-      includeRoot: true,
-    })),
-    ...(bundledHooksDir ? [{ dir: bundledHooksDir, source: "openclaw-bundled" as const }] : []),
-    ...resolvePluginHookDirs({ workspaceDir, config: opts?.config }).map(
-      ({ dir, pluginId, rootDir }) => ({
-        dir,
-        pluginId,
-        rootDir,
-        source: "openclaw-plugin" as const,
+    ...filterStringEntries(opts?.config?.hooks?.internal?.load?.extraDirs)
+      .filter((dir) => dir.trim())
+      .map((dir) => {
+        // Resolve only the invocation base and home through the trimming resolver.
+        // The configured directory's whitespace belongs to its filesystem identity.
+        const expanded = dir.startsWith("~")
+          ? expandHomePrefix(dir, { home: resolveUserPath("~") })
+          : dir;
+        return {
+          dir: path.isAbsolute(expanded)
+            ? path.resolve(expanded)
+            : path.resolve(resolveUserPath("."), expanded),
+          source: "openclaw-managed" as const,
+          includeRoot: true,
+        };
       }),
-    ),
+    ...(bundledHooksDir ? [{ dir: bundledHooksDir, source: "openclaw-bundled" as const }] : []),
+    ...resolvePluginHookDirs({ workspaceDir, config: opts?.config }),
     { dir: opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks"), source: "openclaw-managed" },
     { dir: path.join(workspaceDir, "hooks"), source: "openclaw-workspace" },
   ];

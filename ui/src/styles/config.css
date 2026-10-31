@@ -194,9 +194,19 @@
   width: 100%;
 }
 
+.settings-theme-card,
+.settings-text-scale__btn {
+  display: grid;
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
 .settings-theme-card {
   position: relative;
-  display: grid;
   /* minmax(0, 1fr): a plain 1fr floors at the label's min-content width, so a
      long theme name (imported tweakcn labels) overflowed the card's border. */
   grid-template-columns: auto minmax(0, 1fr);
@@ -204,14 +214,8 @@
   gap: 10px;
   min-height: 64px;
   padding: 14px 16px;
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg);
-  color: var(--text);
-  text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
 }
 
 .settings-theme-card:hover {
@@ -225,6 +229,11 @@
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.settings-theme-card--active:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
 }
 
 .settings-theme-card__icon {
@@ -288,148 +297,158 @@
 /* stylelint-disable color-no-hex */
 .settings-theme-card--claw,
 .settings-accent-theme--claw {
-  --theme-chip-bg: #0e1015;
+  --theme-chip-bg: #111318;
   --theme-chip-accent: #ff5c5c;
   --theme-chip-accent-2: #14b8a6;
 }
 
 .settings-theme-card--knot,
 .settings-accent-theme--knot {
-  --theme-chip-bg: #080808;
+  --theme-chip-bg: #0c0c0c;
   --theme-chip-accent: #e5243b;
   --theme-chip-accent-2: #b8bdc4;
 }
 
 .settings-theme-card--dash,
 .settings-accent-theme--dash {
-  --theme-chip-bg: #1a1210;
+  --theme-chip-bg: #1e1613;
   --theme-chip-accent: #cf8b4d;
   --theme-chip-accent-2: #dcb878;
 }
 
 .settings-theme-card--absolutely,
 .settings-accent-theme--absolutely {
-  --theme-chip-bg: #1c1c1a;
+  --theme-chip-bg: #1f1f1e;
   --theme-chip-accent: #d97757;
   --theme-chip-accent-2: #b8926a;
 }
 
 .settings-theme-card--tide,
 .settings-accent-theme--tide {
-  --theme-chip-bg: #10151b;
+  --theme-chip-bg: #14191f;
   --theme-chip-accent: #5ab6d8;
   --theme-chip-accent-2: #7f9bb5;
 }
 
 .settings-theme-card--beacon,
 .settings-accent-theme--beacon {
-  --theme-chip-bg: #000000;
+  --theme-chip-bg: #050505;
   --theme-chip-accent: #ffc233;
   --theme-chip-accent-2: #8ecdff;
 }
 
 .settings-theme-card--phosphor,
 .settings-accent-theme--phosphor {
-  --theme-chip-bg: #0a0f0a;
+  --theme-chip-bg: #0e130e;
   --theme-chip-accent: #4ade80;
   --theme-chip-accent-2: #8fd6a5;
 }
 
 .settings-theme-card--crt,
 .settings-accent-theme--crt {
-  --theme-chip-bg: #090a09;
+  --theme-chip-bg: #0d0e0d;
   --theme-chip-accent: #e8e8e8;
   --theme-chip-accent-2: #ffcf5c;
 }
 
 .settings-theme-card--manuscript,
 .settings-accent-theme--manuscript {
-  --theme-chip-bg: #211e18;
+  --theme-chip-bg: #25221b;
   --theme-chip-accent: #8fa8e0;
   --theme-chip-accent-2: #cfa85e;
 }
 
 .settings-theme-card--rose,
 .settings-accent-theme--rose {
-  --theme-chip-bg: #191724;
+  --theme-chip-bg: #1d1b28;
   --theme-chip-accent: #ebbcba;
   --theme-chip-accent-2: #f6c177;
 }
 
 .settings-theme-card--miami,
 .settings-accent-theme--miami {
-  --theme-chip-bg: #140f1e;
+  --theme-chip-bg: #181322;
   --theme-chip-accent: #f472b6;
   --theme-chip-accent-2: #5fd7e8;
 }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
-  --theme-chip-bg: #faf9f7;
-  --theme-chip-accent: #bd4531;
-  --theme-chip-accent-2: #0d9488;
-}
+:root[data-theme-mode="light"] {
+  .settings-theme-card--claw,
+  .settings-accent-theme--claw {
+    --theme-chip-bg: #f4f4f4;
+    --theme-chip-accent: #bd4531;
+    --theme-chip-accent-2: #0d9488;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
-  --theme-chip-bg: #f9f9fb;
-  --theme-chip-accent: #c41e30;
-  --theme-chip-accent-2: #5a626e;
-}
+  .settings-theme-card--knot,
+  .settings-accent-theme--knot {
+    --theme-chip-bg: #f0f0f3;
+    --theme-chip-accent: #c41e30;
+    --theme-chip-accent-2: #5a626e;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
-  --theme-chip-bg: #f7f2ec;
-  --theme-chip-accent: #8a512c;
-  --theme-chip-accent-2: #7d6027;
-}
+  .settings-theme-card--dash,
+  .settings-accent-theme--dash {
+    --theme-chip-bg: #e8e2dc;
+    --theme-chip-accent: #8a512c;
+    --theme-chip-accent-2: #7d6027;
+  }
 
-:root[data-theme-mode="light"]
-  :is(.settings-theme-card--absolutely, .settings-accent-theme--absolutely) {
-  --theme-chip-bg: #faf9f5;
-  --theme-chip-accent: #a8452a;
-  --theme-chip-accent-2: #8a6a44;
-}
+  .settings-theme-card--absolutely,
+  .settings-accent-theme--absolutely {
+    --theme-chip-bg: #f3f2f1;
+    --theme-chip-accent: #cc7d5d;
+    --theme-chip-accent-2: #8a6a44;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--tide, .settings-accent-theme--tide) {
-  --theme-chip-bg: #f7f9fb;
-  --theme-chip-accent: #1f6f8f;
-  --theme-chip-accent-2: #3d6d88;
-}
+  .settings-theme-card--tide,
+  .settings-accent-theme--tide {
+    --theme-chip-bg: #edeff1;
+    --theme-chip-accent: #1f6f8f;
+    --theme-chip-accent-2: #3d6d88;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--beacon, .settings-accent-theme--beacon) {
-  --theme-chip-bg: #ffffff;
-  --theme-chip-accent: #6e4a00;
-  --theme-chip-accent-2: #09428d;
-}
+  .settings-theme-card--beacon,
+  .settings-accent-theme--beacon {
+    --theme-chip-bg: #f3f3f3;
+    --theme-chip-accent: #6e4a00;
+    --theme-chip-accent-2: #09428d;
+  }
 
-:root[data-theme-mode="light"]
-  :is(.settings-theme-card--phosphor, .settings-accent-theme--phosphor) {
-  --theme-chip-bg: #f4f7f4;
-  --theme-chip-accent: #10693a;
-  --theme-chip-accent-2: #2f6b47;
-}
+  .settings-theme-card--phosphor,
+  .settings-accent-theme--phosphor {
+    --theme-chip-bg: #edf0ed;
+    --theme-chip-accent: #10693a;
+    --theme-chip-accent-2: #2f6b47;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
-  --theme-chip-bg: #f5f5f4;
-  --theme-chip-accent: #1f1f1f;
-  --theme-chip-accent-2: #7a5d10;
-}
+  .settings-theme-card--crt,
+  .settings-accent-theme--crt {
+    --theme-chip-bg: #f0f0f0;
+    --theme-chip-accent: #1f1f1f;
+    --theme-chip-accent-2: #7a5d10;
+  }
 
-:root[data-theme-mode="light"]
-  :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
-  --theme-chip-bg: #f6f1e4;
-  --theme-chip-accent: #31549b;
-  --theme-chip-accent-2: #7d6118;
-}
+  .settings-theme-card--manuscript,
+  .settings-accent-theme--manuscript {
+    --theme-chip-bg: #edece6;
+    --theme-chip-accent: #31549b;
+    --theme-chip-accent-2: #7d6118;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--rose, .settings-accent-theme--rose) {
-  --theme-chip-bg: #faf4ed;
-  --theme-chip-accent: #9c4f66;
-  --theme-chip-accent-2: #286983;
-}
+  .settings-theme-card--rose,
+  .settings-accent-theme--rose {
+    --theme-chip-bg: #edeae7;
+    --theme-chip-accent: #9c4f66;
+    --theme-chip-accent-2: #286983;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--miami, .settings-accent-theme--miami) {
-  --theme-chip-bg: #f7f3f6;
-  --theme-chip-accent: #b0246f;
-  --theme-chip-accent-2: #0f6f7d;
+  .settings-theme-card--miami,
+  .settings-accent-theme--miami {
+    --theme-chip-bg: #f2eef1;
+    --theme-chip-accent: #b0246f;
+    --theme-chip-accent-2: #0f6f7d;
+  }
 }
 /* stylelint-enable color-no-hex */
 
@@ -680,19 +699,12 @@
 }
 
 .settings-text-scale__btn {
-  display: grid;
   gap: 4px;
   justify-items: start;
   min-height: 58px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--card);
-  color: var(--text);
-  text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
 }
 
 .settings-text-scale__btn:hover {
@@ -779,8 +791,7 @@
   width: 100%;
 }
 
-.cfg-array .settings-row--stacked .settings-row__control > input[type="number"],
-.cfg-array .settings-row--stacked .settings-row__control > .lit-content > input[type="number"] {
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
   flex: 1 1 auto;
   width: auto;
 }

@@ -1,4 +1,3 @@
-/** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -24,7 +23,7 @@ import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 const configLog = createSubsystemLogger("config");
 
-export function noteMediaCliModelWarnings(cfg: OpenClawConfig): void {
+function noteMediaCliModelWarnings(cfg: OpenClawConfig): void {
   const models = cfg.tools?.media?.models;
   if (!Array.isArray(models)) {
     return;
@@ -137,7 +136,7 @@ export function noteDoctorHookConfigWarnings(cfg: OpenClawConfig, configPath: st
   }
 }
 
-export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
+function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
   if (
     cfg.agents?.ownership === "explicit" &&
     listAgentEntries(cfg).length > 1 &&
@@ -184,18 +183,15 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
 /**
  * Removes unknown config keys reported by schema validation.
  *
- * Doctor skips this while an update is in progress so partially written upgrade state is not
- * stripped before its migration can finish.
+ * Runs after migrations; retained plugin inputs must survive until their owner can finish.
  */
-export function stripUnknownConfigKeys(config: OpenClawConfig): {
+export function stripUnknownConfigKeys(
+  config: OpenClawConfig,
+  preservedPaths: readonly (readonly string[])[] = [],
+): {
   config: OpenClawConfig;
   removed: string[];
 } {
-  const updating = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  if (updating === "1" || updating === "true") {
-    return { config, removed: [] };
-  }
-
   const parsed = OpenClawSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
@@ -221,6 +217,16 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       if (key === INCLUDE_KEY) {
         continue;
       }
+      const keyPath = [...issuePath, key].map(String);
+      if (
+        (key === "heartbeat" && issuePath[0] === "agents") ||
+        (key === "heartbeatVisibility" && issuePath[0] === "channels") ||
+        preservedPaths.some((retained) =>
+          retained.slice(0, keyPath.length).every((part, index) => keyPath[index] === part),
+        )
+      ) {
+        continue;
+      }
       delete target[key];
       removed.push(formatConfigKeyPath([...issuePath, key]));
     }
@@ -229,8 +235,37 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   return { config: next, removed };
 }
 
+/** Emits the final config advisories under the flow's prepared plugin metadata. */
+export async function noteConfigAdvisories(
+  cfg: OpenClawConfig,
+  runWithCurrentPluginMetadata: <T>(config: OpenClawConfig, run: () => T) => T,
+): Promise<void> {
+  const configuredOpencodePluginIds = [
+    cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
+      ? "opencode"
+      : undefined,
+    cfg.models?.providers?.["opencode-go"] ? "opencode-go" : undefined,
+  ].filter((pluginId): pluginId is string => pluginId !== undefined);
+  let activeOpencodePluginIds: string[] = [];
+  if (configuredOpencodePluginIds.length > 0) {
+    const { resolveEnabledProviderPluginIds } = await import("../plugins/providers.js");
+    activeOpencodePluginIds = runWithCurrentPluginMetadata(cfg, () =>
+      resolveEnabledProviderPluginIds({ config: cfg, onlyPluginIds: configuredOpencodePluginIds }),
+    );
+  }
+  noteOpencodeProviderOverrides(cfg, {
+    opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
+    opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),
+  });
+  noteImplicitFallbackClobberWarnings(cfg);
+  noteSandboxOriginProxyWarning(cfg);
+  noteMcpOriginWarning(cfg);
+  noteMediaCliModelWarnings(cfg);
+  noteMissingDefaultAgentOwner(cfg);
+}
+
 /** Warns when legacy OpenCode overrides shadow an active plugin-provided catalog. */
-export function noteOpencodeProviderOverrides(
+function noteOpencodeProviderOverrides(
   cfg: OpenClawConfig,
   options: { opencodePluginActive?: boolean; opencodeGoPluginActive?: boolean } = {},
 ): void {
@@ -281,7 +316,7 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   return false;
 }
 
-export function noteImplicitFallbackClobberWarnings(cfg: unknown): void {
+function noteImplicitFallbackClobberWarnings(cfg: unknown): void {
   const agents = isRecord(cfg) && isRecord(cfg.agents) ? cfg.agents : undefined;
   const defaults = isRecord(agents?.defaults) ? agents.defaults : undefined;
   const model = defaults?.model;
@@ -354,7 +389,7 @@ function noteIncludeConfinementWarning(snapshot: {
 }
 
 /** Warns when a trusted-proxy gateway has no public sandbox origin for widget/MCP-app frames. */
-export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
+function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
   if (cfg.gateway?.auth?.mode !== "trusted-proxy" || cfg.mcp?.apps?.sandboxOrigin) {
     return;
   }
@@ -369,7 +404,7 @@ export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
 }
 
 /** Warns when per-requester MCP OAuth cannot build a public callback URL. */
-export function noteMcpOriginWarning(cfg: OpenClawConfig): void {
+function noteMcpOriginWarning(cfg: OpenClawConfig): void {
   const hasPerRequesterOAuth = Object.values(cfg.mcp?.servers ?? {}).some(
     (server) => server.oauth?.identity === "per-requester",
   );

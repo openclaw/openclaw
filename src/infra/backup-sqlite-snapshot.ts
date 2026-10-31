@@ -42,12 +42,13 @@ import {
   type BackupSqliteSourceGroup,
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
-import { resolveClientCredentialStorePath } from "./client-credential-store.js";
 import { resolveAgentPortRoots } from "./database-engine/agent-port.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { listDatabaseEngineStores, selectDatabaseEngine } from "./database-engine/registry.js";
-import { hasErrnoCode } from "./errno.js";
+import { sha256File } from "./directory-durability.js";
+import { hasErrnoCode, ignoreMissingPath as ignoreMissingSource } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -56,6 +57,7 @@ import {
   resolveSqliteDatabaseFilePaths,
   SQLITE_SIDECAR_SUFFIXES,
 } from "./sqlite-files.js";
+import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
@@ -71,12 +73,6 @@ type SqliteBackupAsset = {
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
 };
-
-function ignoreMissingSource(error: unknown): undefined {
-  if (!hasErrnoCode(error, "ENOENT")) {
-    throw error;
-  }
-}
 
 function findLegacyAuditBackupStateChange(
   error: unknown,
@@ -95,14 +91,21 @@ type CanonicalSqliteSource = {
   sourcePath: string;
 } & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
 
-function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    if (sourcePath.endsWith(suffix)) {
-      const databasePath = sourcePath.slice(0, -suffix.length);
-      return databasePath.endsWith(".sqlite") ? databasePath : undefined;
-    }
+// The sealed inventory also bounds header answers to one backup capture.
+const sqliteHeaderAnswers = new WeakMap<BackupResourceInventory, Map<string, boolean>>();
+
+function stripSqliteSidecarSuffix(sourcePath: string): string {
+  const sidecarSuffix = SQLITE_SIDECAR_SUFFIXES.find((suffix) => sourcePath.endsWith(suffix));
+  return sidecarSuffix ? sourcePath.slice(0, -sidecarSuffix.length) : sourcePath;
+}
+
+function headerAnswers(inventory: BackupResourceInventory): Map<string, boolean> {
+  let answers = sqliteHeaderAnswers.get(inventory);
+  if (!answers) {
+    answers = new Map();
+    sqliteHeaderAnswers.set(inventory, answers);
   }
-  return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
+  return answers;
 }
 
 export function classifyBackupSqliteSource(
@@ -110,11 +113,6 @@ export function classifyBackupSqliteSource(
   inventory: BackupResourceInventory,
 ): "excluded" | "sqlite" | "opaque" | "opaque-skip" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
-  const transient = isTransientSqliteBackupPath(resolvedSourcePath);
-  const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
-  if (!transient && !databasePath) {
-    return undefined;
-  }
   const withinOwnedRoot =
     isPathInside(inventory.stateDir, resolvedSourcePath) ||
     inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
@@ -123,13 +121,34 @@ export function classifyBackupSqliteSource(
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
   }
-  if (transient || !inventory.isIncluded(resolvedSourcePath)) {
+  const transient = isTransientSqliteBackupPath(resolvedSourcePath);
+  const databasePath = stripSqliteSidecarSuffix(resolvedSourcePath);
+  const nameTrusted = databasePath.endsWith(".sqlite");
+  if (!inventory.isIncludedByOwner(resolvedSourcePath)) {
+    return nameTrusted ? "excluded" : undefined;
+  }
+  if (!transient && !nameTrusted) {
+    const answers = headerAnswers(inventory);
+    if (!answers.has(databasePath)) {
+      for (const [pathname, sqlite] of probeSqliteDatabaseHeaders([databasePath])) {
+        answers.set(pathname, sqlite);
+      }
+    }
+    // Ordinary files must leave before the per-path privacy admission probes.
+    if (!answers.get(databasePath)) {
+      return undefined;
+    }
+  }
+  if (transient) {
     return "excluded";
+  }
+  if (!inventory.isIncluded(resolvedSourcePath)) {
+    return nameTrusted ? "excluded" : undefined;
   }
   if (isAppleDoubleMetadataFile(resolvedSourcePath)) {
     return "excluded";
   }
-  const source = databasePath && inventory.resolveSqliteSource(databasePath);
+  const source = inventory.resolveSqliteSource(databasePath);
   if (source && source.role === "unresolvable-link") {
     return resolvedSourcePath === databasePath ? "opaque-skip" : "opaque";
   }
@@ -143,6 +162,7 @@ async function discoverBackupSqliteSources(params: {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
   const visitedDirectories = new Set<string>();
+  const candidates: Array<{ path: string; name: string }> = [];
   const gatewayLockDir = resolveGatewayLockDir(params.inventory.stateDir);
 
   const isRetainedPath = (pathname: string) =>
@@ -167,7 +187,7 @@ async function discoverBackupSqliteSources(params: {
         (entry.kind === "file" || entry.kind === "symlink") &&
         isSelectedPath(entry.path) &&
         isRetainedPath(entry.path) &&
-        classifyBackupSqliteSource(entry.path, params.inventory) === "sqlite",
+        params.inventory.isIncludedByOwner(entry.path),
       descend: (entry) => {
         if (
           visitedDirectories.has(entry.path) ||
@@ -187,10 +207,26 @@ async function discoverBackupSqliteSources(params: {
       throw failure.error;
     }
     for (const entry of entries) {
-      discoveredSourcePaths.add(entry.path);
-      if (entry.name.endsWith(".sqlite")) {
-        snapshotPaths.add(entry.path);
-      }
+      candidates.push(entry);
+    }
+  }
+
+  // One isolated read batch serves discovery and archive traversal. Include
+  // visited directories so traversal never launches a probe for each directory.
+  const answers = headerAnswers(params.inventory);
+  const probePaths = [...candidates.map((entry) => entry.path), ...visitedDirectories]
+    .map(stripSqliteSidecarSuffix)
+    .filter((pathname) => !pathname.endsWith(".sqlite"));
+  for (const [pathname, sqlite] of probeSqliteDatabaseHeaders(probePaths)) {
+    answers.set(pathname, sqlite);
+  }
+  for (const entry of candidates) {
+    if (classifyBackupSqliteSource(entry.path, params.inventory) !== "sqlite") {
+      continue;
+    }
+    discoveredSourcePaths.add(entry.path);
+    if (!SQLITE_SIDECAR_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) {
+      snapshotPaths.add(entry.path);
     }
   }
 
@@ -317,10 +353,14 @@ export async function createBackupSqliteSnapshotPlan(params: {
 }): Promise<{
   inventory: BackupResourceInventory;
   snapshots: SqliteBackupAsset[];
+  postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }>;
   discoveredSourcePaths: Set<string>;
+  sharedDatabaseSourcePath?: string;
 }> {
   const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
   const snapshots: SqliteBackupAsset[] = [];
+  const postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }> = [];
+  let sharedDatabaseSourcePath: string | undefined;
   let capturedAgents: Array<{ role: "agent"; agentId: string; sourcePath: string }> = [];
   function captureAgentRegistry(database: DatabaseSync, archiveSourcePath: string) {
     capturedAgents = readOpenClawAgentDatabaseRegistryRows(database, archiveSourcePath).map(
@@ -427,7 +467,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
         throw stateChange;
       }
       throw new Error(
-        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(error)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data.`,
+        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(error)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data. For a plugin-owned database, restore the required SQLite capabilities or use the plugin's own backup procedure before retrying.`,
         { cause: error },
       );
     }
@@ -461,6 +501,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
         sourcePath: anchorPath,
         archiveSourcePath,
         skippedSourcePaths: new Set(resolveSqliteDatabaseFilePaths(sourceDatabasePath)),
+      });
+      postgresSnapshots.push({
+        sourcePath: archiveSourcePath,
+        manifestSha256: (await sha256File(path.join(directory, "manifest.json"))).digest,
       });
       return;
     }
@@ -509,6 +553,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     );
     globalGroup = groups.get(globalSource.sourcePath);
     await captureSource(globalPath, globalGroup, globalSource);
+    sharedDatabaseSourcePath = globalSource.sourcePath;
   } else {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
       const exists = await fs.lstat(sidecar).catch(ignoreMissingSource);
@@ -600,5 +645,11 @@ export async function createBackupSqliteSnapshotPlan(params: {
       throw new Error(`Canonical SQLite path changed after discovery: ${source.sourcePath}`);
     }
   }
-  return { inventory, snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };
+  return {
+    inventory,
+    snapshots,
+    postgresSnapshots,
+    discoveredSourcePaths: discovery.discoveredSourcePaths,
+    sharedDatabaseSourcePath,
+  };
 }

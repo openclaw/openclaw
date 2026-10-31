@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { readSqliteFreePageCount } from "../../infra/sqlite-wal-reclamation.js";
@@ -15,7 +16,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PublishedSessionTranscriptArchive,
@@ -28,6 +29,7 @@ import type {
 export function readSessionArchivePruningInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   limit = 1,
+  offset = 0,
 ): SessionArchivePruningSnapshot {
   const freePages = isPostgresSqlConnection(database.db) ? 0 : readSqliteFreePageCount(database.db);
   if (!tableExists(database.db, "session_transcript_archives")) {
@@ -54,7 +56,8 @@ export function readSessionArchivePruningInDatabase(
       .orderBy("created_at", "asc")
       .orderBy("session_id", "asc")
       .orderBy("generation", "asc")
-      .limit(limit),
+      .limit(limit)
+      .offset(offset),
   ).rows;
   return { archives: rows.map((row) => Object.assign({}, row)), freePages };
 }
@@ -73,7 +76,7 @@ export function readSessionArchivePruningInWorker(
       ) {
         throw new Error("SQLite archive pruning database owner changed");
       }
-      const value = readSessionArchivePruningInDatabase(database, request.limit);
+      const value = readSessionArchivePruningInDatabase(database, request.limit, request.offset);
       assertExistingDatabaseIdentity(request.database.path, identity);
       return value;
     },
@@ -109,35 +112,48 @@ export function pruneSessionArchivesByRetentionInDatabase(
         return (
           !referenced.has(row.session_id) &&
           path.dirname(archivePath) === directory &&
-          path.basename(archivePath) === row.archive_name &&
-          !fs.existsSync(archivePath)
+          path.basename(archivePath) === row.archive_name
         );
       });
-      let removed = 0;
-      if (removable.length > 0) {
-        // Selection can wait behind publication or restore; stale rows simply wait for another sweep.
-        const result = executeSqliteQuerySync(
-          transactionDb.db,
-          db
-            .deleteFrom("session_transcript_archives")
-            .where((eb) =>
-              eb.or(
-                removable.map((row) =>
-                  eb.and([
-                    eb("session_id", "=", row.session_id),
-                    eb("generation", "=", row.generation),
-                    eb("archive_name", "=", row.archive_name),
-                    eb("created_at", "=", row.created_at),
-                    eb("published_at", "=", row.published_at),
-                  ]),
-                ),
-              ),
-            ),
-        );
-        removed = Number(result.numAffectedRows ?? 0n);
-      }
+      // Selection can wait behind publication or restore; stale rows wait for another sweep.
+      const removed =
+        removable.length > 0
+          ? executeSqliteQuerySync(
+              transactionDb.db,
+              db
+                .deleteFrom("session_transcript_archives")
+                .where((eb) =>
+                  eb.or(
+                    removable.map((row) =>
+                      eb.and([
+                        eb("session_id", "=", row.session_id),
+                        eb("generation", "=", row.generation),
+                        eb("archive_name", "=", row.archive_name),
+                        eb("archive_sha256", "=", row.archive_sha256),
+                        eb("created_at", "=", row.created_at),
+                        eb("encoding", "=", row.encoding),
+                        eb("reason", "=", row.reason),
+                        eb("session_key", "=", row.session_key),
+                        eb("published_at", "=", row.published_at),
+                      ]),
+                    ),
+                  ),
+                )
+                .returning("archive_name"),
+            ).rows
+          : [];
+      // One grant covers this synchronous batch and commit; failed unlink retains recovery blobs.
       admit("commit");
-      return removed;
+      for (const row of removed) {
+        try {
+          fs.unlinkSync(path.join(directory, row.archive_name));
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+        }
+      }
+      return removed.length;
     },
     options,
     { operationLabel: "session.archive.prune-retention" },

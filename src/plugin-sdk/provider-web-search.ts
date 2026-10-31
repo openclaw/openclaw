@@ -1,5 +1,3 @@
-// Public web-search registration helpers for provider plugins.
-
 export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
@@ -20,6 +18,7 @@ export {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  externalContentStamp,
   FRESHNESS_TO_RECENCY,
   isoToPerplexityDate,
   MAX_SEARCH_COUNT,
@@ -29,6 +28,8 @@ export {
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,

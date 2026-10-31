@@ -1,249 +1,229 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
+  type JsonObject,
 } from "./protocol.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
 
-const delegationTools: CodexDynamicToolSpec[] = [
-  {
-    type: "function",
-    name: "sessions_spawn",
-    description: "Spawn an OpenClaw session",
-    inputSchema: { type: "object" },
-  },
-  {
-    type: "function",
-    name: "sessions_send",
-    description: "Send to an OpenClaw session",
-    inputSchema: { type: "object" },
-  },
-  {
-    type: "function",
-    name: "subagents",
-    description: "List OpenClaw subagents",
-    inputSchema: { type: "object" },
-  },
-  {
-    type: "namespace",
-    name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-    description: "Direct OpenClaw tools",
-    tools: [
-      {
-        type: "function",
-        name: "sessions_yield",
-        description: "Yield for OpenClaw session events",
-        inputSchema: { type: "object" },
-      },
-    ],
-  },
-];
-
-function createParams(overrides: Partial<EmbeddedRunAttemptParams> = {}): EmbeddedRunAttemptParams {
+function tool(
+  name: string,
+  properties: JsonObject = {},
+  deferLoading = false,
+): CodexDynamicToolFunctionSpec {
   return {
-    agentId: "main",
-    config: {},
-    modelId: "gpt-5.6-luna",
-    sessionKey: "agent:main:main",
-    sourceReplyDeliveryMode: "automatic",
-    ...overrides,
-  } as EmbeddedRunAttemptParams;
+    type: "function",
+    name,
+    description: name,
+    inputSchema: { type: "object", properties },
+    deferLoading,
+  };
 }
 
-function buildInstructions(overrides: Partial<EmbeddedRunAttemptParams> = {}): string {
-  return buildDeveloperInstructions(createParams(overrides), {
-    dynamicTools: delegationTools,
-  });
+function namespace(tools: CodexDynamicToolFunctionSpec[], name = "openclaw"): CodexDynamicToolSpec {
+  return { type: "namespace", name, description: "OpenClaw tools", tools };
+}
+
+const spawnTool = tool("sessions_spawn", {
+  runtime: { type: "string", enum: ["subagent", "acp"] },
+});
+const delegationTools = [
+  spawnTool,
+  tool("sessions_send"),
+  tool("subagents"),
+  namespace([tool("sessions_yield")], CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE),
+];
+
+function render(
+  params: Partial<CodexThreadPromptContext> = {},
+  options: Parameters<typeof buildDeveloperInstructions>[1] = {},
+) {
+  return buildDeveloperInstructions(
+    {
+      agentId: "main",
+      config: {},
+      modelId: "gpt-5.6-luna",
+      sessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: "automatic",
+      ...params,
+    },
+    {
+      dynamicTools: delegationTools,
+      ...options,
+    },
+  );
 }
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
-  it.each([{ name: "native delegation", overrides: {}, deferred: false }] as const)(
-    "uses direct discovery for normal threads with $name",
-    ({ overrides, deferred }) => {
-      const instructions = buildDeveloperInstructions(createParams(overrides), {
-        nativeCodeModeOnlyEnabled: false,
-        dynamicTools: deferred
-          ? [
-              {
-                type: "function",
-                name: "lookup",
-                description: "Lookup",
-                inputSchema: {},
-                deferLoading: true,
-              },
-            ]
-          : [],
-      });
-
-      expect(instructions).toContain(
-        "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.",
+  it.each([
+    [false, false, false],
+    [true, false, false],
+    [false, false, true],
+    [true, false, true],
+    [true, true, false],
+  ] as const)(
+    "selects discovery (JavaScript: %s, code-only: %s, restricted: %s)",
+    (enabled, codeOnly, restricted) => {
+      const instructions = render(
+        restricted ? { toolsAllow: ["message"], sourceReplyDeliveryMode: "message_tool_only" } : {},
+        {
+          nativeCodeModeEnabled: enabled,
+          nativeCodeModeOnlyEnabled: codeOnly,
+          dynamicTools: codeOnly
+            ? []
+            : restricted
+              ? [tool("message")]
+              : [namespace([tool("dashboard", {}, true)])],
+        },
       );
-      expect(instructions).not.toContain("On code-mode-only models");
-      expect(instructions).not.toContain("use `exec` instead");
+      if (restricted) {
+        for (const name of ["ALL_TOOLS", "`tool_search`", "spawn_agent"]) {
+          expect(instructions).not.toContain(name);
+        }
+      } else {
+        expect(instructions.includes("ALL_TOOLS")).toBe(enabled);
+        expect(instructions).toContain(
+          enabled
+            ? "native JavaScript `exec`"
+            : "Shell command tools execute operating-system commands",
+        );
+        if (!codeOnly) {
+          expect(instructions).toContain("openclaw.dashboard");
+        } else {
+          expect(instructions).not.toContain("`tool_search`");
+        }
+      }
     },
   );
-
-  it("preserves exec discovery for code-mode-only threads", () => {
-    const instructions = buildDeveloperInstructions(createParams(), {
-      nativeCodeModeOnlyEnabled: true,
-    });
-
-    expect(instructions).toContain(
-      "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.",
-    );
-    expect(instructions).not.toContain("Do not use `exec`");
-  });
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it("routes new helpers by tool requirements without moving existing children", () => {
+    const instructions = render(
+      {},
+      {
+        dynamicTools: [namespace([spawnTool, tool("sessions_create")])],
+      },
+    );
+
+    expect(instructions).toContain("`spawn_agent` for work that only needs Codex-native tools");
+    expect(instructions).toContain("native collaboration tools may be deferred");
+    expect(instructions).toContain(
+      'For new delegated work that needs OpenClaw tools, use `openclaw.sessions_spawn` with `runtime="subagent"` from the start.',
+    );
+    expect(instructions).toContain(
+      "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
+    );
+    expect(instructions).toContain("Do not respawn existing work to switch tool routes");
+  });
+
+  it.each<{ properties: JsonObject; expected: string }>([
+    { properties: {}, expected: "use `sessions_spawn` from the start." },
+    {
+      properties: { runtime: { type: "string", enum: ["acp"] } },
+      expected: "Keep work needing OpenClaw tools in this session",
+    },
+  ])("respects the advertised managed runtime schema: %j", ({ properties, expected }) => {
+    const instructions = render(
+      {},
+      {
+        dynamicTools: [tool("sessions_spawn", properties)],
+      },
+    );
+
+    expect(instructions).toContain(expected);
+    expect(instructions).not.toContain('runtime="subagent"');
+  });
+
   it.each([{ requireWorkspaceOnly: true }, { delegationCapability: "host_only" }] as const)(
     "does not advertise native helpers for restricted runs (%j)",
     (overrides) => {
-      const instructions = buildInstructions(overrides);
+      const instructions = render(overrides);
       expect(instructions).not.toContain("spawn_agent");
       expect(instructions).not.toContain("wait_agent");
-      expect(instructions).toContain("sessions_spawn");
+      expect(instructions).toContain('`sessions_spawn` with `runtime="subagent"`');
     },
   );
 
-  it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
-    const params = createParams({ toolsAllow: [] });
-    const instructions = buildDeveloperInstructions(params);
-
-    expect(instructions).not.toContain("Deferred tools may be absent");
+  it.each<Partial<CodexThreadPromptContext>>([
+    { delegationCapability: "report_only" },
+    { disableTools: true },
+    { toolsAllow: [] },
+  ])("does not advertise either delegation route when delegation is disabled (%j)", (overrides) => {
+    const instructions = render(overrides);
     expect(instructions).not.toContain("spawn_agent");
-    expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain(
-      "Deferred tools may be absent",
-    );
+    expect(instructions).not.toContain("sessions_spawn");
+  });
+
+  it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
+    const instructions = render({ toolsAllow: [] }, { dynamicTools: [] });
+
+    expect(instructions).not.toContain("Shell command tools");
+    expect(instructions).not.toContain("spawn_agent");
+    expect(render({}, { dynamicTools: [] })).toContain("Shell command tools");
   });
 
   it.each([false, true])(
     "routes session creation from available tools in suggest mode (deferred: %s)",
     (deferLoading) => {
-      const params = createParams({ sessionKey: "agent:main:dashboard:task" });
-      const render = (createAvailable: boolean) =>
-        buildDeveloperInstructions(params, {
-          dynamicTools: [
-            ...delegationTools,
-            {
-              type: "namespace",
-              name: "openclaw",
-              description: "OpenClaw tools",
-              tools: [
-                {
-                  type: "function",
-                  name: createAvailable ? "sessions_create" : "sessions",
-                  description: "Session tool",
-                  deferLoading,
-                  inputSchema: { type: "object" },
-                },
-                {
-                  type: "function",
-                  name: "suggest_task",
-                  description: "Suggest a follow-up",
-                  deferLoading,
-                  inputSchema: { type: "object" },
-                },
-              ],
-            },
-          ],
-        });
-      const instructions = render(true);
+      const renderCreation = (createAvailable: boolean) =>
+        render(
+          { sessionKey: "agent:main:dashboard:task" },
+          {
+            dynamicTools: [
+              ...delegationTools,
+              namespace([
+                tool(createAvailable ? "sessions_create" : "sessions", {}, deferLoading),
+                tool("suggest_task", {}, deferLoading),
+              ]),
+            ],
+          },
+        );
+      const instructions = renderCreation(true);
 
-      expect(instructions).toContain('"spin up a new task"');
       expect(instructions).toContain("`openclaw.sessions_create`");
       expect(instructions).toContain("no completion event or yield expectation");
       expect(instructions).toContain("Actual delegated helpers use native `spawn_agent`");
       expect(instructions).toContain("unrequested follow-up proposals use `openclaw.suggest_task`");
       expect(instructions).not.toContain("## Delegation");
-      expect(render(false)).not.toContain("`openclaw.sessions_create`");
+      expect(renderCreation(false)).not.toContain("`openclaw.sessions_create`");
     },
   );
 
-  it.each([{ name: "prompt mode none", overrides: { promptMode: "none" } }] as const)(
-    "omits the policy for $name",
-    ({ overrides }) => {
-      expect(buildInstructions(overrides)).not.toContain("## Delegation");
-    },
-  );
+  it("omits the policy for prompt mode none", () => {
+    expect(render({ promptMode: "none" })).not.toContain("## Delegation");
+  });
 });
 
 describe("buildDeveloperInstructions UI presentation guidance", () => {
-  const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map(
-    (name): CodexDynamicToolFunctionSpec => ({
-      type: "function",
-      name,
-      description: `Use ${name}`,
-      inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
-    }),
+  const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map((name) =>
+    tool(name, name === "message" ? { clawhub: {} } : {}, true),
   );
 
-  it.each([
-    {
-      name: "namespaced deferred",
-      dynamicTools: [
-        {
-          type: "namespace",
-          name: "openclaw",
-          description: "OpenClaw tools",
-          tools: uiTools.map((tool) => ({ ...tool, deferLoading: true })),
-        },
-      ],
-      prefix: "openclaw.",
-    },
-  ] satisfies { name: string; dynamicTools: CodexDynamicToolSpec[]; prefix: string }[])(
-    "explains the actual $name presentation routes",
-    ({ dynamicTools, prefix }) => {
-      const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
+  it("explains the actual namespaced deferred presentation routes", () => {
+    const dynamicTools = [namespace(uiTools)];
+    const instructions = render({}, { dynamicTools });
 
-      expect(instructions).toContain("## UI Presentation");
-      expect(instructions).toContain(`\`${prefix}screen(action="browser_show")\``);
-      expect(instructions).toContain("Do not create or expand a dashboard to open a panel");
-      for (const tool of uiTools) {
-        expect(instructions).toContain(`\`${prefix}${tool.name}\``);
-      }
-      expect(instructions).toContain("pin=true");
-      expect(instructions).toContain("publicUrl");
-      expect(instructions).toContain("result.presentation");
-      expect(instructions).toContain("this turn's schema");
-      expect(instructions).toContain("status=pinned means the widget is on the session dashboard");
-      expect(instructions).toContain('action="focus_tab" with its tabId');
-      expect(instructions).toContain("do not open hosting URLs as browser pages");
-      expect(instructions).toContain(
-        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
-      );
-      expect(instructions).toContain("Tools/skills first");
-      expect(instructions).toContain(
-        "For explicit plugin/skill search/install or missing capability, use ClawHub",
-      );
-      expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
-    },
-  );
+    expect(instructions).toContain("## UI Presentation");
+    expect(instructions).toContain('`openclaw.screen(action="browser_show")`');
+    for (const uiTool of uiTools) {
+      expect(instructions).toContain(`\`openclaw.${uiTool.name}\``);
+    }
+    expect(instructions).toContain(
+      '`openclaw.message(action="send", clawhub={query:"capability"})`',
+    );
+  });
 });
 
 describe("buildDeveloperInstructions delivery-mode stability", () => {
-  it.each([true])("keeps thread policy stable with message available=%s", (available) => {
-    const dynamicTools: CodexDynamicToolSpec[] = available
-      ? [
-          {
-            type: "function",
-            name: "message",
-            description: "Send messages",
-            inputSchema: { type: "object" },
-          },
-        ]
-      : [];
+  it("keeps thread policy stable with message available", () => {
+    const dynamicTools = [tool("message")];
     const instructions = (["automatic", "message_tool_only", "automatic"] as const).map(
-      (sourceReplyDeliveryMode) =>
-        buildDeveloperInstructions(createParams({ sourceReplyDeliveryMode }), { dynamicTools }),
+      (sourceReplyDeliveryMode) => render({ sourceReplyDeliveryMode }, { dynamicTools }),
     );
 
     expect(instructions[1]).toBe(instructions[0]);
     expect(instructions[2]).toBe(instructions[0]);
-    if (!available) {
-      expect(instructions[0]).not.toContain("message(action=send)");
-    }
   });
 });

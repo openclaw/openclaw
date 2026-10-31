@@ -8,7 +8,7 @@ import { hasCompletedLegacyAgentDirMigration } from "../infra/state-migrations.a
 import { resolveLegacyProfileMigrationExceptions } from "../infra/state-migrations.profile-scope.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-lifecycle.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-owner-read.js";
 import {
   listAgentIds,
   resolveEffectiveAgentDir,

@@ -29,8 +29,8 @@ import { defineValidatedGatewayHandler } from "../../server-methods/validation.j
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { withPreparedSessionResolve } from "../../sessions-resolve.js";
-import { resolveTalkAgentConsultAuthority } from "../client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "../client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../handoff.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
@@ -60,6 +60,7 @@ import {
   rememberUnifiedTalkSession,
   requireUnifiedTalkSessionConn,
 } from "../session-registry.js";
+import { restoreTalkSessionTarget } from "../session-start.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   createTalkTranscriptionRelaySession,
@@ -274,6 +275,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
         });
         assertCommitAllowed();
+        await restoreTalkSessionTarget(request, target, replacement?.source(target).assertCurrent);
         const ensuredSessionId = await ensureClientVoiceAgentSessionEntry({
           agentId,
           sessionKey: target.canonicalKey,

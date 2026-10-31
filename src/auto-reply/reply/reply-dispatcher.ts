@@ -10,7 +10,7 @@ import {
 import { toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { generateSecureInt } from "../../infra/secure-random.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -35,7 +35,6 @@ import {
   markReplyDispatchBeforeDeliverDeadlineOwned,
   runReplyDispatchBeforeDeliverStage,
 } from "./reply-dispatch-before-deliver.js";
-import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
   isReplyDispatchDeliveryPending,
@@ -60,6 +59,30 @@ import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchDeliveryOutcome };
+
+const DEFAULT_RANGE = { min: 800, max: 2500 };
+
+function resolveHumanDelayRange(config: HumanDelayConfig | undefined) {
+  if (!config?.mode || config.mode === "off") {
+    return undefined;
+  }
+  return config.mode === "custom"
+    ? { min: config.minMs ?? DEFAULT_RANGE.min, max: config.maxMs ?? DEFAULT_RANGE.max }
+    : DEFAULT_RANGE;
+}
+
+function getHumanDelay(config: HumanDelayConfig | undefined): number {
+  const range = resolveHumanDelayRange(config);
+  if (!range || range.max <= range.min) {
+    return range?.min ?? 0;
+  }
+  return range.min + generateSecureInt(range.max - range.min + 1);
+}
+
+function getHumanDelayMax(config: HumanDelayConfig | undefined): number {
+  const range = resolveHumanDelayRange(config);
+  return range ? Math.max(range.min, range.max) : 0;
+}
 
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
@@ -97,7 +120,6 @@ function replaceDispatchPayload(
 export type { ReplyDispatchBeforeDeliver };
 export { composeReplyDispatchBeforeDeliver, markReplyDispatchBeforeDeliverDeadlineOwned };
 
-const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const { deliveryOutcomeTrackers, undeliveredFallbacks, conversationContextsByDispatcher } =
   resolveGlobalSingleton(Symbol.for("openclaw.replyDispatcherState"), () => ({
     deliveryOutcomeTrackers: new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>(),
@@ -291,14 +313,6 @@ export function createReplyDispatcher(
     } while (sent !== sendChain || settled !== settlementChain);
   };
 
-  const buildReceipt = (): ReplyDispatchReceipt => ({
-    counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
-    anyVisibleDelivered: Object.values(settledCounts).some(
-      (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
-    ),
-    ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
-  });
-
   const unregister = registerDispatcher(() => pending);
   const releasePending = () => {
     pending -= 1;
@@ -321,19 +335,25 @@ export function createReplyDispatcher(
     notifySkip: boolean,
   ) =>
     normalizeReplyPayloadOutcome(payload, {
-      responsePrefix: options.responsePrefix,
-      responsePrefixContext:
-        options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
-      transformReplyPayload: options.transformReplyPayload,
-      conversationContext: conversationContextsByDispatcher.get(dispatcher),
-      onHeartbeatStrip: options.onHeartbeatStrip,
-      onSkip: notifySkip
-        ? (reason) =>
-            options.onSkip?.(payload, {
-              ...buildReplyDispatchRuntimeInfo(payload, kind),
-              reason,
-            })
-        : undefined,
+      preserveLeadingSourceBoundary:
+        kind === "block" && getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
+      ...(getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
+        ? { prepared: true }
+        : {
+            responsePrefix: options.responsePrefix,
+            responsePrefixContext:
+              options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
+            transformReplyPayload: options.transformReplyPayload,
+            conversationContext: conversationContextsByDispatcher.get(dispatcher),
+            onHeartbeatStrip: options.onHeartbeatStrip,
+            onSkip: notifySkip
+              ? (reason) =>
+                  options.onSkip?.(payload, {
+                    ...buildReplyDispatchRuntimeInfo(payload, kind),
+                    reason,
+                  })
+              : undefined,
+          }),
     });
 
   const notifyBeforeDeliverCancelled = async (
@@ -513,11 +533,7 @@ export function createReplyDispatcher(
     deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
-    const originalWasSilent = getReplyPayloadMetadata(payload)?.silentReply === true;
-    const normalizedPrimary =
-      getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
-        ? ({ kind: "deliver", payload } as const)
-        : normalizeForDispatch(kind, payload, true);
+    const normalizedPrimary = normalizeForDispatch(kind, payload, true);
     const normalizedFallback =
       fallback &&
       !(normalizedPrimary.kind === "suppress" && normalizedPrimary.reason === "channel_transform")
@@ -531,13 +547,6 @@ export function createReplyDispatcher(
           : null;
     const normalizedInput = normalized ? replaceDispatchPayload(input, normalized) : null;
     if (!normalizedInput) {
-      if (kind === "final" && originalWasSilent) {
-        silentReplyLogger.debug("silent final payload was skipped before delivery", {
-          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
-          surface: options.silentReplyContext?.surface,
-          conversationType: options.silentReplyContext?.conversationType,
-        });
-      }
       return false;
     }
     let deliveryFallback =
@@ -653,7 +662,13 @@ export function createReplyDispatcher(
     supportsSettledReceipt: true,
     waitForIdle: async () => {
       await waitForIdle();
-      const receipt = buildReceipt();
+      const receipt: ReplyDispatchReceipt = {
+        counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
+        anyVisibleDelivered: Object.values(settledCounts).some(
+          (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
+        ),
+        ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
+      };
       if (
         options.propagateRetryableNoSendFailure === true &&
         !hasPendingDelivery &&

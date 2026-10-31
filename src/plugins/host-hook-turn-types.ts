@@ -37,6 +37,12 @@ export type PluginNextTurnInjectionEnqueueResult = {
 /** Event passed to plugins before an agent turn is prepared. */
 export type PluginAgentTurnPrepareEvent = {
   prompt: string;
+  /**
+   * Model-context history: fresh array/envelopes per dispatch, shared frozen transcript payloads.
+   * Treat nested content as read-only; strict-mode writes to frozen leaves throw TypeError.
+   * Return result fields to contribute context. Array/envelope edits stay local to this dispatch,
+   * whose handlers share them in priority order; they never update core history.
+   */
   messages: unknown[];
   queuedInjections: PluginNextTurnInjectionRecord[];
 };
@@ -55,7 +61,4 @@ export type PluginHeartbeatPromptContributionEvent = {
 };
 
 /** Plugin contribution to heartbeat prompt context. */
-export type PluginHeartbeatPromptContributionResult = {
-  prependContext?: string;
-  appendContext?: string;
-};
+export type PluginHeartbeatPromptContributionResult = PluginAgentTurnPrepareResult;

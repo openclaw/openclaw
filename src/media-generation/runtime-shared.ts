@@ -154,22 +154,9 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
 }
 
 type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
-  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. Final compatibility day: 2026-12-31. */
+  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
   isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
-};
-
-type ParsedAspectRatio = {
-  width: number;
-  height: number;
-  value: number;
-};
-
-type ParsedSize = {
-  width: number;
-  height: number;
-  aspectRatio: number;
-  area: number;
 };
 
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
@@ -304,7 +291,7 @@ function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParam
   };
 }
 
-/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. Final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCapabilityModelCandidates(
   params: CapabilityModelCandidatesParams,
 ): ParsedProviderModelRef[] {
@@ -432,7 +419,11 @@ function parsePositiveDimensionPair(
   return { width, height };
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+export function parseAspectRatioValue(raw?: string | null): {
+  width: number;
+  height: number;
+  value: number;
+} | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
   if (!pair) {
     return null;
@@ -444,7 +435,12 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   };
 }
 
-function parseSizeValue(raw?: string | null): ParsedSize | null {
+function parseSizeValue(raw?: string | null): {
+  width: number;
+  height: number;
+  aspectRatio: number;
+  area: number;
+} | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
   if (!pair) {
     return null;

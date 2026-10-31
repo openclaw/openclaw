@@ -16,7 +16,6 @@ export type SharedCodexAppServerClientEntry = {
   anonymousLeases: number;
   pendingAcquires: number;
   closeWhenIdle: boolean;
-  closeError?: Error;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasOwnedThreads?: () => boolean;
   onStartedClientCallbacks: Set<(client: CodexAppServerClient) => void>;
@@ -147,6 +146,14 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
   }),
 );
 
+export function trackIsolatedCodexAppServerClient(client: CodexAppServerClient): void {
+  const state = getSharedCodexAppServerClientState();
+  state.isolatedClients.add(client);
+  client.addTransportExitHandler((exitedClient) => {
+    state.isolatedClients.delete(exitedClient);
+  });
+}
+
 export function hasActiveSharedCodexAppServerWork(): boolean {
   const state = getSharedCodexAppServerClientState();
   if (state.startup.pending.size > 0 || state.startup.controller.signal.aborted) {
@@ -177,17 +184,11 @@ export function getCurrentSharedClientEntry(
 }
 
 /**
- * Retires a matching shared client. Default is graceful: detach from the map
+ * Retires a matching shared client gracefully: detach from the map
  * (future acquisitions get a fresh client) and close once leases drain.
- * `failActiveLeases` is for suspect clients only (timed-out turns): it closes
- * the physical connection immediately so co-leased attempts hit the normal
- * client-closed retry path, and pending acquires reject instead of leasing
- * the poisoned process. Routine cleanup must NOT use it — it would abort
- * healthy sibling turns on a working client.
  */
 export function retireSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
-  opts?: { failActiveLeases?: boolean },
 ): { activeLeases: number; closed: boolean } | undefined {
   if (!client) {
     return undefined;
@@ -195,22 +196,13 @@ export function retireSharedCodexAppServerClientIfCurrent(
   const state = getSharedCodexAppServerClientState();
   const currentEntry = getCurrentSharedClientEntry(client);
   const entry = currentEntry ?? state.entriesByClient.get(client);
-  if (!entry || (entry.client !== client && !entry.closeError)) {
+  if (!entry || entry.client !== client) {
     return undefined;
   }
   cancelSharedClientIdleRetirement(entry);
   if (currentEntry) {
     state.clients.delete(entry.key);
     entry.closeWhenIdle = true;
-  }
-  // Detached entries still own explicit native-subagent retains and remember
-  // forced closure after the physical client has been cleared.
-  if (opts?.failActiveLeases && (currentEntry || !entry.closeError)) {
-    entry.closeError = new Error("codex app-server client is closed");
-    return {
-      activeLeases: entry.activeLeases,
-      closed: closeRetiredSharedClientEntry(entry),
-    };
   }
   return {
     activeLeases: entry.activeLeases,
@@ -293,7 +285,7 @@ export async function retainSharedCodexAppServerClientByInstanceId(
       continue;
     }
     const entry = state.entriesByClient.get(client);
-    if (entry?.client !== client || entry.closeError || client.getCloseError()) {
+    if (entry?.client !== client || client.getCloseError()) {
       // Stop must reach the parent while the transport owner finishes shutdown.
       // Replacement writers keep joining physical exit before acquiring ownership.
       if (options?.waitForExit === false && client.getCloseError()) {

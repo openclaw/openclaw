@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { text as readText } from "node:stream/consumers";
@@ -7,28 +6,30 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import {
+  catalogTransportModels,
+  catalogReply,
+  catalogAgents,
+  catalogSessionRpc,
+  catalogDiscoverySource,
+  closeCatalogServer,
+  createCatalogState,
+  expectAssistantReply,
+  listenCatalogServer,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
+import { startModelsGateway } from "./models-integration.test-support.js";
 
 it("dispatches a discovered model outside the agent workspace and preserves it after withdrawal", async () => {
-  const state = await createOpenClawTestState({
-    label: "models-dispatch-catalog",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-  });
+  await using state = await createCatalogState("models-dispatch-catalog");
   const provider = "opencode";
   const model = "live-only-model";
   const modelRef = `${provider}/${model}`;
   const inferenceStarted = createDeferred();
   const imageStarted = createDeferred();
   const releaseInference = createDeferred();
+  const waitFor = (promise: Promise<unknown>, message: string) =>
+    withTestTimeout(promise, 30_000, message);
   const requests: Array<{
     authorization: string | undefined;
     catalogHeader: string | string[] | undefined;
@@ -60,22 +61,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       }
       await releaseInference.promise;
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: ${JSON.stringify({
-          id: "chatcmpl-discovered-model",
-          object: "chat.completion.chunk",
-          created: 0,
-          model,
-          choices: [
-            {
-              index: 0,
-              delta: { role: "assistant", content: "CATALOG_DISPATCH_REPLY" },
-              finish_reason: "stop",
-            },
-          ],
-          usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
-        })}\n\ndata: [DONE]\n\n`,
-      );
+      response.end(catalogReply("chatcmpl-discovered-model", model, "CATALOG_DISPATCH_REPLY"));
     })();
     providerWork.push(work);
     void work.catch((error: unknown) => {
@@ -83,240 +69,145 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       response.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Dispatch fixture did not bind a TCP port");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: provider,
-      providers: [provider],
-      modelCatalog: { discovery: { [provider]: "refreshable" } },
-      configSchema: { type: "object", additionalProperties: false },
-    });
-    const pluginPath = await state.writeText(
-      "catalog-plugin/index.cjs",
-      `module.exports = {
+  await using endpointFixture = Object.assign(endpoint, {
+    async [Symbol.asyncDispose]() {
+      releaseInference.resolve();
+      await closeCatalogServer(endpoint, true);
+      await Promise.all(providerWork);
+    },
+  });
+  const baseUrl = `${await listenCatalogServer(endpointFixture)}/v1`;
+  const pluginPath = await writeCatalogPlugin(
+    state,
+    provider,
+    `module.exports = {
         id: ${JSON.stringify(provider)},
         register(api) {
           api.registerProvider({
             id: ${JSON.stringify(provider)}, label: "Dispatch fixture", auth: [],
-            catalog: {
-              order: "profile",
-              async run(ctx) {
-                const auth = ctx.resolveProviderAuth(${JSON.stringify(provider)});
-                if (!auth.discoveryApiKey) return null;
-                const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, {
-                  headers: { Authorization: "Bearer " + auth.discoveryApiKey },
-                });
-                if (!response.ok) throw new Error("Fixture discovery failed");
-                const { data: rows } = await response.json();
-                return { provider: {
-                  baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-                  models: rows.map((row) => ({
-                    ...row, reasoning: false, input: ["text", "image"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 32768, maxTokens: 1536,
-                    headers: { "X-Catalog-Model": "discovered-generation" },
-                    compat: { maxTokensField: "max_tokens" },
-                  })),
-                } };
+            ${catalogDiscoverySource(provider, baseUrl, {
+              wrappedRows: true,
+              error: "Fixture discovery failed",
+              model: {
+                input: ["text", "image"],
+                maxTokens: 1536,
+                headers: { "X-Catalog-Model": "discovered-generation" },
+                compat: { maxTokensField: "max_tokens" },
               },
-            },
+            })},
           });
         },
       };`,
-    );
-    const token = "catalog-dispatch-gateway-token";
-    const cfg = {
-      models: {
-        providers: {
-          [provider]: {
-            baseUrl: "",
-            models: [],
-            request: {
-              allowPrivateNetwork: true,
-              headers: { "X-Dispatch-Request": "configured-transport" },
-            },
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          skipBootstrap: true,
-          heartbeat: { every: "0m" },
-          modelPolicy: { allow: [`${provider}/*`] },
-        },
-        entries: { main: { workspace: state.workspaceDir } },
-      },
-      tools: { profile: "minimal" },
-      plugins: {
-        allow: [provider],
-        load: { paths: [pluginPath] },
-        slots: { memory: "none" },
-      },
-      gateway: { mode: "local", auth: { mode: "token", token } },
-    } satisfies OpenClawConfig;
-    await state.writeConfig(cfg);
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        [`${provider}:default`]: { type: "api_key", provider, key: "dispatch-account-key" },
-        [`${provider}:alternate`]: { type: "api_key", provider, key: "image-account-key" },
-      },
-      order: { [provider]: [`${provider}:default`, `${provider}:alternate`] },
+    { modelCatalog: { discovery: { [provider]: "refreshable" } } },
+  );
+  const token = "catalog-dispatch-gateway-token";
+  const cfg = {
+    cron: { enabled: false },
+    models: catalogTransportModels(provider, "configured-transport"),
+    agents: catalogAgents(state, {
+      skipBootstrap: true,
+      modelPolicy: { allow: [`${provider}/*`] },
+    }),
+    tools: { profile: "minimal" },
+    plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
+    gateway: { mode: "local", auth: { mode: "token", token } },
+  } satisfies OpenClawConfig;
+  await state.writeConfig(cfg);
+  await state.writeAuthProfiles({
+    version: 1,
+    profiles: {
+      [`${provider}:default`]: { type: "api_key", provider, key: "dispatch-account-key" },
+      [`${provider}:alternate`]: { type: "api_key", provider, key: "image-account-key" },
+    },
+    order: { [provider]: [`${provider}:default`, `${provider}:alternate`] },
+  });
+  await using gateway = await startModelsGateway(state, cfg, token);
+  using _ = { [Symbol.dispose]: () => releaseInference.resolve() };
+  const { client, server } = gateway;
+  const rpc = catalogSessionRpc(client);
+  await server.startupSettled;
+  const refresh = () =>
+    client.request<ModelsListResult>("models.list", {
+      agentId: "main",
+      provider,
+      view: "all",
+      refresh: true,
     });
-    const { client, server } = await startGatewayWithClient({
-      cfg,
-      configPath: state.configPath,
-      token,
-      scopes: ["operator.admin"],
+  expect((await refresh()).models.filter((row) => row.provider === provider)).toEqual([]);
+  advertised = [{ id: model, name: "Live-only model" }];
+  const discovered = await refresh();
+  expect(discovered.refreshFailed).not.toBe(true);
+  expect(discovered.models).toContainEqual(
+    expect.objectContaining({ provider, id: model, available: true }),
+  );
+  const outsideCwd = state.path("outside-workspace");
+  await fs.mkdir(outsideCwd, { recursive: true });
+  const session = await rpc.create(modelRef, "agent:main:catalog-dispatch", {
+    cwd: outsideCwd,
+  });
+  expect(session).toMatchObject({ ok: true, entry: { spawnedCwd: outsideCwd } });
+  const started = await rpc.send(
+    session.key,
+    "Reply with the catalog dispatch marker.",
+    "catalog-dispatch-first-turn",
+  );
+  expect(started.status).toBe("started");
+  await waitFor(inferenceStarted.promise, "First turn did not reach provider");
+  expect(requests).toHaveLength(1);
+  const expectRequest = (index: number, key: string, maxTokens: number) =>
+    expect(requests[index]).toMatchObject({
+      authorization: `Bearer ${key}`,
+      catalogHeader: undefined,
+      requestHeader: "configured-transport",
+      body: { model, max_tokens: maxTokens },
     });
-    try {
-      await server.startupSettled;
-      const refresh = () =>
-        client.request<ModelsListResult>("models.list", {
-          agentId: "main",
-          provider,
-          view: "all",
-          refresh: true,
-        });
-      expect((await refresh()).models.filter((row) => row.provider === provider)).toEqual([]);
-      advertised = [{ id: model, name: "Live-only model" }];
-      const discovered = await refresh();
-      expect(discovered.refreshFailed).not.toBe(true);
-      expect(discovered.models).toEqual(
-        expect.arrayContaining([expect.objectContaining({ provider, id: model, available: true })]),
-      );
-      const outsideCwd = state.path("outside-workspace");
-      await fs.mkdir(outsideCwd, { recursive: true });
-      const session = await client.request<{
-        ok: boolean;
-        key: string;
-        entry: { spawnedCwd: string };
-      }>("sessions.create", {
-        agentId: "main",
-        key: "agent:main:catalog-dispatch",
-        label: "Catalog dispatch",
-        model: modelRef,
-        cwd: outsideCwd,
-      });
-      expect(session.ok).toBe(true);
-      expect(session.entry.spawnedCwd).toBe(outsideCwd);
-      const started = await client.request<{ runId: string; status: string }>("chat.send", {
-        sessionKey: session.key,
-        message: "Reply with the catalog dispatch marker.",
-        idempotencyKey: "catalog-dispatch-first-turn",
-      });
-      expect(started.status).toBe("started");
-      await withTestTimeout(
-        inferenceStarted.promise,
-        30_000,
-        "Discovered model did not reach the provider on its first turn",
-      );
-      expect(requests).toHaveLength(1);
-      expect(requests[0]).toMatchObject({
-        authorization: "Bearer dispatch-account-key",
-        catalogHeader: undefined,
-        requestHeader: "configured-transport",
-        body: { model: "live-only-model", max_tokens: 1536 },
-      });
+  expectRequest(0, "dispatch-account-key", 1536);
 
-      const image = describeImageWithModel({
-        provider,
-        model,
-        cfg,
-        agentId: "main",
-        agentDir: state.agentDir("main"),
-        workspaceDir: state.workspaceDir,
-        profile: `${provider}:alternate`,
-        buffer: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII=",
-          "base64",
-        ),
-        fileName: "pixel.png",
-        mime: "image/png",
-        prompt: "Describe the pixel.",
-        maxTokens: 321,
-        timeoutMs: 30_000,
-      });
-      await withTestTimeout(
-        Promise.race([imageStarted.promise, image]),
-        30_000,
-        "Image utility did not use the published model",
-      );
-      expect(requests).toHaveLength(2);
-      expect(requests[1]).toMatchObject({
-        authorization: "Bearer image-account-key",
-        catalogHeader: undefined,
-        requestHeader: "configured-transport",
-        body: { model: "live-only-model", max_tokens: 321 },
-      });
+  const image = describeImageWithModel({
+    provider,
+    model,
+    cfg,
+    agentId: "main",
+    agentDir: state.agentDir("main"),
+    workspaceDir: state.workspaceDir,
+    profile: `${provider}:alternate`,
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII=",
+      "base64",
+    ),
+    fileName: "pixel.png",
+    mime: "image/png",
+    prompt: "Describe the pixel.",
+    maxTokens: 321,
+    timeoutMs: 30_000,
+  });
+  await waitFor(
+    Promise.race([imageStarted.promise, image]),
+    "Image utility did not use the published model",
+  );
+  expect(requests).toHaveLength(2);
+  expectRequest(1, "image-account-key", 321);
 
-      advertised = [];
-      const withdrawn = await refresh();
-      expect(withdrawn.refreshFailed).not.toBe(true);
-      expect(withdrawn.models.filter((row) => row.provider === provider)).toEqual([]);
-      releaseInference.resolve();
-      await expect(image).resolves.toMatchObject({ text: "CATALOG_DISPATCH_REPLY" });
-      const completed = await client.request<{ status: string }>(
-        "agent.wait",
-        { runId: started.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      );
-      expect(completed).toMatchObject({ status: "ok" });
-      const history = await client.request<{ messages: unknown[] }>("chat.history", {
-        sessionKey: session.key,
-      });
-      expect(history.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            role: "assistant",
-            content: expect.arrayContaining([
-              expect.objectContaining({ type: "text", text: "CATALOG_DISPATCH_REPLY" }),
-            ]),
-          }),
-        ]),
-      );
+  advertised = [];
+  const withdrawn = await refresh();
+  expect(withdrawn.refreshFailed).not.toBe(true);
+  expect(withdrawn.models.filter((row) => row.provider === provider)).toEqual([]);
+  releaseInference.resolve();
+  await expect(image).resolves.toMatchObject({ text: "CATALOG_DISPATCH_REPLY" });
+  expect(await rpc.wait(started.runId)).toMatchObject({ status: "ok" });
+  expectAssistantReply((await rpc.history(session.key)).messages, "CATALOG_DISPATCH_REPLY");
 
-      const nextSession = await client.request<{ key: string }>("sessions.create", {
-        agentId: "main",
-        key: "agent:main:catalog-after-withdrawal",
-        label: "After withdrawal",
-        model: modelRef,
-      });
-      const nextTurn = await client.request<{ runId: string }>("chat.send", {
-        sessionKey: nextSession.key,
-        message: "Try the withdrawn model.",
-        idempotencyKey: "catalog-dispatch-after-withdrawal",
-      });
-      const unavailable = await client.request<{ status: string; error?: string }>(
-        "agent.wait",
-        { runId: nextTurn.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      );
-      expect(unavailable).toMatchObject({ status: "error" });
-      expect(unavailable.error).toContain("This model was not found");
-      expect(unavailable.error).toContain("Choose another model");
-      expect(requests).toHaveLength(2);
-    } finally {
-      releaseInference.resolve();
-      await disconnectGatewayClient(client);
-      await server.close();
-    }
-  } finally {
-    releaseInference.resolve();
-    endpoint.closeAllConnections();
-    try {
-      await new Promise<void>((resolve, reject) => {
-        endpoint.close((error) => (error ? reject(error) : resolve()));
-      });
-      await Promise.all(providerWork);
-    } finally {
-      await state.cleanup();
-    }
-  }
+  const nextSession = await rpc.create(modelRef, "agent:main:catalog-after-withdrawal");
+  const nextTurn = await rpc.send(
+    nextSession.key,
+    "Try the withdrawn model.",
+    "catalog-dispatch-after-withdrawal",
+  );
+  const unavailable = await rpc.wait(nextTurn.runId);
+  expect(unavailable).toMatchObject({
+    status: "error",
+    error: expect.stringContaining("This model was not found"),
+  });
+  expect(unavailable.error).toContain("Choose another model");
+  expect(requests).toHaveLength(2);
 }, 120_000);

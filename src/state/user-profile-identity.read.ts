@@ -1,36 +1,30 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
-import {
-  selectProfileAccessEntries,
-  selectUserProfileGitHubIdentities,
-} from "./user-profile-github-identity.js";
+import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
   resolveCatalogProfile,
   projectUserProfileDisplay,
+  projectCatalogUserProfileIdentity,
+  projectUserProfileListItem,
   selectResolvedUserProfile,
-  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
-  selectProfileDisplayEntries,
-  selectUserProfileEmails,
   userProfilesDb,
   userProfileDisplaySelection,
-  toUserProfile,
 } from "./user-profiles-internal.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
   UserProfileIdentity,
-  UserProfileAuthority,
+  UserProfileEmailBindingIndex,
 } from "./user-profiles.types.js";
 
 export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
@@ -78,7 +72,14 @@ export function readUserProfileSnapshotCommand(
     { type: "userProfiles.reconcile" | "userProfiles.catalog" }
   >,
 ) {
-  return runSqliteDeferredTransactionSync(db, () =>
+  if (command.type === "userProfiles.catalog" && !tableExists(db, "user_profiles")) {
+    return {
+      type: command.type,
+      profiles: [],
+      emailBindings: readUserProfileEmailBindings(db),
+    };
+  }
+  return runSqliteReadSnapshotSync(db, () =>
     command.type === "userProfiles.reconcile"
       ? {
           type: command.type,
@@ -87,88 +88,60 @@ export function readUserProfileSnapshotCommand(
         }
       : {
           type: command.type,
-          profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
+          profiles: selectProfileAccessEntries(db),
           emailBindings: readUserProfileEmailBindings(db),
         },
   );
 }
 
-export function readUserProfileIdForEmail(db: EngineConnection, email: string): string | undefined {
-  if (!tableExists(db, "user_profile_emails") || !tableExists(db, "user_profiles")) {
+/** Select one canonical profile; private fields never require projecting the directory. */
+export function readCatalogUserProfileAuthority(
+  catalog: {
+    rows: Map<string, ProfileDisplayRow>;
+    bindings: UserProfileEmailBindingIndex;
+    assertCurrent: (profileId: string) => void;
+  },
+  profileId: string,
+  includeProfile: boolean,
+) {
+  catalog.assertCurrent(profileId);
+  const { rows, bindings } = catalog;
+  const profile = projectCatalogUserProfileIdentity(rows, profileId);
+  if (!profile) {
     return undefined;
   }
-  const alias = selectUserProfileEmailAlias(db, email);
-  return alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id)?.id : undefined;
+  catalog.assertCurrent(profile.profileId);
+  const row = rows.get(profile.profileId)!;
+  return {
+    ...profile,
+    aliases: [
+      profile.profileId,
+      ...[...profile.aliases].filter((id) => id !== profile.profileId).toSorted(),
+    ],
+    display: projectUserProfileDisplay(row),
+    ...(includeProfile ? { listItem: projectUserProfileListItem(row, bindings) } : {}),
+  };
 }
 
-/** Resolve current authority and display together on the caller's admitted connection. */
-export function readUserProfileAuthorityCommand(
-  db: EngineConnection,
-  command: Extract<OpenClawStateReadCommand, { type: "userProfiles.authority.resolve" }>,
+/** Exact verified email/account facts from the retained catalog, including secondary accounts. */
+export function readCatalogGitHubEmailIdentity(
+  catalog: Parameters<typeof readCatalogUserProfileAuthority>[0],
+  accountId: number,
+  email: string,
 ) {
-  const { profileId, includeProfile = false } = command;
-  const profile: (UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined =
-    runSqliteDeferredTransactionSync(db, () => {
-      const current = tableExists(db, "user_profiles")
-        ? selectResolvedUserProfileMetadataById(db, profileId)
-        : undefined;
-      if (!current) {
-        return undefined;
-      }
-      const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
-      if (!display) {
-        return undefined;
-      }
-      const githubIdentity = selectUserProfileGitHubIdentities(db, [current.id]).get(current.id);
-      const aliases = executeSqliteQuerySync(
-        db,
-        userProfilesDb(db)
-          .selectFrom("user_profiles")
-          .select("id")
-          .where("merged_into", "=", current.id)
-          .orderBy("id", "asc"),
-      ).rows;
-      return {
-        profileId: current.id,
-        role: current.role ?? null,
-        githubLogin: githubIdentity?.host ? null : (githubIdentity?.login ?? null),
-        aliases: [current.id, ...aliases.map((alias) => alias.id)],
-        display: projectUserProfileDisplay(display),
-        ...(includeProfile
-          ? {
-              listItem: {
-                ...toUserProfile(current),
-                emails: selectUserProfileEmails(db, current.id),
-                githubIdentity: githubIdentity ?? null,
-                hasAvatar: display.has_avatar === 1,
-              },
-            }
-          : {}),
-      };
-    });
-  return { type: command.type, profile };
-}
-
-/** Disclosure scopes need current aliases, never the resident display catalog. */
-export function readCurrentUserProfileAliasesInDatabase(db: EngineConnection, profileId: string) {
-  return runSqliteDeferredTransactionSync(
-    db,
-    () => {
-      if (!tableExists(db, "user_profiles")) {
-        return { profileId, aliases: [profileId] };
-      }
-      const canonicalId = selectResolvedUserProfileMetadataById(db, profileId)?.id ?? profileId;
-      const aliases = executeSqliteQuerySync(
-        db,
-        userProfilesDb(db)
-          .selectFrom("user_profiles")
-          .select("id")
-          .where("merged_into", "=", canonicalId),
-      ).rows;
-      return { profileId: canonicalId, aliases: [canonicalId, ...aliases.map((row) => row.id)] };
-    },
-    { operationLabel: "user-profiles.aliases" },
-  );
+  const alias = catalog.bindings.byEmail.get(email.trim().toLowerCase());
+  if (!alias) {
+    return undefined;
+  }
+  catalog.assertCurrent(alias.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, alias.profileId);
+  if (!profile) {
+    return undefined;
+  }
+  catalog.assertCurrent(profile.id);
+  return profile.githubAccountIds?.includes(accountId)
+    ? { profileId: profile.id, updatedAt: profile.updated_at }
+    : undefined;
 }
 
 /** In-memory counterpart of the bounded SQL selector for the Gateway catalog. */

@@ -40,8 +40,11 @@ type DirectoryState = {
 };
 
 const directories = new Map<string, DirectoryState>();
-type FileChangeListener = (change: FileChange) => void | Promise<void>;
-const listeners = new Set<FileChangeListener>();
+// Directories discovered after startup share the current Gateway's host binding.
+let gatewayFileChangePublisher: DirectoryState["publishChange"] | undefined;
+export const authProfileFileChanges: {
+  onChange?: (change: FileChange) => void | Promise<void>;
+} = {};
 const legacyNames = new Set(["auth-profiles.json", "auth-state.json", "auth.json", "oauth.json"]);
 
 function missingFile(error: unknown): null | undefined {
@@ -154,17 +157,17 @@ function captureFileChangePublisher(): DirectoryState["publishChange"] {
       return;
     }
     await runWithSpawnBroker(broker, () =>
-      runWithReaders(() =>
-        Promise.all(Array.from(listeners, (listener) => Promise.resolve(listener(change)))),
-      ),
+      runWithReaders(() => authProfileFileChanges.onChange?.(change)),
     );
   };
 }
 
-/** Retained shared state survives a restart; its observers must use the new Gateway readers. */
+/** Retained observers must use the current Gateway's host bindings after a restart. */
 export function bindAuthProfileFileObservationReaders(): void {
+  const publishChange = captureFileChangePublisher();
+  gatewayFileChangePublisher = publishChange;
   for (const state of directories.values()) {
-    state.publishChange = captureFileChangePublisher();
+    state.publishChange = publishChange;
   }
 }
 
@@ -178,20 +181,22 @@ function directoryState(directory: string): DirectoryState {
     identities,
     presence: new Map(),
     dirty: false,
-    publishChange: captureFileChangePublisher(),
-    observation: observeOwnedDirectory(
-      directory,
-      (filename) => {
-        if (
-          filename === undefined ||
-          legacyNames.has(filename) ||
-          [...identities.keys()].some((databasePath) => filename === path.basename(databasePath))
-        ) {
+    publishChange: gatewayFileChangePublisher ?? captureFileChangePublisher(),
+    observation: observeOwnedDirectory(directory, (filename, event) => {
+      if (event === "change" && filename !== undefined) {
+        return;
+      }
+      if (filename === undefined || legacyNames.has(filename)) {
+        void refreshDirectory(directory, state);
+        return;
+      }
+      for (const databasePath of identities.keys()) {
+        if (filename === path.basename(databasePath)) {
           void refreshDirectory(directory, state);
+          return;
         }
-      },
-      { recoveryIntervalMs: 30_000 },
-    ),
+      }
+    }),
   };
   directories.set(directory, state);
   return state;
@@ -265,13 +270,6 @@ export function admitAuthProfileLegacySources(sourcePaths: Iterable<string>): vo
   }
 }
 
-export function registerAuthProfileFileChangeListener(listener: FileChangeListener) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
 /** Explicit refresh joins observation without retiring unchanged file authority. */
 export async function refreshAuthProfileFileState(): Promise<void> {
   await Promise.all(
@@ -280,6 +278,7 @@ export async function refreshAuthProfileFileState(): Promise<void> {
 }
 
 function closeAuthProfileFileState(): void {
+  gatewayFileChangePublisher = undefined;
   for (const [directory, state] of directories) {
     retireDirectory(directory, state);
   }

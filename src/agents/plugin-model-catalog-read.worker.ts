@@ -1,15 +1,67 @@
+import { parentPort, workerData } from "node:worker_threads";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { createSqliteWorkerTransferOwner } from "../infra/sqlite-worker-transfer.js";
+import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../state/worker-operation-registry.js";
+import type {
+  PluginModelCatalogReadInput,
+  PluginModelCatalogReadResult,
+} from "./plugin-model-catalog-read.types.js";
 import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
 import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
+  readPluginModelCatalogEntries,
 } from "./plugin-model-catalog.kernel.js";
+
+if (parentPort && workerData?.pluginCatalogRead === true) {
+  serveOwnedWorkerTasks<PluginModelCatalogReadResult, PluginModelCatalogReadInput>(
+    async (input, channel) => {
+      if (!channel) {
+        throw new Error("Plugin catalog read requires a result channel");
+      }
+      const scope = new OpenClawAgentDatabaseReadOnlyScope();
+      let catalogs;
+      try {
+        const result = scope.read(
+          ({ db }) =>
+            readPluginModelCatalogEntries(db, PLUGIN_MODEL_CATALOG_CACHE_SCOPE, input.pluginIds),
+          input,
+        );
+        catalogs = result.found ? result.value : [];
+      } catch (error) {
+        // Report ordinary refusal only after native cleanup succeeds; failed close retires the worker.
+        return { error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        scope.close();
+      }
+      const transfer = createSqliteWorkerTransferOwner();
+      const handle = transfer.start([{ kind: "catalogs", value: catalogs }].values(), {
+        kinds: ["catalogs"],
+      });
+      try {
+        for (;;) {
+          const frame = transfer.next(handle.id);
+          const response = await channel.request({ handle, frames: [frame] });
+          response.consumed();
+          if (frame.done) {
+            break;
+          }
+        }
+      } finally {
+        transfer.close();
+      }
+      return undefined;
+    },
+    { retireOnError: true },
+  );
+}
 
 export type PluginModelCatalogCredentialCandidate = {
   agentId: string;

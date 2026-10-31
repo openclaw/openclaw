@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -17,11 +16,12 @@ import type {
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import {
+  historyTarget,
+  messageEvent,
+  withHistoryState,
+} from "./session-history-events.test-support.js";
 import {
   assistantTextMessage,
   messageToolCall,
@@ -29,10 +29,7 @@ import {
   userTextMessage,
 } from "./session-history-fixtures.test-support.js";
 import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
-import {
-  readSessionHistorySnapshotAsync,
-  SessionHistorySseState,
-} from "./session-history-state.js";
+import { readSessionHistorySnapshotAsync } from "./session-history-state.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
@@ -43,19 +40,9 @@ function readSnapshot(params: SessionHistoryReadParams): Promise<SessionHistoryS
   });
 }
 
-function historyTarget(state: OpenClawTestState, sessionId: string) {
-  return {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(state.sessionsDir(), "sessions.json"),
-  };
-}
-
 describe("session history snapshot reads", () => {
   test("keeps commentary fallback rows reachable across SQLite cursor pages", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withHistoryState(async (state) => {
       const target = historyTarget(state, "history-commentary-cursor");
       const messages = [
         userTextMessage("check the workspace", 1),
@@ -73,12 +60,9 @@ describe("session history snapshot reads", () => {
       ];
       await replaceTranscriptEvents(target, [
         { type: "session", version: 3, id: target.sessionId },
-        ...messages.map((message, index) => ({
-          type: "message",
-          id: `row-${index + 1}`,
-          parentId: index === 0 ? null : `row-${index}`,
-          message,
-        })),
+        ...messages.map((message, index) =>
+          messageEvent(`row-${index + 1}`, message, index === 0 ? null : `row-${index}`),
+        ),
       ]);
       const newest = await readSnapshot({ target, limit: 1 });
       expect(newest.history.messages).toMatchObject([
@@ -131,21 +115,15 @@ describe("session history snapshot reads", () => {
       turnBoundaryPending: false,
       assistantErrorPending: true,
     },
-  ])("carries $name from the transcript worker into incremental SSE", async (fixture) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+  ])("carries $name from the transcript worker into its snapshot", async (fixture) => {
+    await withHistoryState(async (state) => {
       const target = historyTarget(state, "history-pending-state");
       const entry = { sessionId: target.sessionId, updatedAt: 1 };
       await replaceSessionEntry(target, entry);
       await replaceTranscriptEvents(target, [
         { type: "session", version: 3, id: target.sessionId },
-        {
-          type: "message",
-          id: "visible",
-          parentId: null,
-          message: assistantTextMessage("Already visible", 1),
-        },
-        { type: "message", id: "pending", parentId: "visible", message: fixture.message },
+        messageEvent("visible", assistantTextMessage("Already visible", 1)),
+        messageEvent("pending", fixture.message, "visible"),
       ]);
       await waitForSessionTranscriptProjection(target);
 
@@ -158,25 +136,6 @@ describe("session history snapshot reads", () => {
         assistantErrorPending: fixture.assistantErrorPending,
       });
       expect(snapshot.history.items).toBe(snapshot.history.messages);
-      const history = SessionHistorySseState.fromSnapshot({ target, snapshot });
-      const appended = (
-        await history.prepareInlineMessage({
-          message: {
-            role: "assistant",
-            content: textContent("The next reply"),
-            stopReason: "stop",
-            __openclaw: { runId: "run-pending" },
-          },
-        })
-      )();
-      if (fixture.assistantErrorPending) {
-        expect(appended).toEqual({ shouldRefresh: true });
-      } else {
-        expect(appended?.message).toMatchObject({
-          content: textContent("The next reply"),
-          __openclaw: { seq: 3, turnBoundary: true },
-        });
-      }
     });
   });
 
@@ -187,17 +146,17 @@ describe("session history snapshot reads", () => {
   ])(
     "keeps cursor $cursor stable when messages append during its read",
     async ({ cursor, expectedSeq }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        setRuntimeConfigSnapshot({});
+      await withHistoryState(async (state) => {
         const target = historyTarget(state, "history-cursor-append");
         await replaceTranscriptEvents(target, [
           { type: "session", version: 3, id: target.sessionId },
-          ...Array.from({ length: 8 }, (_, index) => ({
-            type: "message",
-            id: `row-${index + 1}`,
-            parentId: index === 0 ? null : `row-${index}`,
-            message: assistantTextMessage(`Message ${index + 1}`, index + 1),
-          })),
+          ...Array.from({ length: 8 }, (_, index) =>
+            messageEvent(
+              `row-${index + 1}`,
+              assistantTextMessage(`Message ${index + 1}`, index + 1),
+              index === 0 ? null : `row-${index}`,
+            ),
+          ),
         ]);
         const readPage = sessionTranscriptReaders.readSessionMessagesPageWithStatsAsync;
         const pageReadSpy = vi
@@ -250,24 +209,9 @@ describe("session history snapshot reads", () => {
       limit: 1,
       events: [
         ...["A", "B"].flatMap((branch) => [
-          {
-            type: "message",
-            id: `${branch}1`,
-            parentId: null,
-            message: userTextMessage(`${branch} question`, 1),
-          },
-          {
-            type: "message",
-            id: `${branch}2`,
-            parentId: `${branch}1`,
-            message: assistantTextMessage("NO_REPLY", 2),
-          },
-          {
-            type: "message",
-            id: `${branch}3`,
-            parentId: `${branch}2`,
-            message: assistantTextMessage("NO_REPLY", 3),
-          },
+          messageEvent(`${branch}1`, userTextMessage(`${branch} question`, 1)),
+          messageEvent(`${branch}2`, assistantTextMessage("NO_REPLY", 2), `${branch}1`),
+          messageEvent(`${branch}3`, assistantTextMessage("NO_REPLY", 3), `${branch}2`),
         ]),
         { type: "leaf", id: "select-A", parentId: "B3", targetId: "A3", appendParentId: "A3" },
       ],
@@ -287,12 +231,13 @@ describe("session history snapshot reads", () => {
       cursor: "5",
       limit: 1,
       events: [
-        ...Array.from({ length: 4 }, (_, index) => ({
-          type: "message",
-          id: `M${index + 1}`,
-          parentId: index === 0 ? null : `M${index}`,
-          message: userTextMessage(`Message ${index + 1}`, index + 1),
-        })),
+        ...Array.from({ length: 4 }, (_, index) =>
+          messageEvent(
+            `M${index + 1}`,
+            userTextMessage(`Message ${index + 1}`, index + 1),
+            index === 0 ? null : `M${index}`,
+          ),
+        ),
         {
           type: "reset",
           id: "R1",
@@ -301,8 +246,8 @@ describe("session history snapshot reads", () => {
           reason: "new",
           timestamp: "2026-09-01T00:00:00.000Z",
         },
-        { type: "message", id: "M5", parentId: "R1", message: assistantTextMessage("NO_REPLY", 5) },
-        { type: "message", id: "M6", parentId: "M5", message: userTextMessage("Message 6", 6) },
+        messageEvent("M5", assistantTextMessage("NO_REPLY", 5), "R1"),
+        messageEvent("M6", userTextMessage("Message 6", 6), "M5"),
       ],
       change: {
         type: "reset",
@@ -317,8 +262,7 @@ describe("session history snapshot reads", () => {
       stableMessageId: "M5",
     },
   ])("recovers cursor continuation across $name", async (fixture) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withHistoryState(async (state) => {
       const target = historyTarget(state, "history-cursor-prefix-change");
       await replaceTranscriptEvents(target, [
         { type: "session", version: 3, id: target.sessionId },
@@ -390,8 +334,7 @@ describe("session history snapshot reads", () => {
   test.each(["sqlite", "reset-archive"] as const)(
     "keeps same-sequence siblings at the head of %s cursor history",
     async (source) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        setRuntimeConfigSnapshot({});
+      await withHistoryState(async (state) => {
         const target = historyTarget(state, "history-cursor-siblings");
         const messages = [
           userTextMessage("send both here", 1),
@@ -419,12 +362,9 @@ describe("session history snapshot reads", () => {
         ];
         const events = [
           { type: "session", version: 3, id: target.sessionId },
-          ...messages.map((message, index) => ({
-            type: "message",
-            id: `row-${index + 1}`,
-            parentId: index === 0 ? null : `row-${index}`,
-            message,
-          })),
+          ...messages.map((message, index) =>
+            messageEvent(`row-${index + 1}`, message, index === 0 ? null : `row-${index}`),
+          ),
         ];
         const archivePath = path.join(
           state.sessionsDir(),
@@ -481,12 +421,7 @@ describe("session history snapshot reads", () => {
               const page = await readPage(...args);
               await fs.appendFile(
                 archivePath,
-                `\n${JSON.stringify({
-                  type: "message",
-                  id: "row-6",
-                  parentId: "row-5",
-                  message: assistantTextMessage("Replacement archive reply", 6),
-                })}\n`,
+                `\n${JSON.stringify(messageEvent("row-6", assistantTextMessage("Replacement archive reply", 6), "row-5"))}\n`,
               );
               archiveChanged = true;
               return page;

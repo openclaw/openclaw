@@ -1,6 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
-import { jsonPathValue, jsonRemovePaths } from "../../infra/database-engine/json-values.js";
+import {
+  jsonObjectValue,
+  jsonPathValue,
+  jsonRemovePaths,
+  jsonValid,
+} from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -21,16 +25,47 @@ import {
 } from "./session-model-context-projection.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
 import {
+  MAX_COMPRESSED_EVENT_BYTES,
+  type TranscriptPayloadAlias,
+} from "./transcript-payload-read.js";
+import {
   deriveTranscriptPredicateFields,
   type TranscriptPredicateFields,
 } from "./transcript-predicate-fields.js";
 
-export const MAX_COMPRESSED_EVENT_BYTES = 4 * 1024 * 1024;
+export {
+  MAX_COMPRESSED_EVENT_BYTES,
+  readTranscriptPayload,
+  transcriptEventJsonSql,
+  type TranscriptPayloadAlias,
+} from "./transcript-payload-read.js";
+
 const MAX_NAVIGATION_BYTES = 16 * 1024;
 const MIN_COMPRESS_BYTES = 1024;
-const DECODE_FUNCTION = "openclaw_transcript_payload_decode";
-const registeredDecoders = new WeakSet<DatabaseSync>();
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+// This shape owns both the native envelope and its minimum serialized overhead.
+const NAVIGATION_ENVELOPE = {
+  version: 1,
+  report: null,
+  navigation: {},
+  reset: {},
+  model: {},
+  modelBytes: 0,
+  modelWithoutCheckpointBytes: 0,
+  withoutCustomDataBytes: 0,
+};
+function minimumNavigationBytes(navigation: Record<string, number>): number {
+  return (
+    Buffer.byteLength(
+      JSON.stringify({ ...NAVIGATION_ENVELOPE, navigation, reset: navigation, model: navigation }),
+    ) - "null".length
+  );
+}
+const MIN_NAVIGATION_BYTES = [
+  minimumNavigationBytes({}),
+  minimumNavigationBytes({ type: 0, id: 0 }),
+  minimumNavigationBytes({ type: 0, id: 0, parentId: 0 }),
+] as const;
 
 export type TranscriptPayloadRecord = TranscriptPredicateFields & {
   event_json: string | null;
@@ -45,39 +80,50 @@ export type PreparedTranscriptPayload = {
   payload: TranscriptPayloadRecord;
 };
 
-export type TranscriptPayloadAlias = "transcript_events" | "event" | "te" | "parent";
+export type TranscriptEventInsertRow = {
+  seq: number;
+  eventJson: string;
+  createdAt: number;
+  eventId?: string;
+  parsedEvent?: unknown;
+  preparedPayload?: PreparedTranscriptPayload;
+};
+
+type StoredTranscriptIdentity = DB["transcript_event_identities"];
+export type TranscriptIdentityInsertRow = {
+  seq: number;
+  createdAt: number;
+  eventId: StoredTranscriptIdentity["event_id"];
+  eventType: StoredTranscriptIdentity["event_type"];
+  parentId: StoredTranscriptIdentity["parent_id"];
+  messageIdempotencyKey: StoredTranscriptIdentity["message_idempotency_key"];
+};
+
+// Fourteen bound columns per row use at most 7,168 parameters on either engine.
+export const TRANSCRIPT_INSERT_BATCH_SIZE = 512;
+
+export const TRANSCRIPT_PAYLOAD_COLUMNS = [
+  "session_id",
+  "seq",
+  "event_json",
+  "event_zstd",
+  "event_utf8_bytes",
+  "navigation_json",
+  "navigation_type",
+  "navigation_custom_type",
+  "navigation_display",
+  "message_role",
+  "navigation_last_type",
+  "navigation_last_custom_type",
+  "navigation_valid",
+  "created_at",
+] as const;
 
 /** Physical payload writes participate in the transcript owner's admitted transaction. */
 export function createTranscriptEventInserter(database: EngineConnection, sessionId: string) {
-  const insert = prepareSqliteQuerySync<
-    TranscriptPayloadRecord & { seq: number; createdAt: number }
-  >(database, (parameter) =>
-    getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
-      .insertInto("transcript_events")
-      .values({
-        session_id: sessionId,
-        seq: parameter((row) => row.seq),
-        event_json: parameter((row) => row.event_json),
-        event_zstd: parameter((row) => row.event_zstd),
-        event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
-        navigation_json: parameter((row) => row.navigation_json),
-        navigation_type: parameter((row) => row.navigation_type),
-        navigation_custom_type: parameter((row) => row.navigation_custom_type),
-        navigation_display: parameter((row) => row.navigation_display),
-        message_role: parameter((row) => row.message_role),
-        navigation_last_type: parameter((row) => row.navigation_last_type),
-        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
-        navigation_valid: parameter((row) => row.navigation_valid),
-        created_at: parameter((row) => row.createdAt),
-      }),
-  );
-  return (row: {
-    seq: number;
-    eventJson: string;
-    createdAt: number;
-    parsedEvent?: unknown;
-    preparedPayload?: PreparedTranscriptPayload;
-  }) => {
+  const kysely =
+    getNodeSqliteKysely<Pick<DB, "transcript_events" | "transcript_event_identities">>(database);
+  const prepareRow = (row: TranscriptEventInsertRow) => {
     const prepared = row.preparedPayload;
     const payload =
       prepared?.eventJson === row.eventJson &&
@@ -85,8 +131,223 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
       (!isPostgresSqlConnection(database) || prepared.payload.event_zstd === null)
         ? prepared.payload
         : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
-    return insert({ ...row, ...payload });
+    return { session_id: sessionId, seq: row.seq, ...payload, created_at: row.createdAt };
   };
+  type StoredRow = ReturnType<typeof prepareRow>;
+  type BatchRows = {
+    events: readonly StoredRow[];
+    identities: readonly TranscriptIdentityInsertRow[];
+  };
+  type IdentitySourceRow = {
+    seq: number;
+    event_id: string;
+    event_type: string | null;
+    parent_id: string | null;
+    message_idempotency_key: string | null;
+    created_at: number;
+  };
+  // Each executor is used only with the chunk lengths that define its bound indexes.
+  const createBatchInsert = (count: number, identityCount = 0) =>
+    prepareSqliteQuerySync<BatchRows>(database, (parameter) => {
+      const events = kysely.insertInto("transcript_events").values(
+        Array.from({ length: count }, (_, index) => ({
+          session_id: sessionId,
+          seq: parameter((chunk) => chunk.events[index]!.seq),
+          event_json: parameter((chunk) => chunk.events[index]!.event_json),
+          event_zstd: parameter((chunk) => chunk.events[index]!.event_zstd),
+          event_utf8_bytes: parameter((chunk) => chunk.events[index]!.event_utf8_bytes),
+          navigation_json: parameter((chunk) => chunk.events[index]!.navigation_json),
+          navigation_type: parameter((chunk) => chunk.events[index]!.navigation_type),
+          navigation_custom_type: parameter((chunk) => chunk.events[index]!.navigation_custom_type),
+          navigation_display: parameter((chunk) => chunk.events[index]!.navigation_display),
+          message_role: parameter((chunk) => chunk.events[index]!.message_role),
+          navigation_last_type: parameter((chunk) => chunk.events[index]!.navigation_last_type),
+          navigation_last_custom_type: parameter(
+            (chunk) => chunk.events[index]!.navigation_last_custom_type,
+          ),
+          navigation_valid: parameter((chunk) => chunk.events[index]!.navigation_valid),
+          created_at: parameter((chunk) => chunk.events[index]!.created_at),
+        })),
+      );
+      if (identityCount === 0) {
+        return events;
+      }
+      // PG's writable CTE exposes only accepted sequences to the dependent identity insert.
+      // The batch owner already deduplicates identities by event ID before this boundary.
+      const identities =
+        /* kysely-allow-raw: Bound PG VALUES rows carry the existing identity insert columns. */
+        sql<IdentitySourceRow>`(values ${sql.join(
+          Array.from(
+            { length: identityCount },
+            (_, index) =>
+              sql`(${parameter((chunk) => chunk.identities[index]!.seq)}::bigint, ${parameter((chunk) => chunk.identities[index]!.eventId)}::text, ${parameter((chunk) => chunk.identities[index]!.eventType)}::text, ${parameter((chunk) => chunk.identities[index]!.parentId)}::text, ${parameter((chunk) => chunk.identities[index]!.messageIdempotencyKey)}::text, ${parameter((chunk) => chunk.identities[index]!.createdAt)}::bigint)`,
+          ),
+        )})`;
+      return kysely
+        .with(
+          "identity_rows(seq, event_id, event_type, parent_id, message_idempotency_key, created_at)",
+          () => identities,
+        )
+        .with("inserted_events", () => events.returning("seq"))
+        .insertInto("transcript_event_identities")
+        .columns([
+          "session_id",
+          "event_id",
+          "seq",
+          "event_type",
+          "parent_id",
+          "message_idempotency_key",
+          "created_at",
+        ])
+        .expression((db) =>
+          db
+            .selectFrom("identity_rows")
+            .innerJoin("inserted_events", "inserted_events.seq", "identity_rows.seq")
+            .select((eb) => [
+              eb.val(sessionId).as("session_id"),
+              "identity_rows.event_id",
+              "inserted_events.seq",
+              "identity_rows.event_type",
+              "identity_rows.parent_id",
+              "identity_rows.message_idempotency_key",
+              "identity_rows.created_at",
+            ]),
+        )
+        .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing());
+    });
+  const batchInserts = new Map<number, ReturnType<typeof createBatchInsert>>();
+  const batch = (rows: readonly TranscriptEventInsertRow[]) => {
+    for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+      const prepared = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE).map(prepareRow);
+      let insert = batchInserts.get(prepared.length);
+      if (!insert) {
+        insert = createBatchInsert(prepared.length);
+        batchInserts.set(prepared.length, insert);
+      }
+      insert({ events: prepared, identities: [] });
+    }
+  };
+  const identityBatchInserts = new Map<string, ReturnType<typeof createBatchInsert>>();
+  const batchWithIdentities = isPostgresSqlConnection(database)
+    ? (
+        rows: readonly TranscriptEventInsertRow[],
+        identities: readonly TranscriptIdentityInsertRow[],
+      ) => {
+        const bySeq = new Map(identities.map((identity) => [identity.seq, identity]));
+        for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+          const events = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
+          const selected = events.flatMap((event) => {
+            const identity = bySeq.get(event.seq);
+            return identity ? [identity] : [];
+          });
+          const key = `${events.length}:${selected.length}`;
+          let insert = identityBatchInserts.get(key);
+          if (!insert) {
+            insert = createBatchInsert(events.length, selected.length);
+            identityBatchInserts.set(key, insert);
+          }
+          // At most 512 * (14 payload + 6 identity) + 1 session parameters.
+          insert({ events: events.map(prepareRow), identities: selected });
+        }
+      }
+    : undefined;
+  type Identity = Omit<TranscriptIdentityInsertRow, "seq" | "createdAt">;
+  type SingleRow = StoredRow & { eventId?: string; identity?: Identity };
+  const createSingleInsert = (checkEventId: boolean, includeIdentity: boolean) =>
+    prepareSqliteQueryTakeFirstSync<SingleRow, { seq: number }>(database, (parameter) => {
+      const event = kysely
+        .insertInto("transcript_events")
+        .columns(TRANSCRIPT_PAYLOAD_COLUMNS)
+        .expression(
+          kysely
+            .selectNoFrom(
+              TRANSCRIPT_PAYLOAD_COLUMNS.map((column) =>
+                parameter((row) => row[column]).as(column),
+              ),
+            )
+            .$if(checkEventId, (query) =>
+              query.where((eb) =>
+                eb.not(
+                  eb.exists(
+                    eb
+                      .selectFrom("transcript_event_identities")
+                      .select("event_id")
+                      .where("session_id", "=", sessionId)
+                      .where(
+                        "event_id",
+                        "=",
+                        parameter((row) => row.eventId!),
+                      ),
+                  ),
+                ),
+              ),
+            ),
+        );
+      if (!includeIdentity) {
+        return event.returning("seq");
+      }
+      return (
+        kysely
+          .with("inserted_event", () => event.returning(["session_id", "seq"]))
+          .with("inserted_identity", (db) =>
+            db
+              .insertInto("transcript_event_identities")
+              .columns([
+                "session_id",
+                "event_id",
+                "seq",
+                "event_type",
+                "parent_id",
+                "message_idempotency_key",
+                "created_at",
+              ])
+              .expression(
+                db
+                  .selectFrom("inserted_event")
+                  .select([
+                    "session_id",
+                    parameter((row) => row.identity!.eventId).as("event_id"),
+                    "seq",
+                    parameter((row) => row.identity!.eventType).as("event_type"),
+                    parameter((row) => row.identity!.parentId).as("parent_id"),
+                    parameter((row) => row.identity!.messageIdempotencyKey).as(
+                      "message_idempotency_key",
+                    ),
+                    parameter((row) => row.created_at).as("created_at"),
+                  ]),
+              )
+              .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing())
+              .returning("seq"),
+          )
+          // Event acceptance is independent of an ignored identity conflict.
+          .selectFrom("inserted_event")
+          .select("seq")
+      );
+    });
+  let insertIdentity: ReturnType<typeof createSingleInsert> | undefined;
+  const fusedInserts = new Map<boolean, ReturnType<typeof createSingleInsert>>();
+  const withIdentity = isPostgresSqlConnection(database)
+    ? (row: TranscriptEventInsertRow, identity: Identity): boolean => {
+        const checkEventId = row.eventId !== undefined;
+        let insert = fusedInserts.get(checkEventId);
+        if (!insert) {
+          insert = createSingleInsert(checkEventId, true);
+          fusedInserts.set(checkEventId, insert);
+        }
+        return insert({ ...prepareRow(row), eventId: row.eventId, identity }) !== undefined;
+      }
+    : undefined;
+  return Object.assign(
+    (row: TranscriptEventInsertRow): boolean => {
+      if (row.eventId === undefined) {
+        batch([row]);
+        return true;
+      }
+      insertIdentity ??= createSingleInsert(true, false);
+      return insertIdentity({ ...prepareRow(row), eventId: row.eventId }) !== undefined;
+    },
+    { batch, withIdentity, batchWithIdentities },
+  );
 }
 
 export function createTranscriptPayloadUpdater(database: EngineConnection, sessionId: string) {
@@ -152,20 +413,27 @@ function navigationProjection(
   report: Expression<string>,
   originalEvent: Expression<string>,
 ): RawBuilder<string | null> {
+  const metadata = jsonObjectValue(database, {
+    ...Object.fromEntries(
+      Object.entries(NAVIGATION_ENVELOPE).map(([key, value]) => [
+        key,
+        typeof value === "number" ? sql.lit(value) : sql`json(${JSON.stringify(value)})`,
+      ]),
+    ),
+    report: sql`json(${report})`,
+    navigation: sql`json(${projectTranscriptPayloadNavigationSql(database, event)})`,
+    reset: sql`json(${projectResetBoundaryNavigationSql(database, originalEvent)})`,
+    model: sql`json(${projectModelContextNavigationSql(database, event, undefined, sql.lit(1))})`,
+    modelBytes: sql`octet_length(${projectModelContextEventSql(database, event, sql.lit(0), undefined, undefined, sql.lit(1))})`,
+    modelWithoutCheckpointBytes: sql`octet_length(${projectModelContextEventSql(database, event, sql.lit(1), undefined, undefined, sql.lit(1))})`,
+    withoutCustomDataBytes: sql`octet_length(json_remove(${event}, '$.data'))`,
+  });
   return /* kysely-allow-raw: record native projections and exact byte costs; exceptional envelopes retain identity behavior. */ sql<
     string | null
   >`CASE WHEN json_valid(${originalEvent}) AND json_valid(${report}) THEN CASE
     WHEN json_type(${event}) != 'object'
       OR coalesce(json_type(${event}, '$.message'), 'null') NOT IN ('object', 'null') THEN NULL
-    ELSE json_object('version', 1,
-      'report', json(${report}),
-      'navigation', json(${projectTranscriptPayloadNavigationSql(database, event)}),
-      'reset', json(${projectResetBoundaryNavigationSql(database, originalEvent)}),
-      'model', json(${projectModelContextNavigationSql(database, event)}),
-      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0))}),
-      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1))}),
-      'withoutCustomDataBytes', octet_length(json_remove(${event}, '$.data')))
-    END ELSE NULL END`;
+    ELSE ${metadata} END ELSE NULL END`;
 }
 
 type NavigationInput = { eventJson: string; reportJson: string };
@@ -228,13 +496,6 @@ const navigationReader = createSqliteQueryCache((database: EngineConnection) =>
   ),
 );
 
-function readNavigation(database: EngineConnection, input: NavigationInput): string | null {
-  const navigation = navigationReader(database)(input)?.navigation_json ?? null;
-  return navigation !== null && Buffer.byteLength(navigation, "utf8") <= MAX_NAVIGATION_BYTES
-    ? navigation
-    : null;
-}
-
 /** Prepare canonical UTF-8 bytes and native query metadata before publishing a transcript row. */
 export function prepareTranscriptPayload(
   database: EngineConnection,
@@ -266,14 +527,14 @@ export function prepareTranscriptPayload(
     return identity;
   }
   const codec = resolveZstdCodec();
-  if (!codec || rawBytes < MIN_COMPRESS_BYTES) {
+  if (rawBytes < MIN_COMPRESS_BYTES) {
+    return identity;
+  }
+  // A literal unpaired surrogate cannot round-trip through a UTF-8 frame.
+  if (!eventJson.isWellFormed()) {
     return identity;
   }
   const bytes = Buffer.from(eventJson, "utf8");
-  // A literal unpaired surrogate cannot round-trip through a UTF-8 frame.
-  if (utf8Decoder.decode(bytes) !== eventJson) {
-    return identity;
-  }
   const compressed = codec.compress(bytes, 1, true);
   const maximumStoredBytes = rawBytes - Math.max(64, Math.ceil(rawBytes / 10));
   if (compressed.byteLength > maximumStoredBytes) {
@@ -287,12 +548,24 @@ export function prepareTranscriptPayload(
     if (findSessionTranscriptHeader([raw])) {
       return identity;
     }
-    reportJson = JSON.stringify(projectSessionTranscriptReportFacts(raw));
+    const report = projectSessionTranscriptReportFacts(raw);
+    reportJson = JSON.stringify(report);
+    // Canonical projections all retain type/id and any serialized parentId.
+    const minimum =
+      MIN_NAVIGATION_BYTES[
+        report.kind === "canonical" ? (report.entry.parentId !== undefined ? 2 : 1) : 0
+      ];
+    if (
+      compressed.byteLength + Buffer.byteLength(reportJson, "utf8") + minimum >
+      maximumStoredBytes
+    ) {
+      return identity;
+    }
   } catch {
     // Unsupported JSON or projection nesting must not reject existing identity bytes.
     return identity;
   }
-  const navigation = readNavigation(database, { eventJson, reportJson });
+  const navigation = navigationReader(database)({ eventJson, reportJson })?.navigation_json ?? null;
   if (
     navigation === null ||
     compressed.byteLength + Buffer.byteLength(navigation, "utf8") > maximumStoredBytes
@@ -300,78 +573,6 @@ export function prepareTranscriptPayload(
     return identity;
   }
   return { ...identity, event_json: null, event_zstd: compressed, navigation_json: navigation };
-}
-
-function registerDecoder(database: DatabaseSync): void {
-  if (registeredDecoders.has(database)) {
-    return;
-  }
-  database.function(
-    DECODE_FUNCTION,
-    { deterministic: true, directOnly: true },
-    decodeCompressedTranscriptPayload,
-  );
-  registeredDecoders.add(database);
-}
-
-function decodeCompressedTranscriptPayload(bytes: unknown, rawBytes: unknown): string {
-  if (
-    !(bytes instanceof Uint8Array) ||
-    bytes.byteLength === 0 ||
-    bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
-    typeof rawBytes !== "number" ||
-    !Number.isSafeInteger(rawBytes) ||
-    rawBytes < 1 ||
-    rawBytes > MAX_COMPRESSED_EVENT_BYTES
-  ) {
-    throw new Error("Invalid compressed transcript payload bounds");
-  }
-  const codec = resolveZstdCodec();
-  if (!codec) {
-    throw new Error("Cannot decode compressed transcript payload: this runtime lacks zstd support");
-  }
-  const decoded = codec.decompress(bytes, rawBytes);
-  if (decoded.byteLength !== rawBytes) {
-    throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");
-  }
-  return utf8Decoder.decode(decoded);
-}
-
-/** Decode selected rows without copying expanded payloads back through SQLite. */
-export function readTranscriptPayload(
-  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes">,
-): string {
-  return row.event_json ?? decodeCompressedTranscriptPayload(row.event_zstd, row.event_utf8_bytes);
-}
-
-/** Only selected bodies decode; identity TEXT remains inside SQLite for native repairs. */
-export function transcriptEventJsonSql(
-  database: EngineConnection,
-  alias: TranscriptPayloadAlias = "transcript_events",
-): RawBuilder<string> {
-  if (isPostgresSqlConnection(database)) {
-    return /* kysely-allow-raw: closed transcript aliases select PostgreSQL's canonical text. */ sql.ref<string>(
-      `${alias}.event_json`,
-    );
-  }
-  registerDecoder(database);
-  const identity =
-    /* kysely-allow-raw: closed transcript aliases select the canonical identity column. */ sql.ref(
-      `${alias}.event_json`,
-    );
-  const compressed =
-    /* kysely-allow-raw: closed transcript aliases select the canonical compressed column. */ sql.ref(
-      `${alias}.event_zstd`,
-    );
-  const bytes =
-    /* kysely-allow-raw: closed transcript aliases select recorded canonical byte counts. */ sql.ref(
-      `${alias}.event_utf8_bytes`,
-    );
-  const decode = getNodeSqliteKysely<Record<string, never>>(database).fn<string>(DECODE_FUNCTION, [
-    compressed,
-    bytes,
-  ]);
-  return /* kysely-allow-raw: lazy selection evaluates identity expressions once and keeps giant TEXT out of the bounded JS decoder. */ sql<string>`coalesce(${identity}, ${decode})`;
 }
 
 export function transcriptEventNavigationSql(
@@ -383,6 +584,65 @@ export function transcriptEventNavigationSql(
       `${alias}.event_json`,
     );
   return storedProjectionSql(database, "navigation", identity, alias);
+}
+
+/** Old SQLite transcripts keep lazy predicates until their next payload write. */
+export function transcriptPredicateSql<K extends keyof TranscriptPredicateFields>(
+  database: EngineConnection,
+  field: K,
+  alias: TranscriptPayloadAlias = "transcript_events",
+): RawBuilder<TranscriptPredicateFields[K]> {
+  const stored =
+    /* kysely-allow-raw: closed payload aliases and predicate keys name persisted owner facts. */
+    sql.ref<TranscriptPredicateFields[K]>(`${alias}.${field}`);
+  // PostgreSQL starts with materialized predicates, including SQLite port imports.
+  if (isPostgresSqlConnection(database)) {
+    return stored;
+  }
+  const type =
+    /* kysely-allow-raw: the closed payload alias selects the classification marker. */
+    sql.ref(`${alias}.navigation_type`);
+  const valid =
+    /* kysely-allow-raw: the closed payload alias selects recorded validity. */
+    sql.ref(`${alias}.navigation_valid`);
+  const identity =
+    /* kysely-allow-raw: the closed payload alias selects the canonical raw identity. */
+    sql.ref(`${alias}.event_json`);
+  const metadata =
+    /* kysely-allow-raw: closed payload aliases select the duplicate-preserving navigation envelope. */
+    sql.ref(`${alias}.navigation_json`);
+  const source = sql`coalesce(${identity}, ${jsonPathValue(database, metadata, sql.lit("$.navigation"), "json")})`;
+  const sourceValid = jsonValid(database, source);
+  const event = sql`CASE WHEN ${sourceValid} THEN ${source} ELSE '{}' END`;
+  let derived: RawBuilder<unknown>;
+  if (field === "navigation_valid") {
+    derived = sql`coalesce(${sourceValid}, 0)`;
+  } else if (field === "navigation_display") {
+    derived =
+      /* kysely-allow-raw: SQLite-only legacy classification preserves JSON true versus numeric one. */
+      sql`CASE WHEN json_type(${event}, '$.display') = 'true' THEN 1 ELSE 0 END`;
+  } else {
+    const isCustom = field === "navigation_custom_type" || field === "navigation_last_custom_type";
+    const path = field === "message_role" ? "$.message.role" : isCustom ? "$.customType" : "$.type";
+    const value =
+      field === "navigation_last_type" || field === "navigation_last_custom_type"
+        ? /* kysely-allow-raw: SQLite-only legacy navigation uses the final duplicate root member. */
+          sql`(SELECT value FROM json_each(${event}) WHERE key = ${sql.lit(isCustom ? "customType" : "type")} ORDER BY id DESC LIMIT 1)`
+        : jsonPathValue(database, event, sql.lit(path));
+    const accepted =
+      field === "message_role"
+        ? ["user", "assistant", "toolResult", "system"]
+        : isCustom
+          ? ["openclaw.runtime-context", "openclaw.cache-ttl"]
+          : ["session", "message", "reset", "compaction", "custom_message", "custom"];
+    derived = sql`CASE WHEN ${value} IN (${sql.join(accepted.map((candidate) => sql.lit(candidate)))}) THEN ${value} END`;
+  }
+  // A valid unknown type shares legacy defaults and can harmlessly rederive.
+  // Classified and malformed rows never parse their payload again here.
+  return /* kysely-allow-raw: closed predicate keys select matching stored and derived owner facts. */ sql<
+    TranscriptPredicateFields[K]
+  >`CASE WHEN ${type} IS NOT NULL OR ${valid} = 0
+    THEN ${stored} ELSE ${derived} END`;
 }
 
 export function transcriptEventRunIdSql(
@@ -447,15 +707,14 @@ export function transcriptEventModelNavigationSql(
 export function transcriptEventModelBytesSql(
   database: EngineConnection,
   omitCheckpoint: Expression<number>,
-  alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
   const metadata =
     /* kysely-allow-raw: closed transcript aliases select native projection accounting. */ sql.ref(
-      `${alias}.navigation_json`,
+      "transcript_events.navigation_json",
     );
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
-      `${alias}.event_json`,
+      "transcript_events.event_json",
     );
   return /* kysely-allow-raw: native fallback preserves UTF-16 byte units; metadata excludes the JSONL separator. */ sql<number>`CASE WHEN ${metadata} IS NULL
     THEN octet_length(${projectModelContextEventSql(database, identity, omitCheckpoint)})

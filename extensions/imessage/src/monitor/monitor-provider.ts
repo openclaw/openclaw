@@ -29,6 +29,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
@@ -66,7 +67,7 @@ import { resolveIMessageAccount } from "../accounts.js";
 import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
-import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
+import { handleIMessageApprovalReaction } from "../approval-reactions.js";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageStartupRowidWatermark } from "../chat-db.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -77,7 +78,8 @@ import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../media-contract.js";
-import { imessageRpcSupportsMethod, probeIMessage, probeIMessagePrivateApi } from "../probe.js";
+import { imessageRpcSupportsMethod } from "../private-api-status.js";
+import { probeIMessage, probeIMessagePrivateApi } from "../probe.js";
 import { resolveIMessageRemoteHost } from "../remote-host.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -88,7 +90,6 @@ import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
-import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -104,7 +105,6 @@ import {
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
-  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
@@ -112,13 +112,14 @@ import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
+import { resolveIMessageReactionContext } from "./reaction-context.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
@@ -215,7 +216,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
-  const selfChatCache = createSelfChatCache();
+  const selfChatCache = new SelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeStringEntries(imessageCfg.allowFrom);
@@ -282,7 +283,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   const logTypingError = (action: "start" | "stop", target: string, error: unknown) =>
     logTypingFailure({ log: logVerbose, channel: "imessage", action, target, error });
   let staleBacklogSuppressed = 0;
-  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
+  // Bound monitor-lifetime warn-once state; evicted conversations may log again.
+  const loggedThrottledDropDiagnostics = createDedupeCache({ maxSize: 512, ttlMs: 0 });
 
   // Capture local MAX(ROWID) before probing: it caps replay and separates recovery
   // from fresh-rowid Push backlog. Remote bridges lack this boundary and use the live age fence.
@@ -297,11 +299,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     dbPath,
     remoteHost,
   });
-  const recoveryCursorRowid = await loadIMessageRecoveryCursor(
-    accountInfo.accountId,
-    recoveryCursorDbIdentity,
-    { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
-  );
+  const recoveryCursorRowid = catchupCfg.enabled
+    ? null
+    : await loadIMessageRecoveryCursor(accountInfo.accountId, recoveryCursorDbIdentity, {
+        watermarkRowid: recoveryBoundaryRowid,
+      });
   const reconciledWatchSinceRowid = catchupCfg.enabled
     ? null
     : recoveryCursorRowid !== null
@@ -575,11 +577,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
 
-    const storeAllowFrom = await readChannelAllowFromStore(
-      "imessage",
-      process.env,
-      accountInfo.accountId,
-    ).catch(() => []);
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -593,13 +590,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
-      storeAllowFrom,
+      readStoreAllowFrom: () =>
+        readChannelAllowFromStore("imessage", process.env, accountInfo.accountId),
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
       reactionNotifications: imessageCfg.reactionNotifications,
-      logVerbose,
     });
 
     const chatId = message.chat_id ?? undefined;
@@ -703,7 +700,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     }
 
     if (decision.kind === "reaction") {
-      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
+      enqueueIMessageReactionSystemEvent({ decision, runtime });
       return;
     }
 
@@ -791,7 +788,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
           allowedRoots: effectiveAttachmentRoots,
-          deps: { logVerbose },
         });
     const mediaAttachments = staged.attachments;
     const unavailableCount = staged.unavailableCount;
@@ -824,7 +820,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
             senderNormalized: decision.senderNormalized,
             limit: dmHistoryLimit,
             envelopeOptions: resolveEnvelopeFormatOptions(cfg),
-            logVerbose,
           })
         : undefined;
     // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
@@ -1079,14 +1074,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     ) {
       return true;
     }
-    return await maybeResolveIMessageApprovalReaction({
+    const result = await handleIMessageApprovalReaction({
       cfg,
       accountId: accountInfo.accountId,
       message,
       bodyText: resolveIMessageInboundBodyText(message).bodyText,
       gatewayRuntime: approvalGatewayRuntime,
-      logVerboseMessage: logVerbose,
     });
+    return result.handled;
   };
 
   const ingress = createIMessageDurableIngress({
@@ -1318,7 +1313,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
         gatewayRuntime: approvalGatewayRuntime,
-        logVerboseMessage: logVerbose,
       }).catch((err: unknown) => {
         logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
       });

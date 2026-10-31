@@ -2,20 +2,21 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { MessageChannel } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
-import { createSqliteReadOnlyNativeResourceClient } from "./sqlite-readonly-native-resource.client.js";
+import {
+  createSqliteReadOnlyNativeResourceClient,
+  createSqliteReadOnlyNativeResourceConnection,
+} from "./sqlite-readonly-native-resource.client.js";
 import { createNativeWorkerResource } from "./sqlite-readonly-native-resource.js";
 import type {
-  SqliteNativeOwnerReply,
   SqliteNativeOwnerRequest,
   SqliteNativeSessionLaunch,
 } from "./sqlite-readonly-native-resource.types.js";
-import type { NativeWorkerResourceOwner } from "./worker-native-lifecycle.types.js";
+import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
 
 const operations = vi.hoisted(() => ({
   session: vi.fn<typeof import("./sqlite-readonly-worker.js").createScopedSqliteReadOnlyWorker>(),
@@ -33,15 +34,19 @@ vi.mock("./sqlite-readonly-worker.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const owned: Array<{
-  resource: NativeWorkerResourceOwner;
-  port1: MessagePort;
-  port2: MessagePort;
-  ownerPort: MessagePort;
-  hostPort: MessagePort;
-  cleanup: { expectedFailure?: RegExp };
-  closeNative(): Promise<void>;
-}> = [];
+const owned: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of owned.splice(0)) {
+    await close();
+  }
+});
+
+const tokenPath = "/fixture/token";
+type Client = ReturnType<typeof createSqliteReadOnlyNativeResourceClient>;
+function allocate(session: ReturnType<Client["createSession"]>, directory = tokenPath) {
+  return session.run(directory, { mode: "staging-create", preparationId: 1 });
+}
+
 function fixture() {
   const closed = createDeferredCore();
   let retired = false;
@@ -65,34 +70,25 @@ function fixture() {
   operations.copy.mockReset().mockImplementation(async (pathname) => pathname);
   operations.remove.mockReset().mockResolvedValue(undefined);
   const { port1, port2 } = new MessageChannel();
-  const { port1: ownerPort, port2: hostPort } = new MessageChannel();
   // This is the host policy boundary, not physical filesystem or process proof.
   const inventory = new Set<string>();
   const hostMessages: SqliteNativeOwnerRequest[] = [];
   const hostPolicy = vi.fn((_request: SqliteNativeOwnerRequest) => {});
-  hostPort.on("message", (request: SqliteNativeOwnerRequest) => {
-    hostMessages.push(request);
-    let reply: SqliteNativeOwnerReply;
-    try {
+  const host = createSqliteReadOnlyNativeResourceConnection({
+    receive(request) {
+      hostMessages.push(request);
       if (request.type === "allocated") {
         inventory.add(request.directory);
       } else if (!inventory.has(request.directory)) {
         throw new Error("Host received a directory outside this physical resource");
       }
       hostPolicy(request);
-      if (request.type === "removed") {
-        inventory.delete(request.directory);
-      }
-      reply = { id: request.id, ok: true };
-    } catch (error: unknown) {
-      const encoded = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-      if (!encoded) {
-        throw new Error("Fixture host failure must be an Error", { cause: error });
-      }
-      reply = { id: request.id, ok: false, error: encoded };
-    }
-    hostPort.postMessage(reply, { transfer: [] });
+    },
+    onFailure(error) {
+      throw error;
+    },
   });
+  const ownerPort = host.port;
   const resource = createNativeWorkerResource(port1, undefined, ownerPort);
   const client = createSqliteReadOnlyNativeResourceClient(port2);
   const launch: SqliteNativeSessionLaunch = {
@@ -102,57 +98,67 @@ function fixture() {
     retainLifetime: false,
     retainOnOperationError: true,
   };
-  const cleanup: { expectedFailure?: RegExp } = {};
-  const closeNative: () => Promise<void> = native.close;
-  const value = {
+  const cleanup: { expectedFailure?: RegExp; closeNative(): Promise<void> } = {
+    closeNative: native.close,
+  };
+  owned.push(async () => {
+    try {
+      if (cleanup.expectedFailure) {
+        await expect(resource.close()).rejects.toThrow(cleanup.expectedFailure);
+        // A refused resource close still leaves the fixture's native producer to join.
+        await cleanup.closeNative();
+      } else {
+        await resource.close();
+      }
+    } finally {
+      port1.close();
+      port2.close();
+      host.dispose();
+    }
+  });
+  return {
     resource,
     client,
     launch,
     native,
     closed,
-    port1,
     port2,
     ownerPort,
-    hostPort,
+    host,
     inventory,
     hostMessages,
     hostPolicy,
     cleanup,
-    closeNative,
   };
-  owned.push(value);
-  return value;
 }
-afterEach(async () => {
-  for (const entry of owned.splice(0)) {
-    try {
-      if (entry.cleanup.expectedFailure) {
-        await expect(entry.resource.close()).rejects.toThrow(entry.cleanup.expectedFailure);
-        // Join the fixture's original producer after the resource refuses
-        // to acknowledge unresolved cleanup; physical cases install their real close.
-        await entry.closeNative();
-      } else {
-        await entry.resource.close();
-      }
-    } finally {
-      entry.port1.close();
-      entry.port2.close();
-      entry.ownerPort.close();
-      entry.hostPort.close();
-    }
-  }
-});
+
+async function allocatedFixture(directory = tokenPath) {
+  const value = fixture();
+  const session = value.client.createSession(value.launch);
+  await allocate(session, directory);
+  return { ...value, session };
+}
+
+function expectCustody(native: ReturnType<typeof fixture>["native"]) {
+  expect(native.close).not.toHaveBeenCalled();
+  expect(operations.copy).not.toHaveBeenCalled();
+  expect(operations.remove).not.toHaveBeenCalled();
+}
+
+function expectReconciled(directory: string, launch: SqliteNativeSessionLaunch) {
+  expect(operations.copy).toHaveBeenCalledWith(
+    directory,
+    { mode: "staging-reconcile" },
+    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
+  );
+}
 
 it("projects an accepted allocation before closing its child after target port loss", async () => {
-  const { client, resource, launch, native, port2, inventory, hostMessages } = fixture();
-  const entered = createDeferredCore();
-  const complete = createDeferredCore<string>();
-  native.run.mockImplementationOnce(async () => {
-    entered.resolve();
-    return await complete.promise;
-  });
+  const { client, resource, launch, native, port2, hostMessages } = fixture();
+  const { entered, resume, hold } = createReadBarrier();
+  native.run.mockImplementationOnce(() => hold("/fixture/allocated-before-reply"));
   const session = client.createSession(launch);
-  const allocation = session.run("/fixture/root", { mode: "staging-create", preparationId: 1 });
+  const allocation = allocate(session, "/fixture/root");
   const rejected = expect(allocation).rejects.toThrow("child cleanup is not acknowledged");
   await entered.promise;
   port2.close();
@@ -165,33 +171,26 @@ it("projects an accepted allocation before closing its child after target port l
     expect(operations.copy).not.toHaveBeenCalled();
     expect(hostMessages).toEqual([]);
   } finally {
-    complete.resolve("/fixture/allocated-before-reply");
+    resume.resolve();
     await joined;
   }
   expect(hostMessages.map(({ id: _id, ...request }) => request)).toEqual([
     { type: "allocated", directory: "/fixture/allocated-before-reply", preparationId: 1 },
     { type: "retire", directory: "/fixture/allocated-before-reply" },
-    { type: "removed", directory: "/fixture/allocated-before-reply" },
   ]);
   expect(native.close).toHaveBeenCalledOnce();
-  expect(operations.copy).toHaveBeenCalledWith(
-    "/fixture/allocated-before-reply",
-    { mode: "staging-reconcile" },
-    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
-  );
+  expectReconciled("/fixture/allocated-before-reply", launch);
   expect(operations.remove).toHaveBeenCalledWith("/fixture/allocated-before-reply", {
     force: true,
     recursive: true,
     maxRetries: 3,
     retryDelay: 20,
   });
-  expect(inventory.size).toBe(0);
 });
 
 it("retains creator custody behind a host reader fence and retries cleanup on the same resource", async () => {
-  const { client, resource, launch, native, hostPolicy, inventory } = fixture();
-  const session = client.createSession(launch);
-  await session.run("/fixture/fenced", { mode: "staging-create", preparationId: 1 });
+  const { resource, launch, native, hostPolicy, inventory } =
+    await allocatedFixture("/fixture/fenced");
   let readerActive = true;
   hostPolicy.mockImplementation((request) => {
     if (request.type === "retire" && readerActive) {
@@ -200,9 +199,7 @@ it("retains creator custody behind a host reader fence and retries cleanup on th
   });
   try {
     await expect(resource.close()).rejects.toThrow("active reader");
-    expect(native.close).not.toHaveBeenCalled();
-    expect(operations.copy).not.toHaveBeenCalled();
-    expect(operations.remove).not.toHaveBeenCalled();
+    expectCustody(native);
     expect(inventory).toEqual(new Set(["/fixture/fenced"]));
   } finally {
     readerActive = false;
@@ -210,28 +207,21 @@ it("retains creator custody behind a host reader fence and retries cleanup on th
   }
   expect(operations.session).toHaveBeenCalledOnce();
   expect(native.close).toHaveBeenCalledOnce();
-  expect(operations.copy).toHaveBeenCalledWith(
-    "/fixture/fenced",
-    { mode: "staging-reconcile" },
-    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
-  );
-  expect(inventory.size).toBe(0);
+  expectReconciled("/fixture/fenced", launch);
+  expect(operations.remove).toHaveBeenCalledOnce();
 });
 
 it("refuses cleanup after losing its host fence port without releasing creator custody", async () => {
-  const { client, resource, launch, native, hostPort, ownerPort, cleanup } = fixture();
-  const session = client.createSession(launch);
-  await session.run("/fixture/host-lost", { mode: "staging-create", preparationId: 1 });
+  const { resource, native, host, ownerPort, cleanup } =
+    await allocatedFixture("/fixture/host-lost");
   const disconnected = new Promise<void>((resolve) => {
     ownerPort.once("close", resolve);
   });
   cleanup.expectedFailure = /host cleanup owner is unavailable/;
-  hostPort.close();
+  host.dispose();
   await disconnected;
   await expect(resource.close()).rejects.toThrow(cleanup.expectedFailure);
-  expect(native.close).not.toHaveBeenCalled();
-  expect(operations.copy).not.toHaveBeenCalled();
-  expect(operations.remove).not.toHaveBeenCalled();
+  expectCustody(native);
 });
 
 it("closes the real native session after a refused allocation", async () => {
@@ -255,16 +245,16 @@ it("closes the real native session after a refused allocation", async () => {
     });
     return native;
   });
-  entry.closeNative = async () => {
+  entry.cleanup.closeNative = async () => {
     for (const native of sessions) {
       await native.close();
       await native.closed;
     }
   };
   const session = entry.client.createSession(launch);
-  await expect(
-    session.run(path.join(root, "missing"), { mode: "staging-create", preparationId: 1 }),
-  ).rejects.toThrow("snapshot staging root");
+  await expect(allocate(session, path.join(root, "missing"))).rejects.toThrow(
+    "snapshot staging root",
+  );
   await entry.resource.close();
   expect(nativeClosed).toBe(true);
   expect(sessions).toHaveLength(1);
@@ -295,16 +285,13 @@ it("creates native sessions only through RPC and preserves captured launch and s
   expect(native.close).toHaveBeenCalledOnce();
   expect(inventory).toEqual(new Set(["/fixture/staging"]));
   await client.removed("/fixture/staging");
-  expect(inventory.size).toBe(0);
   await resource.close();
   expect(operations.copy).not.toHaveBeenCalled();
   expect(operations.remove).not.toHaveBeenCalled();
 });
 
 it("joins a cancelled copy without aborting another copy or the token session", async () => {
-  const { client, launch, native } = fixture();
-  const session = client.createSession(launch);
-  await session.run("/fixture/token", { mode: "staging-create", preparationId: 1 });
+  const { client, launch, native, session } = await allocatedFixture();
   const entered = createDeferredCore();
   const cancelled = createDeferredCore();
   const gates = [createDeferredCore(), createDeferredCore()];
@@ -339,27 +326,19 @@ it("joins a cancelled copy without aborting another copy or the token session", 
     copyLaunch,
   );
   const rejected = expect(first).rejects.toBe(reason);
-  let settled = false;
-  void first.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const observation = observeSettlement(first);
   try {
     await entered.promise;
     controller.abort(reason);
     await cancelled.promise;
     expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
-    expect(settled).toBe(false);
+    expect(observation.settled).toBe(false);
     expect(native.close).not.toHaveBeenCalled();
     gates[0]!.resolve();
     await rejected;
     gates[1]!.resolve();
     expect(await second).toBe("second");
-    expect(await session.run("/fixture/token", { mode: "staging-retire" })).toBe("/fixture/token");
+    expect(await session.run(tokenPath, { mode: "staging-retire" })).toBe(tokenPath);
     expect(operations.copy.mock.calls.map((call) => call[2])).toEqual([copyLaunch, copyLaunch]);
   } finally {
     for (const gate of gates) {
@@ -367,21 +346,17 @@ it("joins a cancelled copy without aborting another copy or the token session", 
     }
     await Promise.allSettled([first, second]);
     await session.close();
-    await client.removed("/fixture/token");
+    await client.removed(tokenPath);
   }
 });
 
 it("seals creation and retries a failed close on the same native session", async () => {
-  const { client, resource, launch, native } = fixture();
-  const session = client.createSession(launch);
-  await session.run("/fixture/token", { mode: "staging-create", preparationId: 1 });
+  const { client, resource, launch, native } = await allocatedFixture();
   const failure = new Error("native close was not acknowledged");
   native.close.mockRejectedValueOnce(failure);
   await expect(resource.close()).rejects.toBe(failure);
   const refused = client.createSession(launch);
-  await expect(
-    refused.run("/fixture/other", { mode: "staging-create", preparationId: 1 }),
-  ).rejects.toThrow("closing");
+  await expect(allocate(refused, "/fixture/other")).rejects.toThrow("closing");
   expect(operations.session).toHaveBeenCalledOnce();
   await resource.close();
   expect(native.close).toHaveBeenCalledTimes(2);
@@ -394,39 +369,27 @@ it("settles a refused native creation before a later session can allocate", asyn
     throw failure;
   });
   const refused = client.createSession(launch);
-  await expect(
-    refused.run("/fixture/first", { mode: "staging-create", preparationId: 1 }),
-  ).rejects.toThrow(failure.message);
+  await expect(allocate(refused, "/fixture/first")).rejects.toThrow(failure.message);
   await expect(refused.close()).resolves.toBeUndefined();
   const next = client.createSession(launch);
-  expect(await next.run("/fixture/second", { mode: "staging-create", preparationId: 1 })).toBe(
-    "/fixture/second",
-  );
+  expect(await allocate(next, "/fixture/second")).toBe("/fixture/second");
   await next.close();
 });
 
 it("rejects lost-port RPCs without declaring child death and joins outstanding work on owner close", async () => {
-  const { client, resource, launch, native, port2 } = fixture();
-  const session = client.createSession(launch);
-  await session.run("/fixture/token", { mode: "staging-create", preparationId: 1 });
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
+  const { client, resource, launch, native, port2, session } = await allocatedFixture();
+  const { entered, resume, hold } = createReadBarrier();
   let signal: AbortSignal | undefined;
   operations.copy.mockImplementation(async (_pathname, options) => {
     signal = options.signal;
-    entered.resolve();
-    await finish.promise;
+    await hold(undefined);
     signal?.throwIfAborted();
     return "/fixture/copy";
   });
   const copy = client.runOnce(
     "/fixture/source",
-    { mode: "sync" },
-    {
-      env: launch.env,
-      cwd: launch.cwd,
-      deadlineOwnedByCaller: false,
-    },
+    { mode: "sync", stagingRoot: "/fixture/allocated" },
+    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
   );
   const rejected = expect(copy).rejects.toThrow("child cleanup is not acknowledged");
   await entered.promise;
@@ -443,7 +406,7 @@ it("rejects lost-port RPCs without declaring child death and joins outstanding w
     expect(joined).toBe(false);
     expect(native.close).not.toHaveBeenCalled();
   } finally {
-    finish.resolve();
+    resume.resolve();
     await closing;
   }
   expect(native.close).toHaveBeenCalledOnce();

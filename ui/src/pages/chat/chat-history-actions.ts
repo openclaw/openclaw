@@ -1,29 +1,64 @@
 import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import { requestChatAbort } from "./chat-abort-request.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   captureChatComposerReplacement,
   loadChatComposerState,
   persistChatComposerState,
-} from "./composer-persistence.ts";
-import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { chatAttachmentDraftSignature } from "./composer-draft.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
+
+export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string): boolean {
+  const view = getChatPendingInputs(state);
+  const input = view?.queuedInputs.find(
+    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
+  );
+  const client = state.client;
+  if (!view || !input?.runId) {
+    return false;
+  }
+  if (!client || !state.connected) {
+    return true;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
+  void requestChatAbort(client, {
+    sessionKey: view.sessionKey,
+    agentId: view.agentId,
+    runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
+  }).then(async (result) => {
+    if (!current()) {
+      return;
+    }
+    if (!result.ok) {
+      state.chatError = formatUiError(result.error);
+      return;
+    }
+    await loadChatHistory(state, { supersedeInFlight: true });
+  });
+  return true;
+}
 
 type ClearChatHistoryState = ChatHistoryHost &
   Parameters<typeof reconcileChatRunLifecycle>[0] &
@@ -51,7 +86,7 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   }
   return Boolean(
     state.sessionsResult?.sessions.some(
-      (session) => session.key === state.sessionKey && isSessionRunActive(session),
+      (session) => session.key === state.sessionKey && isSessionRunStateActive(session),
     ),
   );
 }
@@ -84,7 +119,7 @@ function clearPostResetBranchPrecondition(
   }
   // Reset can leave old branch metadata visible after the transcript becomes
   // empty. The first post-reset send must establish the new branch itself.
-  delete state.chatDisplayedLeafEntryId;
+  state.chatDisplayedLeafEntryId = undefined;
 }
 
 export async function clearChatHistory(

@@ -35,7 +35,7 @@ vi.mock("../../infra/provider-usage.load.js", () => ({
 
 import {
   clearModelAuthStatusUsageCache,
-  readProviderUsageStaleWhileRevalidate,
+  readProviderUsage,
 } from "./models-auth-status-usage-cache.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { invokeUsage, usageClient, usageReply } from "./usage.test-support.js";
@@ -214,13 +214,82 @@ describe("usage.status provider usage cache", () => {
     expect(retained).toEqual(timeout ? first : usageSummary(61_000, 20));
     expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
   });
+  it("preserves auth quota across failures without hiding usage.status errors", async () => {
+    await runUsageStatus();
+    for (const error of ["HTTP 503", "Unauthorized"]) {
+      now += 60_000;
+      mocks.loadSummary.mockResolvedValue({
+        updatedAt: now,
+        providers: [{ ...providerDescriptor, windows: [], error }],
+      });
+      await settledStatus();
+      await expect(runUsageStatus()).resolves.toMatchObject({
+        providers: [{ ...providerDescriptor, windows: [], error }],
+      });
+      const authUsage = await readProviderUsage({
+        ...(await getProviderUsageRuntimeSnapshot({ config })),
+        providerIds: ["openai"],
+        now,
+      });
+      expect(authUsage.usageByProvider.get("openai")?.windows).toEqual([
+        { label: "5h", usedPercent: 10 },
+      ]);
+    }
+  });
+
+  it.each([undefined, 120_000, 0])(
+    "paces post-run usage with cacheTtlMs=%s",
+    async (cacheTtlMs) => {
+      const snapshot = await getProviderUsageRuntimeSnapshot({
+        config: { ...config, models: { usage: { cacheTtlMs } } },
+      });
+      const read = () => readProviderUsage({ ...snapshot, now, awaitRefresh: true });
+      const ttl = cacheTtlMs ?? 60_000;
+      expect((await read()).refreshAt).toBe(now + ttl);
+      for (let run = 0; run < 10; run += 1) {
+        await read();
+      }
+      expect(mocks.loadSummary).toHaveBeenCalledTimes(ttl === 0 ? 11 : 1);
+      now += ttl;
+      await read();
+      expect(mocks.loadSummary).toHaveBeenCalledTimes(ttl === 0 ? 12 : 2);
+    },
+  );
+
+  it("refreshes each provider set once per TTL when page reads interleave", async () => {
+    // models.authStatus polls refreshable credentials only; usage.status polls every descriptor.
+    mocks.listDescriptors.mockReturnValue([
+      providerDescriptor,
+      { provider: "anthropic", displayName: "Anthropic" },
+    ]);
+    const readAuthStatusUsage = async () =>
+      readProviderUsage({
+        ...(await getProviderUsageRuntimeSnapshot({ config })),
+        providerIds: ["openai"],
+        now,
+      });
+    for (let load = 0; load < 3; load += 1) {
+      const scope = new AsyncWorkScope();
+      await Promise.all([
+        scope.track(readAuthStatusUsage),
+        scope.track(() => runUsageStatus(refreshingCapableClient)),
+      ]);
+      await scope.drain();
+      now += 1_000;
+    }
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
+    expect((await readAuthStatusUsage()).usageByProvider.get("openai")).toBeDefined();
+    await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
+  });
+
   it("shares the credential-bound snapshot and invalidates it on rotation", async () => {
     await runUsageStatus();
-    const usage = readProviderUsageStaleWhileRevalidate({
+    const usage = await readProviderUsage({
       ...(await getProviderUsageRuntimeSnapshot({ config })),
       now,
     });
-    expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);
+    expect(usage.usageByProvider.get("openai")?.windows[0]?.usedPercent).toBe(10);
     expect(mocks.loadSummary).toHaveBeenCalledTimes(1);
     publishStore(createStore({ default: "access-two" }));
     await expect(runUsageStatus()).resolves.toMatchObject({

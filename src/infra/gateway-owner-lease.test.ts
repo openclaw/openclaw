@@ -4,11 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
+import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import * as pidAlive from "../shared/pid-alive.js";
-import {
-  readOpenClawDatabaseQuarantineFailure,
-  recordOpenClawDatabaseQuarantine,
-} from "../state/openclaw-quarantine-store.js";
+import * as provenance from "../state/openclaw-agent-db-lease-provenance.js";
+import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -20,10 +20,14 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as leaseHeartbeat from "../state/openclaw-state-lease-heartbeat.js";
 import { renewOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as machineIdentity from "./current-machine-identity.js";
+import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
+import { parseShippedStateLeaseProcessOwner } from "./gateway-lock-rollback.test-support.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   acquireGatewayOwnerLease,
@@ -34,7 +38,11 @@ import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
+import { writeGatewayServiceRestartIntentSync } from "./restart-intent.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseIntegrityVerification,
+} from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -57,6 +65,7 @@ function fixture() {
       createdAt: new Date().toISOString(),
       configPath: path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
       role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
     },
   });
   let lease: GatewayOwnerLease | undefined;
@@ -85,13 +94,22 @@ function fixture() {
 
 function seedOwner(
   env: NodeJS.ProcessEnv,
-  params: {
+  {
+    pid = process.pid,
+    host = hostname(),
+    startedAt = pidAlive.getFileLockProcessStartTime(process.pid),
+    expiresAt = Date.now() + 300_000,
+    heartbeatAt = Date.now(),
+    processNamespace = readGatewayLockProcessNamespace(),
+    machineIdentity: ownerMachineIdentity,
+  }: {
     pid?: number;
     host?: string;
     startedAt?: number | null;
     expiresAt?: number | null;
     heartbeatAt?: number;
     processNamespace?: unknown;
+    machineIdentity?: string | null;
   } = {},
 ) {
   withOpenClawStateStartupMigrationCheckpointDatabase(
@@ -101,20 +119,10 @@ function seedOwner(
          (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
          VALUES ('gateway-owner', 'global', 'previous-generation', ?, ?, ?, ?, ?)`,
       ).run(
-        params.expiresAt === undefined ? Date.now() + 300_000 : params.expiresAt,
-        params.heartbeatAt ?? Date.now(),
+        expiresAt,
+        heartbeatAt,
         JSON.stringify({
-          owner: {
-            pid: params.pid ?? process.pid,
-            host: params.host ?? hostname(),
-            ...(params.processNamespace === undefined
-              ? {}
-              : { processNamespace: params.processNamespace }),
-            startedAt:
-              params.startedAt === undefined
-                ? pidAlive.getFileLockProcessStartTime(process.pid)
-                : params.startedAt,
-          },
+          owner: { pid, host, processNamespace, startedAt, machineIdentity: ownerMachineIdentity },
           port: 19483,
           mode: "foreground",
           supervisor: null,
@@ -127,25 +135,48 @@ function seedOwner(
   );
 }
 
-function mockLinuxNamespace(root: string) {
-  if (process.platform !== "linux") {
-    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const stat = fs.statSync.bind(fs);
-    vi.spyOn(fs, "statSync").mockImplementation((file, options) =>
-      stat(file === "/proc/self/ns/pid" ? root : file, options),
-    );
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    readGatewayLockProcessNamespace();
-    platform.mockRestore();
+async function seedClosedOwner(
+  params: Parameters<typeof seedOwner>[1] = {},
+  setup?: (env: NodeJS.ProcessEnv) => void,
+) {
+  let env: NodeJS.ProcessEnv;
+  {
+    await using owner = fixture();
+    env = owner.env;
+    seedOwner(env, params);
+    setup?.(env);
   }
-  const namespace = readGatewayLockProcessNamespace();
-  if (!namespace || !("pidNsInode" in namespace)) {
-    throw new Error("Expected Linux process namespace identity");
-  }
-  return namespace;
+  await closeOpenClawStateDatabaseAsync();
+  return env;
+}
+
+function quarantine(env: NodeJS.ProcessEnv, reason: string) {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  seedOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason });
+  return () => readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message;
+}
+
+function acquireLock(
+  env: NodeJS.ProcessEnv,
+  params: Partial<Parameters<typeof acquireGatewayLock>[0]> = {},
+) {
+  return acquireGatewayLock({
+    env,
+    allowInTests: true,
+    port: 19483,
+    listenerMode: "foreground",
+    ...params,
+  });
+}
+
+function captureCoordinator() {
+  const acquire = stateOwners.acquireGatewayStateOwner;
+  let coordinator: ReturnType<typeof acquire> | undefined;
+  vi.spyOn(stateOwners, "acquireGatewayStateOwner").mockImplementation((params) => {
+    coordinator = acquire(params);
+    return coordinator;
+  });
+  return () => coordinator;
 }
 
 function readFreshProcessNamespace() {
@@ -157,93 +188,136 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
-  it("reclaims when the heartbeat becomes stale after the initial observation", async () => {
+  it.runIf(process.platform === "darwin" || process.platform === "linux").each([
+    {
+      kind: "same machine",
+      machine: "a".repeat(64),
+      sameHost: false,
+      reclaim: process.platform === "darwin",
+    },
+    { kind: "different machine", machine: "b".repeat(64), sameHost: false, reclaim: false },
+    { kind: "legacy", machine: undefined, sameHost: false, reclaim: false },
+    { kind: "unavailable", machine: null, sameHost: true, reclaim: true },
+  ])("handles a previous-boot $kind lease", async ({ machine, sameHost, reclaim }) => {
+    vi.spyOn(machineIdentity, "readProcessMachineIdentity").mockReturnValue("a".repeat(64));
     await using owner = fixture();
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const namespace = readFreshProcessNamespace();
+    const host = sameHost ? namespace?.host : "previous-hostname";
     seedOwner(owner.env, {
-      host: "previous-container",
-      heartbeatAt: now - GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+      host,
+      machineIdentity: machine,
+      processNamespace: {
+        ...namespace,
+        host,
+        identity: "87654321-abcd-0123-abcd-0123456789ab",
+      },
     });
-    const read = ownerLeaseRead.readGatewayOwnerLeaseFromDatabase;
-    const observations: Array<ReturnType<typeof read>> = [];
-    vi.spyOn(ownerLeaseRead, "readGatewayOwnerLeaseFromDatabase").mockImplementation((...args) => {
-      const previous = read(...args);
-      observations.push(previous);
-      now += 1;
-      return previous;
-    });
-    const lease = owner.acquire();
-    await lease.ready;
-    expect(observations[0]?.state).toBe("unknown");
-    expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
-      owner: lease.owner,
-      state: "live",
-    });
+    if (!reclaim) {
+      expect(() => owner.acquire()).toThrow("openclaw gateway recover-lock");
+      expect(readGatewayOwnerLease({ env: owner.env })?.owner).toBe("previous-generation");
+      return;
+    }
+    await owner.acquire().ready;
+    const lease = readGatewayOwnerLease({ env: owner.env });
+    expect(lease?.state).toBe("live");
+    expect(lease?.machineIdentity).toBe(process.platform === "darwin" ? "a".repeat(64) : undefined);
+    const row = withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) =>
+        db
+          .prepare(
+            "SELECT payload_json FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global'",
+          )
+          .get() as { payload_json: string },
+      { env: owner.env },
+    );
+    const oldReader = parseShippedStateLeaseProcessOwner(row.payload_json);
+    expect(oldReader?.processNamespace).toEqual(lease?.processNamespace);
+    expect(oldReader?.pid).toBe(process.pid);
+    expect(oldReader).not.toHaveProperty("machineIdentity");
   });
 
-  it.each(["legacy", "qualified"] as const)(
-    "reclaims a crashed container's %s lease after its heartbeat goes stale",
-    async (kind) => {
+  it.runIf(process.platform === "darwin")(
+    "records native restart intent after a hostname change in the same kernel boot",
+    async () => {
       await using owner = fixture();
-      const namespace = mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
-      seedOwner(owner.env, {
-        host: "previous-container",
-        pid: 2_147_483_647,
-        expiresAt: null,
-        heartbeatAt: Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1,
-        ...(kind === "qualified"
-          ? {
-              processNamespace: { ...namespace, host: "previous-container", pidNsInode: "foreign" },
-            }
-          : {}),
-      });
-      const lease = owner.acquire();
+      const service = { kind: "launchd" as const, name: "ai.openclaw.hostname-fixture" };
+      const lease = owner.acquire({ mode: "supervised", supervisor: service });
       await lease.ready;
-      expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
-        owner: lease.owner,
-        state: "live",
-      });
-    },
-  );
-
-  it.each([
-    { age: 0, pid: process.pid },
-    { age: 0, pid: 2_147_483_647 },
-    { age: GATEWAY_OWNER_HEARTBEAT_STALE_MS, pid: 2_147_483_647 },
-  ])(
-    "preserves a foreign namespace with a $age ms heartbeat regardless of local PID $pid",
-    async ({ age, pid }) => {
-      await using owner = fixture();
-      const namespace = mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
-      vi.spyOn(Date, "now").mockReturnValue(Date.now());
-      seedOwner(owner.env, {
-        pid,
-        processNamespace: { ...namespace, pidNsInode: "foreign" },
-        heartbeatAt: Date.now() - age,
-      });
-      expect(() => owner.acquire()).toThrow(
-        "run this command inside the Gateway container or with a shared PID namespace",
+      withOpenClawStateStartupMigrationCheckpointDatabase(
+        (db) => {
+          db.prepare(
+            "UPDATE state_leases SET payload_json = json_set(payload_json, '$.owner.host', ?, '$.owner.processNamespace.host', ?) WHERE scope = 'gateway-owner'",
+          ).run("previous-hostname", "previous-hostname");
+        },
+        { env: owner.env },
       );
-      expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
-        owner: "previous-generation",
-        state: "unknown",
-      });
+      let clearIntent: (() => void) | undefined;
+      try {
+        expect(
+          writeGatewayServiceRestartIntentSync({
+            env: owner.env,
+            service,
+            nativeStopped: false,
+            nativePid: process.pid,
+            assertCurrent: () => undefined,
+            onRecorded: (clear) => {
+              clearIntent = clear;
+            },
+          }),
+        ).toBe(true);
+        expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
+          owner: lease.owner,
+          pid: process.pid,
+          host: "previous-hostname",
+          state: "live",
+        });
+      } finally {
+        clearIntent?.();
+      }
     },
   );
 
   it.each([
-    { label: "unavailable", processNamespace: null },
-    { label: "invalid", processNamespace: { platform: "unknown" } },
-  ])(
-    "preserves a fresh foreign host with $label namespace identity",
-    async ({ processNamespace }) => {
-      await using owner = fixture();
-      seedOwner(owner.env, { host: "previous-container", pid: 2_147_483_647, processNamespace });
-      expect(() => owner.acquire()).toThrow("owner heartbeat is fresh");
-      expect(readGatewayOwnerLease({ env: owner.env })?.owner).toBe("previous-generation");
-    },
-  );
+    { kind: "crashed legacy", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
+    { kind: "crashed qualified", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
+    { kind: "foreign namespace", age: 0, pid: process.pid },
+    { kind: "foreign namespace", age: 0 },
+    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS },
+    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
+    { kind: "unavailable namespace", age: 0 },
+    { kind: "invalid namespace", age: 0 },
+  ] as const)("preserves $kind with a $age ms heartbeat (PID $pid)", async (row) => {
+    await using owner = fixture();
+    const { kind, age } = row;
+    const unqualified = kind === "unavailable namespace" || kind === "invalid namespace";
+    const namespace = unqualified ? null : mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
+    if (kind === "foreign namespace") {
+      vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    }
+    seedOwner(owner.env, {
+      pid: "pid" in row ? row.pid : 2_147_483_647,
+      ...(kind.startsWith("crashed") || unqualified ? { host: "previous-container" } : {}),
+      ...(kind.startsWith("crashed") ? { expiresAt: null } : {}),
+      processNamespace:
+        kind === "crashed legacy" || kind === "unavailable namespace"
+          ? null
+          : kind === "invalid namespace"
+            ? { platform: "unknown" }
+            : {
+                ...namespace,
+                ...(kind === "crashed qualified" ? { host: "previous-container" } : {}),
+                pidNsInode: "foreign",
+              },
+      heartbeatAt: Date.now() - age,
+    });
+    expect(() => owner.acquire()).toThrow(
+      unqualified ? "heartbeat age does not prove" : "openclaw gateway recover-lock",
+    );
+    expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
+      owner: "previous-generation",
+      state: "unknown",
+    });
+  });
 
   it.each(["local identity unavailable", "different host boot"] as const)(
     "preserves a fresh foreign lease when its namespace is not comparable: %s",
@@ -282,7 +356,7 @@ describe("Gateway owner lease", () => {
         platform.mockRestore();
       }
       try {
-        expect(() => owner.acquire()).toThrow("owner heartbeat is fresh");
+        expect(() => owner.acquire()).toThrow("heartbeat age does not prove");
         expect(readGatewayOwnerLease({ env: owner.env })?.owner).toBe("previous-generation");
         if (condition === "local identity unavailable") {
           expect(failedProbe).toHaveBeenCalled();
@@ -297,35 +371,23 @@ describe("Gateway owner lease", () => {
   it.each(["current", "quarantined", "newer"] as const)(
     "Doctor refuses a fresh foreign lease with %s state",
     async (condition) => {
-      let env: NodeJS.ProcessEnv;
-      {
-        await using owner = fixture();
-        env = owner.env;
-        seedOwner(env, { host: "previous-container" });
+      const env = await seedClosedOwner({ host: "previous-container" }, (stateEnv) => {
         if (condition === "newer") {
           withOpenClawStateStartupMigrationCheckpointDatabase(
             (db) => db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`),
-            { env },
+            { env: stateEnv },
           );
         }
-      }
-      await closeOpenClawStateDatabaseAsync();
+      });
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const before = fs.readFileSync(databasePath);
       if (condition === "quarantined") {
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env,
-            kind: "state",
-            path: resolveOpenClawStateSqlitePath(env),
-            reason: "synthetic index damage",
-          }),
-        ).toBe(true);
+        quarantine(env, "synthetic index damage");
       }
       const run = vi.fn();
       await expect(
         withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
-      ).rejects.toThrow("wait up to 90 seconds");
+      ).rejects.toThrow("openclaw gateway recover-lock");
       expect(run).not.toHaveBeenCalled();
       expect(fs.readFileSync(databasePath)).toEqual(before);
       if (condition === "quarantined") {
@@ -340,18 +402,11 @@ describe("Gateway owner lease", () => {
     "Doctor refuses quarantined %s lease claims after lookup-index corruption",
     async (kind) => {
       const ambiguous = kind === "ambiguous";
-      let env: NodeJS.ProcessEnv;
-      {
-        await using owner = fixture();
-        env = owner.env;
-        seedOwner(
-          env,
-          ambiguous
-            ? { pid: 2_147_483_647, startedAt: 1, expiresAt: null }
-            : { host: "previous-container", expiresAt: null },
-        );
-      }
-      await closeOpenClawStateDatabaseAsync();
+      const env = await seedClosedOwner(
+        ambiguous
+          ? { pid: 2_147_483_647, startedAt: 1, expiresAt: null }
+          : { host: "previous-container", expiresAt: null },
+      );
       const databasePath = resolveOpenClawStateSqlitePath(env);
       corruptSqliteIndexKey(
         databasePath,
@@ -394,56 +449,48 @@ describe("Gateway owner lease", () => {
       }
       const before = fs.readFileSync(databasePath);
       const reason = "fixture Gateway lease index quarantine";
-      expect(
-        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
-      ).toBe(true);
+      const readQuarantine = quarantine(env, reason);
       const run = vi.fn();
       await expect(
         withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
-      ).rejects.toThrow(ambiguous ? "ambiguous during maintenance" : "wait up to 90 seconds");
+      ).rejects.toThrow(
+        ambiguous ? "ambiguous during maintenance" : "openclaw gateway recover-lock",
+      );
       expect(run).not.toHaveBeenCalled();
       expect(fs.readFileSync(databasePath)).toEqual(before);
-      expect(
-        readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message,
-      ).toContain(reason);
+      expect(readQuarantine()).toContain(reason);
     },
   );
 
   it.each(["dead", "stale foreign"] as const)(
     "Doctor can inspect quarantined state with a %s owner without clearing its lease or quarantine",
     async (kind) => {
-      let env: NodeJS.ProcessEnv;
-      {
-        await using owner = fixture();
-        env = owner.env;
-        seedOwner(env, {
-          pid: 2_147_483_647,
-          startedAt: 1,
-          expiresAt: null,
-          ...(kind === "stale foreign"
-            ? {
-                host: "previous-container",
-                heartbeatAt: Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1,
-              }
-            : {}),
-        });
-      }
-      await closeOpenClawStateDatabaseAsync();
+      const env = await seedClosedOwner({
+        pid: 2_147_483_647,
+        startedAt: 1,
+        expiresAt: null,
+        ...(kind === "stale foreign"
+          ? {
+              host: "previous-container",
+              heartbeatAt: Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1,
+            }
+          : {}),
+      });
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const before = fs.readFileSync(databasePath);
       const reason = "fixture audit index quarantine";
-      expect(
-        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
-      ).toBe(true);
+      const readQuarantine = quarantine(env, reason);
       const run = vi.fn(() => "inspected");
-      await expect(
-        withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
-      ).resolves.toBe("inspected");
-      expect(run).toHaveBeenCalledOnce();
+      const inspection = withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run });
+      if (kind === "dead") {
+        await expect(inspection).resolves.toBe("inspected");
+        expect(run).toHaveBeenCalledOnce();
+      } else {
+        await expect(inspection).rejects.toThrow("openclaw gateway recover-lock");
+        expect(run).not.toHaveBeenCalled();
+      }
       expect(fs.readFileSync(databasePath)).toEqual(before);
-      expect(
-        readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message,
-      ).toContain(reason);
+      expect(readQuarantine()).toContain(reason);
       expect(() => readGatewayOwnerLease({ env, current: true })).toThrow(reason);
     },
   );
@@ -460,11 +507,7 @@ describe("Gateway owner lease", () => {
         env = owner.env;
         seedOwner(env, { host: "previous-container" });
       }
-      const startup = acquireGatewayLock({
-        env,
-        allowInTests: true,
-        port: 19483,
-        listenerMode: "foreground",
+      const startup = acquireLock(env, {
         now: () => now,
         sleep: async (ms) => {
           expect(ms).toBe(5_000);
@@ -482,17 +525,8 @@ describe("Gateway owner lease", () => {
           }
         },
       });
-      if (renewing) {
-        await expect(startup).rejects.toThrow("owner heartbeat is fresh");
-        expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
-      } else {
-        const lock = await startup;
-        try {
-          expect(readGatewayOwnerLease({ env })).toMatchObject({ pid: process.pid, state: "live" });
-        } finally {
-          await lock?.release();
-        }
-      }
+      await expect(startup).rejects.toThrow("openclaw gateway recover-lock");
+      expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
       expect(now - began).toBe(95_000);
     },
   );
@@ -543,6 +577,37 @@ describe("Gateway owner lease", () => {
     expect(readGatewayOwnerLease({ env })?.state).toBe("live");
   });
 
+  it("publishes its state file provenance after Gateway startup admission and listening", async () => {
+    const state = await createOpenClawTestState({ label: "gateway-owner-provenance" });
+    try {
+      await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+      const pathname = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeOpenClawStateDatabaseAsync();
+      // Existing-file startup inspects a private snapshot rather than certifying the live file.
+      renameSync(pathname, `${pathname}.seed`);
+      fs.copyFileSync(`${pathname}.seed`, pathname);
+      await runStartupConfigPreflight({ gateway: true });
+      const lock = await acquireLock(state.env);
+      try {
+        expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+        vi.spyOn(provenance, "readAgentDatabaseLeaseProvenance").mockReturnValue(
+          "fixture:state-file",
+        );
+
+        lock?.markListening?.();
+
+        expect(readGatewayOwnerLease({ env: state.env, current: true })).toMatchObject({
+          listeningAt: expect.any(Number),
+          stateDatabaseProvenance: "fixture:state-file",
+        });
+      } finally {
+        await lock?.release();
+      }
+    } finally {
+      await state.cleanup();
+    }
+  });
+
   it("repairs a missing publication identity on heartbeat and becomes live", async () => {
     await using owner = fixture();
     const { env } = owner;
@@ -556,30 +621,46 @@ describe("Gateway owner lease", () => {
     lookup.mockRestore();
     await lease.ready;
     await expect.poll(() => readGatewayOwnerLease({ env })?.state).toBe("live");
+    lease.markListening();
     expect(readGatewayOwnerLease({ env })).toMatchObject({
       owner: lease.owner,
       startedAt: pidAlive.getFileLockProcessStartTime(process.pid),
+      listeningAt: expect.any(Number),
     });
   });
 
-  it("admits existing state without copying it and records the owner before listening", async () => {
-    let env: NodeJS.ProcessEnv;
-    {
-      await using owner = fixture();
-      env = owner.env;
-      seedOwner(env, { pid: 2_147_483_647 });
+  it("admits one competing Gateway and preserves its lease through listening publication", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-competing-gateways-") };
+    const attempts = await Promise.allSettled(
+      [19483, 19484].map((port) => acquireLock(env, { port, timeoutMs: 100, pollIntervalMs: 5 })),
+    );
+    const locks = attempts.flatMap((attempt) =>
+      attempt.status === "fulfilled" && attempt.value ? [attempt.value] : [],
+    );
+    try {
+      expect(locks).toHaveLength(1);
+      expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
+      const before = readGatewayOwnerLease({ env });
+      expect(before?.state).toBe("live");
+      locks[0]?.markListening?.();
+      expect(readGatewayOwnerLease({ env })).toMatchObject({
+        owner: before?.owner,
+        state: "live",
+        listeningAt: expect.any(Number),
+      });
+    } finally {
+      await Promise.all(locks.map((lock) => lock.release()));
     }
-    await closeOpenClawStateDatabaseAsync();
+    expect(readGatewayOwnerLease({ env })).toBeUndefined();
+  });
+
+  it("admits existing state without copying it and records the owner before listening", async () => {
+    const env = await seedClosedOwner({ pid: 2_147_483_647 });
     const snapshot = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
     snapshot.mockImplementation(() => {
       throw new Error("Gateway custody must not copy shared state for lease inspection");
     });
-    const lock = await acquireGatewayLock({
-      env,
-      allowInTests: true,
-      port: 18789,
-      listenerMode: "foreground",
-    });
+    const lock = await acquireLock(env, { port: 18789 });
     if (!lock) {
       throw new Error("Expected gateway lock");
     }
@@ -605,12 +686,7 @@ describe("Gateway owner lease", () => {
 
   it("retains physical custody when heartbeat startup and cleanup both fail", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-startup-failure-") };
-    const acquire = stateOwners.acquireGatewayStateOwner;
-    let coordinator: ReturnType<typeof acquire> | undefined;
-    vi.spyOn(stateOwners, "acquireGatewayStateOwner").mockImplementation((params) => {
-      coordinator = acquire(params);
-      return coordinator;
-    });
+    const coordinator = captureCoordinator();
     vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation(() => ({
       ready: Promise.reject(new Error("heartbeat startup failed")),
       assertRunning() {
@@ -626,42 +702,27 @@ describe("Gateway owner lease", () => {
       stop: async () => {
         throw new Error("heartbeat cleanup retained native custody");
       },
-      assertResponsive: () => undefined,
+      holdOwnerFence() {
+        throw new Error("heartbeat startup failed");
+      },
     }));
     try {
-      await expect(
-        acquireGatewayLock({
-          allowInTests: true,
-          env,
-          port: 19483,
-          listenerMode: "foreground",
-        }),
-      ).rejects.toThrow("heartbeat cleanup retained native custody");
-      if (!coordinator) {
+      await expect(acquireLock(env)).rejects.toThrow("heartbeat cleanup retained native custody");
+      if (!coordinator()) {
         throw new Error("Gateway did not acquire its process owner");
       }
       const contender = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env));
       contender?.release();
       expect(contender).toBeNull();
     } finally {
-      coordinator?.release();
+      coordinator()?.release();
     }
   });
 
   it("releases lost physical custody without changing its recorded lease", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-lost-") };
-    const acquire = stateOwners.acquireGatewayStateOwner;
-    let coordinator: ReturnType<typeof acquire> | undefined;
-    vi.spyOn(stateOwners, "acquireGatewayStateOwner").mockImplementation((params) => {
-      coordinator = acquire(params);
-      return coordinator;
-    });
-    const lock = await acquireGatewayLock({
-      env,
-      allowInTests: true,
-      port: 19483,
-      listenerMode: "foreground",
-    });
+    const coordinator = captureCoordinator();
+    const lock = await acquireLock(env);
     if (!lock) {
       throw new Error("Expected gateway lock");
     }
@@ -677,7 +738,7 @@ describe("Gateway owner lease", () => {
       expect(successor).not.toBeNull();
       successor?.release();
     } finally {
-      coordinator?.release();
+      coordinator()?.release();
     }
   });
 
@@ -701,6 +762,9 @@ describe("Gateway owner lease", () => {
         host: hostname(),
         processNamespace: readGatewayLockProcessNamespace(),
         heartbeatAt: expect.any(Number),
+        ...(process.platform === "darwin"
+          ? { machineIdentity: machineIdentity.readProcessMachineIdentity() }
+          : {}),
         startedAt: pidAlive.getFileLockProcessStartTime(process.pid),
         port: 19483,
         mode: "foreground",
@@ -720,7 +784,9 @@ describe("Gateway owner lease", () => {
       );
       expect(Number(heartbeat?.heartbeat_at)).toBeGreaterThan(Number(heartbeat?.created_at));
 
-      expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+      expect(repairOpenClawStateDatabaseSchema({ env, integrityCheck: "full" }).warnings).toEqual(
+        [],
+      );
       const held = cached ? openOpenClawStateDatabase({ env }) : undefined;
       if (!cached) {
         await closeOpenClawStateDatabaseAsync();
@@ -781,15 +847,18 @@ describe("Gateway owner lease", () => {
 
   it.each([
     { label: "foreign host", host: "other-gateway-host" },
-    { label: "missing start identity", startedAt: null },
+    { label: "missing start identity", startedAt: null, expiresAt: 1 },
   ])("preserves an unverifiable $label owner", async (previous) => {
     await using owner = fixture();
     const { env } = owner;
     seedOwner(env, previous);
-    expect(readGatewayOwnerLease({ env })).toMatchObject({ state: "unknown", expired: false });
+    expect(readGatewayOwnerLease({ env })).toMatchObject({
+      state: "unknown",
+      expired: previous.label === "missing start identity",
+    });
     expect(() => owner.acquire()).toThrow(
       previous.label === "foreign host"
-        ? "owner heartbeat is fresh"
+        ? "heartbeat age does not prove"
         : "Another Gateway owner lease is still active",
     );
     expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");

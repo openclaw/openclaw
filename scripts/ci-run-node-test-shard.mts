@@ -20,9 +20,9 @@ import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
-import type { CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
+import type { CiTestRuntimePolicy, CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
@@ -106,10 +106,6 @@ type RunShardOptions = {
   runChild?: typeof runChild;
   scratchDir?: string;
 };
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
 
 function isShardGroupConfig(value: unknown): value is ShardGroupConfig {
   return isRecord(value) && isStringArray(value.configs);
@@ -291,12 +287,18 @@ export function pruneFsModuleCache(root: string, maxBytes = FS_MODULE_CACHE_MAX_
   return { beforeBytes, afterBytes: totalBytes, removedFiles };
 }
 
-export function clonePersistentCacheSlots(root: string | undefined, concurrency: number) {
+export function clonePersistentCacheSlots(
+  root: string | undefined,
+  concurrency: number,
+  policy: CiTestRuntimePolicy,
+) {
   if (!root || concurrency <= 1) {
     return 0;
   }
   let clonedSlots = 0;
-  for (const prefix of ["vitest-cache", "vitest-cache-bun"]) {
+  // Bun policies can still select Node-only contracts; pure Node never uses Bun's seed.
+  const prefixes = policy === "node" ? ["vitest-cache"] : ["vitest-cache", "vitest-cache-bun"];
+  for (const prefix of prefixes) {
     const seed = join(root, `${prefix}-0`);
     if (!existsSync(seed)) {
       continue;
@@ -794,7 +796,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       );
       reportCiResourceSnapshot("start");
     }
-    const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency);
+    const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency, policy);
     if (clonedCacheSlots > 0) {
       process.stdout.write(
         `[shard:cache] cloned restored Vitest seed into ${clonedCacheSlots} isolated lane(s)\n`,

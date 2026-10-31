@@ -1,14 +1,16 @@
-import { createHash } from "node:crypto";
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   embeddedAgentLog,
   prepareWatchedSessionsHarnessContext,
   type AgentMessage,
+  type AnyAgentTool,
   type ContextEngineProjection,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { classifyAgentToolSource } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -43,6 +45,30 @@ import {
 
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
+
+// Projected schema identities survive report refreshes; do not reserialize the
+// entire deferred catalog when workspace references or local egress change.
+const deferredSchemaChars = new WeakMap<object, number | null>();
+
+function measureDeferredSchemaChars(
+  schema: CodexDynamicToolFunctionSpec["inputSchema"],
+): number | null {
+  if (schema === null || typeof schema !== "object") {
+    return JSON.stringify(schema).length;
+  }
+  const cached = deferredSchemaChars.get(schema);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let chars: number | null;
+  try {
+    chars = JSON.stringify(schema).length;
+  } catch {
+    chars = null;
+  }
+  deferredSchemaChars.set(schema, chars);
+  return chars;
+}
 
 export async function readMirroredSessionHistoryMessages(
   params: CodexMirroredSessionHistoryTarget & {
@@ -130,8 +156,25 @@ export function buildCodexSystemPromptReport(params: {
   parentLocalEgress?: boolean;
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
+  sourceTools?: readonly AnyAgentTool[];
 }): CodexSystemPromptReport {
-  const toolEntries = flattenCodexDynamicToolFunctions(params.tools).map(buildCodexToolReportEntry);
+  const tools = flattenCodexDynamicToolFunctions(params.tools);
+  const sources = new Map((params.sourceTools ?? []).map((tool) => [tool.name, tool]));
+  const toolEntries = tools
+    .filter((tool) => !tool.deferLoading)
+    .map((tool) => buildCodexToolReportEntry(tool, sources.get(tool.name)));
+  const deferredEntries = tools
+    .filter((tool) => tool.deferLoading)
+    .map((tool) => {
+      const { source, sourceName, mcp } = classifyAgentToolSource(sources.get(tool.name) ?? tool);
+      return {
+        name: tool.name,
+        source,
+        sourceName,
+        serverName: mcp?.serverName,
+        schemaChars: measureDeferredSchemaChars(tool.inputSchema),
+      };
+    });
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
   const bootstrapMaxChars = params.attempt.config?.agents?.defaults?.bootstrapMaxChars;
@@ -162,6 +205,10 @@ export function buildCodexSystemPromptReport(params: {
       listChars: 0,
       schemaChars,
       entries: toolEntries,
+      deferred: {
+        entries: deferredEntries,
+        schemaChars: deferredEntries.reduce((sum, tool) => sum + (tool.schemaChars ?? 0), 0),
+      },
     },
   };
 }
@@ -178,32 +225,45 @@ function buildCodexSkillReportEntries(
   }));
 }
 
-function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToolReportEntry {
+// Each Codex definition retains only its latest JSON schema revision. The JSON
+// already needed for schemaChars detects nested edits without a freezing contract.
+const toolReportSchemaHashes = new WeakMap<
+  CodexDynamicToolFunctionSpec,
+  { json: string; hash: string }
+>();
+
+function buildCodexToolReportEntry(
+  tool: CodexDynamicToolFunctionSpec,
+  sourceTool?: AnyAgentTool,
+): CodexToolReportEntry {
   const summary = tool.description.trim();
-  const deferred = tool.deferLoading === true;
-  const schema = deferred ? null : tool.inputSchema;
-  let schemaChars = 0;
-  if (!deferred) {
-    try {
-      schemaChars = JSON.stringify(schema).length;
-    } catch {
-      schemaChars = 0;
-    }
+  const schema = tool.inputSchema;
+  let schemaJson: string | undefined;
+  try {
+    schemaJson = JSON.stringify(schema);
+  } catch {
+    // Preserve reporting for schemas whose raw JSON serialization fails.
   }
+  const cached = toolReportSchemaHashes.get(tool);
+  const schemaHash =
+    schemaJson !== undefined && cached?.json === schemaJson ? cached.hash : stableJsonHash(schema);
+  if (schemaJson !== undefined && cached?.json !== schemaJson) {
+    toolReportSchemaHashes.set(tool, { json: schemaJson, hash: schemaHash });
+  }
+  const { source, sourceName, mcp } = classifyAgentToolSource(sourceTool ?? tool);
   const properties =
     isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
   return {
     name: tool.name,
+    source,
+    sourceName,
+    ...(mcp ? { serverName: mcp.serverName } : {}),
     summaryChars: summary.length,
     summaryHash: sha256Text(summary),
-    schemaChars,
-    schemaHash: stableJsonHash(schema),
+    schemaChars: schemaJson?.length ?? 0,
+    schemaHash,
     propertiesCount: properties ? Object.keys(properties).length : null,
   };
-}
-
-function sha256Text(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function stableJsonHash(value: JsonValue): string {
@@ -246,6 +306,7 @@ function buildCodexBootstrapInjectionStats(
       return {
         name: displayName,
         path: pathValue,
+        origin: file.origin,
         missing: false,
         rawChars,
         injectionStatus: "native_unverified",
@@ -262,6 +323,7 @@ function buildCodexBootstrapInjectionStats(
     return {
       name: displayName,
       path: pathValue,
+      origin: file.origin,
       missing: file.missing,
       rawChars,
       injectedChars,

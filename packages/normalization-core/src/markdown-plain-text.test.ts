@@ -3,12 +3,12 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 
 describe("flattenMarkdownToPlainText", () => {
   it.each([
-    ["fenced code blocks", "Before\n```ts\nconst hidden = true;\n```\nAfter", "Before After"],
-    ["inline code", "Use `pnpm test` now", "Use pnpm test now"],
+    ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
+    ["inline code", "Use `x` and ````y````.", "Use x and `."],
     [
-      "links",
-      "Read the [deployment guide](https://example.com/deploy)",
-      "Read the deployment guide",
+      "links and escaped image markers",
+      String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
+      String.raw`Read the deployment guide, \!important, \\diagram`,
     ],
     ["images", "Status ![green check](https://example.com/check.png)", "Status green check"],
     [
@@ -70,19 +70,41 @@ describe("flattenMarkdownToPlainText", () => {
       "Keep [this](https://example.com/open( text",
     ],
     [
-      "heading and list markers",
-      "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote",
-      "Heading bullet plus star numbered quote",
+      "block markers, nested quotes, line boundaries, and inline comparisons",
+      "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote\n>quoted\n>> deep\n>>>tight\n> > spaced\n> >>mixed\n>\r\n    > literal\nNext a > b\n\\>escaped\n#Heading\n-bullet",
+      "Heading bullet plus star numbered quote quoted deep tight spaced mixed > literal Next a > b \\>escaped #Heading -bullet",
     ],
     ["emphasis", "**bold** _italic_ ~~struck~~", "bold italic struck"],
+    ["wider opener preference", "__a_ _b__", "a_ _b"],
+    ["shorter opener fallback", "__a_", "_a"],
+    ["unmatched closing marker", "_a__", "a_"],
+    ["unconsumed emphasis markers", "___a___ ***b***", "_a_ *b*"],
+    ["adjacent underscore spans", "_a__b_", "a_b_"],
+    ["internal underscores", "_a_b_", "a_b"],
+    [
+      "whitespace beside emphasis markers",
+      "_ x_ _x _ * x* *x * ~~ x~~",
+      "_ x_ _x _ * x* *x * ~~ x~~",
+    ],
+    ["multiline emphasis", "_a\nb_ **c\nd** ~~e\nf~~", "a b c d e f"],
+    ["astral letter boundaries", "𐐀_x_ _x_𐐀", "𐐀_x_ _x_𐐀"],
+    ["emoji emphasis boundaries", "🦞_x_🦞", "🦞x🦞"],
+    ["combining mark boundaries", "e\u0301_x_", "e\u0301x"],
+    ["Unicode whitespace boundaries", "_\u00a0x_ _x\ufeff_", "_ x_ _x _"],
+    ["literal backslashes before emphasis", "\\_x_", "\\x"],
     [
       "literal underscores and tildes",
       "Use foo_bar_baz from ~/.openclaw",
       "Use foo_bar_baz from ~/.openclaw",
     ],
-    ["multiline whitespace", "First\n\n  second\t third", "First second third"],
+    ["multiline whitespace", "a\n\n b\tc\n````\nx", "a b c ` x"],
   ])("flattens %s", (_label, input, expected) => {
     expect(flattenMarkdownToPlainText(input)).toBe(expected);
+  });
+
+  it.each(["*", "_", "~~"])("preserves repeated unmatched %s openers", (marker) => {
+    const text = ` ${marker}field`.repeat(8_192);
+    expect(flattenMarkdownToPlainText(text)).toBe(text.trim());
   });
 
   it("flattens deeply nested links without exhausting the stack", () => {

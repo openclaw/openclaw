@@ -13,6 +13,8 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
+import { preparePriorWorkspaceRewriteInTransaction } from "./session-accessor.sqlite-prior-workspace.js";
+import { createTranscriptIdentityReader } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
@@ -103,6 +105,10 @@ export function prepareTranscriptRewriteSync(
         ) {
           throw conflict();
         }
+        const priorWorkspace =
+          fresh?.entry?.priorWorkspace &&
+          preparePriorWorkspaceRewriteInTransaction(current, resolved);
+        const copies: { sourceId: string; copyId: string }[] = [];
         // The existing append/relocation owners participate in the same transaction.
         // Interruption rolls back entries, key ownership, and receipt publications together.
         for (const entry of entries) {
@@ -126,6 +132,7 @@ export function prepareTranscriptRewriteSync(
                     now: Date.parse(entry.timestamp),
                     message: entry.message,
                     appendMode: entry.appendMode,
+                    supersedesEntryId: source.id,
                     idempotencyLookup: "caller-checked",
                   },
                   undefined,
@@ -136,9 +143,22 @@ export function prepareTranscriptRewriteSync(
               throw new Error("Transcript rewrite message was not appended");
             }
             entry.message = result.message;
+            // The loaded view must match the committed row for later source comparisons.
+            entry.supersedesEntryId = source.id;
+            copies.push({ sourceId: source.id, copyId: entry.id });
           } else if (!appendTranscriptEventInTransaction(current, resolved, entry, preparation)) {
             throw new Error("Transcript rewrite entry was not appended");
           }
+        }
+        if (priorWorkspace) {
+          const identity = createTranscriptIdentityReader(current, resolved.sessionId);
+          priorWorkspace.commitCopies(
+            copies.flatMap(({ sourceId, copyId }) => {
+              const source = identity(sourceId);
+              const copy = identity(copyId);
+              return source && copy ? [{ sourceSeq: source.seq, seq: copy.seq }] : [];
+            }),
+          );
         }
         assertActive();
         assertOwnedTranscriptWriteCommit(fencedScope);

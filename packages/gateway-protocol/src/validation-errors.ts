@@ -47,8 +47,16 @@ export function checkProtocolJson(data: unknown, maxDepth: number): ValidationEr
   return undefined;
 }
 
-function firstStringParam(value: unknown): string | undefined {
-  return Array.isArray(value) ? value.find(hasNonEmptyString) : readNonBlankString(value);
+const MAX_VALIDATION_ERROR_FIELDS = 8;
+
+function stringParams(value: unknown, fallback?: unknown): string[] {
+  if (hasNonEmptyString(value)) {
+    return [value];
+  }
+  const values = Array.isArray(value)
+    ? value.slice(0, MAX_VALIDATION_ERROR_FIELDS).filter(hasNonEmptyString)
+    : [];
+  return values.length > 0 || fallback === undefined ? values : stringParams(fallback);
 }
 
 /** Convert validator errors into compact operator-facing failure text. */
@@ -63,23 +71,28 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const keyword = typeof err?.keyword === "string" ? err.keyword : "";
     const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
 
-    if (keyword === "additionalProperties") {
-      const additionalProperty =
-        firstStringParam(err?.params?.additionalProperty) ??
-        firstStringParam(err?.params?.additionalProperties);
-      if (additionalProperty) {
-        const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
+    if (keyword === "additionalProperties" || keyword === "required") {
+      const additional = keyword === "additionalProperties";
+      const properties = stringParams(
+        additional ? err?.params?.additionalProperty : err?.params?.missingProperty,
+        additional ? err?.params?.additionalProperties : err?.params?.requiredProperties,
+      );
+      if (properties.length > 0) {
+        const where = instancePath ? `at ${instancePath}: ` : additional ? "at root: " : "";
+        const message = additional ? "unexpected property" : "must have required property";
+        for (const property of properties) {
+          parts.push(`${where}${message} '${property}'`);
+        }
         continue;
       }
     }
-    if (keyword === "required") {
-      const missingProperty =
-        firstStringParam(err?.params?.missingProperty) ??
-        firstStringParam(err?.params?.requiredProperties);
-      if (missingProperty) {
+    if (keyword === "enum") {
+      const allowedValues = stringParams(err?.params?.allowedValues);
+      if (allowedValues.length > 0) {
         const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
+        parts.push(
+          `${where}must be one of: ${allowedValues.map((value) => JSON.stringify(value)).join(", ")}`,
+        );
         continue;
       }
     }

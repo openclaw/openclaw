@@ -35,6 +35,7 @@ export async function runAdmittedUpdate(
   prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
+  env: NodeJS.ProcessEnv,
   executeUpdate: (
     opts: UpdateCommandOptions,
     presentation: ReturnType<typeof createUpdateProgress>,
@@ -66,10 +67,9 @@ export async function runAdmittedUpdate(
     opts: inputOpts,
     root: resolveUpdateCommandAdmissionRoot(prepared),
     serviceRoot,
-    invocationCwd,
+    env,
     initialization,
     assertCurrent: assertInitializationCurrent,
-    pkgOwnership: prepared.pkgOwnership,
     expectedForeground:
       prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     installKind: prepared.installKind,
@@ -111,17 +111,16 @@ export async function runAdmittedUpdate(
           run.executorFence = await executor.enter(resolveUpdateCommandAdmissionRoot(prepared), {
             preflight: true,
             serviceRoot,
-            activationTimeoutMs: Math.max(1, deadline.remainingMs()),
           });
         }
         const execute = () => {
           executionStarted = true;
-          if (refusal) {
-            assertInitializationCurrent?.();
-            throw refusal;
-          }
           return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
             withCommandProcessScope(async () => {
+              if (refusal) {
+                assertInitializationCurrent?.();
+                throw refusal;
+              }
               deadline?.signal.throwIfAborted();
               await executeUpdate(opts, presentation, executor);
               deadline?.signal.throwIfAborted();

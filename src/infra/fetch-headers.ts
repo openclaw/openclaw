@@ -1,4 +1,3 @@
-// Normalizes fetch header inputs while stripping non-header symbols.
 export type HeadersLike = {
   entries: () => IterableIterator<[string, string]>;
   get: (name: string) => string | null;

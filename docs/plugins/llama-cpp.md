@@ -153,6 +153,13 @@ GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
 embedding output buffer to one input; the context bound avoids reserving a custom
 model's full training context for short memory chunks.
 
+`memory.search.outputDimensionality` truncates local embedding vectors before
+L2 normalization, preserving the requested size in the index identity. Use a
+GGUF model that supports dimensionality reduction. Without this setting, vectors
+retain their native size; requesting a larger size than the model returns fails.
+If an existing index contains native-size vectors despite a smaller configured
+size, rebuild it with `openclaw memory index --force --agent <id>`.
+
 Existing context, batch, and slot settings in the embedding section, `[*]`, or
 the managed service's arguments or environment remain authoritative. OpenClaw adds
 the context bound only when no slot count or per-slot context is configured,
@@ -470,10 +477,22 @@ constraints. Agent turns and standalone completions also map thinking-off
 requests to the server's chat-template flag and adapt JSON Schema requests
 for older llama-server builds.
 
+For tool continuations with an unchanged prompt prefix, OpenClaw uses the server's
+measured context usage plus newly appended content to budget the next response.
+This avoids charging historical reasoning that the chat template discards.
+The first request of an attempt, a request with a changed prefix, or a request with
+a response schema keeps the conservative payload estimate. Replayed reasoning is
+preserved for templates that need it, and genuinely full contexts still trigger
+output limits or compaction.
+
 Local memory embeddings require managed mode:
 
 For automated embedding-only setup, configure local memory and explicitly consent
 to downloading the embedding model and verified llama.cpp runtime:
+
+This unattended option is not available in v2026.10.5. If your installation
+rejects `--llama-cpp-embedding-only`, use the [interactive embedding-only
+setup](/plugins/llama-cpp#set-up-only-local-embeddings) instead.
 
 ```bash
 openclaw config set memory.search.provider local
@@ -525,10 +544,23 @@ model.
   tool-capable Jinja chat template.
 - Managed Linux builds require glibc 2.34 on x64 or 2.38 on arm64. Windows
   builds require the Microsoft Visual C++ 2015-2022 Redistributable.
+- If a Linux upgrade removes a shared library, setup and embedding diagnostics
+  name the missing library and its runtime package. For `libssl.so.3` or
+  `libcrypto.so.3`, install OpenSSL 3 (`libssl3t64` or `libssl3` on Debian/Ubuntu);
+  for `libgomp.so.1`, install OpenMP (`libgomp1` on Debian/Ubuntu). OpenSSL 4 does
+  not replace OpenSSL 3 for the pinned build. Restore the missing runtime, rerun
+  llama.cpp setup, then verify with `openclaw memory status --deep` and retry
+  `openclaw memory index --force`. Re-downloading the same build does not supply
+  system libraries; existing memory indexes are preserved while embeddings are
+  unavailable.
 - A model that replies to a simple prompt but fails the setup tool check is
   not selected as the default. Retry after reviewing its tool support or choose
   another model.
 - Platforms without a verified managed build should use an existing server.
+- Managed embedding server keeps exiting or is OOM-killed: serve embeddings
+  from an external [llmman](/providers/llmman#advanced-configuration) daemon
+  instead. It relaunches a dead backend on the next request, and the Gateway
+  manages no child process.
 
 OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 

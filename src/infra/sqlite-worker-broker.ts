@@ -168,6 +168,7 @@ export class SqliteWorkerBroker {
         },
         snapshot.signal,
         reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
+        snapshot.carrierClass,
       )
       .catch((error: unknown) => {
         this.clients.delete(client);
@@ -182,6 +183,13 @@ export class SqliteWorkerBroker {
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     // Cached client callbacks share this scope; never capture the opening options in it.
     const { maintenanceScope, cleanupAccess } = options;
+    const databaseIdentity = options.expectedIdentity
+      ? {
+          databasePath: options.databasePath,
+          key: options.expectedIdentity,
+          birthtime: options.expectedBirthtime,
+        }
+      : undefined;
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
@@ -190,13 +198,16 @@ export class SqliteWorkerBroker {
     if (reusable && this.actors.get(key) !== reusable.actor) {
       return undefined;
     }
-    const stateAccess = captureStateDatabaseAccess(
+    const stateAccess = await captureStateDatabaseAccess(
       options.stateDatabasePath ?? identity.canonicalPath,
     );
-    stateAccess.assertAccessAllowed({
+    const assertStateAccess = await stateAccess.prepareAccess({
       maintenanceScope: options.maintenanceScope,
       schemaLease: options.cleanupAccess,
     });
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
+    assertStateAccess();
     const input = options.input;
     const admittedPaths = captureSqliteWorkerAdmissionPaths(
       databasePath,
@@ -249,6 +260,12 @@ export class SqliteWorkerBroker {
       try {
         options.assertCurrent?.();
         options.signal?.throwIfAborted();
+        if (this.actors.has(key)) {
+          throw new SqliteWorkerError(
+            "SQLite database owner was admitted while acquiring a worker; retry open",
+            "overloaded",
+          );
+        }
       } catch (error) {
         return this.lifecycle.rejectSlotAdmission(slot, error);
       }
@@ -260,6 +277,7 @@ export class SqliteWorkerBroker {
         markNativeStopped: nativeStopped.resolve,
         id: ++this.nextActor,
         key,
+        identity,
         // Native ownership pins its opening paths even after the first client closes.
         pathReferences: new Map([...admittedPaths].map((pathname) => [pathname, 1])),
         moduleUrl,
@@ -285,6 +303,7 @@ export class SqliteWorkerBroker {
         {
           type: "open",
           actor: actor.id,
+          databaseIdentity,
           moduleUrl,
           databasePath,
           ...(options.createAdmission
@@ -314,10 +333,11 @@ export class SqliteWorkerBroker {
           const existing = this.actors.get(id);
           return existing !== undefined && existing !== opening;
         });
-        if (physical !== key) {
+        opening.identity = physical;
+        if (physical.key !== key) {
           this.actors.delete(key);
-          opening.key = physical;
-          this.actors.set(physical, opening);
+          opening.key = physical.key;
+          this.actors.set(physical.key, opening);
         }
       });
     }
@@ -343,40 +363,7 @@ export class SqliteWorkerBroker {
       }
     } catch (error) {
       resumeScheduledMaintenance?.();
-      this.lifecycle.releaseActorReference(actor);
-      if (!actor.references) {
-        const errors = [error];
-        try {
-          if (actor.initialized) {
-            await this.lifecycle.closeActor(actor, options.maintenanceScope);
-          } else {
-            const nativeOpenMayHaveEntered =
-              actor.openDispatch.custody.postAttempted &&
-              !actor.openDispatch.openNotEntered &&
-              !actor.openDispatch.openRefused;
-            if (!nativeOpenMayHaveEntered && !actor.slot.failed) {
-              actor.backendClosed = true;
-              actor.markNativeStopped();
-              actor.cleanupState = "pending";
-            }
-            if (nativeOpenMayHaveEntered) {
-              // A throwing factory cannot prove that all partially opened native handles closed.
-              this.fail(actor.slot, error);
-              await actor.slot.exit;
-            }
-            this.lifecycle.forget(actor);
-            await this.lifecycle.retireEmpty(actor.slot);
-          }
-        } catch (cleanupError) {
-          errors.push(cleanupError);
-        }
-        if (errors.length > 1) {
-          throw new AggregateError(errors, "SQLite worker admission and cleanup failed", {
-            cause: error,
-          });
-        }
-      }
-      throw error;
+      return this.lifecycle.rejectActorAdmission(actor, error, options.maintenanceScope);
     }
     const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
     let referenceReleased = false;
@@ -391,6 +378,7 @@ export class SqliteWorkerBroker {
           {
             type: "execute",
             actor: owned.id,
+            databaseIdentity,
             input: payload,
             ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
           },
@@ -418,8 +406,8 @@ export class SqliteWorkerBroker {
           this.clients.delete(client);
           releasePaths();
         }
-        if (this.draining && !reclaiming) {
-          // Ordinary releases join host drainage; reclamation avoids its open-tail cycle.
+        if (this.draining && !reclaiming && !owned.stateContext) {
+          // Canonical shared-state close must release its clients before host drainage joins it.
           await this.draining;
         } else if (owned.slot.failed) {
           // A nonlast client must still join the failed worker's native cleanup.
@@ -462,7 +450,7 @@ export class SqliteWorkerBroker {
     return this.lifecycle.retireActor(identity);
   }
 
-  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath">> {
+  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath" | "identity">> {
     const client = this.stores.get(store);
     // Retained facts remain readable after worker failure; dispatch owns liveness.
     if (!client || client.sealed || !client.actor.stateContext) {
@@ -495,7 +483,7 @@ export class SqliteWorkerBroker {
     slot: Slot,
     body: RequestBody,
     bytes: number,
-    options: EnqueueOptions = {},
+    options: EnqueueOptions,
     admitted = false,
     observation = trackWorkerRequest("sqlite_writer", options.requestClass ?? body.type),
   ): Promise<unknown> {
@@ -555,6 +543,7 @@ export class SqliteWorkerBroker {
         databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
       },
       bytes: reservedBytes,
+      result: result.promise,
       resolve: result.resolve,
       reject: result.reject,
       detach: () => signal?.removeEventListener("abort", abort),
@@ -714,16 +703,19 @@ export class SqliteWorkerBroker {
     });
   }
 
-  close(): Promise<void> {
+  close(beforeSharedStateClose?: () => Promise<void>): Promise<void> {
     this.draining ??= this.lifecycle
       .closeHost({
         inputAdmission: this.inputAdmission,
         operations: this.operations,
         waiters: this.waiters.values(),
+        beforeSharedStateClose,
       })
-      .finally(() => {
+      .then(() => {
         this.clients.clear();
         this.stores.clear();
+      })
+      .finally(() => {
         this.draining = undefined;
       });
     return this.draining;

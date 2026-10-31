@@ -44,8 +44,19 @@ provider requests.
 
 ## Live model discovery
 
+For interactive setup of an OpenAI-compatible custom endpoint, reuse
+`discoverOpenAICompatibleLocalModels` from `openclaw/plugin-sdk/provider-setup`.
+Pass the resolved API key, `rawResult: true`, and `discoverRuntimeContext: false`
+to list models without updating the runtime catalog. The optional
+`configuredProvider: { config, id }` resolves only that provider row's header and
+transport SecretRefs and applies its existing private-network, proxy, and TLS policy.
+The authored configuration keeps its original secret references.
+
 If your provider exposes an OpenAI-compatible `/models` API, opt the
-single-provider helper into shared discovery:
+single-provider helper into shared discovery. Bundled providers with such an
+API must list models live, through this option or a `buildProvider` that
+discovers, so the account's listing decides which models appear and new vendor
+models need no OpenClaw release:
 
 ```typescript
 catalog: {
@@ -78,6 +89,8 @@ behaviors:
 
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
+Expired response-cache payloads are released even when the account is no longer
+queried; catalogs already published to callers keep their own lifetime.
 Pending loads retain their initial expiry so stalled work can be replaced.
 An explicit refresh through the prepared catalog owner bypasses completed
 response-cache entries only for the keys acquired by that request. Repeated
@@ -88,8 +101,10 @@ Passive model-list reads that wait for a configuration replacement resume agains
 the newly committed catalog and configuration. They do not retry with the retired
 configuration. Exact runtime acquisitions remain bound to their requested configuration.
 
-Bundled providers set `discoveryMode: "strict"` in their catalog options.
-This code option keeps successful empty results empty and reports failed
+Bundled providers also set `discoveryMode: "strict"` in their catalog options.
+It changes only how discovery reports results and never enables discovery:
+with a static or manifest-backed `buildProvider` and no `liveModelDiscovery`
+or custom `run`, the provider serves its static rows. This code option keeps successful empty results empty and reports failed
 acquisition through `ProviderCatalogResult.outcomes`, rather than returning
 seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 `auth-rejected` outcome; other acquisition failures produce `unavailable`.
@@ -417,22 +432,30 @@ OpenClaw also filters returned identities to that scope. An absent scope
 means the caller requested the full catalog.
 
 If the upstream provider uses different control tokens than OpenClaw, add a
-small bidirectional text transform instead of replacing the stream path:
+small bidirectional `textTransforms` declaration on that provider instead of replacing the stream path:
 
 ```typescript
-api.registerTextTransforms({
-  input: [
-    { from: /red basket/g, to: "blue basket" },
-    { from: /paper ticket/g, to: "digital ticket" },
-    { from: /left shelf/g, to: "right shelf" },
-  ],
-  output: [
-    { from: /blue basket/g, to: "red basket" },
-    { from: /digital ticket/g, to: "paper ticket" },
-    { from: /right shelf/g, to: "left shelf" },
-  ],
+api.registerProvider({
+  id: "my-provider",
+  label: "My provider",
+  auth: [],
+  textTransforms: {
+    input: [
+      { from: /red basket/g, to: "blue basket" },
+      { from: /paper ticket/g, to: "digital ticket" },
+      { from: /left shelf/g, to: "right shelf" },
+    ],
+    output: [
+      { from: /blue basket/g, to: "red basket" },
+      { from: /digital ticket/g, to: "paper ticket" },
+      { from: /right shelf/g, to: "left shelf" },
+    ],
+  },
 });
 ```
+
+These transforms apply only to this provider. The removed
+`api.registerTextTransforms(...)` global overlay has no equivalent replacement.
 
 `input` rewrites the final system prompt and text message content before
 transport. `output` rewrites assistant text deltas and final text before

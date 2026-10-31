@@ -982,7 +982,6 @@
   0% {
     opacity: 0;
     mask-image: linear-gradient(90deg, black 0%, transparent 0%);
-    -webkit-mask-image: linear-gradient(90deg, black 0%, transparent 0%);
   }
   30% {
     opacity: 1;
@@ -990,7 +989,6 @@
   100% {
     opacity: 1;
     mask-image: linear-gradient(90deg, black 100%, transparent 100%);
-    -webkit-mask-image: linear-gradient(90deg, black 100%, transparent 100%);
   }
 }
 

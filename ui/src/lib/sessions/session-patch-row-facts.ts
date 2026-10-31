@@ -37,13 +37,23 @@ export function projectSessionPatchRowFields(
       });
     }
   }
+  if (patch.cyberAccessProgram !== undefined) {
+    fields.push({ cyberAccessProgram: entry.cyberAccessProgram });
+  }
   if (patch.fastMode !== undefined) {
     fields.push({ fastMode: entry.fastMode });
   }
-  if (typeof patch.archived === "boolean") {
+  if (patch.archived !== undefined) {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
-  for (const key of ["label", "category", "boardPresentation", "boardFace"] as const) {
+  for (const key of [
+    "label",
+    "icon",
+    "color",
+    "category",
+    "boardPresentation",
+    "boardFace",
+  ] as const) {
     if (patch[key] !== undefined) {
       fields.push({ [key]: entry[key] });
     }

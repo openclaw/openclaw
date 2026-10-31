@@ -1,21 +1,25 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { StandaloneBuildInfo } from "../../cli-invocation.mjs";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gitRuntimeStagingPath } from "../infra/update-runtime-staging.js";
 import { fingerprintPluginRuntimeArtifact } from "./plugin-runtime-artifact-identity.js";
 
-const tempDirs: string[] = [];
+const temp = useAutoCleanupTempDirTracker(afterEach);
 
-function createPluginFixture(): { rootDir: string; source: string } {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-artifact-"));
-  tempDirs.push(rootDir);
+function write(filename: string, content: string) {
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, content);
+}
+
+function createPluginFixture() {
+  const rootDir = temp.make("openclaw-plugin-artifact-");
   const source = path.join(rootDir, "dist", "index.js");
-  fs.mkdirSync(path.dirname(source), { recursive: true });
-  fs.writeFileSync(source, 'export { run } from "./runtime.js";\n', "utf8");
-  fs.writeFileSync(path.join(rootDir, "dist", "runtime.js"), "export const run = () => 1;\n");
-  fs.writeFileSync(path.join(rootDir, "package.json"), '{"name":"fixture"}\n');
-  return { rootDir, source };
+  write(source, 'export { run } from "./runtime.js";\n');
+  write(path.join(rootDir, "dist", "runtime.js"), "export const run = () => 1;\n");
+  write(path.join(rootDir, "package.json"), '{"name":"fixture"}\n');
+  return { pluginId: "fixture", origin: "global" as const, rootDir, source };
 }
 
 function interceptReads(
@@ -41,15 +45,77 @@ function interceptReads(
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  vi.unstubAllGlobals();
 });
 
 describe("fingerprintPluginRuntimeArtifact", () => {
+  it("binds embedded code to its image build and retained sidecar content", () => {
+    const record = { ...createPluginFixture(), origin: "bundled" as const };
+    fs.rmSync(path.join(record.rootDir, "dist"), { recursive: true });
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      (source: string) => source === record.source,
+    );
+    const build = {
+      mode: "aot",
+      openclaw: { version: "2026.10.25" },
+      bun: { version: "1.3.0" },
+      build: {
+        id: "image-one",
+        flavor: "standard",
+        pluginSetSha256: "a".repeat(64),
+        moduleGraphSha256: "b".repeat(64),
+      },
+    } satisfies StandaloneBuildInfo;
+    vi.stubGlobal("__openclawStandaloneBuildInfo", build);
+    const first = fingerprintPluginRuntimeArtifact(record);
+    expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
+
+    for (const changed of [
+      { ...build, build: { ...build.build, id: "image-two" } },
+      { ...build, build: { ...build.build, flavor: "support" } },
+      { ...build, mode: "jit" },
+    ]) {
+      vi.stubGlobal("__openclawStandaloneBuildInfo", changed);
+      expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
+    }
+
+    vi.stubGlobal("__openclawStandaloneBuildInfo", build);
+    write(path.join(record.rootDir, "package.json"), '{"name":"fixture","revision":2}\n');
+    expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
+  });
+
+  it.each(["bundled", "global"] as const)(
+    "rejects a missing %s entry without bundled image membership",
+    (origin) => {
+      const record = { ...createPluginFixture(), origin };
+      fs.rmSync(record.source);
+      vi.stubGlobal("__openclawStandaloneIsEmbeddedModule", () => origin === "global");
+      expect(() => fingerprintPluginRuntimeArtifact(record)).toThrow(
+        "plugin runtime entry is unavailable: fixture",
+      );
+    },
+  );
+
+  it("rejects an embedded entry without an image build identity", () => {
+    const record = { ...createPluginFixture(), origin: "bundled" as const };
+    fs.rmSync(record.source);
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      (source: string) => source === record.source,
+    );
+    vi.stubGlobal("__openclawStandaloneBuildInfo", {
+      mode: "aot",
+      openclaw: { version: "2026.10.25" },
+      bun: { version: "1.3.0" },
+    });
+    expect(() => fingerprintPluginRuntimeArtifact(record)).toThrow(
+      "plugin runtime image build is unavailable: fixture",
+    );
+  });
+
   it("keeps the same fingerprint when descriptor reads return short chunks", () => {
-    const fixture = createPluginFixture();
-    const record = { pluginId: "fixture", origin: "global" as const, ...fixture };
+    const record = createPluginFixture();
     const expected = fingerprintPluginRuntimeArtifact(record);
     const read = fs.readSync;
     interceptReads((fd, buffer, options) =>
@@ -86,9 +152,9 @@ describe("fingerprintPluginRuntimeArtifact", () => {
         return count;
       });
 
-      expect(() =>
-        fingerprintPluginRuntimeArtifact({ pluginId: "fixture", origin: "global", ...fixture }),
-      ).toThrow("plugin runtime artifact file changed while reading: dist/index.js");
+      expect(() => fingerprintPluginRuntimeArtifact(fixture)).toThrow(
+        "plugin runtime artifact file changed while reading: dist/index.js",
+      );
       expect(bytesRead).toBeLessThanOrEqual(identity.size + 1);
       expect(descriptors.size).toBe(1);
       for (const fd of descriptors) {
@@ -98,33 +164,26 @@ describe("fingerprintPluginRuntimeArtifact", () => {
   );
 
   it("is stable for unchanged files and changes with plugin-owned imported code", () => {
-    const fixture = createPluginFixture();
-    const record = { pluginId: "fixture", origin: "global" as const, ...fixture };
+    const record = createPluginFixture();
     const first = fingerprintPluginRuntimeArtifact(record);
-
     expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
 
-    fs.writeFileSync(
-      path.join(fixture.rootDir, "dist", "runtime.js"),
-      "export const run = () => 2;\n",
-    );
+    write(path.join(record.rootDir, "dist", "runtime.js"), "export const run = () => 2;\n");
     expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
   });
 
   it.each(["node_modules", "transaction"])(
     "keeps %s outside the plugin-owned artifact identity",
     (kind) => {
-      const fixture = createPluginFixture();
-      const modules = path.join(fixture.rootDir, "node_modules");
+      const record = createPluginFixture();
+      const modules = path.join(record.rootDir, "node_modules");
       const root = kind === "transaction" ? gitRuntimeStagingPath(modules) : modules;
       const dependency = path.join(root, "dependency", "index.js");
-      const record = { pluginId: "fixture", origin: "global" as const, ...fixture };
       const first = fingerprintPluginRuntimeArtifact(record);
-      fs.mkdirSync(path.dirname(dependency), { recursive: true });
-      fs.writeFileSync(dependency, "export const value = 1;\n");
+      write(dependency, "export const value = 1;\n");
       expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
 
-      fs.writeFileSync(dependency, "export const value = 2;\n");
+      write(dependency, "export const value = 2;\n");
       expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
       fs.rmSync(root, { recursive: true });
       expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
@@ -132,16 +191,13 @@ describe("fingerprintPluginRuntimeArtifact", () => {
   );
 
   it("hashes canonical dist content when the registry points at dist-runtime", () => {
-    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-artifact-"));
-    tempDirs.push(packageRoot);
+    const packageRoot = temp.make("openclaw-plugin-artifact-");
     const stagingRoot = path.join(packageRoot, "dist-runtime", "extensions", "fixture");
     const canonicalRoot = path.join(packageRoot, "dist", "extensions", "fixture");
     const stagingSource = path.join(stagingRoot, "index.js");
     const canonicalSource = path.join(canonicalRoot, "index.js");
-    fs.mkdirSync(stagingRoot, { recursive: true });
-    fs.mkdirSync(canonicalRoot, { recursive: true });
-    fs.writeFileSync(stagingSource, "export const revision = 'staging-1';\n");
-    fs.writeFileSync(canonicalSource, "export const revision = 'canonical-1';\n");
+    write(stagingSource, "export const revision = 'staging-1';\n");
+    write(canonicalSource, "export const revision = 'canonical-1';\n");
     const record = {
       pluginId: "fixture",
       origin: "bundled" as const,
@@ -150,21 +206,19 @@ describe("fingerprintPluginRuntimeArtifact", () => {
     };
     const first = fingerprintPluginRuntimeArtifact(record);
 
-    fs.writeFileSync(stagingSource, "export const revision = 'staging-2';\n");
+    write(stagingSource, "export const revision = 'staging-2';\n");
     expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
 
-    fs.writeFileSync(canonicalSource, "export const revision = 'canonical-2';\n");
+    write(canonicalSource, "export const revision = 'canonical-2';\n");
     expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
   });
 
   it("hashes source when a bundled plugin opts out of core dist", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-artifact-"));
-    tempDirs.push(rootDir);
+    const rootDir = temp.make("openclaw-plugin-artifact-");
     const source = path.join(rootDir, "index.ts");
     const staleDistSource = path.join(rootDir, "dist", "index.js");
-    fs.mkdirSync(path.dirname(staleDistSource), { recursive: true });
-    fs.writeFileSync(source, "export const revision = 'source-1';\n");
-    fs.writeFileSync(staleDistSource, "export const revision = 'stale-1';\n");
+    write(source, "export const revision = 'source-1';\n");
+    write(staleDistSource, "export const revision = 'stale-1';\n");
     const record = {
       pluginId: "fixture",
       origin: "bundled" as const,
@@ -174,11 +228,11 @@ describe("fingerprintPluginRuntimeArtifact", () => {
     };
     const first = fingerprintPluginRuntimeArtifact(record);
 
-    fs.writeFileSync(staleDistSource, "export const revision = 'stale-2';\n");
+    write(staleDistSource, "export const revision = 'stale-2';\n");
     expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
 
     const afterStaleChange = fingerprintPluginRuntimeArtifact(record);
-    fs.writeFileSync(source, "export const revision = 'source-2';\n");
+    write(source, "export const revision = 'source-2';\n");
     expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(afterStaleChange);
   });
 });

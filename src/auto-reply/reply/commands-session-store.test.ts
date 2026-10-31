@@ -64,12 +64,10 @@ describe("commands session store persistence", () => {
       label: "After rename",
       pinnedAt: undefined,
     };
-    await persistCommandSession({
+    await persist({
       allowCreateSessionEntry: true,
       sessionEntry: concurrentEntry,
       sessionStore: { [sessionKey]: concurrentEntry },
-      sessionKey,
-      storePath,
     });
     await replaceSessionEntry({ storePath, sessionKey: otherKey }, { ...otherEntry });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(200).mockReturnValue(400);
@@ -80,10 +78,8 @@ describe("commands session store persistence", () => {
       nowSpy.mockRestore();
     }
 
-    const persisted = read();
-    const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
     expect(entry.updatedAt).not.toBe(1);
-    for (const current of [sessionStore[sessionKey], persisted]) {
+    for (const current of [sessionStore[sessionKey], read()]) {
       expect(current).toMatchObject({
         sessionId: "command-session",
         label: "After rename",
@@ -92,7 +88,7 @@ describe("commands session store persistence", () => {
       expect(current?.updatedAt).toBeGreaterThanOrEqual(concurrentUpdatedAt);
       expect(current?.pinnedAt).toBeUndefined();
     }
-    expect(persistedOther).toStrictEqual(otherEntry);
+    expect(loadSessionEntry({ storePath, sessionKey: otherKey })).toStrictEqual(otherEntry);
   });
 
   it("rejects command persistence after the session rotates", async () => {
@@ -174,8 +170,7 @@ describe("commands session store persistence", () => {
         touchedFields: ["sendPolicy"],
       }),
     ).resolves.toBe(true);
-    const persisted = fixture.read();
-    expect(persisted).toMatchObject({
+    expect(fixture.read()).toMatchObject({
       sessionId: "tombstone-session",
       sendPolicy: "allow",
       updatedAt: 0,
@@ -185,12 +180,11 @@ describe("commands session store persistence", () => {
 
   it("keeps the legacy pending-reset marker through abort persistence", async () => {
     const persistedEntry = makeEntry({ sessionId: "tombstone-abort-session", updatedAt: 0 });
-    const entry: SessionEntry = { ...persistedEntry };
+    const entry = { ...persistedEntry };
     const fixture = commandFixture(entry);
     await fixture.replace({ ...persistedEntry });
     await expect(fixture.abort({ messageSid: "77", timestamp: 456 })).resolves.toBe(true);
-    const persisted = fixture.read();
-    expect(persisted).toMatchObject({
+    expect(fixture.read()).toMatchObject({
       sessionId: "tombstone-abort-session",
       abortedLastRun: true,
       abortCutoffMessageSid: "77",
@@ -208,14 +202,13 @@ describe("commands session store persistence", () => {
     });
     const fixture = commandFixture(entry, sessionKey);
     await expect(fixture.abort({ messageSid: "42", timestamp: 123 })).resolves.toBe(true);
-    const persisted = fixture.read();
     expect(fixture.sessionStore[sessionKey]).toBe(entry);
     expect(entry).toMatchObject({
       abortedLastRun: true,
       abortCutoffMessageSid: "42",
       abortCutoffTimestamp: 123,
     });
-    expect(persisted).toMatchObject({
+    expect(fixture.read()).toMatchObject({
       sessionId: "abort-session",
       model: "gpt-5.5",
       abortedLastRun: true,
@@ -246,13 +239,12 @@ describe("commands session store persistence", () => {
     await expect(fixture.abort()).resolves.toBe(false);
 
     const persisted = loadSessionEntry({ storePath, sessionKey });
-    const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
     expect(entry.abortedLastRun).toBe(true);
     expect(persisted).toMatchObject({
       sessionId: "persisted-session",
       model: "sonnet-4.6",
     });
     expect(persisted?.abortedLastRun ?? false).toBe(false);
-    expect(persistedOther).toStrictEqual(otherEntry);
+    expect(loadSessionEntry({ storePath, sessionKey: otherKey })).toStrictEqual(otherEntry);
   });
 });

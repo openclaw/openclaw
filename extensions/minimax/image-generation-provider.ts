@@ -2,7 +2,7 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -24,21 +24,6 @@ const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "9:16",
   "21:9",
 ] as const;
-
-type MinimaxImageApiResponse = {
-  data?: {
-    image_base64?: string[];
-  };
-  metadata?: {
-    success_count?: number;
-    failed_count?: number;
-  };
-  id?: string;
-  base_resp?: {
-    status_code?: number;
-    status_msg?: string;
-  };
-};
 
 function isMinimaxCnHost(value: string | undefined): boolean {
   const trimmed = value?.trim();
@@ -130,7 +115,20 @@ export function buildMinimaxImageGenerationProvider(
         const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
         body.subject_reference = [{ type: "character", image_file: dataUrl }];
       }
-      const data = await postJsonResponse<MinimaxImageApiResponse>({
+      const data = await postJsonResponse<{
+        data?: {
+          image_base64?: string[];
+        };
+        metadata?: {
+          success_count?: number;
+          failed_count?: number;
+        };
+        id?: string;
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>({
         url: `${resolvedBaseUrl}/v1/image_generation`,
         headers,
         body,
@@ -144,7 +142,7 @@ export function buildMinimaxImageGenerationProvider(
         readOptions: {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             MINIMAX_MAX_IMAGE_RESULTS,
-            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+            resolveGeneratedImageDownloadMaxBytes(req.cfg),
           ),
         },
       });

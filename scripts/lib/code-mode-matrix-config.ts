@@ -31,6 +31,28 @@ export function createGatewayMatrixConfig(params: {
 }) {
   const { root, port, token, executor, requiredTools, allowedTools } = params;
   const provider = params.model.split("/")[0]!;
+  const patch = params.configPatch;
+  const modelOverrides = [
+    ...Object.values(patch?.agents?.defaults?.models ?? {}),
+    ...Object.values(patch?.agents?.entries ?? {}).flatMap((agent) =>
+      Object.values(agent.models ?? {}),
+    ),
+  ];
+  if (
+    patch?.tools?.codeMode !== undefined ||
+    Object.values(patch?.agents?.entries ?? {}).some(
+      (agent) => agent.tools?.codeMode !== undefined,
+    ) ||
+    modelOverrides.some((model) => model.codeMode !== undefined) ||
+    Object.values(patch?.models?.providers ?? {}).some((providerConfig) =>
+      providerConfig.models?.some((model) => model.compat?.codeMode !== undefined),
+    )
+  ) {
+    throw new Error("Fixture configuration cannot override the selected Code Mode treatment.");
+  }
+  if (params.mode === "auto" && executor !== "node") {
+    throw new Error("Gateway auto measures the default executor; do not select an executor.");
+  }
   const baseConfig = {
     logging: {
       level: "info",
@@ -44,7 +66,6 @@ export function createGatewayMatrixConfig(params: {
         workspace: path.join(root, "workspace"),
         skipBootstrap: true,
         thinkingDefault: params.thinking,
-        heartbeat: { every: "0m" },
         systemAgent: { agentId: "qa" },
       },
       entries: { qa: {} },
@@ -91,6 +112,9 @@ export function createGatewayMatrixConfig(params: {
   // Task-specific limits cannot change the selected treatment, runtime, or model settings.
   return mergeDeep(mergeDeep(baseConfig, params.configPatch ?? {}), {
     agents: matrixModelConfig(params.model, params.thinking),
-    tools: { codeMode: { enabled: params.mode === "code", executor } },
+    // An options-only object disables activation, so auto must omit the whole setting.
+    ...(params.mode === "auto"
+      ? {}
+      : { tools: { codeMode: { enabled: params.mode === "code", executor } } }),
   });
 }

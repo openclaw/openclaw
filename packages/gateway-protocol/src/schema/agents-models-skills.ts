@@ -17,13 +17,30 @@ import { NonEmptyString, Sha256String } from "./primitives.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SkillsDetailResultSchema } from "./skill-detail.js";
+import { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 
+export {
+  AgentsAvatarGenerateParamsSchema,
+  AgentsAvatarGenerateResultSchema,
+} from "./agents-avatar-generate.js";
+export type {
+  AgentsAvatarGenerateParams,
+  AgentsAvatarGenerateResult,
+} from "./agents-avatar-generate.js";
 export { SkillsDetailResultSchema } from "./skill-detail.js";
 export { AgentKindSchema, AgentOwnershipSchema };
+export {
+  AgentsCreateParamsSchema,
+  AgentsCreateResultSchema,
+  type AgentsCreateParams,
+  type AgentsCreateResult,
+} from "./agents-create.js";
 export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";
 
 export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
 export type { SkillsSearchParams, SkillsSearchResult } from "./skills-search.js";
+export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
+export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 
 export {
   ModelChoiceSchema,
@@ -96,26 +113,6 @@ export const AgentsListResultSchema = closedObject({
   agents: Type.Array(AgentSummarySchema),
 });
 
-/** Creates a configured agent; the server supplies an omitted workspace. */
-export const AgentsCreateParamsSchema = closedObject({
-  name: NonEmptyString,
-  expectedOwnerId: Type.Optional(NonEmptyString),
-  workspace: Type.Optional(NonEmptyString),
-  model: Type.Optional(NonEmptyString),
-  emoji: Type.Optional(Type.String()),
-  avatar: Type.Optional(Type.String()),
-});
-
-/** Result returned after creating an agent. */
-export const AgentsCreateResultSchema = closedObject({
-  ok: Type.Literal(true),
-  agentId: NonEmptyString,
-  name: NonEmptyString,
-  workspace: NonEmptyString,
-  agentDir: Type.Optional(NonEmptyString),
-  model: Type.Optional(NonEmptyString),
-});
-
 /** Updates mutable agent identity, workspace, and model fields; null clears the model override. */
 export const AgentsUpdateParamsSchema = closedObject({
   agentId: NonEmptyString,
@@ -167,6 +164,8 @@ export const AgentsDeleteResultSchema = closedObject({
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
+  /** Await cold or stale provider usage using prepared credentials, without refreshing auth. */
+  refreshUsage: Type.Optional(Type.Boolean()),
   agentId: Type.Optional(Type.String()),
 });
 
@@ -396,6 +395,19 @@ export const SkillsSecurityVerdictsResultSchema = closedObject({
   ),
 });
 
+/** Reads the current SKILL.md for a discovered, agent-scoped local skill. */
+export const SkillsFileGetParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  path: NonEmptyString,
+});
+
+/** Full source for the skill file preview. */
+export const SkillsFileGetResultSchema = closedObject({
+  path: NonEmptyString,
+  name: NonEmptyString,
+  content: Type.String(),
+});
+
 /** Reads the rendered skill card for one installed skill. */
 export const SkillsSkillCardParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
@@ -472,10 +484,12 @@ export const SkillsWorkshopListParamsSchema = closedObject({
 
 export const SkillsWorkshopListResultSchema = closedObject({
   agentId: NonEmptyString,
-  mode: Type.Union([Type.Literal("off"), Type.Literal("auto")]),
+  mode: Type.Union([Type.Literal("off"), Type.Literal("propose"), Type.Literal("auto")]),
   root: NonEmptyString,
   skills: Type.Array(SkillWorkshopSkillSummarySchema),
   archived: Type.Array(SkillWorkshopArchivedSkillSchema),
+  /** Absent from Gateways that predate drafts. */
+  drafts: Type.Optional(Type.Array(SkillWorkshopDraftSchema)),
 });
 
 /** Pages the Workshop change feed newest first. */
@@ -489,12 +503,17 @@ export const SkillsWorkshopChangesResultSchema = closedObject({
   changes: Type.Array(SkillWorkshopChangeSchema),
 });
 
-/** Reads one file of a live Workshop skill, or of a saved version when `versionId` is set. */
+/**
+ * Reads one file of a live Workshop skill, of a saved version when `versionId` is set, or of a
+ * waiting draft when `draftId` is set. `skills.workshop.applyDraft` and `discardDraft` take the
+ * same params with `draftId` required, and answer `SkillsWorkshopChangesResult`.
+ */
 export const SkillsWorkshopReadParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   name: NonEmptyString,
   filePath: Type.Optional(NonEmptyString),
   versionId: Type.Optional(NonEmptyString),
+  draftId: Type.Optional(NonEmptyString),
 });
 
 export const SkillsWorkshopReadResultSchema = closedObject({
@@ -758,8 +777,6 @@ export const ToolsInvokeResultSchema = closedObject({
 export type AgentKind = Static<typeof AgentKindSchema>;
 export type AgentSummary = Static<typeof AgentSummarySchema>;
 export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
-export type AgentsCreateParams = Static<typeof AgentsCreateParamsSchema>;
-export type AgentsCreateResult = Static<typeof AgentsCreateResultSchema>;
 export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
 export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
@@ -819,6 +836,8 @@ export type SkillsWorkshopUndoParams = Static<typeof SkillsWorkshopUndoParamsSch
 export type SkillsWorkshopUndoResult = Static<typeof SkillsWorkshopUndoResultSchema>;
 export type SkillsSecurityVerdictsParams = Static<typeof SkillsSecurityVerdictsParamsSchema>;
 export type SkillsSecurityVerdictsResult = Static<typeof SkillsSecurityVerdictsResultSchema>;
+export type SkillsFileGetParams = Static<typeof SkillsFileGetParamsSchema>;
+export type SkillsFileGetResult = Static<typeof SkillsFileGetResultSchema>;
 export type SkillsSkillCardParams = Static<typeof SkillsSkillCardParamsSchema>;
 export type SkillsSkillCardResult = Static<typeof SkillsSkillCardResultSchema>;
 export type SkillsUploadBeginParams = Static<typeof SkillsUploadBeginParamsSchema>;

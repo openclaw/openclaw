@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, onCleanup } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import {
@@ -9,21 +9,25 @@ import {
   nextWorkboardCardPosition,
   workboardCardSessionKey,
 } from "../../lib/workboard/card-state.ts";
-import { canStartWorkboardCard } from "../../lib/workboard/execution.ts";
+import {
+  canStartWorkboardCard,
+  startWorkboardCard,
+  stopWorkboardCard,
+} from "../../lib/workboard/execution.ts";
+import { findWorkboardSession } from "../../lib/workboard/lifecycle.ts";
 import {
   archiveWorkboardCard,
   deleteWorkboardCard,
-  findWorkboardSession,
-  getWorkboardState,
   moveWorkboardCard,
-  startWorkboardCard,
-  stopWorkboardCard,
-  type WorkboardCard,
-  type WorkboardExecutionEngine,
-  type WorkboardExecutionMode,
-  type WorkboardStatus,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/mutations.ts";
+import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import { workboardCardSessionTarget } from "../../lib/workboard/session-resolution.ts";
+import type {
+  WorkboardCard,
+  WorkboardExecutionEngine,
+  WorkboardExecutionMode,
+  WorkboardStatus,
+} from "../../lib/workboard/types.ts";
 import { openEditModal } from "./view-card-modal.tsx";
 import {
   canMutate,
@@ -73,7 +77,6 @@ export function CardMoveControl(input: {
       : [input.card.status, ...state().statuses],
   );
   const StatusSelect = () => {
-    let select: HTMLSelectElement | undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
         return;
@@ -95,11 +98,6 @@ export function CardMoveControl(input: {
       event.preventDefault();
       void moveCardToStatus(input.workboard, input.card, status);
     };
-    onCleanup(() => {
-      if (select) {
-        select.removeEventListener("keydown", handleKeyDown);
-      }
-    });
     return (
       <select
         class="workboard-card__move-select"
@@ -114,10 +112,7 @@ export function CardMoveControl(input: {
             void moveCardToStatus(input.workboard, input.card, status);
           }
         }}
-        ref={(element: HTMLSelectElement) => {
-          select = element;
-          element.addEventListener("keydown", handleKeyDown);
-        }}
+        onKeyDown={handleKeyDown}
       >
         <For each={statuses()} keyed={(status) => status}>
           {(status) => (
@@ -169,7 +164,6 @@ export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
     session?.hasActiveRun === true ||
     (session?.hasActiveRun !== false && session?.status === "running");
   return {
-    state,
     busy,
     live,
     linkedSessionKey,

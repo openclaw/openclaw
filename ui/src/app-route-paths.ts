@@ -10,6 +10,10 @@ import {
 } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import {
+  pluginCatalogIdFromRouteSuffix,
+  pluginCatalogRouteSuffix,
+} from "../../packages/plugin-package-contract/src/catalog-route.ts";
 import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
 import { takeGraphemes } from "./lib/graphemes.ts";
@@ -21,7 +25,7 @@ export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 export const INTERNAL_PLUGIN_SETTINGS_PATH_PARAM = "__openclawPluginSettingsPath";
-export const INTERNAL_CLAWS_PATH_PARAM = "__openclawClawsPath";
+export const INTERNAL_TEMPLATES_PATH_PARAM = "__openclawTemplatesPath";
 export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
 export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
   approval: "/approve",
@@ -49,8 +53,7 @@ const APP_ROUTE_DEFINITIONS = {
   meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
-  "agents-home": { path: "/agents" },
-  claws: { path: "/agents/claws" },
+  templates: { path: "/templates" },
   agents: { path: "/settings/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
@@ -341,24 +344,32 @@ export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
   if (!isPluginCatalogId(id)) {
     throw new Error("Invalid plugin catalog id for a route path.");
   }
-  return `${pathForRoute("plugins", basePath)}/${id}`;
+  return `${pathForRoute("plugins", basePath)}/${pluginCatalogRouteSuffix(id)}`;
 }
 
 export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
   const id = routePathSuffix(pathname, "plugins", basePath);
-  return id && isPluginCatalogId(id) ? id : null;
+  return id ? pluginCatalogIdFromRouteSuffix(id) : null;
 }
 
-export function pathForClawCatalogEntry(packageName: string, basePath = ""): string {
-  const match = /^@openclaw\/([a-z0-9][a-z0-9._-]*)$/u.exec(packageName);
-  if (!match) {
-    throw new Error("Only official Claws can be opened from a route path.");
+export function pathForTemplateCatalogEntry(packageName: string, basePath = ""): string {
+  if (!isClawCatalogPackageName(packageName)) {
+    throw new Error("Invalid Template package name for a route path.");
   }
-  return `${pathForRoute("claws", basePath)}/${match[1]}`;
+  return `${pathForRoute("templates", basePath)}/packages/${encodeURIComponent(packageName)}`;
 }
 
-export function clawCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
-  const slug = routePathSuffix(pathname, "claws", basePath);
+function isClawCatalogPackageName(value: string): boolean {
+  return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(value);
+}
+
+export function templateCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
+  const slug = routePathSuffix(pathname, "templates", basePath);
+  if (slug?.startsWith("packages/")) {
+    const packageName = decodeRouteSegment(slug.slice("packages/".length));
+    return packageName && isClawCatalogPackageName(packageName) ? packageName : null;
+  }
+  // Preserve the original official-only detail links.
   return slug && /^[a-z0-9][a-z0-9._-]*$/u.test(slug) ? `@openclaw/${slug}` : null;
 }
 
@@ -442,16 +453,19 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   workboard: INTERNAL_WORKBOARD_PATH_PARAM,
   memory: INTERNAL_MEMORY_PATH_PARAM,
   plugins: INTERNAL_PLUGINS_PATH_PARAM,
-  claws: INTERNAL_CLAWS_PATH_PARAM,
+  templates: INTERNAL_TEMPLATES_PATH_PARAM,
   "plugin-settings": INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   chat: INTERNAL_SESSION_PATH_PARAM,
   dashboard: INTERNAL_SESSION_PATH_PARAM,
 } as const;
 
-// These namespaces belong to app documents. /plugins also owns Gateway HTTP
-// routes, so offline admission there stays limited to its exact catalog root.
+// These namespaces belong to app documents. /plugins and /plugin also own Gateway
+// HTTP routes (plugin tabs use /<slug> or /plugin?…), so offline admission there
+// stays limited to the exact roots.
+const GATEWAY_SHARED_ROUTE_IDS: ReadonlySet<RouteId> = new Set(["plugins", "plugin"]);
 export const APP_ROUTE_OFFLINE_PREFIXES = APP_ROUTE_IDS.filter(
-  (routeId) => routeId !== "plugins" && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
+  (routeId) =>
+    !GATEWAY_SHARED_ROUTE_IDS.has(routeId) && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
 ).map((routeId) => `${pathForRoute(routeId)}/`);
 
 const DYNAMIC_ROUTE_MATCHERS = [
@@ -461,6 +475,7 @@ const DYNAMIC_ROUTE_MATCHERS = [
   ["activity", activityPersonFromPath],
   ["workboard", workboardBoardIdFromPath],
   ["memory", memoryTabFromPath],
+  ["plugins", pluginCatalogIdFromPath],
   ["plugins", isLegacyPluginsDiscoveryPath],
   ["plugin-settings", pluginSettingsIdFromPath],
 ] as const;
@@ -469,8 +484,8 @@ function dynamicRouteIdFromPath(
   pathname: string,
   basePath = "",
 ): keyof typeof DYNAMIC_ROUTE_PATH_PARAMS | null {
-  if (clawCatalogPackageNameFromPath(pathname, basePath)) {
-    return "claws";
+  if (templateCatalogPackageNameFromPath(pathname, basePath)) {
+    return "templates";
   }
   return (
     DYNAMIC_ROUTE_MATCHERS.find(([, matches]) => matches(pathname, basePath))?.[0] ??
@@ -481,8 +496,8 @@ function dynamicRouteIdFromPath(
 export function dynamicRouteFromPath(pathname: string, basePath: string) {
   const routeId = pluginCatalogIdFromPath(pathname, basePath)
     ? "plugins"
-    : clawCatalogPackageNameFromPath(pathname, basePath)
-      ? "claws"
+    : templateCatalogPackageNameFromPath(pathname, basePath)
+      ? "templates"
       : dynamicRouteIdFromPath(pathname, basePath);
   // The overview is a static route; only its subpages need the pathname bridge.
   return routeId && !(routeId === "memory" && memoryTabFromPath(pathname, basePath) === "overview")
@@ -506,8 +521,8 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (pluginCatalogIdFromPath(normalizedPath, normalizedBasePath)) {
     return "plugins";
   }
-  if (clawCatalogPackageNameFromPath(normalizedPath, normalizedBasePath)) {
-    return "claws";
+  if (templateCatalogPackageNameFromPath(normalizedPath, normalizedBasePath)) {
+    return "templates";
   }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the

@@ -3,9 +3,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { readSqliteWriterAppVersion } from "../infra/sqlite-schema-header.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion, readSqliteWriterAppVersion } from "../infra/sqlite-user-version.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import type {
   AgentDeletionJournalDisposition,
@@ -29,6 +28,7 @@ import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-versio
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
 import { inspectCurrentStateStartupSchema } from "./openclaw-state-schema-inspection.js";
 import { readStateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
+import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 export type StateSchemaInspectionInput = {
   pathname: string;
@@ -108,7 +108,17 @@ export function inspectStateDatabaseSchema(
       input.requireStartupMigrationReadiness &&
       contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION
     ) {
-      assertSqliteIntegrity(database, pathname);
+      assertSqliteIntegrity(
+        database,
+        pathname,
+        contentVersion < supportedVersion
+          ? resolveSchemaMigrationIntegrityCheck({
+              kind: "state",
+              foundVersion: contentVersion,
+              supportedVersion,
+            })
+          : undefined,
+      );
       assertCanonicalStateSchemaShape(database, pathname);
       // Readiness must reject malformed ownership even when startup has no pending writes.
       inspectOpenClawStateOwnershipFromDatabase(database, pathname);

@@ -2,9 +2,10 @@
   "controlUi": {
     "entry": "dist/control-ui/overview/index.js",
     "activation": "settings-only",
-    "settingsViews": [{"section": "memory", "panel": "overview"}]
+    "settingsViews": [{"section": "memory", "panel": "overview"}, {"section": "memory", "panel": "memories"}]
   },
   "id": "memory-core",
+  "generationOverlap": true,
   "categories": ["memory"],
   "doctorContract": {
     "stateMigrations": [

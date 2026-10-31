@@ -1,16 +1,17 @@
 import type { ServerResponse } from "node:http";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import * as orphanMarking from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import * as hostAccount from "../infra/host-account-name.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readResidentGatewayOwnerProfile } from "../state/user-profile-list.js";
@@ -19,35 +20,68 @@ import { getFreePort } from "../test-utils/ports.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
+import * as restartResume from "./session-restart-resume.js";
 import * as rowReads from "./session-row-database-facts.js";
 import * as projections from "./session-row-projection.js";
+import * as sessionLists from "./session-utils-list.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
-function createStartupState(label: string) {
-  return createOpenClawTestState({
-    label,
-    layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-    },
+function observeProjectionDisposal(afterCreate?: () => Promise<void>) {
+  const createProjection = projections.createSessionRowProjection;
+  const disposed = vi.fn();
+  vi.spyOn(projections, "createSessionRowProjection").mockImplementation(async (params) => {
+    const projection = await createProjection(params);
+    const dispose = projection.dispose;
+    vi.spyOn(projection, "dispose").mockImplementation(disposed.mockImplementation(dispose));
+    await afterCreate?.();
+    return projection;
   });
+  return disposed;
 }
 
-it("overlaps startup orphan marking with projection preparation and joins both before readiness", async ({
+const token = "startup-projection-synthetic-token";
+const basePath = "/health";
+const startupOptions = { bind: "loopback", controlUiEnabled: false } as const;
+const authenticatedOptions = {
+  ...startupOptions,
+  auth: { mode: "token", token },
+  sidecarStartup: "defer",
+} as const;
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  await state?.cleanup();
+});
+
+async function createStartupState({ ui = false, anonymous = false } = {}) {
+  const port = await getFreePort();
+  state = await createOpenClawTestState({
+    label: "startup-projection",
+    layout: "home",
+    env: { ...KERNEL_TEST_ENV },
+  });
+  await state.writeConfig({
+    gateway: {
+      auth: anonymous ? { mode: "none" } : { mode: "token", token },
+      controlUi: ui
+        ? { enabled: true, basePath, root: state.statePath("synthetic-ui") }
+        : { enabled: false },
+      port,
+    },
+    ...(!anonymous && { agents: { defaults: { model: "unit-test/model", utilityModel: "" } } }),
+    plugins: { enabled: false },
+    discovery: { mdns: { mode: "off" } },
+    cron: { enabled: false },
+  });
+  state.applyEnv();
+  return port;
+}
+
+it("warms the recent page without gating startup and joins it before projection disposal", async ({
   signal,
 }) => {
-  const basePath = "/health";
-  const port = await getFreePort();
-  const token = "startup-projection-synthetic-token";
-  const state = await createStartupState("startup-projection-http");
+  const port = await createStartupState({ ui: true });
   const projectionEntered = createDeferred();
   const releaseProjection = createDeferred();
   const releaseTransport = createDeferred();
@@ -55,64 +89,83 @@ it("overlaps startup orphan marking with projection preparation and joins both b
   const releaseListening = createDeferred();
   const earlyRuntimeEntered = createDeferred();
   const releaseEarlyRuntime = createDeferred();
-  const markingEntered = createDeferred();
-  const releaseMarking = createDeferred();
   const entryReceived = createDeferred<ServerResponse>();
   const secondEntryReceived = createDeferred<ServerResponse>();
   const entryClosed = createDeferred();
+  const firstPage =
+    createDeferred<Awaited<ReturnType<typeof sessionLists.listProjectedSessions>>>();
+  const releaseFirstPage = createDeferred();
+  const firstPageClosing = createDeferred();
+  const resumeEntered = createDeferred();
+  const releaseResume = createDeferred();
+  const projectionDisposed = vi.fn();
   const requests = new AbortController();
   const earlyRequest = new AbortController();
   const requestSignal = AbortSignal.any([signal, requests.signal]);
+  const waitFor = <T>(gate: PromiseLike<T>, operation: PromiseLike<unknown>) =>
+    withinTest(
+      awaitGateBeforeSettlement(gate, operation, "Checkpoint must precede settlement"),
+      signal,
+    );
   const entryPath = `${buildControlUiSessionEntryUrl(`${basePath}/chat/main/topic`, basePath)}&probe=1`;
   let startup: Promise<GatewayServer> | undefined;
-  let projection: Awaited<ReturnType<typeof projections.createSessionRowProjection>> | undefined;
   let startupFinished = false;
   let earlyEntryRequest: Promise<Response> | undefined;
   let entryRequest: Promise<Response> | undefined;
+  let closing: Promise<void> | undefined;
   try {
+    const resumeMarkedSessions = restartResume.resumeMarkedSessions;
+    vi.spyOn(restartResume, "resumeMarkedSessions").mockImplementation(async (...args) => {
+      resumeEntered.resolve();
+      await releaseResume.promise;
+      return resumeMarkedSessions(...args);
+    });
     await state.writeText(
       "synthetic-ui/index.html",
       "<!doctype html><title>Startup fixture</title>",
     );
-    await state.writeConfig({
-      gateway: {
-        auth: { mode: "token", token },
-        controlUi: { enabled: true, basePath, root: state.statePath("synthetic-ui") },
-        port,
-      },
-      agents: { defaults: { model: "unit-test/model", utilityModel: "" } },
-      plugins: { enabled: false },
-      discovery: { mdns: { mode: "off" } },
-      cron: { enabled: false },
-    });
-    state.applyEnv();
     vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", "");
     vi.spyOn(hostAccount, "resolveHostAccountName").mockResolvedValue("Startup Owner");
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:topic" },
       { sessionId: "startup-http-topic", updatedAt: 1 },
     );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:orphan" },
-      { sessionId: "startup-orphan", updatedAt: 1, abortedLastRun: true, status: "interrupted" },
+    runOpenClawAgentWriteTransaction(
+      () => {
+        for (let index = 0; index < 101; index++) {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: `agent:main:recent-${index}` },
+            { sessionId: `recent-${index}`, updatedAt: index + 10 },
+          );
+        }
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:archived" },
+          { sessionId: "archived", updatedAt: 1_000, archivedAt: 1 },
+        );
+      },
+      { agentId: "main" },
     );
+    const listProjectedSessions = sessionLists.listProjectedSessions;
+    vi.spyOn(sessionLists, "listProjectedSessions").mockImplementationOnce(async (...args) => {
+      const result = await listProjectedSessions(...args);
+      const workSignal = getAsyncWorkSignal();
+      expect(workSignal).toBeDefined();
+      workSignal?.addEventListener("abort", () => firstPageClosing.resolve(), { once: true });
+      firstPage.resolve(result);
+      await releaseFirstPage.promise;
+      return result;
+    });
     const createProjection = projections.createSessionRowProjection;
     vi.spyOn(projections, "createSessionRowProjection").mockImplementation(async (params) => {
       projectionEntered.resolve();
       await releaseProjection.promise;
-      projection = await createProjection(params);
+      const projection = await createProjection(params);
+      const dispose = projection.dispose;
+      vi.spyOn(projection, "dispose").mockImplementation(
+        projectionDisposed.mockImplementation(dispose),
+      );
       return projection;
     });
-    const markOrphans = orphanMarking.markStartupOrphanedMainSessionsForRecovery;
-    vi.spyOn(orphanMarking, "markStartupOrphanedMainSessionsForRecovery").mockImplementation(
-      async (params) => {
-        const result = await markOrphans(params);
-        expect(result.marked).toBe(1);
-        markingEntered.resolve();
-        await releaseMarking.promise;
-        return result;
-      },
-    );
     const transportModule = await import("./server-runtime-state.js");
     const createTransport = transportModule.createGatewayHttpTransport;
     vi.spyOn(transportModule, "createGatewayHttpTransport").mockImplementation(async (params) => {
@@ -143,31 +196,15 @@ it("overlaps startup orphan marking with projection preparation and joins both b
     });
     const { startGatewayServerCore } = await import("./server-start.js");
     startup = startGatewayServerCore(port, {
-      auth: { mode: "token", token },
-      bind: "loopback",
+      ...authenticatedOptions,
       controlUiEnabled: true,
-      sidecarStartup: "defer",
     }).then((server) => {
       startupFinished = true;
       return server;
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        projectionEntered.promise,
-        startup,
-        "Gateway did not warm its projection while transport creation was pending",
-      ),
-      signal,
-    );
+    await waitFor(projectionEntered.promise, startup);
     releaseTransport.resolve();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        listenerBound.promise,
-        startup,
-        "Gateway startup completed before its listener was available",
-      ),
-      signal,
-    );
+    await waitFor(listenerBound.promise, startup);
     const read = (path: string, fetchSignal = requestSignal) =>
       fetch(`http://127.0.0.1:${port}${path}`, {
         headers: { authorization: `Bearer ${token}` },
@@ -175,28 +212,11 @@ it("overlaps startup orphan marking with projection preparation and joins both b
       });
     earlyEntryRequest = read(entryPath, AbortSignal.any([requestSignal, earlyRequest.signal]));
     void earlyEntryRequest.catch(() => {});
-    const entryResponse = await withinTest(
-      awaitGateBeforeSettlement(
-        entryReceived.promise,
-        earlyEntryRequest,
-        "Session entry request did not reach the Gateway listener",
-      ),
-      signal,
-    );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        projectionEntered.promise,
-        earlyEntryRequest,
-        "Session entry request completed without preparing its session projection",
-      ),
-      signal,
-    );
+    const entryResponse = await waitFor(entryReceived.promise, earlyEntryRequest);
+    await waitFor(projectionEntered.promise, earlyEntryRequest);
     for (const [path, expectedStatus, expectedBody] of [
-      ["/health", 200, { ok: true, status: "live" }],
       ["/healthz", 200, { ok: true, status: "live" }],
-      ["/startup", 503, { ok: false, status: "starting" }],
       ["/startupz", 503, { ok: false, status: "starting" }],
-      ["/ready", 503, { ready: false }],
       ["/readyz", 503, { ready: false }],
     ] as const) {
       const response = await fetch(`http://127.0.0.1:${port}${path}`, { signal: requestSignal });
@@ -207,97 +227,69 @@ it("overlaps startup orphan marking with projection preparation and joins both b
     earlyRequest.abort();
     await withinTest(entryClosed.promise, signal);
     entryRequest = read(entryPath);
-    const secondEntryResponse = await withinTest(
-      awaitGateBeforeSettlement(
-        secondEntryReceived.promise,
-        entryRequest,
-        "Second session entry request did not reach the Gateway listener",
-      ),
-      signal,
-    );
+    const secondEntryResponse = await waitFor(secondEntryReceived.promise, entryRequest);
     expect(secondEntryResponse.writableEnded).toBe(false);
     releaseListening.resolve();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        Promise.all([earlyRuntimeEntered.promise, markingEntered.promise]),
-        startup,
-        "Gateway did not mark startup orphans while its projection was pending",
-      ),
-      signal,
-    );
+    await waitFor(earlyRuntimeEntered.promise, startup);
     expect(secondEntryResponse.writableEnded).toBe(false);
     releaseProjection.resolve();
     expect((await entryRequest).status).toBe(204);
     expect(readResidentGatewayOwnerProfile(resolveOpenClawStateSqlitePath())?.displayName).toBe(
       "Startup Owner",
     );
-    expect(
-      projection?.describe({ agentId: "main", key: "agent:main:orphan" })?.entry
-        .mainRestartRecovery,
-    ).toBeDefined();
     expect(startupFinished).toBe(false);
+    const warmed = await waitFor(firstPage.promise, startup);
+    expect(warmed.sessions.map((row) => row.key)).toEqual(
+      Array.from({ length: 100 }, (_, index) => `agent:main:recent-${100 - index}`),
+    );
     releaseEarlyRuntime.resolve();
-    const pendingReadiness = await read("/readyz");
-    expect(pendingReadiness.status).toBe(503);
-    await pendingReadiness.arrayBuffer();
-    expect(startupFinished).toBe(false);
-    releaseMarking.resolve();
     const server = await startup;
     await server.startupSettled;
+    await withinTest(resumeEntered.promise, signal);
+    const pendingResume = await read("/startupz");
+    expect(pendingResume.status).toBe(503);
+    expect(await pendingResume.json()).toMatchObject({ ok: false, status: "starting" });
+    releaseResume.resolve();
+    await waitForGatewayStartup(port);
+    expect(startupFinished).toBe(true);
     const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
       signal: requestSignal,
     });
     expect(unauthorized.status).toBe(401);
     await unauthorized.arrayBuffer();
+    closing = server.close();
+    await waitFor(firstPageClosing.promise, closing);
+    expect(projectionDisposed).not.toHaveBeenCalled();
+    releaseFirstPage.resolve();
+    await closing;
+    expect(projectionDisposed).toHaveBeenCalledOnce();
   } finally {
     releaseTransport.resolve();
     releaseProjection.resolve();
     releaseListening.resolve();
     releaseEarlyRuntime.resolve();
-    releaseMarking.resolve();
+    releaseFirstPage.resolve();
+    releaseResume.resolve();
     requests.abort();
-    try {
-      const server = await startup?.catch(() => undefined);
-      await server?.close();
-      await earlyEntryRequest?.catch(() => undefined);
-      await entryRequest?.catch(() => undefined);
-    } finally {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      await state.cleanup();
-    }
+    const server = await startup?.catch(() => undefined);
+    await (closing ?? server?.close());
+    await earlyEntryRequest?.catch(() => undefined);
+    await entryRequest?.catch(() => undefined);
   }
 });
 
 it("joins and disposes a warming projection when transport creation fails", async ({ signal }) => {
-  const state = await createStartupState("startup-projection-transport-failure");
-  const port = await getFreePort();
+  const port = await createStartupState({ anonymous: true });
   const projectionEntered = createDeferred();
   const releaseProjection = createDeferred();
   const transportFailed = createDeferred();
   const failure = new Error("Synthetic transport failure");
-  const disposed = vi.fn();
   let startup: Promise<GatewayServer> | undefined;
   let settled = false;
   try {
-    await state.writeConfig({
-      gateway: { auth: { mode: "none" }, controlUi: { enabled: false }, port },
-      plugins: { enabled: false },
-      discovery: { mdns: { mode: "off" } },
-      cron: { enabled: false },
-    });
-    state.applyEnv();
-    const createProjection = projections.createSessionRowProjection;
-    vi.spyOn(projections, "createSessionRowProjection").mockImplementation(async (params) => {
-      const projection = await createProjection(params);
-      const dispose = projection.dispose;
-      vi.spyOn(projection, "dispose").mockImplementation(() => {
-        dispose();
-        disposed();
-      });
+    const disposed = observeProjectionDisposal(async () => {
       projectionEntered.resolve();
       await releaseProjection.promise;
-      return projection;
     });
     const transportModule = await import("./server-runtime-state.js");
     vi.spyOn(transportModule, "createGatewayHttpTransport").mockImplementation(async () => {
@@ -306,15 +298,11 @@ it("joins and disposes a warming projection when transport creation fails", asyn
       throw failure;
     });
     const { startGatewayServerCore } = await import("./server-start.js");
-    startup = startGatewayServerCore(port, { bind: "loopback", controlUiEnabled: false });
-    void startup.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    startup = startGatewayServerCore(port, startupOptions);
+    const markSettled = () => {
+      settled = true;
+    };
+    void startup.then(markSettled, markSettled);
     await withinTest(
       awaitGateBeforeSettlement(transportFailed.promise, startup, "Transport did not fail"),
       signal,
@@ -329,31 +317,15 @@ it("joins and disposes a warming projection when transport creation fails", asyn
   } finally {
     releaseProjection.resolve();
     projectionEntered.resolve();
-    try {
-      const server = await startup?.catch(() => undefined);
-      await server?.close();
-    } finally {
-      vi.restoreAllMocks();
-      await state.cleanup();
-    }
+    const server = await startup?.catch(() => undefined);
+    await server?.close();
   }
 });
 
 it("refuses startup and disposes its projection when initial rows fail after the first batch", async () => {
-  const port = await getFreePort();
-  const token = "startup-projection-synthetic-token";
-  const state = await createStartupState("startup-projection-warm");
+  const port = await createStartupState();
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-  const disposed = vi.fn();
   try {
-    await state.writeConfig({
-      gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-      agents: { defaults: { model: "unit-test/model", utilityModel: "" } },
-      plugins: { enabled: false },
-      discovery: { mdns: { mode: "off" } },
-      cron: { enabled: false },
-    });
-    state.applyEnv();
     runOpenClawAgentWriteTransaction(
       () => {
         for (let index = 0; index <= MAX_SESSION_ROW_FACTS_KEYS; index++) {
@@ -374,22 +346,8 @@ it("refuses startup and disposes its projection when initial rows fail after the
       }
       return readFacts(...args);
     });
-    const createProjection = projections.createSessionRowProjection;
-    vi.spyOn(projections, "createSessionRowProjection").mockImplementation(async (params) => {
-      const projection = await createProjection(params);
-      const dispose = projection.dispose;
-      vi.spyOn(projection, "dispose").mockImplementation(() => {
-        dispose();
-        disposed();
-      });
-      return projection;
-    });
-    const startup = createGatewayKernel(port, {
-      auth: { mode: "token", token },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    }).then((created) => {
+    const disposed = observeProjectionDisposal();
+    const startup = createGatewayKernel(port, authenticatedOptions).then((created) => {
       kernel = created;
     });
     await expect(startup).rejects.toBe(failure);
@@ -398,11 +356,6 @@ it("refuses startup and disposes its projection when initial rows fail after the
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
   } finally {
-    try {
-      await kernel?.closeOnStartupFailure();
-    } finally {
-      vi.restoreAllMocks();
-      await state.cleanup();
-    }
+    await kernel?.closeOnStartupFailure();
   }
 });

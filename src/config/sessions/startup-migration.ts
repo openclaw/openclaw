@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import {
   readDeferredPluginSessionImport,
   readStaleDeferredPluginSessionImport,
@@ -22,10 +23,12 @@ import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../../state/openclaw-agent-db-contract.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
+import { agentEngineInput } from "../../state/openclaw-agent-db-engine.js";
+import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
+  openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
@@ -33,7 +36,6 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   listLegacySessionTranscriptFiles,
@@ -44,6 +46,7 @@ import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { isCanonicalSqliteSessionMainKeyCurrent } from "./session-canonical-key-read.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import {
   resolveSqliteTargetFromSessionStorePath,
   type SessionStoreRegistryRead,
@@ -219,19 +222,19 @@ export async function runSessionStartupMigration(params: {
   assertCurrent?: () => void;
   log: SessionStartupMigrationLogger;
   handoffDatabase?: (database: OpenClawAgentDatabaseOptions) => Promise<void>;
-  deps?: {
-    migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
-    resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
-  };
 }): Promise<void> {
   params.assertCurrent?.();
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  const registeredDatabaseRows = await listOpenClawRegisteredAgentDatabasesAsync({ env });
+  params.assertCurrent?.();
   const deletionRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime");
   let deletionSnapshot: ReturnType<typeof deletionRead.read> | undefined;
-  const resolveTargets =
-    params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
   const admittedTargets = () =>
-    resolveTargets(params.cfg, { env, agentIds: params.agentIds }).filter(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg, {
+      env,
+      agentIds: params.agentIds,
+      registeredDatabases: registeredDatabaseRows,
+    }).filter(
       (target) =>
         (!params.agentIds || params.agentIds.has(target.agentId)) &&
         !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
@@ -239,12 +242,17 @@ export async function runSessionStartupMigration(params: {
   const targets = admittedTargets();
   // Stable installations may still have file-backed history. Only Doctor imports it;
   // do not serve an empty SQLite history or rewrite those files during startup.
-  assertSessionStoreMigrationComplete({ cfg: params.cfg, env, targets });
+  withEngineStoreAdmission(() =>
+    assertSessionStoreMigrationComplete({
+      cfg: params.cfg,
+      env,
+      targets,
+      registeredDatabases: registeredDatabaseRows,
+    }),
+  );
   const { assertAcpSessionKeysMigratedForStartup, assertEmbeddedAcpMetadataMigratedForStartup } =
     await import("../../acp/runtime/session-meta-startup.js");
-  const migrateLegacyMain =
-    params.deps?.migrateLegacyMainSessionKeys ??
-    (await import("./legacy-main-session-migration.js")).migrateLegacyMainSessionKeys;
+  const { migrateLegacyMainSessionKeys } = await import("./legacy-main-session-migration.js");
   // Both inspections are read-only; join them before repair, including on refusal.
   const [, result] = await settleCurrentReadPreparations([
     params.agentIds
@@ -256,10 +264,13 @@ export async function runSessionStartupMigration(params: {
           undefined,
           params.assertCurrent,
         ),
-    migrateLegacyMain({ cfg: params.cfg, env, mode: "detect" }),
+    // Fleet-wide guidance belongs to boot; a deferred agent must not wait on other stores.
+    params.agentIds
+      ? undefined
+      : migrateLegacyMainSessionKeys({ cfg: params.cfg, env, mode: "detect" }),
   ] as const);
   params.assertCurrent?.();
-  if (result.warnings.length > 0) {
+  if (result && result.warnings.length > 0) {
     params.log.warn(
       `session: retired main-agent session migration warnings:\n${result.warnings.map((warning) => `- ${warning}`).join("\n")}`,
     );
@@ -269,11 +280,11 @@ export async function runSessionStartupMigration(params: {
   const coldCloses = new Set<string>();
   let interruptedSessions = 0;
   const registeredDatabases = new Set(
-    listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
+    registeredDatabaseRows.map((entry) => `${entry.agentId}\0${entry.path}`),
   );
-  const configuredTargets = resolveConfiguredAgentDatabaseCandidatePaths(params.cfg, { env }).map(
-    (pathname) => ({ path: pathname }),
-  );
+  const configuredTargets = resolveConfiguredAgentDatabaseCandidatePaths(params.cfg, {
+    env,
+  }).map((pathname) => ({ path: pathname }));
   const tasks = targets.map((target) => async () => {
     params.assertCurrent?.();
     const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
@@ -333,11 +344,18 @@ export async function runSessionStartupMigration(params: {
           !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
           !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
         ) {
-          await withOpenClawAgentDatabaseAsync(
-            options,
-            (database) => setCanonicalSqliteSessionMainKey(database, mainKey),
-            params.assertCurrent,
-          );
+          if (agentEngineInput()) {
+            withEngineStoreAdmission(() => {
+              params.assertCurrent?.();
+              setCanonicalSqliteSessionMainKey(openOpenClawAgentDatabase(options), mainKey);
+            });
+          } else {
+            await withOpenClawAgentDatabaseAsync(
+              options,
+              (database) => setCanonicalSqliteSessionMainKey(database, mainKey),
+              params.assertCurrent,
+            );
+          }
         }
       } catch (error) {
         params.assertCurrent?.();
@@ -345,9 +363,20 @@ export async function runSessionStartupMigration(params: {
           `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
         );
       }
+      let embeddedAcpSessionKey: string | undefined;
       interruptedSessions += await repairLegacySessionRunOutcomes(
         { agentId: options.agentId, env, storePath: databasePath },
         () => params.assertCurrent?.(),
+        (row) => {
+          // Pre-repair rows are valid only while legacy repair never adds or removes `acp`.
+          if (
+            embeddedAcpSessionKey === undefined &&
+            parseSqliteSessionEntryRecord(row)?.acp != null
+          ) {
+            embeddedAcpSessionKey = row.session_key;
+          }
+        },
+        params.log.warn,
       );
       // Canonical refusal is readiness failure. Drain before runtime visitors can
       // otherwise parse a whole migrated store on the main thread.
@@ -369,7 +398,7 @@ export async function runSessionStartupMigration(params: {
           params.assertCurrent,
         );
       }
-      assertEmbeddedAcpMetadataMigratedForStartup(options);
+      assertEmbeddedAcpMetadataMigratedForStartup(options, embeddedAcpSessionKey);
       const handoffDatabase = params.handoffDatabase;
       if (handoffDatabase) {
         // Runtime readiness failures must propagate; only successful handoff
@@ -416,7 +445,7 @@ export async function runSessionStartupMigration(params: {
   }
   throwSqliteLifecycleErrors([...errors], "Session startup migration and cleanup failed");
   if (interruptedSessions > 0) {
-    params.log.info(`session: normalized ${interruptedSessions} legacy run(s) to interrupted`);
+    params.log.info(`session: settled ${interruptedSessions} legacy run(s)`);
   }
   params.assertCurrent?.();
 }

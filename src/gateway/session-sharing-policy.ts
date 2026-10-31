@@ -294,7 +294,10 @@ export function prepareSessionSharingRole(
   params: Pick<SessionSharingRoleParams, "cfg" | "client">,
   preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
-): (target: SessionSharingTarget, isMember?: boolean) => SessionSharingRole {
+): (
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  isMember?: boolean,
+) => SessionSharingRole {
   if (isGatewayAdmin(params.client)) {
     return () => "admin";
   }
@@ -337,6 +340,20 @@ export function prepareSessionSharingRole(
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
   return role === "admin" || role === "owner";
+}
+
+/**
+ * Owner-only conversation work: between attributed people only the creator qualifies, even with
+ * admin scope. Unattributed callers and creators keep the owner-equivalent sharing role.
+ */
+export function isSessionOwnRequester(
+  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  profileId = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+): boolean {
+  return profileId && sessionCreatorProfileId(target.entry.createdActor)
+    ? isSessionCreatorProfile(target.entry.createdActor, profileId)
+    : canManageSessionSharing(prepareSessionSharingRole(params, { value: "none" })(target));
 }
 
 export function hiddenSessionNotFound(sessionKey: string, incognito = false): ErrorShape {
@@ -537,7 +554,10 @@ export function authorizeSessionSharingTarget(
     ? prepared.value
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
-  if (sessionCap === "none" && role !== "owner" && role !== "admin") {
+  if (
+    (sessionCap === "none" && role !== "owner" && role !== "admin") ||
+    (sessionCap === "invited" && role === "viewer")
+  ) {
     return hiddenSessionNotFound(params.target.canonicalKey);
   }
   if (params.requireOwner && !canManageSessionSharing(role)) {
@@ -546,7 +566,7 @@ export function authorizeSessionSharingTarget(
       `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
-  const capped = sessionCap === "view" || sessionCap === "suggest";
+  const capped = sessionCap === "invited" || sessionCap === "view" || sessionCap === "suggest";
   // Draft membership is inactive, while an explicit role caps even shared visibility.
   const canMutate =
     visibility === "draft"

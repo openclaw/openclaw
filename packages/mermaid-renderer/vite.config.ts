@@ -1,7 +1,7 @@
 import { copyFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
-import { mermaidClassicBundlePlugin } from "./vite-plugin.ts";
+import { peleClassicBundlePlugin } from "./vite-plugin.ts";
 
 const output = fileURLToPath(new URL("../../apps/shared/mermaid/assets/mermaid", import.meta.url));
 
@@ -11,7 +11,7 @@ export default defineConfig({
   resolve: { tsconfigPaths: true },
   worker: {
     format: "iife",
-    plugins: () => [mermaidClassicBundlePlugin()],
+    plugins: () => [peleClassicBundlePlugin()],
     rolldownOptions: {
       output: { codeSplitting: false },
     },
@@ -28,7 +28,7 @@ export default defineConfig({
     },
   },
   plugins: [
-    mermaidClassicBundlePlugin(),
+    peleClassicBundlePlugin(),
     {
       name: "native-mermaid-document",
       async closeBundle() {

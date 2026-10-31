@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, Show } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createComponent, createMemo, Show } from "solid-js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
   UsersListModelAccountsResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -24,42 +25,27 @@ import {
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
-import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
+import { createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
-type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
-type AccountSection = NonNullable<ReturnType<typeof renderChatModelAccountControl>>;
-
-function renderControls(
-  state: ChatPageHost,
-  overrides: Partial<Omit<ComposerControlsParams, "state">> = {},
-) {
-  return renderChatPaneComposerControls({
-    state,
-    selectedSession: state.sessionsResult?.sessions[0],
-    agentDefaultModel: undefined,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
-    contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
-    ...overrides,
-  });
-}
+beforeEach(installModelPickerLayout);
 
 describe("chat account selection", () => {
   function mountAccountControl(
@@ -68,16 +54,26 @@ describe("chat account selection", () => {
   ) {
     const container = document.createElement("div");
     let current = true;
-    const state: Pick<ChatPageHost, "client" | "chatAccountSelection" | "requestUpdate"> = {
+    const state = projectChatFields<Pick<ChatPageHost, "client" | "chatAccountSelection">>({
       client: createTestGatewayClient(request),
       chatAccountSelection: selection,
-      requestUpdate: () => draw(),
-    };
-    let updateSection!: (section: AccountSection | undefined) => void;
+    });
+    const onSelect = vi.fn(async () => true);
+    const onManage = vi.fn();
     mountSolid(
       () => {
-        const [section, setSection] = createSignal<AccountSection>();
-        updateSection = setSection;
+        const section = createMemo(() =>
+          renderChatModelAccountControl({
+            owner: state,
+            client: state.client,
+            selection: state.chatAccountSelection,
+            model: "openai/gpt-5.5",
+            disabled: false,
+            ownsSelection: () => current,
+            onSelect,
+            onManage,
+          }),
+        );
         return (
           <Show when={section()}>
             {(activeSection) => <ChatModelAccountSectionView {...activeSection().viewProps(0)} />}
@@ -86,29 +82,10 @@ describe("chat account selection", () => {
       },
       { container },
     );
-    const onSelect = vi.fn(async () => true);
-    const onManage = vi.fn();
-    const draw = () => {
-      updateSection(
-        renderChatModelAccountControl({
-          owner: state,
-          client: state.client,
-          selection: state.chatAccountSelection,
-          model: "openai/gpt-5.5",
-          disabled: false,
-          ownsSelection: () => current,
-          onSelect,
-          onManage,
-          onRequestUpdate: () => draw(),
-        }),
-      );
-      flush();
-    };
-    draw();
+    flush();
     return {
       container,
       state,
-      draw,
       onSelect,
       onManage,
       retire: () => {
@@ -186,7 +163,7 @@ describe("chat account selection", () => {
       authProfileId: "openai:work",
       source: "user",
     };
-    view.draw();
+    flush();
     expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
       "Work workspace",
     );
@@ -252,7 +229,7 @@ describe("chat account selection", () => {
       ],
     });
     await pending.promise;
-    view.draw();
+    flush();
     expect(view.container.textContent).not.toContain("Old connection account");
     view.select("account:openai:old");
     expect(view.onSelect).not.toHaveBeenCalled();
@@ -260,7 +237,7 @@ describe("chat account selection", () => {
 });
 
 describe("chat pane composer controls", () => {
-  it("renders the selected Gateway model while keeping its model picker locked", () => {
+  it("renders the selected Gateway model while keeping its model picker locked", async () => {
     const selectedSession: GatewaySessionRow = {
       key: "main",
       kind: "direct",
@@ -279,20 +256,24 @@ describe("chat pane composer controls", () => {
     const controls = renderControls(state as unknown as ChatPageHost, {
       agentDefaultModel: "openai/gpt-5.6-luna",
     });
-    const container = document.createElement("div");
-    mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
-      container,
-    });
+    const { container } = mountSolid(() =>
+      createComponent(ChatPaneModelControl, controls.composerControls),
+    );
+    flush();
 
     const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
     expect(trigger?.textContent).toContain("GPT-5.6 Sol");
     expect(trigger?.getAttribute("aria-label")).toBe("Chat model: GPT-5.6 Sol");
     expect(trigger?.dataset.chatModelLocked).toBe("true");
+    expect(state.request).not.toHaveBeenCalled();
+    trigger?.click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
       "GPT-5.6 Sol",
     );
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
-    expect(state.request).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -318,11 +299,16 @@ describe("chat pane composer controls", () => {
     },
   ])(
     "renders separate footer inputs with a $label catalog",
-    ({ cached, connected = true, error, message }) => {
-      const container = document.createElement("div");
+    async ({ cached, connected = true, error, message }) => {
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => container.remove());
       const state = makeChatHost({
         connected,
         requestHandlers: {},
+        sessionsResult: createSessionsListResult({
+          model: "cached-model",
+          modelProvider: "openai",
+        }),
         chatModelCatalog: cached
           ? [{ id: "cached-model", name: "Cached Model", provider: "openai", available: false }]
           : [],
@@ -336,9 +322,15 @@ describe("chat pane composer controls", () => {
         agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
+      controls.composerControls.model.modelPickerOpen = true;
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
+
+      expandModelProviders(container);
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
@@ -425,10 +417,10 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
-    expect(defaultOption?.textContent).toContain(
-      "Follow the agent's configured execution permissions.",
-    );
-    expect(defaultOption?.textContent).toContain("Default (Guarded)");
+    expect(defaultOption?.textContent).toContain("The agent's configured permissions.");
+    expect(
+      container.querySelector('[data-chat-permission-option="guarded"]')?.textContent,
+    ).toContain("Default");
     expect(
       container.querySelector('[data-chat-permission-select="true"]')?.getAttribute("aria-label"),
     ).toBe("Execution permissions: Full Access");
@@ -474,11 +466,20 @@ describe("chat pane composer controls", () => {
       },
       chatModelSwitchPromises: {},
     }) as unknown as ChatPageHost;
+    projectChatFields(state, ["sessionsResult"]);
     const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => patchResult.promise);
     const controls = renderControls(state);
+    const { container } = mountSolid(() => {
+      const current = createMemo(() => renderControls(state).permissionPicker);
+      return <ChatPermissionPicker {...current()} />;
+    });
 
     expect(controls.permissionPicker.disabled).toBe(false);
     const selection = controls.permissionPicker.onSelect("workspace");
+    flush();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.getAttribute("aria-busy")).toBe("true");
+    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
     await vi.waitFor(() =>
       expect(patch).toHaveBeenCalledWith(
         key,
@@ -492,8 +493,11 @@ describe("chat pane composer controls", () => {
     } as ChatPageHost["sessionsResult"];
     patchResult.resolve({ ok: true, path: "", key, entry: { sessionId: "materialized" } });
     await selection;
+    flush();
 
     expect(state.chatError).toBeNull();
+    expect(trigger.disabled).toBe(false);
+    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
   });
 
   it.each([
@@ -548,7 +552,6 @@ describe("chat pane composer controls", () => {
       chatModelSwitchPromises: {},
       sessionKey,
       sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
-      requestUpdate: vi.fn(),
     }) as unknown as ChatPageHost;
     const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => pending.promise);
     const controls = renderControls(state);
@@ -742,6 +745,7 @@ describe("chat pane model controls", () => {
       ),
     ).toBe(true);
     const steering = steerQueuedChatMessage(state, steer.id);
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "chat.send",
@@ -749,7 +753,11 @@ describe("chat pane model controls", () => {
           queueMode: "steer",
           idempotencyKey: steer.sendRunId,
         }),
-        { timeoutMs: 30_000 },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
       ),
     );
     expect(state.chatSending).toBe(true);

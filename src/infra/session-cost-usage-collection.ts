@@ -14,7 +14,7 @@ import type { SessionTranscriptStats } from "../config/sessions/session-accessor
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
@@ -90,10 +90,7 @@ async function listUsageCountedTranscriptFileSources(
   try {
     entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? [];
   }
   const transcripts = entries.filter(
     (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
@@ -131,10 +128,7 @@ async function listUsageCountedTranscriptFileSources(
           stats,
         };
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
+        return ignoreMissingPath(error);
       }
     });
   const { firstError, hasError, results } = await runTasksWithConcurrency({
@@ -174,6 +168,11 @@ async function readUsageCostSqliteFiles(
   });
 }
 
+type UsageCostSqliteEntry = Pick<
+  UsageCostSqliteFile,
+  "kind" | "sourcePath" | "sessionId" | "mtimeMs"
+>;
+
 export async function listUsageCountedTranscriptSources(
   agentId: string,
   params: {
@@ -181,7 +180,26 @@ export async function listUsageCountedTranscriptSources(
     sessionsDir?: string;
     storePath: string;
   } & UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptSource[]> {
+): Promise<UsageCostTranscriptSource[]>;
+/** Without statistics, SQLite entries carry only identity and their last mutation time. */
+export async function listUsageCountedTranscriptSources(
+  agentId: string,
+  params: {
+    minMtimeMs?: number;
+    sessionsDir?: string;
+    storePath: string;
+    statistics: false;
+  } & UsageCostCollectionAccess,
+): Promise<Array<UsageCostJsonlSource | UsageCostSqliteEntry>>;
+export async function listUsageCountedTranscriptSources(
+  agentId: string,
+  params: {
+    minMtimeMs?: number;
+    sessionsDir?: string;
+    storePath: string;
+    statistics?: false;
+  } & UsageCostCollectionAccess,
+): Promise<Array<UsageCostJsonlSource | UsageCostSqliteEntry | UsageCostSqliteFile>> {
   const logicalAgentId = normalizeAgentId(agentId);
   const { storePath } = params;
   const sessionsDir = params.sessionsDir ?? resolveSessionArtifactDirectory(storePath);
@@ -190,19 +208,31 @@ export async function listUsageCountedTranscriptSources(
     sessionsDir,
     storePath,
   });
-  const instances = await params.listSqliteInstances(agentId, storePath);
-  const sqliteBacked = (
-    await readUsageCostSqliteFiles(
-      instances
-        .filter(
-          (instance) =>
-            instance.agentId === logicalAgentId &&
-            (params.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
-        )
-        .map((instance) => ({ agentId: logicalAgentId, sessionId: instance.sessionId, storePath })),
-      params,
-    )
-  ).filter((file) => file !== undefined);
+  const instances = (await params.listSqliteInstances(agentId, storePath)).filter(
+    (instance) =>
+      instance.agentId === logicalAgentId &&
+      (params.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
+  );
+  const markers = instances.map((instance) => ({
+    agentId: logicalAgentId,
+    sessionId: instance.sessionId,
+    storePath,
+  }));
+  const sqliteBacked: Array<UsageCostSqliteEntry | UsageCostSqliteFile> =
+    params.statistics === false
+      ? markers.map((marker, index) => {
+          const sourcePath = formatSqliteSessionFileMarker({
+            ...marker,
+            storePath: params.resolveSqliteStorePath(marker.agentId, marker.storePath),
+          });
+          return {
+            kind: "sqlite",
+            sourcePath,
+            sessionId: marker.sessionId,
+            mtimeMs: instances[index]!.updatedAtMs,
+          };
+        })
+      : (await readUsageCostSqliteFiles(markers, params)).filter((file) => file !== undefined);
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
   const canonicalFileBacked = fileBacked.filter(
     (file) => !file.sessionId || !sqliteSessionIds.has(file.sessionId),
@@ -225,10 +255,7 @@ export async function listUsageCountedTranscriptStats(
       try {
         return await materializeUsageCostTranscriptSource(source, params);
       } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
+        return ignoreMissingPath(error);
       }
     }),
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,

@@ -1,4 +1,3 @@
-// Builds provider-aware auth-choice options and grouped onboarding menus.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,12 +21,6 @@ function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
 /** Keep the first-tier provider list stable; every other group belongs under More. */
 export function isFeaturedAuthChoiceGroup(group: AuthChoiceGroup): boolean {
   return isFeaturedProviderAuthChoiceGroup(group.value);
-}
-
-function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
-  const priorityA = a.assistantPriority ?? 0;
-  const priorityB = b.assistantPriority ?? 0;
-  return priorityA - priorityB || compareOptionLabels(a, b);
 }
 
 /** Sort auth-choice groups with featured providers first, then stable labels. */
@@ -136,7 +129,11 @@ export function buildAuthChoiceGroups(params: {
     });
   }
   for (const group of groupsById.values()) {
-    group.options = group.options.toSorted(compareAssistantOptions);
+    group.options = group.options.toSorted((a, b) => {
+      const priorityA = a.assistantPriority ?? 0;
+      const priorityB = b.assistantPriority ?? 0;
+      return priorityA - priorityB || compareOptionLabels(a, b);
+    });
   }
   const groups = Array.from(groupsById.values()).toSorted(compareAuthChoiceGroups);
 

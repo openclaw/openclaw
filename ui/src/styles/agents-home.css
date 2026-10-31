@@ -1,174 +1,5 @@
-.agents-home {
-  padding: 0 24px 24px;
-}
-
-.agents-home__header .content-header {
-  max-height: none;
-  padding: 4px 24px 16px;
-}
-
-.agents-home__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
-  gap: 16px;
-}
-
-.agents-home__card,
-.agents-home__skeleton {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  background: var(--card);
-}
-
-.agents-home__card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 16px;
-  min-width: 0;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.agents-home__card:hover,
-.agents-home__card:focus-visible {
-  border-color: var(--accent);
-  text-decoration: none;
-}
-
-.agents-home__identity {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 100%;
-}
-
-.agents-home__avatar {
-  width: 56px;
-  height: 56px;
-  flex: none;
-  overflow: hidden;
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
-  font-size: 28px;
-}
-
-.agents-home__name {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.agents-home__name h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.agents-home__name p,
-.agents-home__preview {
-  margin: 0;
-  color: var(--muted);
-}
-
-.agents-home__model,
-.agents-home__preview {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agents-home__model,
-.agents-home__working {
-  padding: 4px 8px;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  background: var(--bg-accent);
-}
-
-.agents-home__working {
-  color: var(--ok);
-}
-
-.agents-home__activity {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.agents-home__open {
-  margin-top: auto;
-}
-
-.agents-home__skeleton {
-  min-height: 250px;
-  background: var(--bg-accent);
-}
-
-.agents-home__empty {
-  padding: 48px 24px;
-  text-align: center;
-}
-
-.agents-home__explore {
-  margin-top: 32px;
-  padding-top: 24px;
-}
-
-.agents-home__explore-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.agents-home__explore-heading {
-  min-width: 0;
-}
-
-.agents-home__explore-heading h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.agents-home__explore-heading p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.agents-home__claw-search {
-  position: relative;
-  width: min(100%, 320px);
-  flex: 0 1 320px;
-}
-
-.agents-home__claw-search > span {
-  position: absolute;
-  top: 50%;
-  left: 12px;
-  display: inline-flex;
-  width: 16px;
-  color: var(--muted);
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
-.agents-home__claw-search input {
-  width: 100%;
-  height: 44px;
-  min-height: 44px;
-  padding-left: 36px;
-}
-
-.agents-home__claw-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
-  gap: 12px;
-}
-
-.agents-home__claw-card,
-.agents-home__claw-skeleton {
+.agents-home__template-card,
+.agents-home__template-skeleton {
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
@@ -176,19 +7,22 @@
   background: var(--bg-elevated);
 }
 
-.agents-home__claw-skeleton {
+.agents-home__template-skeleton {
   min-height: 168px;
   background: var(--bg-accent);
 }
 
-.agents-home__claw-card {
+.agents-home__template-card {
   position: relative;
+  /* Card width, not viewport width, decides the title row: multi-column grids
+     make cards narrow on laptop-sized screens. */
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.agents-home__claw-card-link {
+.agents-home__template-card-link {
   position: absolute;
   z-index: 1;
   inset: 0;
@@ -199,32 +33,45 @@
   cursor: var(--cursor-action);
 }
 
-.agents-home__claw-card-link:focus-visible {
+.agents-home__template-card-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -3px;
 }
 
-.agents-home__claw-card-link:disabled {
+.agents-home__template-card-link:disabled {
   cursor: default;
 }
 
-.agents-home__claw-head {
+.agents-home__template-head {
   position: relative;
   z-index: 2;
   display: grid;
+  grid-template-areas: "art identity add";
   grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: start;
   gap: 8px;
   pointer-events: none;
 }
 
-.agents-home__claw-head .btn {
+/* Narrow cards: give the name the full card width instead of the gap between
+   the artwork and Add, which otherwise breaks names one or two words per line. */
+@container (max-width: 279px) {
+  .agents-home__template-head {
+    grid-template-areas:
+      "art . add"
+      "identity identity identity";
+    align-items: center;
+  }
+}
+
+.agents-home__template-head .btn {
   position: relative;
   z-index: 3;
   pointer-events: auto;
 }
 
-.agents-home__claw-art {
+.agents-home__template-art {
+  grid-area: art;
   display: grid;
   width: 36px;
   height: 36px;
@@ -234,28 +81,47 @@
   color: var(--accent);
 }
 
-.agents-home__claw-art svg {
+.agents-home__template-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.agents-home__template-art svg {
   width: 20px;
   height: 20px;
 }
 
-.agents-home__claw-identity {
+.agents-home__template-identity {
+  grid-area: identity;
   min-width: 0;
 }
 
-.agents-home__claw-identity h3 {
+.agents-home__template-identity h3 {
+  display: -webkit-box;
   margin: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  overflow-wrap: break-word;
   font-size: 15px;
   line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.agents-home__claw-identity span {
+.agents-home__template-identity span {
+  display: block;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.agents-home__claw-summary {
+.agents-home__template-add {
+  grid-area: add;
+}
+
+.agents-home__template-summary {
   position: relative;
   z-index: 2;
   display: -webkit-box;
@@ -269,34 +135,7 @@
   pointer-events: none;
 }
 
-.agents-home__claw-empty {
+.agents-home__template-empty {
   margin: 0 0 16px;
   color: var(--muted);
-}
-
-@media (max-width: 560px) {
-  .agents-home {
-    padding: 0 16px 16px;
-  }
-
-  .agents-home__header .content-header {
-    flex-direction: column;
-    align-items: stretch;
-    padding-inline: 16px;
-  }
-
-  .agents-home__header .page-header-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .agents-home__explore-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .agents-home__claw-search {
-    width: 100%;
-    flex: 0 0 auto;
-  }
 }

@@ -1,7 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished as onVitestTestFinished,
+  vi,
+} from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
@@ -34,13 +41,17 @@ import {
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
-import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import {
+  parseRemoteWorkspaceManifestEnvelope,
+  type RemoteWorkspaceManifestEnvelope,
+} from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
+import type { WorkspaceComputationHashResult } from "./workspace-manifest-computation.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
-const workspaceDebug = vi.hoisted(() => vi.fn());
 const tunnelWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
@@ -49,7 +60,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
       if (subsystem === "gateway/worker-workspace") {
-        return { ...logger, debug: workspaceDebug, info: workspaceInfo };
+        return { ...logger, info: workspaceInfo };
       }
       return subsystem === "gateway/worker-tunnel" ? { ...logger, warn: tunnelWarn } : logger;
     },
@@ -57,6 +68,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
 
 describe("node worker tunnel manager", () => {
   it.for<[string, boolean]>([
@@ -865,6 +877,7 @@ describe("node worker tunnel manager", () => {
       const nodeTransport = transport();
       const memoInputs: Array<Array<[string, string]>> = [];
       const captureBytes: Array<{ input: number; output: number }> = [];
+      const remoteReports: RemoteWorkspaceManifestEnvelope[] = [];
       nodeTransport.invoke = withWorkspaceDrain(async ({ command, params }) => {
         if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
           return { ok: true, payloadJSON: "null" };
@@ -882,14 +895,19 @@ describe("node worker tunnel manager", () => {
         if (input.argv.at(-1) === "memo-v1") {
           memoInputs.push(JSON.parse(input.input!));
         }
-        const result = await runCommandWithTimeout([process.execPath, ...input.argv.slice(1)], {
-          input: input.input,
-          cwd: remoteWorkspaceDir,
-          timeoutMs: 10_000,
-          baseEnv: { PATH: process.env.PATH, HOME: remoteHome },
-        });
+        const clock = `data:text/javascript,Date.now=()=>${Date.now() + 60_000};`;
+        const result = await runCommandWithTimeout(
+          [process.execPath, "--import", clock, ...input.argv.slice(1)],
+          {
+            input: input.input,
+            cwd: remoteWorkspaceDir,
+            timeoutMs: 10_000,
+            baseEnv: { PATH: process.env.PATH, HOME: remoteHome },
+          },
+        );
         const { stdout, stderr, code, signal, killed, termination } = result;
         if (input.argv.at(-1) === "memo-v1") {
+          remoteReports.push(parseRemoteWorkspaceManifestEnvelope(stdout));
           captureBytes.push({
             input: Buffer.byteLength(input.input!),
             output: Buffer.byteLength(stdout),
@@ -929,9 +947,16 @@ describe("node worker tunnel manager", () => {
         commit: vi.fn(async () => {}),
         abort: vi.fn(async () => {}),
       };
-      workspaceDebug.mockClear();
+      const workerOperations = vi.spyOn(
+        await import("../../infra/git-worker.js"),
+        "runGitWorkerOperation",
+      );
+      onVitestTestFinished(() => workerOperations.mockRestore());
+      const gatewayReports: WorkspaceComputationHashResult<unknown>[][] = [];
 
       for (let turn = 0; turn < 2; turn += 1) {
+        const firstOperation = workerOperations.mock.results.length;
+        const firstRemoteReport = remoteReports.length;
         const reconciliation = await handle.reconcileWorkspace({
           source: {
             kind: "local",
@@ -943,34 +968,43 @@ describe("node worker tunnel manager", () => {
           baseManifestRef: manifestRef,
         });
         await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+        expect(remoteReports).toHaveLength(firstRemoteReport + 1);
+        const results = await Promise.all(
+          workerOperations.mock.results.slice(firstOperation).map((result) => result.value),
+        );
+        gatewayReports.push(
+          results.flatMap((result) =>
+            result !== null &&
+            typeof result === "object" &&
+            "hashes" in result &&
+            "metrics" in result
+              ? [result]
+              : [],
+          ),
+        );
       }
 
-      const reports = workspaceDebug.mock.calls
-        .filter(([message]) => message === "worker workspace reconcile completed")
-        .map(([, data]) => data as WorkspaceReconcileMetrics);
-      expect(reports).toHaveLength(2);
+      expect(gatewayReports.every((reports) => reports.length > 0)).toBe(true);
       // Turn one hashes the managed worktree; turn two must reuse the
       // placement-owned memo instead of re-hashing every file.
-      expect(reports[0]!.gateway.contentHashCount).toBeGreaterThan(0);
-      expect(reports[1]!.gateway.contentHashCount).toBe(0);
-      expect(reports[1]!.gateway.memoHitCount).toBeGreaterThan(0);
+      expect(gatewayReports[0]!.some((report) => report.metrics.contentHashCount > 0)).toBe(true);
+      expect(gatewayReports[1]!.every((report) => report.metrics.contentHashCount === 0)).toBe(
+        true,
+      );
+      expect(gatewayReports[1]!.some((report) => report.metrics.memoHitCount > 0)).toBe(true);
       const retained = memoInputs[1]!.length;
       const uncached = fileCount - retained;
       expect(retained).toBeGreaterThan(0);
-      expect(reports[0]).toMatchObject({
-        remoteManifestCalls: 1,
-        remoteContentHashCount: fileCount,
-      });
-      expect(reports[1]).toMatchObject({
-        remoteManifestCalls: 1,
-        remoteContentHashCount: uncached,
-        remoteMemoHitCount: retained,
+      expect(remoteReports).toHaveLength(2);
+      expect(remoteReports[0]!.metrics.contentHashCount).toBe(fileCount);
+      expect(remoteReports[1]!.metrics).toMatchObject({
+        contentHashCount: uncached,
+        memoHitCount: retained,
       });
       expect(memoInputs).toHaveLength(2);
       expect(memoInputs[0]).toEqual([]);
       expect(memoInputs.slice(1).every((entries) => entries.length === retained)).toBe(true);
       expect(memoInputs.flat().every(([identity]) => identity.startsWith("worker:"))).toBe(true);
-      expect(reports[1]!.remoteManifestWallDurationMs).toBeGreaterThan(0);
       expect(
         captureBytes.every((bytes) => bytes.input <= NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES),
       ).toBe(true);
@@ -979,7 +1013,7 @@ describe("node worker tunnel manager", () => {
       ).toBe(true);
       if (fileCount > 1) {
         expect(retained).toBeLessThan(fileCount);
-        expect(reports[1]!.remoteMemoTruncatedCount).toBeGreaterThan(0);
+        expect(remoteReports[1]!.metrics.memoTruncatedCount).toBeGreaterThan(0);
       }
 
       await fs.writeFile(path.join(remoteWorkspaceDir, files[0]!), "next  turn\n");

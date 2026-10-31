@@ -1,4 +1,6 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { isPathInside } from "../../infra/path-guards.js";
+import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   createPluginCache,
@@ -17,6 +19,8 @@ import {
 } from "../loading/skill-precedence.js";
 import type { SkillSourceReadBatch } from "../loading/skill-root-loader.js";
 import { buildSkillSnapshotProjection } from "../loading/skill-snapshot-projection.js";
+import { tryRealpath } from "../loading/symlink-targets.js";
+import { resolveWorkspaceSkillDirectories } from "../loading/workspace-skill-roots.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
@@ -30,13 +34,7 @@ import type {
 } from "./discovery-worker-contract.js";
 
 function applyEnvironment(environment: SkillsDiscoveryEnvironment) {
-  for (const [key, value] of Object.entries(environment)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
+  applyProcessEnvKeys(Object.keys(environment), environment);
   pinConfigDir();
 }
 
@@ -73,7 +71,17 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   }
   if (request.kind === "project") {
     applyEnvironment(request.environment);
-    return { kind: "project", snapshot: buildSkillSnapshotProjection(request.input) };
+    const { resolvedSkills, discoverySkills, ...snapshot } = buildSkillSnapshotProjection(
+      request.input,
+    );
+    // Return selection, not another resident copy of the caller's parsed catalog.
+    const indices = new Map(request.input.eligible.map((entry, index) => [entry.skill, index]));
+    return {
+      kind: "project",
+      snapshot,
+      resolvedIndices: resolvedSkills!.map((skill) => indices.get(skill)!),
+      discoveryIndices: discoverySkills!.map((skill) => indices.get(skill)!),
+    };
   }
   if (request.kind === "status") {
     applyEnvironment(request.environment);
@@ -118,15 +126,37 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
         sourceReads.set(environmentKey, batch);
       }
       const sources = readWorkspaceSkillSources(sourceRequest, batch);
-      const entries = mergeSkillRecords(sources.entries, key, []);
+      // Fingerprints need precedence winners, not collision diagnostics.
+      const entries = mergeSkillRecords(sources.entries, key, false);
       appendLowerPrecedenceSkillRecords(
         entries,
-        mergeSkillRecords(sources.executionEntries, key, []),
+        mergeSkillRecords(sources.executionEntries, key, false),
         () => {},
       );
+      // Generated plugin links are shared outputs; watch their canonical sources instead.
+      const watchDirectories = new Set([
+        ...sourceRequest.sourcePlan.roots.map((root) => root.dir),
+        ...(sourceRequest.executionWorkspaceDir
+          ? resolveWorkspaceSkillDirectories(sourceRequest.executionWorkspaceDir).map(
+              (root) => root.dir,
+            )
+          : []),
+      ]);
+      const physicalRoots = [...watchDirectories].map((directory) => tryRealpath(directory));
+      // Workspace entries retain configured paths; watch their admitted physical targets.
+      for (const { skill } of [...sources.entries, ...sources.executionEntries]) {
+        const target = tryRealpath(skill.baseDir);
+        if (
+          target &&
+          !physicalRoots.some((directory) => directory && isPathInside(directory, target))
+        ) {
+          watchDirectories.add(target);
+        }
+      }
       return {
         key,
         sources,
+        watchDirectories: [...watchDirectories],
         plan: selection.plan ? resolvedPlan : undefined,
         fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
       };

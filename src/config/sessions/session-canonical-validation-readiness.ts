@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -29,7 +30,6 @@ import {
 } from "./session-accessor.sqlite-reclamation-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const MAX_BATCH_ROWS = 128;
 const MAX_BATCH_BYTES = 1024 * 1024;
@@ -51,7 +51,7 @@ export async function certifySessionCanonicalValidationPending(
   if (isIncognitoOpenClawAgentSqlitePath(pathname, options)) {
     return;
   }
-  const native = retainOpenClawAgentDatabaseReadOnly(options);
+  const native = withEngineStoreAdmission(() => retainOpenClawAgentDatabaseReadOnly(options));
   if (!native.found) {
     return;
   }
@@ -60,18 +60,17 @@ export async function certifySessionCanonicalValidationPending(
   const drainKey = readOpenClawAgentDatabaseIdentity(database).incarnation;
   let oversizedRows = 0;
   try {
-    const readiness = runSqliteReadOperationSync(database.db, () => {
-      loadOpenClawAgentCanonicalValidationReceipt(database);
-      const initialize = !hasOpenClawAgentCanonicalValidation(database);
-      return {
-        initialize,
-        hasWork: initialize || hasPendingCanonicalSessionValidation(database),
-      };
-    });
-    if (!readiness.hasWork) {
+    const initialize = withEngineStoreAdmission(() =>
+      runSqliteReadOperationSync(database.db, () => {
+        loadOpenClawAgentCanonicalValidationReceipt(database);
+        // Import, repair, and main-key writers revoke readiness when they queue validation.
+        return !hasOpenClawAgentCanonicalValidation(database);
+      }),
+    );
+    if (!initialize) {
       return;
     }
-    let initializeCanonicalValidation = readiness.initialize;
+    let initializeCanonicalValidation = true;
     const databaseOptions = {
       agentId: normalizeAgentId(options.agentId),
       path: readOpenClawAgentDatabaseIdentity(database).filename,

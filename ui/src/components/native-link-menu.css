@@ -3,14 +3,12 @@
   --oc-overlay-max-width: 264px;
 
   min-width: 224px;
-  background: var(--bg-elevated);
 }
 
 .native-link-menu .session-menu__item {
   min-height: var(--menu-item-height);
   gap: 0;
   padding: 0 8px;
-  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .native-link-menu .session-menu__item[data-new-tab-action] {

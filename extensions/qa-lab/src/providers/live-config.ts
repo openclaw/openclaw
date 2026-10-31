@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import JSON5 from "json5";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -29,19 +30,18 @@ function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | nu
 
 export async function readQaLiveProviderConfigOverrides(params: {
   providerIds: readonly string[];
-  env?: NodeJS.ProcessEnv;
 }) {
   const providerIds = normalizeUniqueStringEntries(params.providerIds);
   if (providerIds.length === 0) {
     return {};
   }
-  const configPath = resolveQaLiveProviderConfigPath(params.env);
+  const configPath = resolveQaLiveProviderConfigPath();
   if (!existsSync(configPath.path)) {
     return {};
   }
   try {
     const raw = await fs.readFile(configPath.path, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON5.parse(raw) as unknown;
     const models = asOptionalRecord(asOptionalRecord(parsed)?.models);
     const providers = asOptionalRecord(models?.providers) ?? {};
     const selected: Record<string, ModelProviderConfig> = {};

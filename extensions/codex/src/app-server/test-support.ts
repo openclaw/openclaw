@@ -149,6 +149,9 @@ export function createCodexRuntimePlanFixture(): NonNullable<
       modelId: "gpt-5.4-codex",
       harnessId: "codex",
     },
+    transport: {
+      resolveExtraParams: () => ({}),
+    },
     prompt: {
       resolveSystemPromptContribution: () => undefined,
     },
@@ -213,6 +216,38 @@ export async function waitForHarnessRequest(
 
 export function withoutCodexSkillDiscovery(methods: string[]): string[] {
   return methods.filter((method) => method !== "skills/list");
+}
+
+function readCodexInjectedDeveloperText(params: unknown): string | undefined {
+  if (!isJsonObject(params) || !Array.isArray(params.items)) {
+    return undefined;
+  }
+  const item = params.items[0];
+  if (!isJsonObject(item) || item.role !== "developer" || !Array.isArray(item.content)) {
+    return undefined;
+  }
+  const content = item.content[0];
+  return isJsonObject(content) && content.type === "input_text" && typeof content.text === "string"
+    ? content.text
+    : undefined;
+}
+
+export function isCodexTurnContextHandoff(params: unknown): boolean {
+  return (
+    readCodexInjectedDeveloperText(params)?.startsWith(
+      "Current OpenClaw conversation instructions (replace earlier conversation context, not persistent policy):",
+    ) === true
+  );
+}
+
+export function withoutCodexTurnContextHandoffs(
+  requests: ReadonlyArray<{ method: string; params?: unknown }>,
+): string[] {
+  return withoutCodexSkillDiscovery(
+    requests
+      .filter((request) => !isCodexTurnContextHandoff(request.params))
+      .map(({ method }) => method),
+  );
 }
 
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
@@ -300,7 +335,7 @@ export function createClientHarness(
       }
     });
   });
-  const client = CodexAppServerClient.fromTransportForTests(process);
+  const client = CodexAppServerClient.fromTransport(process);
   return {
     client,
     process,
@@ -331,10 +366,33 @@ export function createClientHarness(
       return stdinDestroyed;
     },
     emitExit,
-    send(message: unknown) {
+    send(this: void, message: unknown) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },
   };
+}
+
+export function createRequestClientHarness(
+  onRequest: (
+    method: string,
+    id: unknown,
+    requestParams: unknown,
+    send: (message: unknown) => void,
+  ) => void,
+) {
+  return createClientHarness({
+    onWrite(line, send) {
+      const message: unknown = JSON.parse(line);
+      if (
+        !isJsonObject(message) ||
+        typeof message.method !== "string" ||
+        message.id === undefined
+      ) {
+        return;
+      }
+      onRequest(message.method, message.id, message.params, send);
+    },
+  });
 }
 
 /** Stock read-only replies from an authenticated managed native app-server. */
@@ -380,35 +438,25 @@ export async function withLeasedCodexTestClient<T>(params: {
   request: (method: string, params?: unknown) => Promise<unknown>;
   run: (client: CodexAppServerClient) => Promise<T>;
 }): Promise<T> {
-  const harness = createClientHarness({
-    onWrite: (line, send) => {
-      const message: unknown = JSON.parse(line);
-      if (
-        !isJsonObject(message) ||
-        typeof message.method !== "string" ||
-        message.id === undefined
-      ) {
-        return;
-      }
-      const result =
-        message.method === "initialize"
-          ? Promise.resolve({
-              userAgent: "codex-cli/0.151.0",
-              codexHome: resolveCodexAppServerHomeDir(params.agentDir),
-            })
-          : params.request(message.method, message.params);
-      void result.then(
-        (value) => send({ id: message.id, result: value }),
-        (error: unknown) =>
-          send({
-            id: message.id,
-            error: {
-              code: -32000,
-              message: error instanceof Error ? error.message : String(error),
-            },
-          }),
-      );
-    },
+  const harness = createRequestClientHarness((method, id, requestParams, send) => {
+    const result =
+      method === "initialize"
+        ? Promise.resolve({
+            userAgent: "codex-cli/0.151.0",
+            codexHome: resolveCodexAppServerHomeDir(params.agentDir),
+          })
+        : params.request(method, requestParams);
+    void result.then(
+      (value) => send({ id, result: value }),
+      (error: unknown) =>
+        send({
+          id,
+          error: {
+            code: -32000,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }),
+    );
   });
   const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
   try {

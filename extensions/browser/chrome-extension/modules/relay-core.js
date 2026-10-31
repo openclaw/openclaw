@@ -208,7 +208,8 @@ function parseStoredPairing(stored) {
 }
 
 /** Own serialized validation and mutation at the extension pairing storage boundary. */
-export function createPairingConfigStore(storage) {
+export function createPairingConfigStore() {
+  const storage = chrome.storage.local;
   const run = createSerialQueue();
   let invalidObserved = false;
   let invalidationRevision = 0;
@@ -316,7 +317,6 @@ export function reconnectDelayMs(attempt) {
   return Math.min(1000 * 2 ** capped, 30_000);
 }
 
-/** Normalize a chrome.tabs.Tab into the relay's tab info shape. */
 export function toRelayTabInfo(tab) {
   return {
     tabId: tab.id,

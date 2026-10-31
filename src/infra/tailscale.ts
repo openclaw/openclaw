@@ -1,6 +1,7 @@
 import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -16,6 +17,7 @@ import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
+import { assertChildRuntimeAvailable, observeChildRuntime } from "./child-runtime-viability.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
@@ -161,16 +163,7 @@ export type TailscaleRouteClaim = {
 
 // Foreground startups replace the daemon's shared Serve config using an ETag.
 // Serialize our starts and owned stops, not the lifetime of each claim.
-let tailscaleRouteOperation: Promise<void> = Promise.resolve();
-
-function serializeTailscaleRouteOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const result = tailscaleRouteOperation.then(operation);
-  tailscaleRouteOperation = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
+const serializeTailscaleRouteOperation = createAsyncLock();
 
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
@@ -217,15 +210,17 @@ async function startTailscaleRouteOwner(
   signal?.throwIfAborted();
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
+  assertChildRuntimeAvailable();
   const worker = fork(
     fileURLToPath(workerUrl),
     [TAILSCALE_ROUTE_OWNER_ARG, JSON.stringify({ argv })],
     {
       execArgv,
       detached: process.platform !== "win32",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
+  const runtimeFailure = observeChildRuntime(worker);
   let routePid: number | undefined;
   let ready = false;
   let active = false;
@@ -277,10 +272,15 @@ async function startTailscaleRouteOwner(
             }
           }
         });
-        worker.once("error", (error) =>
-          reject(toErrorObject(error, "Tailscale route owner failed")),
-        );
-        worker.once("exit", (code, exitSignal) => {
+        worker.once("error", (error) => {
+          failure = toErrorObject(error, "Tailscale route owner failed");
+          // Failed exec has no process to stop; close publishes its runtime diagnosis.
+          if (worker.pid !== undefined) {
+            reject(failure);
+          }
+        });
+        worker.once("close", (code, exitSignal) => {
+          failure = runtimeFailure() ?? failure;
           active = false;
           resolveExit();
           if (!ready) {
@@ -560,12 +560,9 @@ function isPermissionDeniedError(err: unknown): boolean {
   );
 }
 
-export async function hasTailscaleFunnelRouteForPort(
-  port: number,
-  exec: typeof runExec = runExec,
-): Promise<boolean> {
+export async function hasTailscaleFunnelRouteForPort(port: number): Promise<boolean> {
   const tailscaleBin = await getTailscaleBinary();
-  const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+  const { stdout } = await runExec(tailscaleBin, ["funnel", "status", "--json"], {
     maxBuffer: 200_000,
     timeoutMs: 5_000,
   });

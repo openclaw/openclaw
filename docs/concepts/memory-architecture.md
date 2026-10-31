@@ -289,8 +289,8 @@ unconditional pre-reply recall; `mode: "off"` disables the lane.
 ## Project-scoped memory
 
 Repository work adds a second retrieval boundary alongside provenance. When a
-turn runs inside a Git repository, memory written by that work carries a
-trailing project annotation:
+turn runs inside a Git repository with `memory-core` selected, memory written by
+that work carries a trailing project annotation:
 
 ```markdown
 - Use the release helper for package validation. <!-- project: github.com/openclaw/openclaw -->
@@ -310,7 +310,11 @@ evicts the least-recent key beyond that cap. This set is ephemeral runtime
 state: it is not persisted or restored, so a new session or process starts with
 an empty set. The current repository identity remains a separate prepared fact
 used for write annotations; new repository-specific memories receive only that
-current key, not the whole active set. Ranked search boosts entries from any
+current key, not the whole active set. OpenClaw passes that key to memory prompt
+sections as `projectKey`, and `memory-core` owns the instruction that asks the
+agent to add the annotation. Other memory providers receive the same key but get
+no annotation instruction from core, so they can store project scope in their
+own format. Ranked search boosts entries from any
 repository in the active set, mildly demotes entries from another repository,
 and leaves untagged memory neutral. Trigger injection is stricter: a tagged
 entry is eligible only while every project key on that entry is in the active
@@ -447,13 +451,17 @@ knobs that exist:
 
 | Concern                         | Where                                                           | Reference                                                     |
 | ------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
-| Dreaming enable, cadence, model | `plugins.entries.memory-core.config.dreaming`                   | [Dreaming](/concepts/dreaming)                                |
+| Dreaming enable, cadence, model | `plugins.entries.<memory-slot-owner>.config.dreaming`           | [Dreaming](/concepts/dreaming)                                |
 | Session admission exclusions    | `plugins.entries.memory-core.config.memoryPolicy`               | [Provenance & deletion](/concepts/memory-provenance)          |
 | Search providers, hybrid tuning | `memory.search`                                                 | [Memory config](/reference/memory-config)                     |
 | Escalation lane mode, scope     | `plugins.entries.active-memory`                                 | [Active memory](/concepts/active-memory)                      |
 | Cross-conversation recall       | `agents.entries.<id>.memory.search.rememberAcrossConversations` | [Active memory](/concepts/active-memory)                      |
 | Flush behavior                  | `agents.defaults.compaction.memoryFlush`                        | [Memory overview](/concepts/memory)                           |
 | Memory plugin selection         | `plugins.slots.memory`                                          | [Builtin](/concepts/memory-builtin), [Plugins](/tools/plugin) |
+
+For managed Gateway sidecar dreaming, `<memory-slot-owner>` is the plugin selected
+by `plugins.slots.memory` (defaulting to `memory-core`). Memory CLI continues to
+read `plugins.entries.memory-core.config.dreaming` regardless of slot selection.
 
 ## Related
 

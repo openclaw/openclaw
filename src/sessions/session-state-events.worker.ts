@@ -5,7 +5,6 @@ import {
 } from "../config/sessions/session-entry-current-admission.worker.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { SESSION_WATCH_PROVENANCE_EXPLICIT } from "../state/session-watch-cursor-provenance.js";
 import type {
@@ -19,10 +18,9 @@ import {
   isSessionStateUpstreamCurrentInDatabase,
   pruneSessionStateEventsInDatabase,
   readCursor,
-  recordSessionStateEventInDatabase,
+  recordSessionStateEventsInDatabase,
   upsertSeedCursor,
   type SessionStateEventInput,
-  type SessionStateEventRow,
   type SessionStateNotice,
 } from "./session-state-events.kernel.js";
 import { readSessionStateSequence } from "./session-state-events.read.worker.js";
@@ -31,6 +29,7 @@ import {
   sessionStateWatchAgentId,
 } from "./session-state-events.watch-address.js";
 import type { SessionStateWorkerOperations } from "./session-state-events.worker-contract.js";
+import { captureSessionUpstreamMutation } from "./session-upstream-links-publication.worker.js";
 import { deleteSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 
 export const sessionStateOperations = {
@@ -38,65 +37,64 @@ export const sessionStateOperations = {
     input: SessionStateWorkerOperations["sessionState.cleanup"]["input"],
     context,
   ) => {
-    return context.write(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const kysely = getSessionStateKysely(db);
-      if (input.kind === "delete") {
-        deleteSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId);
-        for (const table of ["session_state_events", "session_state_heads"] as const) {
+    return context.writeAdmitted(({ db }) =>
+      captureSessionUpstreamMutation(db, () => {
+        const kysely = getSessionStateKysely(db);
+        if (input.kind === "delete") {
+          deleteSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId);
+          for (const table of ["session_state_events", "session_state_heads"] as const) {
+            executeSqliteQuerySync(
+              db,
+              kysely
+                .deleteFrom(table)
+                .where("session_key", "=", input.sessionKey)
+                .where("agent_id", "=", input.agentId),
+            );
+          }
+        }
+        const cursorOwner = sessionStateWatchAgentId(input.sessionKey);
+        const cursors =
+          cursorOwner && (input.kind === "reset" || cursorOwner === input.agentId)
+            ? executeSqliteQuerySync(
+                db,
+                kysely
+                  .selectFrom("session_watch_cursors")
+                  .select(["watcher_session_key", "target_session_key"])
+                  .where((eb) =>
+                    input.kind === "reset"
+                      ? eb("watcher_session_key", "=", input.sessionKey)
+                      : eb.or([
+                          eb("watcher_session_key", "=", input.sessionKey),
+                          eb("target_session_key", "=", input.sessionKey),
+                        ]),
+                  ),
+              ).rows
+            : [];
+        for (const cursor of cursors) {
+          if (
+            !isSessionStateWatchAddress({
+              watcherSessionKey: cursor.watcher_session_key,
+              targetSessionKey: cursor.target_session_key,
+            })
+          ) {
+            continue;
+          }
           executeSqliteQuerySync(
             db,
             kysely
-              .deleteFrom(table)
-              .where("session_key", "=", input.sessionKey)
-              .where("agent_id", "=", input.agentId),
+              .deleteFrom("session_watch_cursors")
+              .where("watcher_session_key", "=", cursor.watcher_session_key)
+              .where("target_session_key", "=", cursor.target_session_key),
           );
         }
-      }
-      const cursorOwner = sessionStateWatchAgentId(input.sessionKey);
-      const cursors =
-        cursorOwner && (input.kind === "reset" || cursorOwner === input.agentId)
-          ? executeSqliteQuerySync(
-              db,
-              kysely
-                .selectFrom("session_watch_cursors")
-                .select(["watcher_session_key", "target_session_key"])
-                .where((eb) =>
-                  input.kind === "reset"
-                    ? eb("watcher_session_key", "=", input.sessionKey)
-                    : eb.or([
-                        eb("watcher_session_key", "=", input.sessionKey),
-                        eb("target_session_key", "=", input.sessionKey),
-                      ]),
-                ),
-            ).rows
-          : [];
-      for (const cursor of cursors) {
-        if (
-          !isSessionStateWatchAddress({
-            watcherSessionKey: cursor.watcher_session_key,
-            targetSessionKey: cursor.target_session_key,
-          })
-        ) {
-          continue;
-        }
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .deleteFrom("session_watch_cursors")
-            .where("watcher_session_key", "=", cursor.watcher_session_key)
-            .where("target_session_key", "=", cursor.target_session_key),
-        );
-      }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-    });
+      }),
+    );
   },
   "sessionState.sweep": (
     { cursors, now }: SessionStateWorkerOperations["sessionState.sweep"]["input"],
     context,
   ) => {
-    return context.write(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    return context.writeAdmitted(({ db }) => {
       const notices: SessionStateNotice[] = [];
       for (const { watcherSessionKey, targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
@@ -124,7 +122,6 @@ export const sessionStateOperations = {
           queueOnly: isAmbientGroupWatchCursor(row),
         });
       }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return notices;
     });
   },
@@ -153,8 +150,10 @@ export const sessionStateOperations = {
       }
       return true;
     }
+    // Host admission must not hold the writer; current rows and commit authority
+    // are still checked after acquiring the transaction.
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       const existing = readCursor(db, input.watcherSessionKey, input.targetSessionKey);
       if (existing?.watcher_store_path === input.watcherStorePath) {
         if (
@@ -191,8 +190,9 @@ export const sessionStateOperations = {
         stage,
         facts: undefined,
       });
+    context.open();
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       const followups: SessionStateNotice[] = [];
       for (const { targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
@@ -236,8 +236,9 @@ export const sessionStateOperations = {
         stage,
         facts: undefined,
       });
+    context.open();
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       pruneSessionStateEventsInDatabase(db, input.now);
       admit("commit");
     });
@@ -265,24 +266,16 @@ export const sessionStateOperations = {
     if (!events.some((event) => current(database.db, event))) {
       return { rows: [], notices: [] };
     }
+    admit("transaction");
     return context.write(({ db }) => {
-      admit("transaction");
       assertAcpControl();
-      const rows: SessionStateEventRow[] = [];
-      const notices: SessionStateNotice[] = [];
-      for (const event of events) {
-        if (!current(db, event)) {
-          continue;
-        }
-        const recorded = recordSessionStateEventInDatabase(db, event, now);
-        if (recorded.row) {
-          rows.push(recorded.row);
-        }
-        notices.push(...recorded.notices);
-      }
+      const recorded = recordSessionStateEventsInDatabase(
+        db,
+        events.filter((event) => current(db, event)).map((event) => ({ event, now })),
+      );
       admit("commit");
       assertAcpControl();
-      return { rows, notices };
+      return recorded;
     });
   },
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

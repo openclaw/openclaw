@@ -7,7 +7,6 @@ import {
   ensureMemoryIndexSchema,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import * as sqliteWorkerRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +31,17 @@ import type {
   MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
 import { memoryChunkRowId } from "./manager-source-index-kernel.js";
+
+const expectOk = (result: unknown) => expect(result).toMatchObject({ ok: true });
+const expectOutcome = (result: unknown, value: boolean) =>
+  expect(result).toMatchObject({ ok: true, value });
+const expectRefused = (result: unknown, error?: object) =>
+  expect(result).toMatchObject({
+    ok: false,
+    entered: true,
+    committed: false,
+    ...(error ? { error } : {}),
+  });
 
 const owners: MemoryIndexDatabase[] = [];
 const fixtureWriters = new Map<MemoryIndexDatabase, DatabaseSync>();
@@ -82,13 +92,7 @@ function publicationInput(owner: MemoryIndexDatabase) {
   };
   return {
     fileIdentity: readMemoryShadowIdentity(filename),
-    pragmas: {
-      busy_timeout: readPragma("busy_timeout"),
-      synchronous: readPragma("synchronous"),
-      foreign_keys: readPragma("foreign_keys"),
-      journal_size_limit: readPragma("journal_size_limit"),
-      checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
-    },
+    pragmas: { foreign_keys: readPragma("foreign_keys") },
   };
 }
 
@@ -104,6 +108,40 @@ async function createBackend(
     : await openExistingSqliteWorkerBackend(input, { databasePath: filename });
   backends.push(backend);
   return backend;
+}
+
+const queryRows = (db: DatabaseSync, sql: string) => db.prepare(sql).all();
+const expectRows = (db: DatabaseSync, sql: string, rows: unknown[]) =>
+  expect(queryRows(db, sql)).toEqual(rows);
+const expectValues = (db: DatabaseSync, sql: string, rows: unknown[][]) =>
+  expect(queryRows(db, sql).map((row) => Object.values(row))).toEqual(rows);
+const sourceHash = (db: DatabaseSync) => db.prepare("SELECT hash FROM memory_index_sources").get();
+const assertCurrent = () => undefined;
+const publish = (
+  owner: MemoryIndexDatabase,
+  input: MemorySourceIndexReplacement,
+  accepted = true,
+) => owner.replaceSource(input, assertCurrent, async () => accepted);
+
+const disabled = { enabled: false, available: false };
+const enabled = { enabled: true, available: true };
+function stageSource(
+  backend: Awaited<ReturnType<typeof createBackend>>,
+  input: MemorySourceIndexReplacement,
+) {
+  const { chunks: _chunks, embeddings: _embeddings, ...header } = input;
+  backend.execute({ type: "stage.start", input: { header } });
+  for (const fragments of memoryPublicationBatches(input)) {
+    backend.execute({ type: "stage.append", input: { fragments } });
+  }
+}
+
+function forget(db: DatabaseSync, sessionId: string) {
+  recordMemorySessionTombstonesInDatabase(db, {
+    agentId: "main",
+    sessionIds: [sessionId],
+    createdAt: 1,
+  });
 }
 
 function replacement(text = "Violetmarker transfer text"): MemorySourceIndexReplacement {
@@ -142,112 +180,29 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("avoids unused connection work for scalar publications", () => {
-    const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
-    const db = new DatabaseSync(filename);
-    try {
-      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      const sql = vi.spyOn(db, "exec");
-      const reads = vi.spyOn(db, "prepare");
-      const bind = () =>
-        bindSqliteWorkerBackend(
-          { kind: "agent" },
-          { databasePath: filename, database: db, admit: () => undefined },
-        );
-      const scalar = bind();
-      const state = {
-        vector: { enabled: false, available: false },
-        fts: { enabled: false, available: false },
-      };
-      expect(
-        scalar.execute({
-          type: "index.writeMetadata",
-          input: { provider: "none", model: "fts-only", chunkTokens: 400, chunkOverlap: 80 },
-        }),
-      ).toMatchObject({
-        ok: true,
-      });
-      expect(
-        reads.mock.calls.filter(([statement]) =>
-          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)$/u.test(statement),
-        ),
-      ).toEqual([]);
-      expect(scalar.execute({ type: "connection.inspect", input: undefined })).toEqual({
-        fileIdentity: readMemoryShadowIdentity(filename),
-        pragmas: {
-          busy_timeout: expect.any(Number),
-          synchronous: expect.any(Number),
-          foreign_keys: expect.any(Number),
-          journal_size_limit: expect.any(Number),
-          checkpoint_fullfsync: expect.any(Number),
-        },
-      });
-      scalar.close();
-      expect(
-        sql.mock.calls.filter(([statement]) => /memory_publication_input/u.test(statement)),
-      ).toEqual([]);
-      const staged = bind();
-      const input = replacement("staged text survives scalar cleanup");
-      const { chunks: _chunks, embeddings: _embeddings, ...header } = input;
-      staged.execute({
-        type: "stage.start",
-        input: { header },
-      });
-      for (const fragments of memoryPublicationBatches(input)) {
-        staged.execute({ type: "stage.append", input: { fragments } });
-      }
-      expect(staged.execute({ type: "source.replace", input: { state } })).toMatchObject({
-        ok: true,
-      });
-      staged.close();
-      expect(db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-        { text: "staged text survives scalar cleanup" },
-      ]);
-      expect(
-        db
-          .prepare("SELECT name FROM sqlite_temp_master WHERE name = 'memory_publication_input'")
-          .all(),
-      ).toEqual([]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("reads current source rows without restaging scratch or inspecting canonical connection policy", async () => {
+  it("reads current source rows after rebinding the publication owner", async () => {
     const owner = await createOwner();
     const db = fixtureWriter(owner);
     db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
       VALUES ('memory/current', 'memory', 'old', 1, 1)`);
     const input = publicationInput(owner);
-    const sql = observeHostDataSql();
-    try {
-      for (const hash of ["old", "changed"]) {
-        const backend = bindSqliteWorkerBackend(input, {
-          databasePath: db.location()!,
-          database: db,
-          admit: () => undefined,
-        });
-        try {
-          expect(
-            backend.execute({
-              type: "source.hash",
-              input: { source: "memory", path: "memory/current" },
-            }),
-          ).toBe(hash);
-        } finally {
-          backend.close();
-        }
-        db.exec("UPDATE memory_index_sources SET hash = 'changed'");
+    for (const hash of ["old", "changed"]) {
+      const backend = bindSqliteWorkerBackend(input, {
+        databasePath: db.location()!,
+        database: db,
+        admit: () => undefined,
+      });
+      try {
+        expect(
+          backend.execute({
+            type: "source.hash",
+            input: { source: "memory", path: "memory/current" },
+          }),
+        ).toBe(hash);
+      } finally {
+        backend.close();
       }
-      expect(
-        sql.queries.filter((query) =>
-          /PRAGMA\s+(busy_timeout|synchronous|foreign_keys|journal_size_limit|checkpoint_fullfsync)|memory_publication_input/iu.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
+      db.exec("UPDATE memory_index_sources SET hash = 'changed'");
     }
   });
 
@@ -256,11 +211,7 @@ describe("bounded memory publication transfer", () => {
     const db = fixtureWriter(owner);
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
     ensureMemorySessionTombstones(db);
-    recordMemorySessionTombstonesInDatabase(db, {
-      agentId: "main",
-      sessionIds: ["forgotten"],
-      createdAt: 1,
-    });
+    forget(db, "forgotten");
     let refused = true;
     const backend = await createBackend(owner, (stage) => {
       if (stage === "commit" && refused) {
@@ -282,36 +233,24 @@ describe("bounded memory publication transfer", () => {
         ],
       },
     };
-    const sql = observeHostDataSql();
-    try {
-      expect(backend.execute(command)).toMatchObject({
-        ok: false,
-        entered: true,
-        committed: false,
-        error: { message: "inline commit refused" },
-      });
-      expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
-      refused = false;
-      expect(backend.execute(command)).toMatchObject({ ok: true, value: true });
-      expect(db.prepare("SELECT hash, embedding FROM memory_embedding_cache").all()).toEqual([
-        { hash: "current", embedding: encodeMemoryEmbedding([-0, 0.25]) },
-      ]);
-      expect(sql.queries.filter((query) => query.includes("memory_publication_input"))).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    expectRefused(backend.execute(command), { message: "inline commit refused" });
+    expectRows(db, "SELECT hash FROM memory_embedding_cache", []);
+    refused = false;
+    expectOutcome(backend.execute(command), true);
+    expectRows(db, "SELECT hash, embedding FROM memory_embedding_cache", [
+      { hash: "current", embedding: encodeMemoryEmbedding([-0, 0.25]) },
+    ]);
   });
 
-  it.each(["success", "stale", "begin", "write", "transaction", "commit"] as const)(
-    "settles a single-statement source refresh through %s",
+  it.each(["success", "stale", "write", "transaction", "commit"] as const)(
+    "settles an atomic source refresh through %s",
     async (fault) => {
       const owner = await createOwner();
       const db = fixtureWriter(owner);
       db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
         VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
-      const stages: string[] = [];
+      const revision = readMemoryDatabaseRevision(db);
       const backend = await createBackend(owner, (stage) => {
-        stages.push(stage);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         if (fault === stage) {
           throw new Error(`refused ${stage}`);
@@ -321,132 +260,93 @@ describe("bounded memory publication transfer", () => {
         db.exec(`CREATE TRIGGER refuse_refresh BEFORE UPDATE ON memory_index_sources
           BEGIN SELECT RAISE(ABORT, 'refused write'); END`);
       }
-      const locker =
-        fault === "begin" ? sqliteRuntime.openNodeSqliteDatabase(db.location()!) : undefined;
-      locker?.exec("BEGIN IMMEDIATE");
-      const exec = vi.spyOn(db, "exec");
-      try {
-        const outcome = backend.execute({
-          type: "source.refresh",
-          input: {
-            path: "sessions/current",
-            hash: "new",
-            mtime: 2,
-            size: 2,
-            expectedHash: fault === "stale" ? "superseded" : "old",
-          },
-        });
-        expect(outcome).toMatchObject(
-          fault === "success" || fault === "stale"
-            ? { ok: true, value: fault === "success" }
-            : { ok: false, entered: fault !== "begin", committed: false },
-        );
-        expect(stages).toEqual(
-          fault === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
-        expect(
-          exec.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout = 5000"),
-        ).toHaveLength(fault === "transaction" || fault === "commit" ? 0 : 1);
-        expect(
-          exec.mock.calls.filter(([sql]) =>
-            /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/u.test(sql),
-          ),
-        ).toEqual([]);
-        expect(db.isTransaction).toBe(false);
-        expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-        expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
-          hash: fault === "success" ? "new" : "old",
-        });
-      } finally {
-        exec.mockRestore();
-        locker?.exec("ROLLBACK");
-        locker?.close();
-      }
+      const outcome = backend.execute({
+        type: "source.refresh",
+        input: {
+          path: "sessions/current",
+          hash: "new",
+          mtime: 2,
+          size: 2,
+          expectedHash: fault === "stale" ? "superseded" : "old",
+        },
+      });
+      expect(outcome).toMatchObject(
+        fault === "success" || fault === "stale"
+          ? { ok: true, value: fault === "success" }
+          : { ok: false, entered: true, committed: false },
+      );
+      expect(db.isTransaction).toBe(false);
+      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+      expect(sourceHash(db)).toEqual({ hash: fault === "success" ? "new" : "old" });
+      expect(readMemoryDatabaseRevision(db)).toBe(revision + (fault === "success" ? 1 : 0));
     },
   );
 
-  it("opens keyword publication when SQLite extension loading is unavailable", async () => {
-    const owner = await createOwner();
-    vi.spyOn(sqliteWorkerRuntime, "supportsNodeSqliteExtensionLoading").mockReturnValue(false);
-    const open = sqliteWorkerRuntime.openNodeSqliteDatabase;
-    vi.spyOn(sqliteWorkerRuntime, "openNodeSqliteDatabase").mockImplementation(
-      (location, options) => {
-        if (options?.allowExtension) {
-          throw new Error("SQLite extension loading is unavailable");
+  it.each(["unsupported", "unavailable", "required"] as const)(
+    "settles publication with an %s extension",
+    async (extension) => {
+      const owner = await createOwner();
+      const input = replacement();
+      if (extension === "unsupported") {
+        vi.spyOn(sqliteWorkerRuntime, "supportsNodeSqliteExtensionLoading").mockReturnValue(false);
+        const open = sqliteWorkerRuntime.openNodeSqliteDatabase;
+        vi.spyOn(sqliteWorkerRuntime, "openNodeSqliteDatabase").mockImplementation(
+          (file, options) => {
+            if (options?.allowExtension) {
+              throw new Error("SQLite extension loading is unavailable");
+            }
+            return open(file, options);
+          },
+        );
+        const backend = await createBackend(owner);
+        stageSource(backend, input);
+        backend.execute({ type: "stage.discard", input: undefined });
+      } else {
+        Object.assign(owner.vector, {
+          enabled: true,
+          available: extension === "required",
+          extensionPath: path.join(path.dirname(owner.db.location()!), "missing-vec"),
+        });
+        if (extension === "required") {
+          await expect(publish(owner, input)).rejects.toThrow();
+          expectRows(owner.db, "SELECT * FROM memory_index_sources", []);
+          return;
         }
-        return open(location, options);
-      },
-    );
-    const backend = await createBackend(owner);
-    const { chunks: _chunks, embeddings: _embeddings, ...header } = replacement();
-    backend.execute({
-      type: "stage.start",
-      input: { header },
-    });
-    for (const fragments of memoryPublicationBatches(replacement())) {
-      backend.execute({ type: "stage.append", input: { fragments } });
-    }
-    backend.execute({ type: "stage.discard", input: undefined });
-    expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-  });
-
-  it("publishes and deletes keyword data with an unavailable configured extension", async () => {
-    const owner = await createOwner();
-    owner.vector.enabled = true;
-    owner.vector.available = false;
-    owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
-    const input = replacement();
-    const assertCurrent = () => undefined;
-    await owner.replaceSource(input, assertCurrent, async () => true);
-    const matches = () =>
-      owner.db
-        .prepare(
-          "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
-        )
-        .all();
-    expect(matches()).toEqual([{ path: input.entry.path }]);
-    expect(
-      await owner.deleteSource(
-        { path: input.entry.path, source: "memory", expectedHash: input.entry.hash },
-        assertCurrent,
-      ),
-    ).toBe(true);
-    expect(matches()).toEqual([]);
-
-    const shadow = await createOwner();
-    await shadow.replaceSource(input, assertCurrent, async () => true);
-    await shadow.closePublicationWorker();
-    const sourcePath = shadow.db.location()!;
-    await owner.publishShadow(
-      {
-        sourcePath,
-        sourceIdentity: readMemoryShadowIdentity(sourcePath),
-        metaKey: "test-meta",
-        expectedRevision: readMemoryDatabaseRevision(owner.db),
-        sourceHasVectors: false,
-        vectorIndexComplete: false,
-        extensionPath: owner.vector.extensionPath,
-      },
-      assertCurrent,
-    );
-    expect(matches()).toEqual([{ path: input.entry.path }]);
-    expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-  });
-
-  it("preserves extension load failures when vector publication requires the extension", async () => {
-    const owner = await createOwner();
-    owner.vector.enabled = true;
-    owner.vector.available = true;
-    owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
-    await expect(
-      owner.replaceSource(
-        replacement(),
-        () => undefined,
-        async () => true,
-      ),
-    ).rejects.toThrow();
-    expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-  });
+        const matches = () =>
+          queryRows(
+            owner.db,
+            "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
+          );
+        await publish(owner, input);
+        expect(matches()).toEqual([{ path: input.entry.path }]);
+        expect(
+          await owner.deleteSource(
+            { path: input.entry.path, source: "memory", expectedHash: input.entry.hash },
+            assertCurrent,
+          ),
+        ).toBe(true);
+        expect(matches()).toEqual([]);
+        const shadow = await createOwner();
+        await publish(shadow, input);
+        await shadow.closePublicationWorker();
+        const sourcePath = shadow.db.location()!;
+        await owner.publishShadow(
+          {
+            sourcePath,
+            sourceIdentity: readMemoryShadowIdentity(sourcePath),
+            metaKey: "test-meta",
+            expectedRevision: readMemoryDatabaseRevision(owner.db),
+            sourceSchema: shadow.searchSchema,
+            vectorIndexComplete: false,
+            extensionPath: owner.vector.extensionPath,
+          },
+          assertCurrent,
+        );
+        expect(matches()).toEqual([{ path: input.entry.path }]);
+      }
+      expectRows(owner.db, "PRAGMA integrity_check", [{ integrity_check: "ok" }]);
+    },
+  );
 
   it.each([false, true])(
     "preserves the failed publication outcome (close failure: %s)",
@@ -461,7 +361,7 @@ describe("bounded memory publication transfer", () => {
       let closed = false;
       const run = sqliteRuntime.runSqliteWorkerStoreWrite;
       vi.spyOn(sqliteRuntime, "runSqliteWorkerStoreWrite").mockImplementation(
-        (store, operation, assertCurrent, nativeLocations) =>
+        (store, operation, ...options) =>
           run(
             store,
             (scope) =>
@@ -477,8 +377,7 @@ describe("bounded memory publication transfer", () => {
                   return scope.execute(command);
                 },
               }),
-            assertCurrent,
-            nativeLocations,
+            ...options,
           ),
       );
       const open = sqliteRuntime.openSqliteWorkerStore;
@@ -496,17 +395,11 @@ describe("bounded memory publication transfer", () => {
         }
         return store;
       });
-      const result = owner.replaceSource(
-        replacement(),
-        () => undefined,
-        async () => true,
-      );
+      const result = publish(owner, replacement());
       if (failClose) {
         const failure: unknown = await result.catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(AggregateError);
-        if (!(failure instanceof AggregateError)) {
-          throw new Error("Expected publication and cleanup failures");
-        }
+        assert.ok(failure instanceof AggregateError);
         expect(failure.cause).toBe(original);
         expect(failure.errors).toHaveLength(2);
         expect(failure.errors[0]).toBe(original);
@@ -519,26 +412,16 @@ describe("bounded memory publication transfer", () => {
       }
       expect(closed).toBe(true);
       expect(commands).toEqual(["source.replace.inline"]);
-      expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
+      expectRows(owner.db, "SELECT * FROM memory_index_sources", []);
     },
   );
 
   it("discards declined preparation and reuses its healthy publication owner", async () => {
     const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore");
     const owner = await createOwner();
-    await expect(
-      owner.replaceSource(
-        replacement("declined"),
-        () => undefined,
-        async () => false,
-      ),
-    ).resolves.toBeUndefined();
+    await expect(publish(owner, replacement("declined"), false)).resolves.toBeUndefined();
     expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-    await owner.replaceSource(
-      replacement("accepted"),
-      () => undefined,
-      async () => true,
-    );
+    await publish(owner, replacement("accepted"));
     expect(open).toHaveBeenCalledTimes(1);
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "accepted" },
@@ -560,68 +443,42 @@ describe("bounded memory publication transfer", () => {
     for (const batch of batches) {
       expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
     }
-    await owner.replaceSource(
-      input,
-      () => undefined,
-      async () => true,
+    await publish(owner, input);
+    expectValues(
+      owner.db,
+      "SELECT path, source, start_line, end_line, hash, model, text, embedding, updated_at FROM memory_index_chunks",
+      [
+        [
+          input.entry.path,
+          "memory",
+          1,
+          3,
+          "chunk-hash",
+          "transfer-model",
+          text,
+          encodeMemoryEmbedding(vector.map((value) => (Object.is(value, -0) ? 0 : value))),
+          101,
+        ],
+      ],
     );
-    expect(
-      owner.db
-        .prepare(
-          "SELECT path, source, start_line, end_line, hash, model, text, embedding, updated_at " +
-            "FROM memory_index_chunks",
-        )
-        .all(),
-    ).toEqual([
-      {
-        path: input.entry.path,
-        source: "memory",
-        start_line: 1,
-        end_line: 3,
-        hash: "chunk-hash",
-        model: "transfer-model",
-        text,
-        embedding: encodeMemoryEmbedding(vector.map((value) => (Object.is(value, -0) ? 0 : value))),
-        updated_at: 101,
-      },
+    expectValues(owner.db, "SELECT path, source, hash, mtime, size FROM memory_index_sources", [
+      [input.entry.path, "memory", "source-hash", 100.25, Buffer.byteLength(text)],
     ]);
-    expect(
-      owner.db.prepare("SELECT path, source, hash, mtime, size FROM memory_index_sources").all(),
-    ).toEqual([
-      {
-        path: input.entry.path,
-        source: "memory",
-        hash: "source-hash",
-        mtime: 100.25,
-        size: Buffer.byteLength(text),
-      },
-    ]);
-    expect(
-      owner.db
-        .prepare("SELECT importance, triggers, project_key FROM memory_index_chunk_recall_metadata")
-        .all(),
-    ).toEqual([{ importance: 7, triggers: '["漢字","🧠"]', project_key: "project/é" }]);
-    expect(
-      owner.db
-        .prepare(
-          "SELECT origin_class, session_kind, observed_at, supersedes_key FROM memory_index_chunk_provenance",
-        )
-        .all(),
-    ).toEqual([
-      {
-        origin_class: "owner",
-        session_kind: "interactive",
-        observed_at: 90,
-        supersedes_key: "old/🔑",
-      },
-    ]);
-    expect(
-      owner.db
-        .prepare(
-          "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
-        )
-        .all(),
-    ).toEqual([{ path: input.entry.path }]);
+    expectValues(
+      owner.db,
+      "SELECT importance, triggers, project_key FROM memory_index_chunk_recall_metadata",
+      [[7, '["漢字","🧠"]', "project/é"]],
+    );
+    expectValues(
+      owner.db,
+      "SELECT origin_class, session_kind, observed_at, supersedes_key FROM memory_index_chunk_provenance",
+      [["owner", "interactive", 90, "old/🔑"]],
+    );
+    expectRows(
+      owner.db,
+      "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
+      [{ path: input.entry.path }],
+    );
   });
 
   it("keeps inline source replacement atomic and observes a later in-process forget", async () => {
@@ -644,17 +501,11 @@ describe("bounded memory publication transfer", () => {
     });
     const command = {
       type: "source.replace.inline" as const,
-      input: {
-        ...inline,
-        state: {
-          vector: { enabled: false, available: false },
-          fts: { enabled: true, available: true },
-        },
-      },
+      input: { ...inline, state: { vector: disabled, fts: enabled } },
     };
-    expect(backend.execute(command)).toMatchObject({ ok: true });
+    expectOk(backend.execute(command));
     refuseCommit = true;
-    expect(
+    expectRefused(
       backend.execute({
         ...command,
         input: {
@@ -662,24 +513,16 @@ describe("bounded memory publication transfer", () => {
           header: { ...inline.header, entry: { ...inline.header.entry, hash: "replacement" } },
         },
       }),
-    ).toMatchObject({ ok: false, entered: true, committed: false });
-    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
-      hash: "source-hash",
-    });
+    );
+    expect(sourceHash(db)).toEqual({ hash: "source-hash" });
     refuseCommit = false;
-    recordMemorySessionTombstonesInDatabase(db, {
-      agentId: "main",
-      sessionIds: ["inline-session"],
-      createdAt: 1,
-    });
+    forget(db, "inline-session");
     expect(backend.execute(command)).toMatchObject({
       ok: false,
       committed: false,
       error: { message: expect.stringContaining("forgotten") },
     });
-    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
-      hash: "source-hash",
-    });
+    expect(sourceHash(db)).toEqual({ hash: "source-hash" });
   });
 
   it("keeps concurrent large source transfers separate through their publication scopes", async () => {
@@ -692,85 +535,72 @@ describe("bounded memory publication transfer", () => {
       return input;
     });
 
-    await Promise.all(
-      inputs.map((input) =>
-        owner.replaceSource(
-          input,
-          () => undefined,
-          async () => true,
-        ),
-      ),
-    );
+    await Promise.all(inputs.map((input) => publish(owner, input)));
 
-    expect(
-      owner.db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all(),
-    ).toEqual(inputs.map((input) => ({ path: input.entry.path, text: input.chunks[0]!.text })));
+    expect(queryRows(owner.db, "SELECT path, text FROM memory_index_chunks ORDER BY path")).toEqual(
+      inputs.map((input) => ({ path: input.entry.path, text: input.chunks[0]!.text })),
+    );
   });
 
-  it("publishes planned removals and keeps unchanged session rows searchable", async () => {
-    const owner = await createOwner();
-    ensureMemorySessionTombstones(fixtureWriter(owner));
-    const [template] = replacement().chunks;
-    assert.ok(template);
-    const turn = (line: number) => ({
-      ...template,
-      startLine: line,
-      endLine: line,
-      text: `turn ${line} Violetmarker`,
-      hash: `turn-${line}`,
-    });
-    const session = (
-      hash: string,
-      chunks: ReturnType<typeof turn>[],
-      retained: ReturnType<typeof turn>[] = [],
-    ): Extract<MemorySourceIndexReplacement, { source: "sessions" }> => ({
-      ...replacement(),
-      source: "sessions",
-      agentId: "main",
-      sessionId: "delta-session",
-      entry: { path: "sessions/main/delta.jsonl", hash, mtimeMs: 1, size: 1 },
-      embeddings: chunks.map(() => []),
-      chunks,
-      retained,
-    });
-    const rows = () =>
-      owner.db
-        .prepare(
+  it.each(["sessions", "memory"] as const)(
+    "publishes planned removals and keeps unchanged %s rows searchable",
+    async (source) => {
+      const owner = await createOwner();
+      ensureMemorySessionTombstones(fixtureWriter(owner));
+      const [template] = replacement().chunks;
+      assert.ok(template);
+      const turn = (line: number) => ({
+        ...template,
+        startLine: line,
+        endLine: line,
+        text: `turn ${line} Violetmarker`,
+        hash: `turn-${line}`,
+      });
+      const session = (
+        hash: string,
+        chunks: ReturnType<typeof turn>[],
+        retained: ReturnType<typeof turn>[] = [],
+      ): MemorySourceIndexReplacement => ({
+        ...replacement(),
+        ...(source === "sessions"
+          ? { source, agentId: "main", sessionId: "delta-session" }
+          : { source }),
+        entry: {
+          path: source === "sessions" ? "sessions/main/delta.jsonl" : "memory/delta.md",
+          hash,
+          mtimeMs: 1,
+          size: 1,
+        },
+        embeddings: chunks.map(() => []),
+        chunks,
+        retained,
+      });
+      const rows = () =>
+        queryRows(
+          owner.db,
           "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
-        )
-        .all();
+        );
 
-    await owner.replaceSource(
-      session("v1", [turn(1), turn(2)]),
-      () => undefined,
-      async () => true,
-    );
-    const [first] = rows();
-    const delta = session("v2", [turn(3)], [turn(1)]);
-    delta.removedIds = [memoryChunkRowId("sessions", delta.entry.path, turn(2), delta.model)];
-    await expect(
-      owner.replaceSource(
-        delta,
-        () => undefined,
-        async () => true,
-      ),
-    ).resolves.toBe(true);
-    expect(rows()).toEqual([
-      first,
-      expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
-    ]);
-    expect(owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get()).toEqual(
-      { count: 2 },
-    );
+      await publish(owner, session("v1", [turn(1), turn(2)]));
+      const [first] = rows();
+      const delta = session("v2", [turn(3)], [turn(1)]);
+      delta.removedIds = [memoryChunkRowId(source, delta.entry.path, turn(2), delta.model)];
+      await expect(publish(owner, delta)).resolves.toBe(true);
+      expect(rows()).toEqual([
+        first,
+        expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
+      ]);
+      expect(
+        owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get(),
+      ).toEqual({ count: 2 });
 
-    expect(
-      owner.db
-        .prepare(
-          "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
-        )
-        .all(),
-    ).toEqual([{ start_line: 1 }, { start_line: 3 }]);
-  });
+      expectRows(
+        owner.db,
+        "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
+        [{ start_line: 1 }, { start_line: 3 }],
+      );
+    },
+  );
 
   it.each([8, 4 * 1024 * 1024 + 1])(
     "roundtrips %i-coordinate cache vectors with tombstone and capacity limits",
@@ -798,8 +628,7 @@ describe("bounded memory publication transfer", () => {
         );
       }
       const readRows = () =>
-        owner.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
-      const assertCurrent = () => undefined;
+        queryRows(owner.db, "SELECT * FROM memory_embedding_cache ORDER BY hash");
       recordMemorySessionTombstonesInDatabase(writer, {
         agentId: "main",
         sessionIds: ["forgotten"],

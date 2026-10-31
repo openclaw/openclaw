@@ -3,16 +3,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createMissingConfigRecoveryManifest } from "../../commands/update-recovery-manifest.test-support.js";
 import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "../../infra/update-capture-privacy-marker.js";
-import { createUpdateRun, finishUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunRepairAttempt,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { updateCleanupCommand } from "./cleanup.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -39,7 +47,22 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
   return directory;
 }
 
-/** Finished updates, one failed baseline, the latest update, a live run, and unattributed entries. */
+function writeSealedCapture(root: string, runId: string, createdAt: string): string {
+  const directory = writeCapture(root, runId, true);
+  writeFixtureJsonSync(
+    path.join(directory, "manifest.json"),
+    createMissingConfigRecoveryManifest({
+      runId,
+      installRoot: root,
+      stateDir: path.dirname(root),
+      configPath: path.join(root, "config.json"),
+      createdAt,
+    }),
+  );
+  return directory;
+}
+
+/** Finished updates, activated and never-activated failures, a live run, and unattributed entries. */
 async function withCaptureHistory(
   run: (captures: Record<string, string>, root: string) => Promise<void>,
   location: "current" | "pre-migration",
@@ -67,16 +90,39 @@ async function withCaptureHistory(
     const clock = vi.spyOn(Date, "now");
     const captures: Record<string, string> = {};
     let now = Date.UTC(2026, 8, 30);
-    for (const [label, status, sealed] of [
-      ["superseded", "succeeded", true],
-      ["unsealed", "failed", false],
-      ["alreadyCurrent", "skipped", true],
-      ["failedBaseline", "failed", true],
-      ["latest", "succeeded", false],
-      ["unfinished", undefined, true],
+    const activated = ["staging", "validating", "activating"] as const;
+    for (const [label, status, sealed, phases, repaired, captured = true] of [
+      ["superseded", "succeeded", true, activated],
+      ["unsealed", "failed", false, activated],
+      ["alreadyCurrent", "skipped", true, []],
+      ["failedBaseline", "failed", true, activated],
+      ["latest", "succeeded", false, activated],
+      // Later than every successful update: only the missing activation releases it.
+      ["neverActivated", "failed", true, ["staging", "validating"]],
+      ["repairedBeforeActivation", "failed", true, ["staging", "validating"], true],
+      // Runs that took no original-state capture (finalize, repair) never qualify.
+      ["uncapturedBeforeActivation", "failed", true, ["staging", "validating"], false, false],
+      ["unfinished", undefined, true, []],
     ] as const) {
       clock.mockReturnValue((now += 60_000));
       const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+      if (captured) {
+        recordUpdateRunStep(
+          runId,
+          { step: "original-state-capture", status: "completed" },
+          { env },
+        );
+      }
+      for (const phase of phases) {
+        recordUpdateRunPhase(runId, phase, {}, { env });
+      }
+      if (repaired) {
+        recordUpdateRunRepairAttempt(
+          runId,
+          { attempt: 1, status: "failed", startedAtMs: now, endedAtMs: now },
+          { env },
+        );
+      }
       if (status) {
         clock.mockReturnValue((now += 60_000));
         finishUpdateRun(runId, { status }, { env });
@@ -84,6 +130,9 @@ async function withCaptureHistory(
       captures[label] = writeCapture(root, runId, sealed);
     }
     clock.mockRestore();
+    captures.orphan = writeSealedCapture(root, randomUUID(), "2026-10-13T10:00:00.000Z");
+    captures.incomplete = writeSealedCapture(root, randomUUID(), "2026-10-13T10:00:00.000Z");
+    fs.writeFileSync(path.join(captures.incomplete, "manifest.json.partial"), "pending");
     captures.unattributed = writeCapture(root, "doctor-unrecorded", true);
     captures.unmarked = writeCapture(root, "c0ffee00-0000-4000-8000-000000000000", true, false);
     closeOpenClawStateDatabaseForTest();
@@ -141,7 +190,32 @@ const expectedPreview = (captures: Record<string, string>) => ({
     reason: "awaiting-later-completed-update",
     bytes: 1035,
   },
+  [captures.neverActivated!]: {
+    outcome: "candidate",
+    reason: "never-activated-update-capture",
+    bytes: 1038,
+  },
+  [captures.repairedBeforeActivation!]: {
+    outcome: "protected",
+    reason: "unresolved-failed-update",
+    bytes: 1038,
+  },
+  [captures.uncapturedBeforeActivation!]: {
+    outcome: "protected",
+    reason: "unresolved-failed-update",
+    bytes: 1038,
+  },
   [captures.unfinished!]: { outcome: "protected", reason: "unfinished-update-run", bytes: 1038 },
+  [captures.orphan!]: {
+    outcome: "protected",
+    reason: "orphan-update-capture",
+    bytes: expect.any(Number),
+  },
+  [captures.incomplete!]: {
+    outcome: "protected",
+    reason: "unmanifested-update-capture",
+    bytes: expect.any(Number),
+  },
   [captures.unattributed!]: {
     outcome: "protected",
     reason: "unmanifested-update-capture",
@@ -171,8 +245,26 @@ it.each(["current", "pre-migration"] as const)(
   "removes only %s candidate captures and keeps protected captures",
   async (location) => {
     await withCaptureHistory(async (captures, root) => {
+      using stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
+        if (!String(text).startsWith("Removing capture ")) {
+          return true;
+        }
+        const directory = Object.values(captures).find((item) => String(text).includes(item));
+        expect(directory).toBeDefined();
+        expect(fs.existsSync(directory!)).toBe(true);
+        return true;
+      });
       const result = await runCleanup({ yes: true });
       expect(result.status).toBe("complete");
+      const progress = stderr.mock.calls
+        .map(([text]) => String(text))
+        .filter((text) => text.startsWith("Removing capture "));
+      expect(progress).toHaveLength(4);
+      for (const [index, text] of progress.entries()) {
+        expect(text).toMatch(
+          new RegExp(`^Removing capture ${index + 1}/4: .+ \\(103[58] bytes\\)\\n$`),
+        );
+      }
       const preview = expectedPreview(captures);
       for (const [directory, item] of Object.entries(preview)) {
         expect(result.captures[directory]).toEqual(
@@ -194,36 +286,7 @@ it.each(["current", "pre-migration"] as const)(
       const now = Date.now();
       const doctors = [5, 4, 3, 2, 1].map((age) => {
         const runId = `doctor-${randomUUID()}`;
-        const directory = writeCapture(root, runId, true);
-        fs.writeFileSync(
-          path.join(directory, "manifest.json"),
-          JSON.stringify({
-            schemaVersion: 2,
-            kind: "update-recovery",
-            generation: { kind: "baseline" },
-            databases: [],
-            runId,
-            installRoot: root,
-            stateDir: path.dirname(root),
-            configPath: path.join(root, "config.json"),
-            configPaths: [path.join(root, "config.json")],
-            creator: { host: "fixture", pid: 1, startIdentity: "1" },
-            drivers: [],
-            createdAt: new Date(now - age * 86_400_000).toISOString(),
-            roots: [path.join(root, "config.json")],
-            excludedRoots: [],
-            protectedPaths: [path.join(root, "config.json")],
-            entries: [
-              {
-                kind: "missing",
-                sourcePath: path.join(root, "config.json"),
-                sqlite: false,
-                directory: false,
-              },
-            ],
-          }),
-        );
-        return directory;
+        return writeSealedCapture(root, runId, new Date(now - age * 86_400_000).toISOString());
       });
       const preview = await runCleanup({ dryRun: true });
       for (const [index, directory] of doctors.entries()) {

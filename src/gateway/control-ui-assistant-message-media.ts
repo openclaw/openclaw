@@ -6,12 +6,16 @@ import { readSessionPendingInput } from "../config/sessions/session-pending-inpu
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { sameTranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import { FsSafeError } from "../infra/fs-safe.js";
+import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
-import { buildInboundMediaUriFromPath, parseInboundMediaUri } from "../media/media-reference.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import type { resolveAssistantMediaPolicy } from "./assistant-media-policy.js";
-import { normalizeAssistantMediaSource } from "./control-ui-assistant-media-read.js";
+import {
+  normalizeAssistantMediaSource,
+  resolveAssistantMediaSource,
+} from "./control-ui-assistant-media-read.js";
 import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import { projectPendingInputMessage } from "./server-methods/chat-pending-inputs.js";
 import { readSessionMessageByIdAsync } from "./session-transcript-readers.js";
@@ -75,7 +79,7 @@ function messageMediaSources(message: unknown): string[] {
   return sources.filter((source): source is string => typeof source === "string");
 }
 
-function mediaIdentity(source: string, cwd: string | undefined) {
+function mediaIdentity(source: string, policy: MediaPolicy) {
   const normalized = normalizeAssistantMediaSource(source);
   if (!normalized) {
     return undefined;
@@ -84,11 +88,8 @@ function mediaIdentity(source: string, cwd: string | undefined) {
   if (inbound) {
     return `media://inbound/${encodeURIComponent(inbound.id)}`;
   }
-  return path.isAbsolute(normalized)
-    ? path.resolve(normalized)
-    : cwd && !/^[a-z][a-z0-9+.-]*:/iu.test(normalized)
-      ? path.resolve(cwd, normalized)
-      : undefined;
+  const resolved = resolveAssistantMediaSource(normalized, policy);
+  return resolved && path.isAbsolute(resolved) ? path.resolve(resolved) : undefined;
 }
 
 /** Bind narrow session readers to an existing visible message and its current media references. */
@@ -112,13 +113,13 @@ export async function prepareAssistantMessageMedia(
     storePath: loaded.readSource?.path ?? loaded.storePath,
     sessionEntry: loaded.entry,
   };
-  const identity = mediaIdentity(source, policy.executionCwd);
+  const identity = mediaIdentity(source, policy);
   const assertAssociation = (message: unknown) => {
     signal.throwIfAborted();
     if (
       !identity ||
       !messageMediaSources(message).some(
-        (candidate) => mediaIdentity(candidate, policy.executionCwd) === identity,
+        (candidate) => mediaIdentity(candidate, policy) === identity,
       )
     ) {
       throw new FsSafeError("path-mismatch", "Message attachment unavailable");
@@ -126,8 +127,11 @@ export async function prepareAssistantMessageMedia(
   };
   if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
     const inputId = messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length);
+    // Attachment association needs visibility and media, not forwarded sender labels.
     const project = (input: Awaited<ReturnType<typeof readSessionPendingInput>>) =>
-      input ? projectPendingInputMessage(input, MAX_PAYLOAD_BYTES) : undefined;
+      input
+        ? projectPendingInputMessage(input, MAX_PAYLOAD_BYTES, undefined, () => undefined)
+        : undefined;
     assertAssociation(project(await readSessionPendingInput(scope, inputId)));
     return async (publish) => {
       let published = false;

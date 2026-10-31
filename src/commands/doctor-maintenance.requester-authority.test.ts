@@ -11,8 +11,8 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import {
   createManagedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
@@ -30,7 +30,8 @@ import {
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
+import { createDoctorWriteAuthority } from "./doctor-policy-custody.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
@@ -44,6 +45,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 afterEach(() => vi.restoreAllMocks());
 const workers = createSqliteReadOnlyWorkerScope();
 afterAll(() => workers.close());
+
+async function expectNoSidecars(database: string) {
+  for (const suffix of ["-wal", "-shm"]) {
+    await expect(fs.stat(database + suffix)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
 
 it.each(["configured-owner", "profile"] as const)(
   "keeps %s requester authority live through maintenance and revocation",
@@ -76,7 +83,7 @@ it.each(["configured-owner", "profile"] as const)(
         await closeOpenClawStateDatabaseAsync();
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         const files = [databasePath];
-        const generation = readUpdateDatabaseGenerations(files);
+        const generation = await readUpdatePhysicalDatabaseGenerations(files);
         const foreignEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("foreign-state") };
         const foreignDatabase = resolveOpenClawStateSqlitePath(foreignEnv);
         await fs.mkdir(state.path("foreign-state", "state"), { recursive: true });
@@ -99,7 +106,7 @@ it.each(["configured-owner", "profile"] as const)(
           requester.requester,
           foreignEnv,
         );
-        expect(readUpdateDatabaseGenerations(files)).toEqual(generation);
+        expect(await readUpdatePhysicalDatabaseGenerations(files)).toEqual(generation);
         const authorityWorkerLaunches = new Set<object>();
         const assertCurrent = () => {
           const start = vi.mocked(spawnSync).mock.calls.length;
@@ -118,33 +125,24 @@ it.each(["configured-owner", "profile"] as const)(
         };
         assertCurrent();
         await closeOpenClawStateDatabaseAsync();
-        const maintenance = await beginDoctorMaintenance({
-          root: null,
-          options: { repair: true, nonInteractive: true },
-          runtime: { log() {}, error() {}, exit() {} },
+        // Keep the initial liveness control outside the maintenance admission budget.
+        authorityWorkerLaunches.clear();
+        const policy = createDoctorWriteAuthority({ inputHash: "", assertCurrent });
+        const maintenance = await beginDoctorRepair({
           assertCurrent,
-          beforeStateMutation: async () => {
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(databasePath + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
-          },
+          lendPolicyCustody: policy.lendPolicyCustody,
+          beforeStateMutation: () => expectNoSidecars(databasePath),
         });
         expect(maintenance).toBeDefined();
         const admissionWorkerLaunches = authorityWorkerLaunches.size;
         try {
           if (source === "profile") {
             // The live owner grants storage access only inside its retained closure.
-            expect(assertCurrent).toThrow("undergoing offline maintenance");
+            expect(assertCurrent).toThrow("without an active schema lease or maintenance scope");
           }
           await maintenance!.run(async () => {
             expect(foreignRequester.isCurrent()).toBe(true);
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(foreignDatabase + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
+            await expectNoSidecars(foreignDatabase);
             const migration = await withLegacyMigrationStateLock({
               stateDir: state.stateDir,
               env: state.env,
@@ -189,7 +187,11 @@ it.each(["configured-owner", "profile"] as const)(
             repairGatewayMaintenanceStartupFailures(state.env);
           });
           expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
-          expect(admissionWorkerLaunches).toBeLessThanOrEqual(8);
+          // Lease admission rechecks authority after acquisition inside the held scope.
+          expect(admissionWorkerLaunches).toBeLessThanOrEqual(9);
+          // Child custody and post-repair work check outside the scope (#178291);
+          // the held owner lends custody to the delegated check.
+          expect(policy.assertCurrent).not.toThrow();
           // The Doctor flow leaves runChecks before its post-repair cleanup.
           // Draining those readers requires fresh admission before restoration.
           await maintenance!.cleanupRetainedRuntimes();
@@ -200,6 +202,7 @@ it.each(["configured-owner", "profile"] as const)(
               await state.writeConfig({ ...config, commands: { ownerAllowFrom: ["other"] } });
             }
           });
+          expect(policy.assertCurrent).toThrow(UpdateRequesterRevokedError);
           const revoked = await fs.readFile(state.configPath, "utf8");
           await expect(
             captureUpdateDoctorConfigWrites(

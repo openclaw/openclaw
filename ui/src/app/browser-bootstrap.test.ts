@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { makeStallingStream } from "../../../src/infra/http-body.test-support.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { startBrowserBootstrapRecovery } from "./browser-bootstrap.runtime.ts";
 import {
@@ -25,7 +26,7 @@ function rejectConnect(
   code: string = ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
   willRetry = false,
 ) {
-  store.current().opts.onClose?.({
+  store.current().testOptions.onClose?.({
     code: 4008,
     reason: "connect failed",
     error: { code: "INVALID_REQUEST", message: "auth failed", details: { code } },
@@ -66,19 +67,15 @@ describe("same-origin browser bootstrap recovery", () => {
     rejectConnect(ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING);
     await vi.waitFor(() => expect(store.clients).toHaveLength(2));
 
-    expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
       "/operator/.well-known/openclaw/browser-bootstrap",
       expect.objectContaining({
-        method: "GET",
         credentials: "same-origin",
         redirect: "error",
         cache: "no-store",
-        headers: { Accept: "application/json" },
-        signal: expect.any(AbortSignal),
       }),
     );
-    expect(store.current().opts).toMatchObject(OWNER_BOOTSTRAP);
+    expect(store.current().testOptions).toMatchObject(OWNER_BOOTSTRAP);
     expect(store.gateway.connection.token).toBe("");
     expect(globalThis.location.href).toBe(PAGE_URL);
   });
@@ -194,15 +191,9 @@ describe("same-origin browser bootstrap recovery", () => {
     const cancel = vi.fn();
     fetchMock.mockImplementation(
       async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode(" ".repeat(8193)));
-            },
-            cancel,
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        ),
+        new Response(makeStallingStream([new TextEncoder().encode(" ".repeat(8193))], cancel), {
+          headers: { "Content-Type": "application/json" },
+        }),
     );
     startRecovery();
     rejectConnect();

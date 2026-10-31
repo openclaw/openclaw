@@ -10,7 +10,7 @@ export type DoctorMemoryEmbeddingRuntimePayload = {
   loadError?: string;
 };
 
-export type DoctorMemoryDreamingEntry = {
+type DoctorMemoryDreamingEntry = {
   key: string;
   path: string;
   startLine: number;

@@ -71,70 +71,32 @@ describe("malformed tool-call argument repair", () => {
     expect(result).toMatchObject({ content: [{ arguments: { text: "John Smith" } }] });
   });
 
-  it.each([
-    {
-      name: "fragmented JSON with preamble and trailing junk",
-      tool: "read",
-      deltas: [".functions.read:0 ", '{"path":"/tmp/report.txt"', "}x"],
-      expected: { path: "/tmp/report.txt" },
+  type RepairCase = {
+    name: string;
+    tool: string;
+    input: string | string[];
+    expected: Record<string, unknown>;
+  };
+  it.each`
+    name                              | tool             | input                                                                                                                                              | expected
+    ${"fragmented JSON with junk"}    | ${"read"}        | ${[".functions.read:0 ", '{"path":"/tmp/report.txt"', "}x"]}                                                                                       | ${{ path: "/tmp/report.txt" }}
+    ${"smart-quoted edit arrays"}     | ${"edit"}        | ${String.raw` {“path”:“notes/报告.md”,“edits”:[{“oldText”:“旧的 **草稿**”,“newText”:“更新 \"草稿\"\nnext”},{“oldText”:“tail”,“newText”:“done”}]}`} | ${{ path: "notes/报告.md", edits: [{ oldText: "旧的 **草稿**", newText: '更新 "草稿"\nnext' }, { oldText: "tail", newText: "done" }] }}
+    ${"case-varied read options"}     | ${"Read"}        | ${"{“path”:“safe.txt”,“offset”:5,“limit”:20}"}                                                                                                     | ${{ path: "safe.txt", offset: 5, limit: 20 }}
+    ${"structured name beats prefix"} | ${"grep"}        | ${[".functions.read:0 ", String.raw` {“pattern”:“Use ”, “limit”: “bar” in prose”,“path”:“safe.txt”}`]}                                             | ${{ pattern: "Use ”, “limit”: “bar” in prose", path: "safe.txt" }}
+    ${"inherited name rejection"}     | ${"constructor"} | ${"{“length”:“x”,“foo”:1}"}                                                                                                                        | ${{}}
+    ${"escaped smart-quoted content"} | ${"write"}       | ${String.raw` {“path”:“safe.txt”,“content”:“line\nnext \"quoted\" path C:\\tmp mark \u2713 invalid \d”}`}                                          | ${{ path: "safe.txt", content: 'line\nnext "quoted" path C:\\tmp mark ✓ invalid \\d' }}
+    ${"member-looking prose"}         | ${"write"}       | ${String.raw` {"path":"safe.txt","content":“text ”, “path”: “other.txt””}`}                                                                        | ${{ path: "safe.txt", content: "text ”, “path”: “other.txt”" }}
+  `(
+    "repairs $name across partial, end and final messages",
+    async ({ tool, input, expected }: RepairCase) => {
+      const { calls, result, finalMessage } = await repair(
+        typeof input === "string" ? [input] : input,
+        tool,
+      );
+      expect(result).toBe(finalMessage);
+      for (const call of calls) {
+        expect(call.arguments).toEqual(expected);
+      }
     },
-    {
-      name: "smart-quoted edit arrays",
-      tool: "edit",
-      deltas: [
-        String.raw` {“path”:“notes/报告.md”,“edits”:[{“oldText”:“旧的 **草稿**”,“newText”:“更新 \"草稿\"\nnext”},{“oldText”:“tail”,“newText”:“done”}]}`,
-      ],
-      expected: {
-        path: "notes/报告.md",
-        edits: [
-          { oldText: "旧的 **草稿**", newText: '更新 "草稿"\nnext' },
-          { oldText: "tail", newText: "done" },
-        ],
-      },
-    },
-    {
-      name: "prefixless case-varied read options",
-      tool: "Read",
-      deltas: ["{“path”:“safe.txt”,“offset”:5,“limit”:20}"],
-      expected: { path: "safe.txt", offset: 5, limit: 20 },
-    },
-    {
-      name: "structured tool name overriding a mismatched prefix",
-      tool: "grep",
-      deltas: [
-        ".functions.read:0 ",
-        String.raw` {“pattern”:“Use ”, “limit”: “bar” in prose”,“path”:“safe.txt”}`,
-      ],
-      expected: { pattern: "Use ”, “limit”: “bar” in prose", path: "safe.txt" },
-    },
-    {
-      name: "inherited tool-name successor rejection",
-      tool: "constructor",
-      deltas: ["{“length”:“x”,“foo”:1}"],
-      expected: {},
-    },
-    {
-      name: "JSON escapes in smart-quoted content",
-      tool: "write",
-      deltas: [
-        String.raw` {“path”:“safe.txt”,“content”:“line\nnext \"quoted\" path C:\\tmp mark \u2713 invalid \d”}`,
-      ],
-      expected: {
-        path: "safe.txt",
-        content: 'line\nnext "quoted" path C:\\tmp mark ✓ invalid \\d',
-      },
-    },
-    {
-      name: "member-looking prose in mixed ASCII-key content",
-      tool: "write",
-      deltas: [String.raw` {"path":"safe.txt","content":“text ”, “path”: “other.txt””}`],
-      expected: { path: "safe.txt", content: "text ”, “path”: “other.txt”" },
-    },
-  ])("repairs $name across partial, end and final messages", async ({ deltas, tool, expected }) => {
-    const { calls, result, finalMessage } = await repair(deltas, tool);
-    expect(result).toBe(finalMessage);
-    for (const call of calls) {
-      expect(call.arguments).toEqual(expected);
-    }
-  });
+  );
 });

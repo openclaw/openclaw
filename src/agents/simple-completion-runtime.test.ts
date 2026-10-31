@@ -8,6 +8,7 @@ import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/senti
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as authProfileRecords from "./auth-profiles/profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -110,6 +111,10 @@ import {
 
 let preparedModelRuntime: PreparedModelRuntimeSnapshot;
 
+function modelStores() {
+  return { authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock }, modelRegistry: {} };
+}
+
 beforeEach(() => {
   hoisted.acquireRuntimeLeaseMock.mockReset();
   hoisted.resolveModelMock.mockReset();
@@ -126,23 +131,17 @@ beforeEach(() => {
   const authStorage = AuthStorage.inMemory({});
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   preparedModelRuntime = {
-    catalogOwner: undefined,
-    agentDir: "/tmp/openclaw-agent",
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      createStores: () => ({ authStorage, modelRegistry }),
+    }),
     workspaceDir: "/tmp/runtime-workspace",
-    config: {},
     observationConfig: {},
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-    allowGatewaySubagentBinding: false,
-    modelCatalog: { entries: [], routeVariants: [] },
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    activeProjectKeys: [],
-    createStores: () => ({ authStorage, modelRegistry }),
   };
   hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
+    run: <T>(run: () => T): T => run(),
     snapshot: preparedModelRuntime,
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   });
@@ -155,10 +154,7 @@ beforeEach(() => {
       id: "claude-opus-4-6",
       api: "anthropic-messages",
     },
-    authStorage: {
-      setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-    },
-    modelRegistry: {},
+    ...modelStores(),
   });
   hoisted.resolveModelAsyncMock.mockImplementation((...args: unknown[]) =>
     Promise.resolve(hoisted.resolveModelMock(...args)),
@@ -354,10 +350,7 @@ describe("prepareSimpleCompletionModel", () => {
   it("returns error when model resolution fails", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       error: "Unknown model: anthropic/missing-model",
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      ...modelStores(),
     });
 
     const result = await prepareSimpleCompletionModel({
@@ -404,10 +397,7 @@ describe("prepareSimpleCompletionModel", () => {
         id: "anthropic.claude-sonnet-4-6",
         api: "bedrock-converse-stream",
       },
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      ...modelStores(),
     });
     hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
       source: "aws-sdk default chain",
@@ -440,10 +430,7 @@ describe("prepareSimpleCompletionModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
       },
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      ...modelStores(),
     });
     hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
       apiKey: "__amazon_bedrock_mantle_iam__",

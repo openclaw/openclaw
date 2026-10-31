@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { PostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -30,35 +31,38 @@ export type SessionSharingEntry = Pick<
   keyof ReturnType<typeof projectSessionSharingEntry>
 >;
 
-export function projectSessionSharingEntry(entry: InternalSessionEntry) {
+function selectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
+    clientCapabilities: entry.clientCapabilities,
     previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
-    providerReview: entry.providerReview ? structuredClone(entry.providerReview) : undefined,
-    mainRestartRecovery: entry.mainRestartRecovery
-      ? structuredClone(entry.mainRestartRecovery)
-      : undefined,
+    providerReview: entry.providerReview,
     modelSelectionLocked: entry.modelSelectionLocked,
     pluginOwnerId: entry.pluginOwnerId,
-    skillLibrarySelections: entry.skillLibrarySelections
-      ? structuredClone(entry.skillLibrarySelections)
-      : undefined,
+    skillLibrarySelections: entry.skillLibrarySelections,
     pendingProjectGitUrl: entry.pendingProjectGitUrl,
-    pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
+    pendingWorktree: entry.pendingWorktree,
     lifecycleRevision: entry.lifecycleRevision,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
-    ...(entry.subagentRecovery
-      ? {
-          subagentRecovery: {
-            lastRunId: entry.subagentRecovery.lastRunId,
-            sessionLifecycleRunId: entry.subagentRecovery.sessionLifecycleRunId,
-          },
-        }
-      : {}),
+    sandboxMode: entry.sandboxMode,
+    execHost: entry.execHost,
+    execCwd: entry.execCwd,
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+    subagentRole: entry.subagentRole,
+    subagentControlScope: entry.subagentControlScope,
+    completionOwnerSessionKey: entry.completionOwnerSessionKey,
+    inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
+    inheritedToolAllow: entry.inheritedToolAllow,
+    inheritedToolDeny: entry.inheritedToolDeny,
     archivedAt: entry.archivedAt,
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,
@@ -67,33 +71,32 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
     visibility: entry.visibility,
     incognito: entry.incognito,
-    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
-    owner: entry.owner
-      ? {
-          ...entry.owner,
-          actor: { ...entry.owner.actor },
-          assignedBy: entry.owner.assignedBy ? { ...entry.owner.assignedBy } : undefined,
-        }
-      : undefined,
+    createdActor: entry.createdActor,
+    owner: entry.owner ? { ...entry.owner, assignedBy: entry.owner.assignedBy } : undefined,
     sandbox: entry.sandbox,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
-    deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,
+    deviceFolder: entry.deviceFolder,
     permissionMode: entry.permissionMode,
     execNode: entry.execNode,
     sessionRoot: entry.sessionRoot,
     spawnedCwd: entry.spawnedCwd,
     spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
-    toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
+    toolOverrides: entry.toolOverrides,
   };
+}
+
+export function projectSessionSharingEntry(entry: InternalSessionEntry) {
+  return structuredClone(selectSessionSharingEntry(entry));
 }
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
 export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
+  conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
   transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
@@ -111,16 +114,32 @@ export function createSessionEntryCreationOperation(): SessionEntryCreationOpera
 export function sessionSharingEntriesEqual(
   previous: InternalSessionEntry | undefined,
   current: InternalSessionEntry | undefined,
+  scope: "sharing" | "session-access" = "sharing",
 ): boolean {
   if (!previous || !current) {
     return false;
   }
-  const { updatedAt: _previousUpdatedAt, ...before } = projectSessionSharingEntry(previous);
-  const { updatedAt: _currentUpdatedAt, ...after } = projectSessionSharingEntry(current);
+  const { updatedAt: _previousUpdatedAt, ...before } = selectSessionSharingEntry(previous);
+  const { updatedAt: _currentUpdatedAt, ...after } = selectSessionSharingEntry(current);
+  if (scope === "session-access") {
+    // A person's access does not depend on which run currently owns transcript writes.
+    const {
+      lifecycleRunId: _beforeRun,
+      activeWriterRunId: _beforeWriter,
+      ...beforeAccess
+    } = before;
+    const { lifecycleRunId: _afterRun, activeWriterRunId: _afterWriter, ...afterAccess } = after;
+    return isDeepStrictEqual(beforeAccess, afterAccess);
+  }
   return isDeepStrictEqual(before, after);
 }
 
 export type SessionEntryPublicationSource = {
+  /** The anchor routes receipts; null marks PostgreSQL capture without an admitted store. */
+  admission?: Pick<
+    PostgresPhysicalFacts,
+    "engine" | "namespace" | "storeId" | "admissionId"
+  > | null;
   identity: string | symbol;
   birthtime: string | undefined;
   incarnation: string;
@@ -147,6 +166,11 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  /** Required patch response facts survive optional full-snapshot receipt bounding. */
+  patchDiffBaselines?: ReadonlyMap<string, NonNullable<SessionEntry["sessionDiffBaseline"]>>;
+  conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
+  /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
+  transcriptInventoryUnchanged?: true;
   maintenancePlans?: readonly SessionMaintenancePreservationPlan[];
   kind: "session-entry-replacements";
   transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
@@ -237,6 +261,7 @@ export type PendingSessionEntryPublication = {
   sharingUnchanged: Set<string>;
   /** Planned metadata under the writer lock; matching fields survive COMMIT or rollback. */
   entryPostimages?: ReadonlyMap<string, SessionEntry>;
+  fullEntryPostimages?: ReadonlyMap<string, SessionEntry>;
   /** An undefined value records a participant command with no projection change. */
   participantProjections?: ReadonlyMap<
     string,

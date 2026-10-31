@@ -1,10 +1,11 @@
-import { createMemo, createUniqueId, onCleanup } from "solid-js";
+import { createMemo, createUniqueId, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -57,78 +58,114 @@ function permissionIcon(mode: PermissionSelection | undefined) {
 export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   const id = createUniqueId();
   let menu: MenuHandle | undefined;
-  const disabled = createMemo(() => props.disabled || props.pending);
+  let stopSurface: (() => void) | undefined;
+  let stopTrigger: (() => void) | undefined;
+  // Menu publishes its handle during settlement; release its listeners with this view.
+  onSettled(() => () => {
+    stopSurface?.();
+    stopTrigger?.();
+  });
+  // Equal owner refreshes must not recreate the open menu's option content.
+  const pending = createMemo(() => props.pending);
+  const disabled = createMemo(() => props.disabled || pending());
   const selectedMode = createMemo(() => props.mode ?? null);
   const defaultMode = createMemo(() => props.defaultMode);
-  const canSelectFull = createMemo(() => props.canSelectFull);
+  const canSelectFull = createMemo(() => props.canSelectFull, { lazy: true });
   const selectMode = (mode: PermissionSelection) => {
     if (!disabled() && (mode !== "full" || props.canSelectFull) && mode !== (props.mode ?? null)) {
-      void props.onSelect(mode);
+      // The owner reports failures; keep its pending choice visible until settlement.
+      const result = props.onSelect(mode);
+      if (result instanceof Promise) {
+        void result.then(
+          () => menu?.close(),
+          () => menu?.close(),
+        );
+      } else {
+        menu?.close();
+      }
+    } else if (!disabled()) {
+      menu?.close();
     }
   };
-  const items = createMemo<MenuItem[]>(() => [
-    {
-      id: "learn-more",
-      label: t("common.learnMore"),
-      href: PERMISSION_MODES_DOCS_URL,
-      attributes: { target: EXTERNAL_LINK_TARGET, rel: buildExternalLinkRel() },
-      class: "chat-controls__permission-learn-more learn-more-link",
-    },
-    ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
-      const value = mode ?? DEFAULT_PERMISSION_VALUE;
-      const selected = selectedMode() === mode;
-      const locked = mode === "full" && !canSelectFull();
-      const label = modeLabel(mode, defaultMode());
-      return {
-        id: value,
-        label: locked ? `${label}. ${t("chat.permissionControls.fullRequiresAdmin")}` : label,
-        type: "radio",
-        checked: selected,
-        disabled: disabled() || locked,
-        class: `chat-controls__permission-option${selected ? " chat-controls__permission-option--selected" : ""}`,
-        attributes: {
-          "data-chat-permission-option": value,
-          "data-chat-permission-shortcut": String(index + 1),
-          "data-shortcut": String(index + 1),
-          title: locked ? t("chat.permissionControls.fullRequiresAdmin") : undefined,
-        },
-        icon: (
-          <span class="chat-controls__permission-option-icon" aria-hidden="true">
-            <Icon name={permissionIcon(mode)} />
-          </span>
-        ),
-        content: (
-          <span class="chat-controls__permission-option-copy">
-            <span class="chat-controls__permission-option-title">
-              <span>{label}</span>
+  const items = createMemo<MenuItem[]>(
+    () => [
+      {
+        id: "learn-more",
+        label: t("common.learnMore"),
+        href: PERMISSION_MODES_DOCS_URL,
+        attributes: { target: EXTERNAL_LINK_TARGET, rel: buildExternalLinkRel() },
+        class: "chat-controls__permission-learn-more learn-more-link",
+      },
+      ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
+        const value = mode ?? DEFAULT_PERMISSION_VALUE;
+        const selected = selectedMode() === mode;
+        const locked = mode === "full" && !canSelectFull();
+        const label = modeLabel(mode, defaultMode());
+        const fullAccess = mode === "full" || (mode === null && defaultMode() === "full");
+        return {
+          id: value,
+          label: locked ? `${label}. ${t("chat.permissionControls.fullRequiresAdmin")}` : label,
+          type: "radio",
+          checked: selected,
+          disabled: disabled() || locked,
+          closeOnSelect: false,
+          class: [
+            "chat-controls__permission-option",
+            {
+              "chat-controls__permission-option--selected": selected,
+              "chat-controls__permission-option--full": fullAccess,
+              "chat-controls__permission-option--pending": selected && pending(),
+            },
+          ],
+          attributes: {
+            "data-chat-permission-option": value,
+            "data-chat-permission-shortcut": String(index + 1),
+            "data-shortcut": String(index + 1),
+            title: locked ? t("chat.permissionControls.fullRequiresAdmin") : undefined,
+          },
+          icon: (
+            <span class="chat-controls__permission-option-icon" aria-hidden="true">
+              <Icon name={permissionIcon(mode)} />
             </span>
-            <span class="chat-controls__permission-option-description">
-              {mode
-                ? t(`chat.permissionControls.modes.${mode}.description`)
-                : t("chat.permissionControls.defaultDescription")}
+          ),
+          content: (
+            <span class="chat-controls__permission-option-copy">
+              <span class="chat-controls__permission-option-title">
+                <span>{modeLabel(mode)}</span>
+                {mode && mode === defaultMode() && (
+                  <span class="chat-controls__permission-default-badge">
+                    {t("chat.permissionControls.default")}
+                  </span>
+                )}
+              </span>
+              <span class="chat-controls__permission-option-description">
+                {locked
+                  ? t("chat.permissionControls.requiresAdmin")
+                  : mode
+                    ? t(`chat.permissionControls.modes.${mode}.description`)
+                    : t("chat.permissionControls.defaultDescription")}
+              </span>
             </span>
-          </span>
-        ),
-        details: (
-          <span class="chat-controls__permission-option-state" aria-hidden="true">
-            {!selected && !locked && (
-              <span class="chat-controls__permission-shortcut">{index + 1}</span>
-            )}
-            {locked && (
-              <span class="chat-controls__permission-lock">
-                <Icon name="lock" />
-              </span>
-            )}
-            {selected && !locked && (
-              <span class="chat-controls__inline-select-check">
-                <Icon name="check" />
-              </span>
-            )}
-          </span>
-        ),
-      };
-    }),
-  ]);
+          ),
+          details: (
+            <span class="chat-controls__permission-option-state" aria-hidden="true">
+              {locked && (
+                <span class="chat-controls__permission-lock">
+                  <Icon name="lock" />
+                </span>
+              )}
+              {selected && !locked && (
+                <span class="chat-controls__inline-select-check">
+                  {pending() ? <span class="btn__spinner" /> : <Icon name="check" />}
+                </span>
+              )}
+            </span>
+          ),
+        };
+      }),
+    ],
+    { lazy: true },
+  );
   const keydown = (event: KeyboardEvent) => {
     if (
       !menu?.overlay.open ||
@@ -148,13 +185,8 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       event.preventDefault();
       event.stopPropagation();
       selectMode(mode);
-      menu.close();
     }
   };
-  onCleanup(() => {
-    menu?.overlay.surface.removeEventListener("keydown", keydown, true);
-    menu?.overlay.trigger?.removeEventListener("keydown", keydown, true);
-  });
   return (
     <Menu
       lazy
@@ -162,20 +194,30 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       label={`${t("chat.permissionControls.label")}: ${modeLabel(props.mode, props.defaultMode)}`}
       class="chat-controls__inline-select chat-controls__permission-picker"
       panelClass="chat-controls__permission-menu"
-      triggerClass={`chat-controls__inline-select-trigger chat-controls__permission-trigger${props.disabled ? " chat-controls__inline-select-trigger--disabled" : ""}${!props.mode ? " chat-controls__permission-trigger--default" : ""}${(props.mode ?? props.defaultMode) === "full" ? " chat-controls__permission-trigger--full" : ""}`}
+      triggerClass={[
+        "chat-controls__inline-select-trigger chat-controls__permission-trigger",
+        {
+          "chat-controls__permission-trigger--default": !props.mode,
+          "chat-controls__permission-trigger--full": (props.mode ?? props.defaultMode) === "full",
+        },
+      ]}
       triggerAttributes={{
         "data-chat-permission-select": "true",
         "data-chat-select-value": props.mode ?? "",
         title: props.disabledReason ?? t("chat.permissionControls.help"),
+        "aria-description": props.disabledReason,
+        "aria-busy": props.pending ? "true" : undefined,
       }}
-      disabled={Boolean(disabled())}
+      disabled={Boolean(props.disabled)}
       placement="top-start"
       pointerFocus="trigger"
       items={items()}
       ref={(handle) => {
         menu = handle;
-        handle.overlay.surface.addEventListener("keydown", keydown, true);
-        handle.overlay.trigger?.addEventListener("keydown", keydown, true);
+        stopSurface = listen(handle.overlay.surface, "keydown", keydown, true);
+        if (handle.overlay.trigger) {
+          stopTrigger = listen(handle.overlay.trigger, "keydown", keydown, true);
+        }
       }}
       onSelect={(item) => {
         const mode = permissionSelection(item.id);

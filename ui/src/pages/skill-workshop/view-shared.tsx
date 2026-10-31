@@ -5,25 +5,55 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
-import type { SkillWorkshopAccess } from "./access.ts";
+import { canRunWorkshopMutation, type resolveWorkshopAccess } from "./access.ts";
 import type { WorkshopMutation, WorkshopSnapshot } from "./api.ts";
 import type { SkillWorkshopMode } from "./mode.ts";
 
-export type WorkshopView = () => SkillWorkshopViewProps;
+export type WorkshopView = () => {
+  context: ApplicationContext;
+  agentId: string | null;
+  access: ReturnType<typeof resolveWorkshopAccess>;
+  snapshot: WorkshopSnapshot | null;
+  error: string | null;
+  viewer: WorkshopViewer | null;
+  filter: WorkshopFilter;
+  sort: WorkshopSort;
+  tab: WorkshopTab;
+  pendingAction: string | null;
+  actionError: string | null;
+  mode: SkillWorkshopMode | null;
+  modeBusy: boolean;
+  modeError: string | null;
+  learningAccess: SessionMethodAccess;
+  learningBusy: boolean;
+  learningError: string | null;
+  onRetry: () => void;
+  onSelectSkill: (name: string) => void;
+  onSelectDraft: (draftId: string) => void;
+  onOpen: (target: WorkshopViewerTarget) => void;
+  onMutate: (mutation: WorkshopMutation, key: string) => void;
+  onModeChange: (mode: SkillWorkshopMode) => void;
+  onLearn: () => void;
+  onFilter: (filter: WorkshopFilter) => void;
+  onSort: (sort: WorkshopSort) => void;
+  onTab: (tab: WorkshopTab) => void;
+};
 
 export function WorkshopChangeText(props: { change: SkillWorkshopChange; prefix: string }) {
   return (
     <>
-      <span class={`${props.prefix}who`}>
+      <span class={[`${props.prefix}who`]}>
         {t(`skillWorkshop.changes.actors.${props.change.actor}`)}{" "}
         {t(`skillWorkshop.changes.actions.${props.change.action}`)}
       </span>
-      {props.change.summary && <span class={`${props.prefix}why`}>{props.change.summary}</span>}
-      <span class={`${props.prefix}when`}>{formatRelativeTimestamp(props.change.createdAtMs)}</span>
+      {props.change.summary && <span class={[`${props.prefix}why`]}>{props.change.summary}</span>}
+      <span class={[`${props.prefix}when`]}>
+        {formatRelativeTimestamp(props.change.createdAtMs)}
+      </span>
     </>
   );
 }
@@ -34,12 +64,11 @@ export function MutationButton(props: {
   title?: string;
   mutation: WorkshopMutation;
   actionKey: string;
-  variant?: "default" | "danger" | "link";
+  variant?: "default" | "primary" | "danger" | "link";
+  icon?: IconName;
 }) {
-  const allowed = () =>
-    props.mutation.method === "skills.workshop.archive"
-      ? props.view().access.canArchive
-      : props.view().access.canRestore;
+  const allowed = () => canRunWorkshopMutation(props.view().access, props.mutation.method);
+  const icon = () => props.icon ?? (props.variant === "danger" ? "archive" : undefined);
   return (
     <Show when={allowed()}>
       <button
@@ -47,7 +76,14 @@ export function MutationButton(props: {
         class={
           props.variant === "link"
             ? "sw-link-button"
-            : ["btn btn--sm", props.variant === "danger" ? "danger" : "oc-action"]
+            : [
+                "btn btn--sm",
+                props.variant === "danger"
+                  ? "danger"
+                  : props.variant === "primary"
+                    ? "primary"
+                    : "oc-action",
+              ]
         }
         title={props.title}
         disabled={props.view().pendingAction !== null}
@@ -56,11 +92,13 @@ export function MutationButton(props: {
           props.view().onMutate(props.mutation, props.actionKey);
         }}
       >
-        {props.variant === "danger" && (
-          <span aria-hidden="true">
-            <Icon name="archive" />
-          </span>
-        )}
+        <Show when={props.variant !== "link" && icon()}>
+          {(name) => (
+            <span aria-hidden="true">
+              <Icon name={name()} />
+            </span>
+          )}
+        </Show>
         {props.view().pendingAction === props.actionKey
           ? t("skillWorkshop.viewer.loading")
           : props.label}
@@ -110,49 +148,30 @@ export function lastActivityMs(skill: SkillWorkshopSkillSummary, change?: SkillW
   return Math.max(skill.updatedAtMs, skill.lastUsedAtMs ?? 0, change?.createdAtMs ?? 0);
 }
 
-export type WorkshopViewerTarget = { name: string; filePath: string; versionId?: string };
+/** `name` is the skill; `draftId` opens a waiting draft for it instead of the skill itself. */
+export type WorkshopViewerTarget = {
+  name: string;
+  filePath: string;
+  versionId?: string;
+  draftId?: string;
+};
 
-export type WorkshopViewer =
-  | { target: WorkshopViewerTarget; status: "loading" }
-  | {
-      target: WorkshopViewerTarget;
-      status: "ready";
-      result: SkillsWorkshopReadResult;
-      /** Live SKILL.md, loaded when a past version of a live skill is open, for the diff. */
-      current?: string;
-    }
-  | { target: WorkshopViewerTarget; status: "error"; error: string };
+export type WorkshopViewerResult = {
+  target: WorkshopViewerTarget;
+  result: SkillsWorkshopReadResult;
+  /** Live SKILL.md, loaded when a past version or a draft of a live skill is open, for the diff. */
+  current?: string;
+};
 
-export type WorkshopFilter = "active" | "archived";
+export type WorkshopViewer = { target: WorkshopViewerTarget } & Partial<WorkshopViewerResult>;
+
+export type WorkshopReads = {
+  listRequest: () => { result: Promise<unknown> } | null;
+  list: () => WorkshopSnapshot | null;
+  viewerRequest: () => { result: Promise<unknown> } | null;
+  viewer: () => WorkshopViewerResult | null;
+};
+
+export type WorkshopFilter = "active" | "drafts" | "archived";
 export type WorkshopSort = "uses" | "recent" | "name";
 export type WorkshopTab = "instructions" | "files" | "history";
-
-type SkillWorkshopViewProps = {
-  context: ApplicationContext;
-  agentId: string | null;
-  access: SkillWorkshopAccess;
-  snapshot: WorkshopSnapshot | null;
-  loading: boolean;
-  error: string | null;
-  viewer: WorkshopViewer | null;
-  filter: WorkshopFilter;
-  sort: WorkshopSort;
-  tab: WorkshopTab;
-  pendingAction: string | null;
-  actionError: string | null;
-  mode: SkillWorkshopMode | null;
-  modeBusy: boolean;
-  modeError: string | null;
-  learningAccess: SessionMethodAccess;
-  learningBusy: boolean;
-  learningError: string | null;
-  onRetry: () => void;
-  onSelectSkill: (name: string) => void;
-  onOpen: (target: WorkshopViewerTarget) => void;
-  onMutate: (mutation: WorkshopMutation, key: string) => void;
-  onModeChange: (mode: SkillWorkshopMode) => void;
-  onLearn: () => void;
-  onFilter: (filter: WorkshopFilter) => void;
-  onSort: (sort: WorkshopSort) => void;
-  onTab: (tab: WorkshopTab) => void;
-};

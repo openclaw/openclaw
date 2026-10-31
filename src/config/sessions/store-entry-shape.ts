@@ -22,12 +22,28 @@ function normalizeSessionEntryArchiveReason(
     : undefined;
 }
 
-function normalizeOptionalTimestamp(value: unknown): number | undefined {
+export function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
 }
 
 /** Removes retired and projected fields before a session entry is persisted or returned. */
-export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
+export function projectCanonicalSessionEntryShape(
+  value: Partial<
+    Record<
+      | keyof SessionEntry
+      | "sessionFile"
+      | "transcriptPath"
+      | "conversationLink"
+      | "mainRestartRecovery"
+      | "resumeAfterRestart"
+      | "titleRefinement"
+      | "owner"
+      | "participants"
+      | "participantCount",
+      unknown
+    >
+  >,
+): SessionEntry {
   assertSupportedSessionStoreEntry(value);
   if (hasLegacySessionEntryState(value)) {
     throw new SessionStoreMigrationRequiredError(
@@ -38,18 +54,54 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     conversationLink: _retiredConversationLink,
+    titleRefinement: _retiredTitleRefinement,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
-  const setOptionalField = (key: keyof SessionEntry, normalized: unknown) => {
+  // Keep only the cycle for startup's upgrade bridge; never restore execution snapshots.
+  // Remove once stable includes the graceful-restart redesign (#185730).
+  const recovery = canonicalValue.mainRestartRecovery;
+  if (
+    isRecord(recovery) &&
+    typeof recovery.cycleId === "string" &&
+    recovery.cycleId.length > 0 &&
+    !recovery.tombstone
+  ) {
+    canonicalValue.mainRestartRecovery = { cycleId: recovery.cycleId };
+  } else {
+    delete canonicalValue.mainRestartRecovery;
+  }
+  // Retired execution-recovery metadata is inert on existing installs.
+  for (const key of Object.keys(canonicalValue)) {
+    if (
+      key === "pendingExecNotifications" ||
+      key === "subagentRecovery" ||
+      key.startsWith("restartRecovery")
+    ) {
+      Reflect.deleteProperty(canonicalValue, key);
+    }
+  }
+  const setOptionalField = (key: keyof typeof canonicalValue, normalized: unknown) => {
     if (normalized) {
       canonicalValue[key] = normalized;
     } else {
       delete canonicalValue[key];
     }
   };
+  setOptionalField(
+    "clientCapabilities",
+    Array.isArray(canonicalValue.clientCapabilities)
+      ? [
+          ...new Set(
+            canonicalValue.clientCapabilities.filter(
+              (cap): cap is string => typeof cap === "string",
+            ),
+          ),
+        ].toSorted()
+      : undefined,
+  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);
@@ -260,7 +312,7 @@ export function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"
   };
 }
 
-function normalizeCount(value: unknown): number | undefined {
+export function normalizeCount(value: unknown): number | undefined {
   const number = asNonNegativeFiniteNumber(value);
   return number === undefined ? undefined : Math.floor(number);
 }

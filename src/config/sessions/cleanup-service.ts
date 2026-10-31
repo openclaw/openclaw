@@ -48,7 +48,6 @@ export {
   isSessionsCleanupPartialResult,
   serializeSessionCleanupResult,
   SessionsCleanupFailureError,
-  type SessionCleanupSummary,
   type SessionsCleanupResult,
 } from "./cleanup-result.js";
 export { resolveSessionCleanupAction } from "./cleanup-action.js";
@@ -229,7 +228,7 @@ async function previewStoreCleanup(params: {
     },
   });
   const archived = totalArchived - capArchived;
-  const entryCleanupArtifactPaths = new Set<string>();
+  const entryCleanupArtifactPaths = new Set(params.snapshot.retainedArtifactPaths);
   for (const keys of [modelRunPrunedKeys, staleKeys, cappedKeys, dmScopeRetiredKeys]) {
     addEntryArtifactPathsToSet({
       paths: entryCleanupArtifactPaths,
@@ -412,6 +411,7 @@ export async function runSessionsCleanup(params: {
             );
             await yieldToEventLoop();
             owner.assertCurrent();
+            const retainedArtifactPaths = new Set<string>();
             const unreferencedArtifacts =
               mode === "warn"
                 ? {
@@ -421,10 +421,17 @@ export async function runSessionsCleanup(params: {
                     olderThanMs: maintenance.pruneAfterMs,
                   }
                 : await pruneUnreferencedSessionArtifacts({
-                    store: async () => (await owner.read()).store,
+                    store: async () => {
+                      const snapshot = await owner.read();
+                      for (const artifactPath of snapshot.retainedArtifactPaths) {
+                        retainedArtifactPaths.add(artifactPath);
+                      }
+                      return snapshot.store;
+                    },
                     storePath: target.storePath,
                     olderThanMs: maintenance.pruneAfterMs,
                     dryRun: false,
+                    excludeCanonicalPaths: retainedArtifactPaths,
                   });
             owner.assertCurrent();
             const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
@@ -514,7 +521,6 @@ export async function purgeAgentSessionStoreEntries(
   cfg: OpenClawConfig,
   agentId: string,
   options: {
-    env?: NodeJS.ProcessEnv;
     runDatabaseCleanup?: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
     onFailure?: (failure: { path: string; reason: string }) => void;
   } = {},
@@ -526,12 +532,10 @@ export async function purgeAgentSessionStoreEntries(
   try {
     storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
-      env: options.env,
     });
     const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: normalizedAgentId,
       defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
-      env: options.env,
     });
     failurePath = sqliteTarget.path;
     if (!fs.existsSync(sqliteTarget.path)) {
@@ -545,7 +549,6 @@ export async function purgeAgentSessionStoreEntries(
         agentId: normalizedAgentId,
         storeAgentId,
         storePath,
-        env: options.env,
       });
       step = "close session-store cleanup";
     };

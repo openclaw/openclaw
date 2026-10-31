@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Selectable, Updateable } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "../config/repository-branch-prefix.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { ensureSessionRepositoryWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -18,6 +24,26 @@ import type {
 
 const table = "session_repository_workspaces";
 const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const findByOwner = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<
+    RepositoryWorkspaceOwner,
+    Selectable<SessionRepositoryWorkspaces>
+  >(db, (parameter) =>
+    query(db)
+      .selectFrom(table)
+      .selectAll()
+      .where(
+        "agent_id",
+        "=",
+        parameter((owner) => owner.agentId),
+      )
+      .where(
+        "session_key",
+        "=",
+        parameter((owner) => owner.sessionKey),
+      ),
+  ),
+);
 const manifestPattern = /^sha256:[a-f0-9]{64}$/u;
 const resultRefPattern = /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u;
 
@@ -69,14 +95,7 @@ export function findSessionRepositoryWorkspaceInDatabase(
   if (!tableExists(db, table)) {
     return undefined;
   }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom(table)
-      .selectAll()
-      .where("agent_id", "=", owner.agentId)
-      .where("session_key", "=", owner.sessionKey),
-  );
+  const row = findByOwner(db)(owner);
   return row ? project(row) : undefined;
 }
 
@@ -119,6 +138,10 @@ export function createSessionRepositoryWorkspaceInDatabase(
     }
     return { ...changed(db, existing), changed: false };
   }
+  const branchPrefix = input.branchPrefix ?? "openclaw";
+  if (branch === undefined && !REPOSITORY_BRANCH_PREFIX_PATTERN.test(branchPrefix)) {
+    throw new Error("Repository branch prefix is invalid");
+  }
   const workspaceId = randomUUID();
   const inserted = executeSqliteQueryTakeFirstSync(
     db,
@@ -133,7 +156,7 @@ export function createSessionRepositoryWorkspaceInDatabase(
         run_setup_script: input.runSetupScript ? 1 : 0,
         base_commit: null,
         base_manifest_hash: null,
-        branch: branch ?? `openclaw/${workspaceId}`,
+        branch: branch ?? `${branchPrefix}/${workspaceId}`,
         checkpoint_ref: null,
         manifest_hash: null,
         revision: 0,

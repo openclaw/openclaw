@@ -7,6 +7,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal, sleepWithAbort } from "@openclaw/retry";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -25,19 +26,21 @@ import {
 import { shouldDetachChildForProcessTree } from "../process/child-process-tree.js";
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import {
-  appendLocalServiceOutputTail,
+  captureLocalServiceOutput,
+  createLocalServiceLease,
   formatLocalServiceDiagnosticTail,
   formatLocalServiceExit,
   type LocalServiceDiagnostics,
   type LocalServiceExit,
 } from "./provider-local-service-diagnostics.js";
 import {
-  drainLocalServiceOutput,
   forceStopLocalServiceProcess,
   hasLocalServiceProcessExited,
   stopLocalServiceProcess,
   trackLocalServiceProcess,
+  unrefLocalServiceOutput,
   type ManagedLocalServiceProcess,
 } from "./provider-local-service-process.js";
 import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
@@ -113,7 +116,7 @@ export async function ensureModelProviderLocalService(
       {
         providerId: model.provider,
         baseUrl: model.baseUrl,
-        headers: buildHealthProbeHeaders(model.headers, probeHeaders),
+        headers: buildHealthProbeHeaders(omitNullRequestHeaders(model.headers), probeHeaders),
         service: getModelProviderLocalService(model),
         reconcile: getModelProviderLocalServiceReconciler(model),
       },
@@ -192,7 +195,7 @@ async function acquireProviderLocalService(
       return;
     }
     released = true;
-    managed.active = Math.max(0, managed.active - 1);
+    managed.active -= 1;
     scheduleIdleStop(key, managed, service);
   };
 
@@ -218,7 +221,7 @@ async function acquireProviderLocalService(
         !managed.processStop &&
         !hasLocalServiceProcessExited(currentProcess.child)
       ) {
-        return { release };
+        return createLocalServiceLease(release, managed.diagnostics, healthHeaders);
       }
       if (!managed.starting) {
         ownsStartup = true;
@@ -249,7 +252,13 @@ async function acquireProviderLocalService(
       ownsStartup = false;
       assertCurrentServiceAcquisition(key, managed, signal);
       assertAuthCurrent?.();
-      return { release };
+      return createLocalServiceLease(
+        release,
+        managed.process && !hasLocalServiceProcessExited(managed.process.child)
+          ? managed.diagnostics
+          : undefined,
+        healthHeaders,
+      );
     } finally {
       target.onReadinessWait?.(false);
     }
@@ -409,10 +418,7 @@ async function startAndWaitForLocalService(params: {
 
   const startedAt = Date.now();
   const diagnostics: LocalServiceDiagnostics = {
-    providerId: provider,
     healthUrl,
-    startedAt,
-    stdoutTail: "",
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
@@ -434,26 +440,11 @@ async function startAndWaitForLocalService(params: {
   managed.process = owned;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  for (const [stream, tail] of [
-    [child.stdout, "stdoutTail"],
-    [child.stderr, "stderrTail"],
-  ] as const) {
-    stream?.setEncoding("utf8");
-    stream?.on("data", (chunk: string) => {
-      diagnostics[tail] = appendLocalServiceOutputTail(
-        diagnostics[tail],
-        chunk,
-        service.env,
-        process.env,
-        service.args,
-        healthHeaders,
-      );
-    });
-  }
+  child.stdout?.resume();
+  captureLocalServiceOutput(child, diagnostics, service, healthHeaders);
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };
-    diagnostics.lastExit = exit;
     log.info(
       `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
@@ -473,15 +464,16 @@ async function startAndWaitForLocalService(params: {
     service.readyTimeoutMs,
     DEFAULT_READY_TIMEOUT_MS,
   );
-  const deadline = Date.now() + readyTimeoutMs;
+  // The readiness budget is consumed by real health probes and sleepWithAbort
+  // intervals on the monotonic clock; the deadline must live there too, or a
+  // wall-clock step (NTP correction, VM resume) keeps spawning probes past the
+  // configured readiness bound. Spawn/ready timestamps stay wall-clock facts.
+  const deadline = monotonicNow() + readyTimeoutMs;
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
-      diagnostics.lastHealthyAt = diagnostics.readyAt;
-      // Drain readiness diagnostics so pipes cannot pin one-shot hosts.
-      diagnostics.stdoutTail = "";
-      diagnostics.stderrTail = "";
-      drainLocalServiceOutput(child);
+      // Retain bounded stderr without letting diagnostic pipes pin one-shot hosts.
+      unrefLocalServiceOutput(child);
       log.info(
         `${provider} local service ready: pid=${diagnostics.pid ?? "unknown"} spawnMs=${diagnostics.spawnedAt - startedAt} readyMs=${diagnostics.readyAt - startedAt}`,
       );
@@ -494,7 +486,7 @@ async function startAndWaitForLocalService(params: {
         )}${formatLocalServiceDiagnosticTail(diagnostics)}`,
       );
     }
-    if (Date.now() >= deadline) {
+    if (monotonicNow() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
     await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });
@@ -537,7 +529,7 @@ function scheduleIdleStop(
       }
     }, idleStopMs),
   );
-  managed.idleTimer.unref?.();
+  managed.idleTimer.unref();
 }
 
 function clearIdleTimer(managed: ManagedLocalService) {
@@ -568,7 +560,7 @@ function stopManagedService(
       }
       // Startup reports its error to its caller; shutdown must still join its tail.
       await starting?.catch(() => {});
-      await stopManagedProcess(managed, new AbortController().signal);
+      await stopManagedProcess(managed);
       if (services.get(key) === managed) {
         services.delete(key);
       }
@@ -585,7 +577,7 @@ function stopManagedService(
   return pending;
 }
 
-async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {
+async function stopManagedProcess(managed: ManagedLocalService, signal?: AbortSignal) {
   throwIfAborted(signal);
   const owned = managed.process;
   managed.lastExit = undefined;
@@ -660,9 +652,7 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   if (!signal) {
     return promise;
   }
-  return racePromiseWithAbortSignal(promise, signal, toAbortError).catch((error: unknown) => {
-    throw toErrorObject(error, "Non-Error rejection");
-  });
+  return racePromiseWithAbortSignal(promise, signal, toAbortError);
 }
 
 function waitForSpawnResult(

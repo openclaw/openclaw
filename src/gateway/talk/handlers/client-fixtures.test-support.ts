@@ -3,87 +3,62 @@ import { vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
+import type { ChatSendInternalOptions } from "../../server-methods/chat-send-options.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../../server-methods/types.js";
+
+type BrowserSessionFactory = NonNullable<RealtimeVoiceProviderPlugin["createBrowserSession"]>;
 
 export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown[]) => unknown) {
   return (
     request: GatewayRequestHandlerOptions,
     onAdmissionOwned: unknown,
-    options: {
-      beforeDispatch?: (params: {
-        runId: string;
-        assertCurrent: () => void;
-        assertWorkAdmissionCurrent: () => void;
-      }) => Promise<void | (() => void)>;
-    },
+    options: Pick<ChatSendInternalOptions, "beforeDispatch">,
   ) => {
-    request.context.chatAbortControllers ??= new Map();
     let registration: Promise<void | (() => void)> | undefined;
-    const result = chatSend(
-      {
-        ...request,
-        respond: (...args: Parameters<RespondFn>) => {
-          const [ok, payload] = args;
-          const acknowledgement = payload as { runId?: string; status?: string } | undefined;
-          if (
-            ok &&
-            acknowledgement?.runId &&
-            (!acknowledgement.status || acknowledgement.status === "started")
-          ) {
-            registration = options.beforeDispatch?.({
-              runId: acknowledgement.runId,
-              assertCurrent() {},
-              assertWorkAdmissionCurrent() {},
-            });
-          }
-          if (registration) {
-            void registration.then(
-              () => request.respond(...args),
-              (error: unknown) =>
-                request.respond(false, undefined, {
-                  code: ErrorCodes.UNAVAILABLE,
-                  message: String(error),
-                }),
-            );
-          } else {
-            request.respond(...args);
-          }
-        },
-      },
-      onAdmissionOwned,
-      options,
+    const respond: RespondFn = (...args) => {
+      const [ok, payload] = args;
+      const { runId, status } = (payload ?? {}) as { runId?: string; status?: string };
+      if (ok && runId && (!status || status === "started")) {
+        registration = options.beforeDispatch?.({
+          runId,
+          assertCurrent() {},
+          assertWorkAdmissionCurrent() {},
+        });
+      }
+      const forward = () => request.respond(...args);
+      return registration
+        ? void registration.then(forward, (error: unknown) =>
+            request.respond(false, undefined, {
+              code: ErrorCodes.UNAVAILABLE,
+              message: String(error),
+            }),
+          )
+        : forward();
+    };
+    return Promise.resolve(chatSend({ ...request, respond }, onAdmissionOwned, options)).then(
+      () => registration,
     );
-    return Promise.resolve(result).then(() => registration);
   };
 }
 
-export function createBrowserProvider(
-  createBrowserSession: NonNullable<RealtimeVoiceProviderPlugin["createBrowserSession"]>,
-) {
-  return {
-    id: "openai",
-    label: "OpenAI Realtime",
-    isConfigured: () => true,
-    createBrowserSession,
-    createBridge: vi.fn(),
-  };
+export const createBrowserProvider = (createBrowserSession: BrowserSessionFactory) => ({
+  id: "openai",
+  label: "OpenAI Realtime",
+  isConfigured: () => true,
+  createBrowserSession,
+  createBridge: vi.fn(),
+});
+
+function browserCredentials(clientSecret: string) {
+  return { provider: "openai", transport: "webrtc" as const, clientSecret };
 }
 
-export function createBrowserSessionMock() {
-  return vi.fn(async (_input: unknown) => ({
-    provider: "openai",
-    transport: "webrtc" as const,
-    clientSecret: "secret",
-  }));
-}
+export const createBrowserSessionMock = () =>
+  vi.fn(async (_input: unknown) => browserCredentials("secret"));
 
-export type BrowserRequest = Parameters<
-  NonNullable<RealtimeVoiceProviderPlugin["createBrowserSession"]>
->[0];
+export type BrowserRequest = Parameters<BrowserSessionFactory>[0];
 export const browserSession = {
-  provider: "openai",
-  transport: "webrtc" as const,
-  clientSecret: "test-pending-offer",
+  ...browserCredentials("test-pending-offer"),
   offerUrl: "/plugins/openai/realtime/calls",
 };
 
@@ -117,19 +92,13 @@ export function createDelegatedBrowserProviderFixture(
             .filter((candidate) => !filter || filter(candidate))
             .map((candidate) => candidate.connId),
         ),
-      chatAbortControllers: new Map(),
       logGateway: { warn: vi.fn() },
       broadcastToConnIds: vi.fn(),
     },
   };
 }
 
-/** Wait for the requested event while surfacing any earlier handler failure. */
-export function observeTalkVoiceChangeRequest(
-  broadcast: ReturnType<
-    typeof createDelegatedBrowserProviderFixture
-  >["context"]["broadcastToConnIds"],
-) {
+export function observeTalkVoiceChangeRequest(broadcast: ReturnType<typeof vi.fn>) {
   const requested = createDeferred();
   broadcast.mockImplementation((event) => {
     if (event === "talk.voice.change") {

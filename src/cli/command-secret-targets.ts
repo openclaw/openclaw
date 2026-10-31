@@ -15,6 +15,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { GATEWAY_AUTH_SURFACE_PATHS as STATIC_GATEWAY_AUTH_TARGET_IDS } from "../gateway/secret-input-paths.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -69,12 +70,6 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   ...STATIC_MEMORY_TARGET_IDS,
-] as const;
-const STATIC_GATEWAY_AUTH_TARGET_IDS = [
-  "gateway.auth.token",
-  "gateway.auth.password",
-  "gateway.remote.token",
-  "gateway.remote.password",
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
   ...STATIC_GATEWAY_AUTH_TARGET_IDS,
@@ -169,19 +164,6 @@ function addConfigPathTargets(params: ConfigPathTargetParams): boolean {
   return true;
 }
 
-function modelProviderCredentialFallbackPathForWebSearchProvider(
-  providerId: string | undefined,
-): string | undefined {
-  switch (providerId) {
-    case "gemini":
-      return "models.providers.google.apiKey";
-    case "ollama":
-      return "models.providers.ollama.apiKey";
-    default:
-      return undefined;
-  }
-}
-
 function discoverConfiguredTargetPaths(
   config: OpenClawConfig,
   targetIds: ReadonlySet<string>,
@@ -204,14 +186,6 @@ type ConfigPathTargetParams = {
   allowedPaths: Set<string>;
 };
 
-type SelectedProviderTargetState = {
-  targetIds: Set<string>;
-  targetPaths: Set<string>;
-  allowedPaths: Set<string>;
-  fallbackTargetIds: Set<string>;
-  fallbackPaths: Set<string>;
-};
-
 type CapabilityWebCredentialProvider = PluginWebFetchProviderEntry | PluginWebSearchProviderEntry;
 
 function addFallbackPathTargets(
@@ -230,53 +204,6 @@ function addFallbackPathTargets(
   if (added) {
     params.fallbackPaths.add(params.path);
   }
-}
-
-function getCapabilityWebSelectedProviderTargetIds(
-  config: OpenClawConfig,
-  kind: WebCapability,
-  selectedProviderId: string,
-): SelectedProviderTargetState & { matchedProvider: boolean } {
-  const state: SelectedProviderTargetState = {
-    targetIds: new Set(),
-    targetPaths: new Set(),
-    allowedPaths: new Set(),
-    fallbackTargetIds: new Set(),
-    fallbackPaths: new Set(),
-  };
-  const providerDiscoveryConfig = structuredClone(config);
-  const web = ((providerDiscoveryConfig.tools ??= {}).web ??= {});
-  web[kind] = { ...asOptionalRecord(web[kind]), provider: selectedProviderId };
-  const providers = resolveWebProviders(providerDiscoveryConfig, kind).filter(
-    (provider) => provider.id === selectedProviderId,
-  );
-  for (const provider of providers) {
-    if (provider.credentialPath.trim()) {
-      addConfigPathTargets({ ...state, path: provider.credentialPath });
-    }
-    if (isConfiguredSecretCandidate(provider.getConfiguredCredentialValue?.(config))) {
-      continue;
-    }
-    const fallbackPath = provider.getConfiguredCredentialFallback?.(config)?.path?.trim();
-    if (fallbackPath) {
-      addFallbackPathTargets({ ...state, path: fallbackPath });
-    }
-    const modelFallbackPath =
-      kind === "search"
-        ? modelProviderCredentialFallbackPathForWebSearchProvider(selectedProviderId)
-        : undefined;
-    if (
-      modelFallbackPath &&
-      !state.fallbackPaths.has(modelFallbackPath) &&
-      discoverConfiguredTargetPaths(
-        config,
-        new Set(targetIdsForConfigPath(modelFallbackPath)),
-      )?.has(modelFallbackPath)
-    ) {
-      addFallbackPathTargets({ ...state, path: modelFallbackPath });
-    }
-  }
-  return { ...state, matchedProvider: providers.length > 0 };
 }
 
 function getCapabilityWebAutoDetectTargets(
@@ -401,21 +328,6 @@ function selectChannelTargetIds(channel?: string): Set<string> {
   return new Set(channelTargetIds.filter((id) => id.startsWith(`channels.${channel}.`)));
 }
 
-function pathTargetsScopedChannelAccount(params: {
-  pathSegments: readonly string[];
-  channel: string;
-  accountId: string;
-}): boolean {
-  const [root, channelId, accountRoot, accountId] = params.pathSegments;
-  if (root !== "channels" || channelId !== params.channel) {
-    return false;
-  }
-  if (accountRoot !== "accounts") {
-    return true;
-  }
-  return normalizeOptionalAccountId(accountId) === params.accountId;
-}
-
 /** Return channel secret targets, optionally narrowed to one channel account subtree. */
 export function getScopedChannelsCommandSecretTargets(params: {
   config: OpenClawConfig;
@@ -458,13 +370,16 @@ export function getScopedChannelsCommandSecretTargets(params: {
   const allowedPaths = new Set<string>();
   for (const target of discoverConfigSecretTargetsByIds(params.config, targetIds)) {
     if (
-      scopedChannels.some((scopedChannel) =>
-        pathTargetsScopedChannelAccount({
-          pathSegments: target.pathSegments,
-          channel: scopedChannel,
-          accountId: normalizedAccountId,
-        }),
-      )
+      scopedChannels.some((scopedChannel) => {
+        const [root, channelId, accountRoot, accountId] = target.pathSegments;
+        if (root !== "channels" || channelId !== scopedChannel) {
+          return false;
+        }
+        if (accountRoot !== "accounts") {
+          return true;
+        }
+        return normalizeOptionalAccountId(accountId) === normalizedAccountId;
+      })
     ) {
       allowedPaths.add(target.path);
     }
@@ -573,11 +488,53 @@ function getCapabilityWebCommandSecretTargets(
   if (!selectedProviderId) {
     return getCapabilityWebAutoDetectTargets(config, kind);
   }
-  const selectedTargets = getCapabilityWebSelectedProviderTargetIds(
-    config,
-    kind,
-    selectedProviderId,
+  const state = {
+    targetIds: new Set<string>(),
+    targetPaths: new Set<string>(),
+    allowedPaths: new Set<string>(),
+    fallbackTargetIds: new Set<string>(),
+    fallbackPaths: new Set<string>(),
+  };
+  const providerDiscoveryConfig = structuredClone(config);
+  const providerDiscoveryWeb = ((providerDiscoveryConfig.tools ??= {}).web ??= {});
+  providerDiscoveryWeb[kind] = {
+    ...asOptionalRecord(providerDiscoveryWeb[kind]),
+    provider: selectedProviderId,
+  };
+  const providers = resolveWebProviders(providerDiscoveryConfig, kind).filter(
+    (provider) => provider.id === selectedProviderId,
   );
+  for (const provider of providers) {
+    if (provider.credentialPath.trim()) {
+      addConfigPathTargets({ ...state, path: provider.credentialPath });
+    }
+    if (isConfiguredSecretCandidate(provider.getConfiguredCredentialValue?.(config))) {
+      continue;
+    }
+    const fallbackPath = provider.getConfiguredCredentialFallback?.(config)?.path?.trim();
+    if (fallbackPath) {
+      addFallbackPathTargets({ ...state, path: fallbackPath });
+    }
+    const modelFallbackPath =
+      kind === "search"
+        ? selectedProviderId === "gemini"
+          ? "models.providers.google.apiKey"
+          : selectedProviderId === "ollama"
+            ? "models.providers.ollama.apiKey"
+            : undefined
+        : undefined;
+    if (
+      modelFallbackPath &&
+      !state.fallbackPaths.has(modelFallbackPath) &&
+      discoverConfiguredTargetPaths(
+        config,
+        new Set(targetIdsForConfigPath(modelFallbackPath)),
+      )?.has(modelFallbackPath)
+    ) {
+      addFallbackPathTargets({ ...state, path: modelFallbackPath });
+    }
+  }
+  const selectedTargets = { ...state, matchedProvider: providers.length > 0 };
   if (!selectedTargets.matchedProvider && !providerId) {
     return getCapabilityWebAutoDetectTargets(config, kind);
   }

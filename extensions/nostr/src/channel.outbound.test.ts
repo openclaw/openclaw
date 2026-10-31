@@ -64,121 +64,95 @@ async function startGateway({
   account = buildResolvedNostrAccount(),
   cfg = {},
   bus = createMockNostrBus(eventId),
-  abort = new AbortController(),
 }: {
   account?: ReturnType<typeof buildResolvedNostrAccount>;
   cfg?: OpenClawConfig;
   bus?: Bus;
-  abort?: AbortController;
 } = {}) {
+  const abort = new AbortController();
   const started = Promise.withResolvers<BusOptions>();
   mocks.startNostrBus.mockImplementationOnce(async (options) => {
     started.resolve(options);
     return bus;
   });
-  const statusPatchSink = vi.fn();
   const context = createStartAccountContext({
     account,
     cfg,
     abortSignal: abort.signal,
-    statusPatchSink,
   });
   context.channelRuntime = runtime.channel;
-  let settled = false;
   const task = startNostrGatewayAccount(context);
-  void task.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const settled = vi.fn();
+  void task.then(settled, settled);
   cleanups.push(async () => {
     abort.abort();
     await task.catch(() => {});
   });
   const options = await started.promise;
   expect(getActiveNostrBuses().get(account.accountId)).toBe(bus);
-  return { bus, abort, task, options, context, statusPatchSink, isSettled: () => settled };
+  return { bus, abort, task, options, context, settled };
 }
 
 const send = (text: string) =>
-  nostrOutboundAdapter.sendText({
-    cfg: {},
-    to: TEST_HEX_PUBLIC_KEY,
-    text,
-    accountId: "default",
+  nostrOutboundAdapter.sendText({ cfg: {}, to: TEST_HEX_PUBLIC_KEY, text, accountId: "default" });
+
+async function startClosingGateway() {
+  const close = Promise.withResolvers<void>();
+  const closing = Promise.withResolvers<void>();
+  const bus = createMockNostrBus(eventId);
+  bus.close.mockImplementationOnce(() => {
+    closing.resolve();
+    return close.promise;
   });
+  const gateway = await startGateway({ bus });
+  // Release shutdown before startGateway's cleanup waits for the task.
+  cleanups.push(async () => close.resolve());
+  return { ...gateway, close, closing };
+}
 
 describe("nostr gateway lifecycle", () => {
   it.each([false, true])("retires the bus before shutdown settles (failure=%s)", async (fails) => {
-    const close = Promise.withResolvers<void>();
-    const closing = Promise.withResolvers<void>();
-    const bus = createMockNostrBus(eventId);
-    bus.close.mockImplementationOnce(() => {
-      closing.resolve();
-      return close.promise;
-    });
-    const h = await startGateway({ bus });
-    try {
-      expect(h.isSettled()).toBe(false);
-      h.abort.abort();
-      await closing.promise;
-      expect(h.isSettled()).toBe(false);
-      expect(getActiveNostrBuses().has("default")).toBe(false);
-      await expect(send("hello")).rejects.toThrow("Nostr bus not running for account default");
-      expect(bus.sendDm).not.toHaveBeenCalled();
-      expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
-      if (fails) {
-        const error = new Error("Nostr relay shutdown failed");
-        close.reject(error);
-        await expect(h.task).rejects.toBe(error);
-        expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
-      } else {
-        close.resolve();
-        await expect(h.task).resolves.toBeUndefined();
-        expect(h.context.log?.info).toHaveBeenCalledWith("[default] Nostr provider stopped");
-      }
-      expect(bus.close).toHaveBeenCalledOnce();
-      expect(getActiveNostrBuses().has("default")).toBe(false);
-    } finally {
-      close.resolve();
+    const h = await startClosingGateway();
+    expect(h.settled).not.toHaveBeenCalled();
+    h.abort.abort();
+    await h.closing.promise;
+    expect(h.settled).not.toHaveBeenCalled();
+    expect(getActiveNostrBuses().has("default")).toBe(false);
+    await expect(send("hello")).rejects.toThrow("Nostr bus not running for account default");
+    await expect(
+      nostrPlugin.pairing!.notifyApproval!({ cfg: {}, id: TEST_HEX_PUBLIC_KEY }),
+    ).rejects.toThrow("Nostr bus not running for account default");
+    expect(h.bus.sendDm).not.toHaveBeenCalled();
+    if (fails) {
+      const error = new Error("Nostr relay shutdown failed");
+      h.close.reject(error);
+      await expect(h.task).rejects.toBe(error);
+    } else {
+      h.close.resolve();
+      await expect(h.task).resolves.toBeUndefined();
     }
+    expect(h.bus.close).toHaveBeenCalledOnce();
+    expect(getActiveNostrBuses().has("default")).toBe(false);
   });
 
   it("preserves a replacement bus while the previous generation closes", async () => {
-    const close = Promise.withResolvers<void>();
-    const closing = Promise.withResolvers<void>();
-    const bus = createMockNostrBus(eventId);
-    bus.close.mockImplementationOnce(() => {
-      closing.resolve();
-      return close.promise;
-    });
-    const first = await startGateway({ bus });
-    try {
-      const replacement = await startGateway();
-      first.abort.abort();
-      await closing.promise;
-      expect(getActiveNostrBuses().get("default")).toBe(replacement.bus);
-      close.resolve();
-      await first.task;
-      expect(getActiveNostrBuses().get("default")).toBe(replacement.bus);
-      replacement.abort.abort();
-      await replacement.task;
-      expect(getActiveNostrBuses().has("default")).toBe(false);
-    } finally {
-      close.resolve();
-    }
+    const first = await startClosingGateway();
+    const replacement = await startGateway();
+    first.abort.abort();
+    await first.closing.promise;
+    expect(getActiveNostrBuses().get("default")).toBe(replacement.bus);
+    first.close.resolve();
+    await first.task;
+    expect(getActiveNostrBuses().get("default")).toBe(replacement.bus);
+    replacement.abort.abort();
+    await replacement.task;
+    expect(getActiveNostrBuses().has("default")).toBe(false);
   });
 
   it("becomes ready on connection and recovers only after the last relay disconnects", async () => {
     const profile = { name: "Synthetic profile" };
     const h = await startGateway({ account: buildResolvedNostrAccount({ profile }) });
     expect(h.context.getStatus()).toMatchObject({ lifecycle: "starting", profile });
-    expect(h.context.log?.info).toHaveBeenCalledWith(
-      "[default] Nostr provider started with 1 configured relay(s)",
-    );
     h.options.onConnect?.("wss://relay-one.example/");
     expect(h.context.getStatus()).toMatchObject({
       running: true,
@@ -189,9 +163,9 @@ describe("nostr gateway lifecycle", () => {
       terminalDisconnect: undefined,
     });
     h.options.onConnect?.("wss://relay-two.example/");
-    const connectedUpdates = h.statusPatchSink.mock.calls.length;
+    const connectedStatus = { ...h.context.getStatus() };
     h.options.onDisconnect?.("wss://relay-one.example");
-    expect(h.statusPatchSink).toHaveBeenCalledTimes(connectedUpdates);
+    expect(h.context.getStatus()).toEqual(connectedStatus);
     h.options.onDisconnect?.("wss://relay-two.example");
     expect(h.context.getStatus()).toMatchObject({ lifecycle: "recovering", connected: false });
   });
@@ -206,8 +180,7 @@ describe("nostr inbound", () => {
     await expect(
       h.options.authorizeSender?.({ senderPubkey: TEST_HEX_PUBLIC_KEY, reply }),
     ).resolves.toBe("pairing");
-    expect(reply).toHaveBeenCalledOnce();
-    expect(reply).toHaveBeenCalledWith(expect.stringContaining("Pairing code:"));
+    expect(reply).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Pairing code:"));
     expect(mocks.dispatchInboundDirectDm).not.toHaveBeenCalled();
   });
 
@@ -248,30 +221,20 @@ describe("nostr inbound", () => {
       { eventId: "event-123", createdAt: 1_710_000_000 },
       lifecycle,
     );
-    expect(mocks.dispatchInboundDirectDm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "nostr",
-        accountId: "default",
-        peer: { kind: "direct", id: TEST_HEX_PUBLIC_KEY },
-        senderId: TEST_HEX_PUBLIC_KEY,
-        rawBody: "hello from nostr",
-        messageId: "event-123",
-        timestamp: 1_710_000_000_000,
-        commandAuthorized: true,
-        turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
-        channelRuntime: runtime.channel,
-      }),
-    );
-    if (visible) {
-      expect(convertMarkdownTables).toHaveBeenCalledWith(visible, "off");
-    } else {
-      expect(convertMarkdownTables).not.toHaveBeenCalled();
-    }
-    if (expected) {
-      expect(reply).toHaveBeenCalledWith(expected);
-    } else {
-      expect(reply).not.toHaveBeenCalled();
-    }
+    expect(mocks.dispatchInboundDirectDm.mock.lastCall?.[0]).toMatchObject({
+      channel: "nostr",
+      accountId: "default",
+      peer: { kind: "direct", id: TEST_HEX_PUBLIC_KEY },
+      senderId: TEST_HEX_PUBLIC_KEY,
+      rawBody: "hello from nostr",
+      messageId: "event-123",
+      timestamp: 1_710_000_000_000,
+      commandAuthorized: true,
+      turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
+      channelRuntime: runtime.channel,
+    });
+    expect(convertMarkdownTables.mock.calls).toEqual(visible ? [[visible, "off"]] : []);
+    expect(reply.mock.calls).toEqual(expected ? [[expected]] : []);
   });
 });
 
@@ -305,11 +268,6 @@ describe("nostr outbound", () => {
       to: TEST_HEX_PUBLIC_KEY.toUpperCase(),
       text: "|a|b|",
     });
-    expect(runtime.channel.text.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg,
-      channel: "nostr",
-      accountId: "work",
-    });
     expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(h.bus.sendDm).toHaveBeenCalledWith(
       TEST_HEX_PUBLIC_KEY,
@@ -317,6 +275,11 @@ describe("nostr outbound", () => {
       expect.any(Object),
     );
     expect(result.messageId).toBe(eventId);
+    await nostrPlugin.pairing!.notifyApproval!({ cfg, id: TEST_HEX_PUBLIC_KEY });
+    expect(h.bus.sendDm).toHaveBeenLastCalledWith(
+      TEST_HEX_PUBLIC_KEY,
+      "Your pairing request has been approved!",
+    );
   });
 
   it("rejects empty text after Markdown conversion", async () => {

@@ -88,6 +88,10 @@ it("joins managed reload acquisition during Gateway close", async () => {
     };`,
   );
   try {
+    const postReadyMaintenance = vi
+      .spyOn(await import("./server-runtime-services.js"), "scheduleGatewayPostReadyMaintenance")
+      .mockImplementation(() => {});
+    restorers.push(() => postReadyMaintenance.mockRestore());
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port)!;
@@ -244,7 +248,6 @@ it.each(["static catalog", "synthetic auth"] as const)(
       defaults: {
         workspace: fixture.state.workspaceDir,
         model: `${provider}/model`,
-        heartbeat: { agentId: "main" },
         systemAgent: { agentId: "main" },
       },
       entries: {

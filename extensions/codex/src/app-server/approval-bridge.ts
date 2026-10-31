@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   type AgentApprovalEventData,
   type BeforeToolCallFailureDisposition,
+  embeddedAgentLog,
   type ExecApprovalDecision,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
@@ -11,6 +12,7 @@ import {
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeTrimmedStringList,
@@ -198,7 +200,18 @@ export async function handleCodexAppServerApprovalRequest(params: {
         cwd,
       });
       if (!prepared.ok) {
-        return await resolvePolicyApproval("denied", prepared.message);
+        params.signal?.throwIfAborted();
+        // Codex's decline carries no reason and reads as a user rejection, so
+        // record why no approval was offered where operators and clients see it.
+        embeddedAgentLog.warn("codex app-server command approval could not bind the command", {
+          itemId: context.itemId,
+          reason: prepared.message,
+        });
+        recordNativeToolFailureDisposition(params, context, "failed");
+        return finishApproval("denied", {
+          status: "unavailable",
+          message: `Approval could not bind this command, so no approval was requested (${prepared.message}). Retry with a simpler command (for example, without shell operators) or ask an operator.`,
+        });
       }
       mutableFileApprovalRequiresOneShot = prepared.requiresOneShot;
       revalidateMutableFileApproval = prepared.revalidate;
@@ -953,7 +966,7 @@ function readPolicyCommand(record: JsonObject | undefined): string | undefined {
   if (typeof command === "string") {
     return command;
   }
-  if (Array.isArray(command) && command.every((part): part is string => typeof part === "string")) {
+  if (isStringArray(command)) {
     return command.join(" ");
   }
   return readCommandActions(record).join(" && ") || undefined;

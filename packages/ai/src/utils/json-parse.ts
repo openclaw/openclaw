@@ -67,7 +67,7 @@ export function repairJson(
       if (!preserveValidControlEscapes && JSON_CONTROL_ESCAPES.has(nextChar)) {
         // Only this suffix can influence the Windows-path heuristic.
         stringValuePrefix = stringValuePrefix.slice(-160);
-        if (looksLikeWindowsPathPrefix(stringValuePrefix)) {
+        if (/(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(stringValuePrefix)) {
           repaired += "\\\\";
           stringValuePrefix += "\\";
           continue;
@@ -95,10 +95,6 @@ export function repairJson(
 
 export function parseJsonWithRepair(json: string): unknown {
   return JSON.parse(repairJson(json)) as unknown;
-}
-
-function looksLikeWindowsPathPrefix(prefix: string): boolean {
-  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(prefix);
 }
 
 /**

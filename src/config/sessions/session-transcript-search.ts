@@ -12,7 +12,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -26,13 +26,12 @@ import {
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import {
   captureLifecycleDatabaseScope,
+  prepareSqliteScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -97,7 +96,7 @@ export async function searchSessionTranscripts(
           path: preparedDatabase.path,
           env: params.env,
         }
-      : resolveSqliteReadScope(params),
+      : await prepareSqliteScope({ ...params, sessionKey: params.sessionKey ?? "" }),
   );
   const options = toDatabaseOptions(scope);
   const request = {
@@ -180,7 +179,7 @@ export function searchSessionTranscriptsReadOnlySync(
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => ({
-      ...runSqliteDeferredTransactionSync(
+      ...runSqliteReadSnapshotSync(
         database.db,
         () => {
           const limit = sessionTranscriptSearchLimit(params.limit);
@@ -208,7 +207,7 @@ export function searchSessionTranscriptsReadOnlySync(
               params.sessionKeys === undefined
                 ? eb.or([
                     isPostgresSqlConnection(database.db)
-                      ? /* kysely-allow-raw: Literal prefix comparison preserves underscores in agent IDs. */ sql<boolean>`left(${eb.ref("session_key")}, ${agentPrefix.length}) = ${agentPrefix}`
+                      ? /* kysely-allow-raw: starts_with keeps underscores literal and, unlike left(), has planner selectivity, so the GIN match can drive the join. */ sql<boolean>`${eb.ref("session_key")} ^@ ${agentPrefix}`
                       : /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */ sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
                     eb("session_key", "in", ["global", "unknown"]),
                   ])

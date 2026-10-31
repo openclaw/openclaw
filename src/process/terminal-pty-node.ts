@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -13,7 +14,7 @@ import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.j
 const STARTUP_TIMEOUT_MS = 10_000;
 const CLEANUP_TIMEOUT_MS = 2_000;
 
-/** Keeps native PTY I/O on Node while the Gateway or node host runs on Bun. */
+/** Owns native PTY I/O and inherited exec resource policy outside the Gateway. */
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
@@ -21,14 +22,19 @@ export async function spawnNodeTerminalPty(
 ): Promise<TerminalPtyHandle> {
   const node = resolveNodeRuntimeExecutable();
   if (!node) {
-    throw new Error("A Node executable is required for terminals on Bun; add node to PATH.");
+    throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
-  const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-    serialization: "json",
-    env: process.env,
-  });
+  const child = runWithMainThreadTask(
+    "process:spawn",
+    () =>
+      spawn(node, resolveRuntimeWorkerArgv(worker, node), {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        serialization: "json",
+        env: process.env,
+      }),
+    "pty-helper",
+  );
   const stdout = child.stdout;
   const stderrPipe = child.stderr;
   if (!stdout || !stderrPipe) {

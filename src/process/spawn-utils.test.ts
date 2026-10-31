@@ -1,5 +1,7 @@
 import type { ChildProcess } from "node:child_process";
+import childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,6 +14,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { executeGitCommand, executeGitCommandBuffered } from "../infra/git-exec.js";
+import { createMainThreadStallMonitor } from "../infra/main-thread-stall.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
@@ -24,73 +27,47 @@ import {
   withChildProcessOperation,
   withGitProcessOperation,
 } from "./spawn-diagnostics.js";
-import { spawnProcess, spawnWithFallback } from "./spawn-utils.js";
+import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
-type SpawnImplementation = NonNullable<Parameters<typeof spawnWithFallback>[0]["spawnImpl"]>;
-
-function createStubChild() {
-  const child = new EventEmitter() as ChildProcess;
-  queueMicrotask(() => {
-    child.emit("spawn");
-  });
-  return child;
-}
-
-describe("spawnWithFallback", () => {
-  it("retries on EBADF using fallback options", async () => {
-    const spawnMock = vi
-      .fn<SpawnImplementation>()
-      .mockImplementationOnce(() => {
-        const err = new Error("spawn EBADF");
-        (err as NodeJS.ErrnoException).code = "EBADF";
-        throw err;
-      })
-      .mockImplementationOnce(() => createStubChild());
-
-    const result = await spawnWithFallback({
-      argv: ["echo", "ok"],
-      options: { stdio: ["pipe", "pipe", "pipe"] },
-      fallbacks: [{ stdio: ["ignore", "pipe", "pipe"] }],
-      spawnImpl: spawnMock,
+describe("spawnAndWait", () => {
+  it("attributes native launch stalls without profiling or counting child lifetime", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    const nativeSpawn = childProcess.spawn;
+    const delayedSpawn = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      now += 1_500;
+      return nativeSpawn(...args);
     });
-
-    expect(result.usedFallback).toBe(true);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnMock.mock.calls[0]?.[2].stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnMock.mock.calls[1]?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
-  });
-
-  it("does not spawn a fallback after request authority retires during startup", async () => {
-    let current = true;
-    const retired = Object.assign(new Error("request authority retired"), { code: "EBADF" });
-    const firstChild = createStubChild();
-    const spawnMock = vi
-      .fn()
-      .mockReturnValueOnce(firstChild)
-      .mockImplementation(() => createStubChild());
-    const run = spawnWithFallback({
-      argv: ["agent-cli"],
-      options: {},
-      fallbacks: [{ detached: false }, { stdio: "ignore" }],
-      spawnImpl: spawnMock,
-      assertCurrent: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    });
-    const outcome = Promise.allSettled([run]);
-    current = false;
-    firstChild.emit("error", Object.assign(new Error("spawn EBADF"), { code: "EBADF" }));
-
-    expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-    expect(spawnMock).toHaveBeenCalledOnce();
+    syncBuiltinESMExports();
+    try {
+      const child = spawnProcess(process.execPath, ["-e", ""], { stdio: "ignore" }, (launch) => {
+        now += 5_000;
+        const result = launch();
+        now += 5_000;
+        return result;
+      });
+      now += 5_000;
+      expect((await once(child, "close"))[0]).toBe(0);
+      expect(monitor.drain().stalls).toEqual([
+        {
+          task: "process:spawn:native",
+          startedAt: 5_000,
+          endedAt: 6_500,
+          elapsedMs: 1_500,
+          taskMs: 1_500,
+        },
+      ]);
+    } finally {
+      delayedSpawn.mockRestore();
+      syncBuiltinESMExports();
+      monitor.stop();
+    }
   });
 
   it("rejects ENOENT from a real missing executable", async () => {
     await withTempDir("openclaw-spawn-missing-", async (dir) => {
       await expect(
-        spawnWithFallback({
+        spawnAndWait({
           argv: [path.join(dir, "missing-executable")],
           options: { stdio: "ignore" },
         }),

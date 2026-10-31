@@ -1,6 +1,3 @@
-/**
- * Codex app-server agent harness registration and lazy runtime boundaries.
- */
 import type {
   AgentHarnessV2,
   AgentHarnessCompactParams,
@@ -9,6 +6,7 @@ import type {
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,11 +14,67 @@ import {
   CODEX_NATIVE_TOOL_REQUIREMENTS,
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
+import { readCodexPluginConfig as readWorkerPluginConfig } from "./src/app-server/config-parsing.js";
+import { hasManagedCodexAppServerBinary } from "./src/app-server/managed-binary.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import { codexBuildSymbol } from "./src/build-state.js";
+import { resolveCodexWorkerAppServerCommand } from "./src/node-app-server-command.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
+
+const loadUpstreamSessionFork = createLazyRuntimeModule(
+  () => import("./src/app-server/upstream-session-fork.js"),
+);
+const loadAuthBinding = createLazyRuntimeModule(() => import("./src/app-server/auth-binding.js"));
+const loadRuntimeArtifact = createLazyRuntimeModule(
+  () => import("./src/app-server/runtime-artifact.js"),
+);
+const loadRuntimeArtifactConnection = createLazyRuntimeModule(
+  () => import("./src/app-server/runtime-artifact-connection.js"),
+);
+const loadAppServerConfig = createLazyRuntimeModule(() => import("./src/app-server/config.js"));
+const loadUsage = createLazyRuntimeModule(() => import("./src/app-server/usage.js"));
+const loadModelCatalog = createLazyRuntimeModule(() => import("./src/app-server/model-catalog.js"));
+const loadEffectiveMcpCatalog = createLazyRuntimeModule(
+  () => import("./src/app-server/effective-mcp-catalog.js"),
+);
+const loadNativeSubagentRoster = createLazyRuntimeModule(
+  () => import("./src/app-server/native-subagent-roster.js"),
+);
+const loadRunAttempt = createLazyRuntimeModule(() => import("./src/app-server/run-attempt.js"));
+const loadCyberFailover = createLazyRuntimeModule(
+  () => import("./src/app-server/cyber-failover.js"),
+);
+const loadCyberFailoverNotice = createLazyRuntimeModule(
+  () => import("./src/app-server/cyber-failover-notice.js"),
+);
+const loadAccessProgram = createLazyRuntimeModule(
+  () => import("./src/app-server/access-program.js"),
+);
+const loadSimpleCompletionRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/simple-completion-runtime"),
+);
+const loadIsolatedCompletion = createLazyRuntimeModule(
+  () => import("./src/app-server/isolated-completion.js"),
+);
+const loadConfigParsing = createLazyRuntimeModule(
+  () => import("./src/app-server/config-parsing.js"),
+);
+const loadSettledTurnFinalizer = createLazyRuntimeModule(
+  () => import("./src/app-server/settled-turn-finalizer.js"),
+);
+const loadSideQuestion = createLazyRuntimeModule(() => import("./src/app-server/side-question.js"));
+const loadCompact = createLazyRuntimeModule(() => import("./src/app-server/compact.js"));
+const loadSessionCancellation = createLazyRuntimeModule(
+  () => import("./src/app-server/session-cancellation.js"),
+);
+const loadSessionRetirement = createLazyRuntimeModule(
+  () => import("./src/app-server/session-retirement.js"),
+);
+const loadSessionBinding = createLazyRuntimeModule(
+  () => import("./src/app-server/session-binding.js"),
+);
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
@@ -80,10 +134,6 @@ async function disposeSharedCodexAppServerClients(): Promise<void> {
   await dispose?.();
 }
 
-/**
- * Creates the Codex app-server harness used for attempts, side questions,
- * compaction, reset, and disposal.
- */
 export function createCodexAppServerAgentHarness(
   options: CodexAppServerAgentHarnessOptions,
 ): AgentHarnessV2 {
@@ -134,7 +184,11 @@ export function createCodexAppServerAgentHarness(
     cloudPlacement: {
       mode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: [
+          readWorkerPluginConfig(options.pluginConfig).appServer?.workerHostedCloud === true
+            ? resolveCodexWorkerAppServerCommand(process.env, true)
+            : "codex.exec-server.stdio.v1",
+        ],
         consumesWorkerSlot: false,
       },
     },
@@ -186,8 +240,7 @@ export function createCodexAppServerAgentHarness(
             executionEnvironment: "host-only" as const,
             upstreamKinds: ["codex-app-server"] as const,
             fork: async (params) => {
-              const { forkCodexUpstreamSession } =
-                await import("./src/app-server/upstream-session-fork.js");
+              const { forkCodexUpstreamSession } = await loadUpstreamSessionFork();
               return await forkCodexUpstreamSession(params, {
                 bindingStore: options.bindingStore,
                 controlFactory: sessionCatalogControlFactory,
@@ -201,22 +254,19 @@ export function createCodexAppServerAgentHarness(
       : {}),
     authBinding: {
       fingerprint: async (params) => {
-        const { fingerprintCodexAppServerAuthBinding } =
-          await import("./src/app-server/auth-binding.js");
+        const { fingerprintCodexAppServerAuthBinding } = await loadAuthBinding();
         return fingerprintCodexAppServerAuthBinding(params);
       },
     },
     runtimeArtifact: {
       validate: async (binding) => {
-        const { validateCodexAppServerRuntimeArtifact } =
-          await import("./src/app-server/runtime-artifact.js");
-        const { isCodexConfiguredConnectionArtifact } =
-          await import("./src/app-server/runtime-artifact-connection.js");
+        const { validateCodexAppServerRuntimeArtifact } = await loadRuntimeArtifact();
+        const { isCodexConfiguredConnectionArtifact } = await loadRuntimeArtifactConnection();
         if (!isCodexConfiguredConnectionArtifact(binding.id)) {
           return validateCodexAppServerRuntimeArtifact(binding);
         }
         const { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } =
-          await import("./src/app-server/config.js");
+          await loadAppServerConfig();
         return validateCodexAppServerRuntimeArtifact(
           binding,
           undefined,
@@ -229,14 +279,13 @@ export function createCodexAppServerAgentHarness(
       },
     },
     fetchUsageSnapshot: async (ctx) => {
-      const { fetchCodexAppServerUsageSnapshot } = await import("./src/app-server/usage.js");
+      const { fetchCodexAppServerUsageSnapshot } = await loadUsage();
       return await fetchCodexAppServerUsageSnapshot(ctx, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
     loadModelCatalog: async (params) => {
-      const { createCodexAppServerModelCatalog } =
-        await import("./src/app-server/model-catalog.js");
+      const { createCodexAppServerModelCatalog } = await loadModelCatalog();
       if (disposed) {
         return { entries: [] };
       }
@@ -254,8 +303,7 @@ export function createCodexAppServerAgentHarness(
         : serviceTiers;
     },
     acquireMcpAppRuntime: async (params) => {
-      const { acquireCodexMcpAppRuntime } =
-        await import("./src/app-server/effective-mcp-catalog.js");
+      const { acquireCodexMcpAppRuntime } = await loadEffectiveMcpCatalog();
       if (disposed) {
         return undefined;
       }
@@ -265,15 +313,32 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: resolveAttemptPluginConfig(params.config),
       });
     },
+    readNativeSubagents: async (params) => {
+      const { readCodexNativeSubagents } = await loadNativeSubagentRoster();
+      assertOwnershipCurrent(params);
+      return await readCodexNativeSubagents(
+        { ...params, assertCurrent: () => assertOwnershipCurrent(params) },
+        { bindingStore: options.bindingStore },
+      );
+    },
     loadMcpToolCatalog: async (params) => {
-      const { loadCodexEffectiveMcpCatalog } =
-        await import("./src/app-server/effective-mcp-catalog.js");
+      const { loadCodexEffectiveMcpCatalog } = await loadEffectiveMcpCatalog();
       return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
     },
     supports: (ctx) => {
       const unsupported = (reason: string) => ({ supported: false as const, reason });
       const provider = ctx.provider.trim().toLowerCase();
-      if (!providerIds.has(provider)) {
+      const preparedAuth = ctx.modelProvider?.preparedAuth;
+      const customNativeCommandRoute =
+        options.providerIds === undefined &&
+        ctx.requestedRuntime === normalizedHarnessRuntimeId &&
+        ctx.modelProvider?.nativeCommandAuth?.runtimeId === normalizedHarnessRuntimeId &&
+        ctx.modelProvider.requestTransportOverrides === "none" &&
+        (preparedAuth === undefined ||
+          (preparedAuth.source === "harness" &&
+            (preparedAuth.mode === undefined || preparedAuth.mode === "native-command") &&
+            preparedAuth.requirement === undefined));
+      if (!providerIds.has(provider) && !customNativeCommandRoute) {
         return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
       }
       if (ctx.modelProvider?.requestTransportOverrides === "present") {
@@ -283,7 +348,6 @@ export function createCodexAppServerAgentHarness(
           fallbackRuntime: "openclaw",
         };
       }
-      const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;
       // Codex owns discovery and auth for new first-party models. Only trust that
       // native account when no authored transport or host credential is involved.
@@ -305,7 +369,12 @@ export function createCodexAppServerAgentHarness(
         if (!compatible) {
           return unsupported("Codex cannot reproduce the prepared provider route");
         }
-      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
+      } else if (
+        ctx.modelProvider &&
+        provider !== "codex" &&
+        !nativeAccountOwnsUnobservedModel &&
+        !customNativeCommandRoute
+      ) {
         return unsupported("provider route compatibility with Codex is not declared");
       }
       if (preparedAuth?.requirement === "subscription") {
@@ -324,29 +393,51 @@ export function createCodexAppServerAgentHarness(
           return unsupported("Codex Platform auth requires a prepared API key");
         }
       }
+      const appServer = readWorkerPluginConfig(
+        options.resolvePluginConfig?.() ?? options.pluginConfig,
+      ).appServer;
+      if (
+        (appServer?.transport ?? "stdio") === "stdio" &&
+        // Worker placement owns its binary; selection has no admitted placement yet.
+        appServer?.workerHostedCloud !== true &&
+        !appServer?.command?.trim() &&
+        !process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() &&
+        !hasManagedCodexAppServerBinary()
+      ) {
+        // Missing binaries cannot preserve an explicit native session's ownership.
+        return unsupported(
+          "no native Codex app-server binary is available; install Codex or configure appServer.command for a native build",
+        );
+      }
       return { supported: true, priority: 100 };
     },
     runAttempt: async (params) => {
       // Keep app-server runtime code behind lazy imports so plugin discovery and
       // cold provider catalog reads do not pull in the whole Codex runtime.
-      const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
+      const { runCodexAppServerAttempt } = await loadRunAttempt();
       const {
         planCodexCyberEscalation,
         readCodexCyberAttemptVerdict,
         recordCodexCyberTargetUnavailable,
         reserveCodexCyberProbe,
         resolveCodexCyberFailoverConfig,
-      } = await import("./src/app-server/cyber-failover.js");
-      const { emitCodexCyberNotice } = await import("./src/app-server/cyber-failover-notice.js");
+      } = await loadCyberFailover();
+      const { emitCodexCyberNotice } = await loadCyberFailoverNotice();
       const pluginConfig = resolveAttemptPluginConfig(params.config);
-      // The attempt resolves its turn model from runtimeModelId, so escalation
-      // reroutes one turn without touching the session's stored selection.
+      // Retry only the Access setting; retain this runtime model and all other
+      // request settings without touching the session's stored selection.
       const attemptModel = readCodexRuntimeModelId(params.model, params.modelId);
       const runAttemptOnModel = (model: string, isRetry = false) =>
         runCodexAppServerAttempt(
           // The refused attempt already mirrored this prompt; a retry must not
           // write a second copy of it into the transcript.
-          isRetry ? { ...params, suppressNextUserMessagePersistence: true } : params,
+          isRetry
+            ? {
+                ...params,
+                cyberAccessProgram: "daybreak_blue",
+                suppressNextUserMessagePersistence: true,
+              }
+            : params,
           {
             bindingStore: options.bindingStore,
             pluginConfig,
@@ -356,18 +447,21 @@ export function createCodexAppServerAgentHarness(
           },
         );
 
+      const { resolveCodexCyberAccessProgram, CodexAccessProgramUnavailableError } =
+        await loadAccessProgram();
       const cyberFailover = resolveCodexCyberFailoverConfig(pluginConfig);
       // Authorization is per authenticated workspace, so every lookup and record
       // below is scoped to this attempt's agent and auth profile.
       const workspace = { agentId: params.agentId, authProfileId: params.authProfileId };
       const result = await runAttemptOnModel(attemptModel);
       const refusal = readCodexCyberAttemptVerdict(result);
-      if (!refusal.cyberRefused) {
+      if (!refusal.cyberRefused || params.cyberAccessProgram !== undefined) {
         return result;
       }
       const plan = planCodexCyberEscalation({
         config: cyberFailover,
         currentModel: attemptModel,
+        currentAccessProgram: resolveCodexCyberAccessProgram(params),
         replaySafe: refusal.replaySafe,
         workspace,
       });
@@ -378,7 +472,7 @@ export function createCodexAppServerAgentHarness(
           await emitCodexCyberNotice(params, {
             state: "unavailable",
             model: attemptModel,
-            fallbackModel: cyberFailover.model,
+            fallbackModel: attemptModel,
           });
         }
         return result;
@@ -387,12 +481,21 @@ export function createCodexAppServerAgentHarness(
       let escalated: Awaited<ReturnType<typeof runCodexAppServerAttempt>>;
       try {
         escalated = await runAttemptOnModel(plan.model, /*isRetry*/ true);
+      } catch (error) {
+        if (!(error instanceof CodexAccessProgramUnavailableError)) {
+          throw error;
+        }
+        await emitCodexCyberNotice(params, {
+          state: "unavailable",
+          model: attemptModel,
+          fallbackModel: plan.model,
+        });
+        return result;
       } finally {
         releaseProbe();
       }
-      // Catalog presence never proves entitlement, so the retry itself is the
-      // only evidence. Remember a denial for the workspace: each repeat costs
-      // the transport's full reconnect ladder.
+      // The request owner checks current account grants before turn/start.
+      // Remember a server denial without marking ordinary model access unhealthy.
       const outcome = readCodexCyberAttemptVerdict(escalated);
       if (outcome.unavailable) {
         recordCodexCyberTargetUnavailable({
@@ -424,17 +527,24 @@ export function createCodexAppServerAgentHarness(
       return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
+      }
       if (
         resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
         "openclaw"
       ) {
-        const { runHostPreparedIsolatedCompletion } =
-          await import("openclaw/plugin-sdk/simple-completion-runtime");
+        const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
         return runHostPreparedIsolatedCompletion(params);
       }
-      const { runCodexIsolatedCompletion } =
-        await import("./src/app-server/isolated-completion.js");
-      const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
+      const { runCodexIsolatedCompletion } = await loadIsolatedCompletion();
+      const { readCodexPluginConfig } = await loadConfigParsing();
       return runCodexIsolatedCompletion(params, {
         pluginConfig: readCodexPluginConfig(
           options.resolvePluginConfig?.() ?? options.pluginConfig,
@@ -442,8 +552,16 @@ export function createCodexAppServerAgentHarness(
       });
     },
     runIsolatedCompletion: async (params) => {
-      const { runHostPreparedIsolatedCompletion } =
-        await import("openclaw/plugin-sdk/simple-completion-runtime");
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
+      }
+      const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
       // Keep the deprecated V1 contract on its exact host-prepared transport.
       // V2 owns native Codex auth and zero-tool attestation above.
       return runHostPreparedIsolatedCompletion({
@@ -457,9 +575,8 @@ export function createCodexAppServerAgentHarness(
       });
     },
     finalizeSettledTurn: async (params) => {
-      const { runCodexSettledTurnFinalization } =
-        await import("./src/app-server/settled-turn-finalizer.js");
-      const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
+      const { runCodexSettledTurnFinalization } = await loadSettledTurnFinalizer();
+      const { readCodexPluginConfig } = await loadConfigParsing();
       return runCodexSettledTurnFinalization(params, {
         pluginConfig: readCodexPluginConfig(
           options.resolvePluginConfig?.() ?? options.pluginConfig,
@@ -467,7 +584,7 @@ export function createCodexAppServerAgentHarness(
       });
     },
     runSideQuestion: async (params) => {
-      const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
+      const { runCodexAppServerSideQuestion } = await loadSideQuestion();
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
@@ -478,8 +595,8 @@ export function createCodexAppServerAgentHarness(
     },
     compact: async (params) => {
       const admittedParams = requireCodexCompactionCapabilities(params);
-      const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-      const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
+      const { maybeCompactCodexAppServerSession } = await loadCompact();
+      const { readCodexPluginConfig } = await loadConfigParsing();
       return maybeCompactCodexAppServerSession(admittedParams, {
         bindingStore: options.bindingStore,
         pluginConfig: readCodexPluginConfig(
@@ -488,20 +605,17 @@ export function createCodexAppServerAgentHarness(
       });
     },
     withDescendantCancellation: async (params, run) => {
-      const { withCodexSessionDescendantCancellation } =
-        await import("./src/app-server/session-cancellation.js");
+      const { withCodexSessionDescendantCancellation } = await loadSessionCancellation();
       params.assertCurrent();
       return withCodexSessionDescendantCancellation(options.bindingStore, params, run);
     },
     withSessionDeletion: async (params, run) => {
-      const { withCodexAppServerSessionDeletion } =
-        await import("./src/app-server/session-retirement.js");
+      const { withCodexAppServerSessionDeletion } = await loadSessionRetirement();
       params.assertCurrent();
       return withCodexAppServerSessionDeletion(options.bindingStore, params, run);
     },
     withSessionContextReset: async (params, run) => {
-      const { withCodexAppServerSessionContextReset } =
-        await import("./src/app-server/session-retirement.js");
+      const { withCodexAppServerSessionContextReset } = await loadSessionRetirement();
       params.assertCurrent();
       return withCodexAppServerSessionContextReset(options.bindingStore, params, run);
     },
@@ -510,10 +624,7 @@ export function createCodexAppServerAgentHarness(
         const [
           { reclaimCurrentCodexSessionGeneration },
           { retireCodexAppServerSessionGeneration },
-        ] = await Promise.all([
-          import("./src/app-server/session-binding.js"),
-          import("./src/app-server/session-retirement.js"),
-        ]);
+        ] = await Promise.all([loadSessionBinding(), loadSessionRetirement()]);
         const identity = sessionBindingIdentity({
           agentId: params.agentId,
           sessionId: params.sessionId,
@@ -562,8 +673,8 @@ export function createCodexAppServerNativeCompaction(
   return async (params) => {
     const admittedParams: AgentHarnessNativeCompactionParams<2> =
       requireCodexCompactionCapabilities(params);
-    const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-    const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
+    const { maybeCompactCodexAppServerSession } = await loadCompact();
+    const { readCodexPluginConfig } = await loadConfigParsing();
     return maybeCompactCodexAppServerSession(admittedParams, {
       bindingStore: options.bindingStore,
       pluginConfig: readCodexPluginConfig(options.resolvePluginConfig?.() ?? options.pluginConfig),

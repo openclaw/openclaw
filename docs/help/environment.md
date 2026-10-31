@@ -45,6 +45,14 @@ The variables below are the supported environment contract for operators. Undocu
 | `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                                                   |
 | `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun-compatibility#sqlite-library-selection). |
 
+A named `OPENCLAW_PROFILE` uses `~/.openclaw-<profile>` for state and config defaults, even before that profile has a config file. Explicit `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` values take precedence. An explicit CLI `--profile` selects the requested profile as described in [Global flags](/cli#global-flags).
+
+After startup environment selection, the Gateway pins the default home-based state
+directory when the config directory matches it. Named profiles and separate config
+directories keep their existing selection behavior. Foreground child restarts
+inherit a pinned directory. To select a different home, profile, or state directory, stop the
+Gateway and launch it with the new environment.
+
 #### `OPENCLAW_HOME`
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
@@ -118,7 +126,7 @@ writes can temporarily exceed them, and a large backlog may need several invocat
 
 Core and bundled provider plugins recognize the following credential and provider-selection variables. Prefer each provider's config or SecretRef fields when you need scoped credentials rather than one process-wide value.
 
-`AI_GATEWAY_API_KEY`, `ANTHROPIC_ADMIN_API_KEY`, `ANTHROPIC_ADMIN_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `ARCEEAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_SPEECH_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `BASETEN_API_KEY`, `BRAVE_API_KEY`, `BYTEPLUS_API_KEY`, `BYTEPLUS_SEED_SPEECH_API_KEY`, `CEREBRAS_API_KEY`, `CHUTES_API_KEY`, `CHUTES_OAUTH_TOKEN`, `CLAWROUTER_API_KEY`, `CLOUDFLARE_AI_GATEWAY_API_KEY`, `CODEX_API_KEY`, `COHERE_API_KEY`, `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY`, `COPILOT_GITHUB_TOKEN`, `DASHSCOPE_API_KEY`, `DEEPGRAM_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `EXA_API_KEY`, `FAL_API_KEY`, `FAL_KEY`, `FEATHERLESS_API_KEY`, `FIRECRAWL_API_KEY`, `FIREWORKS_API_KEY`, `FISH_API_KEY`, `FISH_AUDIO_API_KEY`, `GCLOUD_PROJECT`, `GEMINI_API_KEY`, `GMI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_API_KEY`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_PROJECT`, `GRADIUM_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, `INWORLD_API_KEY`, `KILOCODE_API_KEY`, `KIMICODE_API_KEY`, `KIMI_API_KEY`, `LITELLM_API_KEY`, `LLAMA_SERVER_API_KEY`, `LM_API_TOKEN`, `LONGCAT_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, `MISTRAL_API_KEY`, `MODELSTUDIO_API_KEY`, `MODEL_API_KEY`, `MOONSHOT_API_KEY`, `NOVITA_API_KEY`, `NVIDIA_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_ADMIN_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY`, `OPENROUTER_API_KEY`, `PARALLEL_API_KEY`, `PERPLEXITY_API_KEY`, `PIXVERSE_API_KEY`, `QIANFAN_API_KEY`, `QWEN_API_KEY`, `QWEN_TOKEN_PLAN_API_KEY`, `RUNWAYML_API_SECRET`, `RUNWAY_API_KEY`, `SENSEAUDIO_API_KEY`, `SGLANG_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`, `STEPFUN_API_KEY`, `SYNTHETIC_API_KEY`, `TAVILY_API_KEY`, `TOGETHER_API_KEY`, `TOKENHUB_API_KEY`, `TOKENPLAN_API_KEY`, `VENICE_API_KEY`, `VLLM_API_KEY`, `VOLCANO_ENGINE_API_KEY`, `VOLCENGINE_TTS_API_KEY`, `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOYAGE_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`, `XIAOMI_TOKEN_PLAN_API_KEY`, `XI_API_KEY`, `ZAI_API_KEY`, and `Z_AI_API_KEY`.
+`ABLITERATION_API_KEY`, `ABLIT_KEY`, `AI_GATEWAY_API_KEY`, `ANTHROPIC_ADMIN_API_KEY`, `ANTHROPIC_ADMIN_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `ARCEEAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_SPEECH_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `BASETEN_API_KEY`, `BRAVE_API_KEY`, `BYTEPLUS_API_KEY`, `BYTEPLUS_SEED_SPEECH_API_KEY`, `CEREBRAS_API_KEY`, `CHUTES_API_KEY`, `CHUTES_OAUTH_TOKEN`, `CLAWROUTER_API_KEY`, `CLOUDFLARE_AI_GATEWAY_API_KEY`, `CODEX_API_KEY`, `COHERE_API_KEY`, `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY`, `COPILOT_GITHUB_TOKEN`, `DASHSCOPE_API_KEY`, `DEEPGRAM_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `EXA_API_KEY`, `FAL_API_KEY`, `FAL_KEY`, `FEATHERLESS_API_KEY`, `FIRECRAWL_API_KEY`, `FIREWORKS_API_KEY`, `FISH_API_KEY`, `FISH_AUDIO_API_KEY`, `GCLOUD_PROJECT`, `GEMINI_API_KEY`, `GMI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_API_KEY`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_PROJECT`, `GRADIUM_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, `INWORLD_API_KEY`, `KILOCODE_API_KEY`, `KIMICODE_API_KEY`, `KIMI_API_KEY`, `LITELLM_API_KEY`, `LLAMA_SERVER_API_KEY`, `LM_API_TOKEN`, `LONGCAT_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, `MISTRAL_API_KEY`, `MODELSTUDIO_API_KEY`, `MODEL_API_KEY`, `MOONSHOT_API_KEY`, `NOVITA_API_KEY`, `NVIDIA_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_ADMIN_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY`, `OPENROUTER_API_KEY`, `PARALLEL_API_KEY`, `PERPLEXITY_API_KEY`, `PIXVERSE_API_KEY`, `QIANFAN_API_KEY`, `QWEN_API_KEY`, `QWEN_TOKEN_PLAN_API_KEY`, `RUNWAYML_API_SECRET`, `RUNWAY_API_KEY`, `SENSEAUDIO_API_KEY`, `SGLANG_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`, `STEPFUN_API_KEY`, `SYNTHETIC_API_KEY`, `TAVILY_API_KEY`, `TOGETHER_API_KEY`, `TOKENHUB_API_KEY`, `TOKENPLAN_API_KEY`, `VENICE_API_KEY`, `VLLM_API_KEY`, `VOLCANO_ENGINE_API_KEY`, `VOLCENGINE_TTS_API_KEY`, `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOYAGE_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`, `XIAOMI_TOKEN_PLAN_API_KEY`, `XI_API_KEY`, `ZAI_API_KEY`, and `Z_AI_API_KEY`.
 
 Installed third-party plugins may declare additional credential variables in their plugin manifests. Those variables are contracts of the plugin that declares them, not core OpenClaw variables.
 
@@ -140,6 +148,7 @@ Installed third-party plugins may declare additional credential variables in the
 | Variable                             | Purpose                                                                                      |
 | ------------------------------------ | -------------------------------------------------------------------------------------------- |
 | `OPENCLAW_CONFIG_READONLY`           | Set to `1` for [externally managed immutable config](/cli/config#externally-managed-config). |
+| `OPENCLAW_CONFIG_READONLY_NOTICE`    | Customize the read-only configuration banner in the [Control UI](/web/control-ui).           |
 | `OPENCLAW_LOAD_SHELL_ENV`            | Import missing expected variables from the login shell.                                      |
 | `OPENCLAW_SHELL_ENV_TIMEOUT_MS`      | Set the login-shell import timeout.                                                          |
 | `OPENCLAW_EXEC_SHELL_SNAPSHOT`       | Disable exec shell snapshots with `0`.                                                       |
@@ -154,8 +163,11 @@ Installed third-party plugins may declare additional credential variables in the
 
 ### Filesystem observation
 
-Config hot reload, skills refresh, memory indexing, and the development watch
-supervisor use `@openclaw/fs-safe/watch`. The existing `CHOKIDAR_*` variable
+Config hot reload uses nonrecursive directory notifications to trigger guarded
+`@openclaw/fs-safe/watch` reconciliation. Missing directories observe only their
+next existing ancestor without recursion, and move inward when created. Personal
+skills watch their own directory; workspace skills retain their workspace watch
+on Windows. The existing `CHOKIDAR_*` variable
 names remain supported for Docker, virtual machines, and other deployments
 that need an observation preference:
 
@@ -165,21 +177,25 @@ that need an observation preference:
 | `CHOKIDAR_USEPOLLING` | Any other nonempty value                | Select `poll`. Values are case-insensitive.                                                 |
 | `CHOKIDAR_INTERVAL`   | Positive integer in milliseconds        | Polling interval for explicit polling and automatic fallback; overrides the defaults below. |
 
-Native events are supported on Node.js on Linux, macOS, and Windows. In `auto`
-mode, Bun and runtimes without the native backend use polling with the same
+The fs-safe native backend supports Node.js on Linux, macOS, and Windows. For
+consumers of that backend, Bun and runtimes without it use polling with the same
 `CHOKIDAR_INTERVAL` setting as explicit polling. Native events retain fs-safe's
 30-second reconciliation interval. Config hot reload and the development
 supervisor default to `100` ms polling; Memory indexing and skills refresh default
 to `30000` ms to bound idle background scanning. A valid explicit
 `CHOKIDAR_INTERVAL` overrides those defaults, with a `20` ms minimum and
 `2147483647` ms maximum. Invalid or nonpositive values use the owner's default.
-Native event hints still trigger prompt updates; Memory and Skills log one warning
+Config uses the runtime's nonrecursive directory notifications, including on Bun,
+with guarded reconciliation every five minutes for missed events. Explicit polling
+disables these notifications. Native event hints still trigger prompt updates; Memory and Skills log one warning
 per watcher when automatic polling fallback is used.
 
-Recovery remains specific to each owner. Config hot reload retries a failed
-subscription with its existing backoff. With `CHOKIDAR_USEPOLLING` unset, native
-watch failures can additionally trigger a fresh polling subscription after those
-retries. Explicit overrides keep the existing retry limit. Memory indexing switches to
+Recovery remains specific to each owner. Config hot reload retries failed guarded
+reconciliation and unavailable directory notifications with its existing backoff.
+With `CHOKIDAR_USEPOLLING` unset, exhausted native-notification retries degrade to
+polling; explicit overrides retain the existing retry limit. Its five-minute
+safety pass covers missed events. Explicit polling retains `CHOKIDAR_INTERVAL`.
+Memory indexing switches to
 refresh-on-search when native watch capacity is exhausted (`watch-limit`).
 Each Memory subscription admits up to 1,000,000 directories and 1,000,000
 examined entries per scan, including excluded entries. Larger trees also fall

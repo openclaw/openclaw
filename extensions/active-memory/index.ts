@@ -18,7 +18,6 @@ import { resolveRecallEscalationDecision } from "./escalation.js";
 import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import { forgetActiveRecallRun, toSingleLineErrorMessage } from "./recall-state.js";
-import { maybeResolveActiveRecall } from "./recall.js";
 import {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
   formatActiveMemoryCommandHelp,
@@ -548,6 +547,8 @@ export default definePluginEntry({
             // Start recall with its full configured budget. The preceding
             // session/config checks must not consume abort-settlement time.
             armHookDeadline(liveRecallTimeoutMs, "recall");
+            const { maybeResolveActiveRecall } = await import("./recall.js");
+            deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             const result = await maybeResolveActiveRecall({
               api,

@@ -11,9 +11,9 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { LegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
-import { createPluginRecord } from "./loader-records.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { resolvePluginServiceScheduler } from "./service-scheduler-binding.js";
@@ -25,26 +25,20 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
   const host = new LegacyPluginSdkResourceHost();
   host.bindScheduler(root);
   const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "scheduled-cli",
-    source: "test",
-    origin: "global",
-    enabled: true,
-    configSchema: true,
-  });
+  const record = createOwnershipRecord("scheduled-cli", { source: "test", configSchema: true });
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
   const instance = getPluginInstance(record)!;
   const program = new Command();
-  const entered = createDeferredCore();
+  const registration = { program, parentPath: [], config: {}, logger: api.logger };
+  const entered = createDeferredCore<unknown>();
   const finish = createDeferredCore();
   const events: string[] = [];
-  const observations: unknown[] = [];
   let scheduler: PluginServiceSchedulerV1 | undefined;
   let lateResolver: (() => PluginServiceSchedulerV1) | undefined;
   api.registerCli(
-    ({ program: cliProgram }) => {
-      cliProgram.command("scheduled").action(() => {
+    ({ program: cliProgram }) =>
+      void cliProgram.command("scheduled").action(() => {
         scheduler = resolvePluginServiceScheduler();
         lateResolver = AsyncLocalStorage.bind(resolvePluginServiceScheduler);
         scheduler.schedule({
@@ -53,7 +47,7 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
           everyMs: 1,
           run: async () => {
             try {
-              observations.push({
+              entered.resolve({
                 instance:
                   pluginInstanceInvocation.getStore()?.instance === instance &&
                   instance.hasActiveCall,
@@ -61,26 +55,18 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
                 requester: getPluginRuntimeGatewayRequestScope()?.client,
                 scheduler: resolvePluginServiceScheduler() === scheduler,
               });
-            } finally {
-              entered.resolve();
+            } catch (error) {
+              entered.reject(error);
             }
             await finish.promise;
             events.push("settled");
           },
         });
-      });
-    },
+      }),
     { commands: ["scheduled"] },
   );
   try {
-    await host.run(() =>
-      builder.registry.cliRegistrars[0]!.register({
-        program,
-        parentPath: [],
-        config: {},
-        logger: api.logger,
-      }),
-    );
+    await host.run(() => builder.registry.cliRegistrars[0]!.register(registration));
     expect(() => resolvePluginServiceScheduler()).toThrow("requires a bound");
     const operator = new AbortController();
     await runWithOperatorToolGatewayAuthority(
@@ -90,10 +76,12 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
     operator.abort();
     expect(lateResolver).toThrow("active plugin invocation");
     const dispatch = clock.advanceBy(1);
-    await entered.promise;
-    expect(observations).toEqual([
-      { instance: true, operator: undefined, requester: undefined, scheduler: true },
-    ]);
+    expect(await entered.promise).toEqual({
+      instance: true,
+      operator: undefined,
+      requester: undefined,
+      scheduler: true,
+    });
     const retirement = host.close().then(() => events.push("retired"));
     await Promise.resolve();
     expect(events).toEqual([]);

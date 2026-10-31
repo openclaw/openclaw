@@ -2,11 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -28,7 +28,6 @@ import {
   stateIntegrityIssueToRepairEffect,
 } from "./doctor-state-integrity.js";
 import {
-  doctorChangesText,
   hasRepairPromptMessage,
   noteMock,
   noteStateIntegrity,
@@ -36,7 +35,6 @@ import {
   runStateIntegrityText,
   stateIntegrityText,
   withMainAgentRoster,
-  writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
 import {
   detectLinuxSdBackedStateDir,
@@ -51,33 +49,36 @@ vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
 }));
 
-vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
-  listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
-  hasBundledChannelPersistedAuthState: () => false,
-}));
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
+  return {
+    ...actual,
+    listBundledChannelIdsForPackageState: (
+      ...args: Parameters<typeof actual.listBundledChannelIdsForPackageState>
+    ) =>
+      args[0] === "persistedAuthState"
+        ? ["matrix", "whatsapp"]
+        : actual.listBundledChannelIdsForPackageState(...args),
+    hasBundledChannelPackageState: (
+      params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
+    ) =>
+      params.metadataKey !== "persistedAuthState" && actual.hasBundledChannelPackageState(params),
+  };
+});
 
 describe("doctor state integrity", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
   let stateDir = "";
-  const wedged = {
-    sessionId: "wedged-child",
-    updatedAt: 0,
-    abortedLastRun: true,
-    subagentRecovery: {
-      automaticAttempts: 2,
-      lastAttemptAt: 10,
-      lastRunId: "run-child",
-      wedgedAt: 20,
-      wedgedReason: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
-    },
-  };
   const decline = () => vi.fn(async (_params: { message: string }) => false);
   function createAgentDir(agentId: string, nested = true) {
     fs.mkdirSync(path.join(stateDir, "agents", agentId, ...(nested ? ["agent"] : [])), {
       recursive: true,
     });
   }
+  const warning = (target: string, message: string) =>
+    expect.objectContaining({ severity: "warning", path: target, message });
 
   beforeEach(() => {
     envSnapshot = captureEnv([
@@ -98,6 +99,7 @@ describe("doctor state integrity", () => {
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     noteMock.mockClear();
+    vi.spyOn(terminalNote, "note").mockImplementation(noteMock);
   });
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -131,11 +133,7 @@ describe("doctor state integrity", () => {
     });
     if (process.platform !== "win32") {
       expect(issues.map(stateIntegrityIssueToHealthFinding)).toContainEqual(
-        expect.objectContaining({
-          severity: "warning",
-          path: configPath,
-          message: "Config file is group/world readable. Recommend chmod 600.",
-        }),
+        warning(configPath, "Config file is group/world readable. Recommend chmod 600."),
       );
     }
     expect(issues.some((issue) => issue.kind === "missing-runtime-dir")).toBe(false);
@@ -152,16 +150,8 @@ describe("doctor state integrity", () => {
     const issues = detectStateIntegrityHealthIssues({}, { configPath });
     expect(issues.map(stateIntegrityIssueToHealthFinding)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          severity: "warning",
-          path: stateDir,
-          message: "State directory permissions are too open. Recommend chmod 700.",
-        }),
-        expect.objectContaining({
-          severity: "warning",
-          path: configPath,
-          message: "Config file is group/world readable. Recommend chmod 600.",
-        }),
+        warning(stateDir, "State directory permissions are too open. Recommend chmod 700."),
+        warning(configPath, "Config file is group/world readable. Recommend chmod 600."),
       ]),
     );
   });
@@ -222,13 +212,12 @@ describe("doctor state integrity", () => {
       ),
     ).toEqual([]);
     const confirmRuntimeRepair = decline();
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(false);
-    expect(stateIntegrityText()).toContain("OAuth dir not present");
-    expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
-    expect(stateIntegrityText()).not.toMatch(
-      /CRITICAL: (?:Sessions dir|Session store dir) missing/,
-    );
+    const text = stateIntegrityText();
+    expect(text).toContain("OAuth dir not present");
+    expect(text).not.toContain("CRITICAL: OAuth dir missing");
+    expect(text).not.toMatch(/CRITICAL: (?:Sessions dir|Session store dir) missing/);
     expect(repairPromptCalls(confirmRuntimeRepair)).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -239,17 +228,28 @@ describe("doctor state integrity", () => {
   });
 
   it.each(["pairing", "explicit"])(
-    "requires missing OAuth storage for %s configuration",
+    "warns without blocking readiness when legacy OAuth storage is missing for %s configuration",
     async (mode) => {
       if (mode === "explicit") {
         setTestEnvValue("OPENCLAW_OAUTH_DIR", path.join(tempHome, ".oauth"));
       }
       const cfg: OpenClawConfig =
         mode === "pairing" ? { channels: { telegram: { dmPolicy: "pairing" } } } : {};
+      const findings = detectStateIntegrityHealthIssues(cfg).map(
+        stateIntegrityIssueToHealthFinding,
+      );
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          message: "OAuth dir is missing.",
+          severity: "warning",
+        }),
+      );
+      expect(findings.some((finding) => finding.severity === "error")).toBe(false);
       const confirmRuntimeRepair = decline();
-      await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+      await noteStateIntegrity(cfg, { confirmRuntimeRepair });
       expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
-      expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+      expect(stateIntegrityText()).toContain("OAuth dir missing");
+      expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
     },
   );
 
@@ -290,29 +290,6 @@ describe("doctor state integrity", () => {
     },
   );
 
-  it("clears stale aborted recovery flags in the legacy store only when approved", async () => {
-    const sessionKey = "agent:main:subagent:wedged-child";
-    writeSessionStore({}, { [sessionKey]: wedged });
-    await noteStateIntegrity(
-      {},
-      {
-        confirmRuntimeRepair: async ({ message }) =>
-          message.includes("Clear stale aborted recovery flags"),
-        note: noteMock,
-      },
-    );
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const persisted: Record<string, { abortedLastRun?: boolean; updatedAt?: number }> = JSON.parse(
-      fs.readFileSync(storePath, "utf8"),
-    );
-    expect(persisted[sessionKey]?.abortedLastRun).toBe(false);
-    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(0);
-    expect(stateIntegrityText()).toContain("automatic restart recovery tombstoned");
-    expect(stateIntegrityText()).toContain(sessionKey);
-    expect(stateIntegrityText()).toContain("openclaw doctor --fix");
-    expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
-  });
-
   it.each(["profile", "state-dir"])(
     "does not inspect another profile's state with a %s override",
     async (selector) => {
@@ -336,6 +313,7 @@ describe("doctor state integrity", () => {
           attemptedProbes.push(`readdir ${String(target)}`);
           throw new Error("another profile's state is outside integrity diagnostics");
         }
+        // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent access-denial spy; preserve the Doctor caller options.
         return readdir(target, options);
       });
       vi.spyOn(fs, "existsSync").mockImplementation((target) => {
@@ -363,7 +341,9 @@ describe("doctor state integrity", () => {
 });
 
 describe("doctor retained session integrity", () => {
-  it("repairs canonical recovery state without editing retained rows deleted from SQLite", async () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("leaves retired recovery state inert without restoring deleted retained rows", async () => {
     await withOpenClawTestState({ label: "retained-session-integrity" }, async (state) => {
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
@@ -405,14 +385,13 @@ describe("doctor retained session integrity", () => {
         resolvedPluginIds: ["fixture-plugin"],
       });
 
+      vi.spyOn(terminalNote, "note").mockImplementation(() => {});
       await noteStateIntegrityRaw(cfg, {
-        confirmRuntimeRepair: async ({ message }) =>
-          message.startsWith("Clear stale aborted recovery flags"),
-        note: vi.fn(),
+        confirmRuntimeRepair: async () => false,
       });
 
       expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.abortedLastRun).toBe(
-        false,
+        true,
       );
       expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
       expect(fs.readFileSync(storePath)).toEqual(source);

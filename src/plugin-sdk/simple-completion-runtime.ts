@@ -1,9 +1,8 @@
-/** Runtime SDK subpath for prepared completions and assistant text extraction. */
 import type {
   PreparedSimpleCompletionModelForAgent,
   PrepareSimpleCompletionModelForAgentParams,
 } from "../agents/simple-completion.types.js";
-import { bindModelCompletionOwner } from "../llm/model-runtime-binding.js";
+import { bindModelCompletionOwner, getModelCompletionOwner } from "../llm/model-runtime-binding.js";
 import { getLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 
 export { completeWithPreparedSimpleCompletionModel } from "../agents/simple-completion-execution.js";
@@ -31,9 +30,16 @@ export const prepareSimpleCompletionModelForAgent = async (
         authProfiles: _authProfiles,
         ...prepared
       } = acquired;
+      const completionOwner = getModelCompletionOwner(prepared.model);
+      if (!completionOwner) {
+        throw new Error("Prepared completion model has no execution owner");
+      }
       const model = bindModelCompletionOwner(prepared.model, {
-        run: (run) => host.track(run),
-        assertCurrent: () => host.assertOpen(),
+        run: (run) => host.track(() => completionOwner.run(run)),
+        assertCurrent: () => {
+          host.assertOpen();
+          completionOwner.assertCurrent();
+        },
       });
       host.adopt(model, claim);
       return { ...prepared, model };

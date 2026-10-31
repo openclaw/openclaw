@@ -20,7 +20,7 @@ export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" 
   avatarRevision: string;
 };
 
-export type UserProfileAuthority = {
+type UserProfileAuthority = {
   profileId: string;
   role: string | null;
   githubLogin?: string | null;
@@ -117,6 +117,7 @@ export type UserProfileAccessFacts = Readonly<{
   profileId: string;
   emails: readonly string[];
   githubAccountIds?: readonly number[];
+  enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
   assignedRole: string | null;
   githubLogin?: string | null;
 }>;
@@ -126,6 +127,8 @@ export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "displa
 };
 
 export type PreparedUserProfileIdentity = {
+  /** Opaque access-fact revision, after checking the bound owner and email lifetimes; excludes aliases. */
+  readCurrentRevision(this: void, requiredEmailBindingIds?: readonly string[]): object;
   readCurrentProfile(
     this: void,
     requiredEmailBindingIds?: readonly string[],
@@ -180,6 +183,8 @@ export type ProfileDisplayRow = Pick<
 > & {
   has_avatar: SqlBool;
   githubAccountIds?: readonly number[];
+  /** The canonical Enterprise reader's proof-validated host/account pairs; aliases alone never set them. */
+  enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
   githubLogin?: string | null;
   githubIdentity?: UserProfileListItem["githubIdentity"];
   /** Present only for the canonical row with its exact local-owner identity binding. */

@@ -95,7 +95,6 @@ export function computeFileLists(fileOps: FileOperations): {
 // next accumulation), so an unbounded join grows without limit in long
 // sessions. Hard caps keep the model-visible section bounded per the
 // context-budget invariant; overflow collapses to a "...and N more" line.
-export const MAX_FILE_OPS_SECTION_CHARS = 2_000;
 const MAX_FILE_OPS_LIST_CHARS = 900;
 
 function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
@@ -190,27 +189,14 @@ function truncateForSummary(text: string, maxChars: number): string {
       }
     }
   }
-  const sliced = truncateUtf16Safe(text, maxChars);
-  const truncatedChars = text.length - sliced.length;
-  return `${sliced}\n\n[... ${truncatedChars} more characters truncated]`;
-}
-
-/** Extract text that compaction both estimates and includes in summary prompts. */
-function getCompactionContentBlockText(block: {
-  type: string;
-  content?: unknown;
-  text?: string;
-}): string {
-  if (
-    (block.type === "text" || block.type === "toolResult" || block.type === "tool_result") &&
-    block.text
-  ) {
-    return block.text;
-  }
-  return (block.type === "toolResult" || block.type === "tool_result") &&
-    typeof block.content === "string"
-    ? block.content
-    : "";
+  const headBudget = maxChars - tailChars - ELISION_MARKER_RESERVE_CHARS;
+  const prefix = truncateUtf16Safe(text, maxChars);
+  // Preserve diagnostics the old prefix already held; ordinary results also
+  // need their terminal facts, with the marker inside the same budget.
+  const tail = IMPORTANT_TOOL_RESULT_TAIL.test(prefix) ? "" : sliceUtf16Safe(text, -tailChars);
+  const head = tail ? truncateUtf16Safe(prefix, headBudget) : prefix;
+  const truncatedChars = text.length - head.length - tail.length;
+  return `${head}\n\n[... ${truncatedChars} more characters truncated]${tail ? `\n\n${tail}` : ""}`;
 }
 
 /** Project summary content once so rendering and token accounting share omission facts. */
@@ -223,7 +209,20 @@ export function getCompactionContent(
       ? content
       : content
           .map((block) => {
-            const blockText = getCompactionContentBlockText(block);
+            let blockText = "";
+            if (
+              (block.type === "text" ||
+                block.type === "toolResult" ||
+                block.type === "tool_result") &&
+              block.text
+            ) {
+              blockText = block.text;
+            } else if (
+              (block.type === "toolResult" || block.type === "tool_result") &&
+              typeof block.content === "string"
+            ) {
+              blockText = block.content;
+            }
             if (block.type !== "text" && !blockText) {
               // This projection knows only what it omits, not whether a model processed it.
               omissions.add(
@@ -246,17 +245,18 @@ const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]
 // metadata is only meaningful on user turns, so this deliberately accepts the
 // minimal shared shape rather than forcing token accounting through an unsafe
 // Message cast.
-type PersistedSenderCarrier = {
-  role: string;
-};
-
-function readPersistedSender(message: PersistedSenderCarrier) {
+/**
+ * Return exactly the persisted-sender text which is projected into a user
+ * conversation label. Keep this shared with token accounting: adding a label
+ * to the prompt without charging it can make bounded compaction overflow.
+ */
+export function formatPersistedSenderSuffix(message: { role: string }): string {
   if (message.role !== "user") {
-    return undefined;
+    return "";
   }
   const metadata = asRecord(Reflect.get(message, "__openclaw"));
   if (!metadata) {
-    return undefined;
+    return "";
   }
   const normalize = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
@@ -273,17 +273,7 @@ function readPersistedSender(message: PersistedSenderCarrier) {
   // Display names and usernames are mutable and non-unique. They are useful
   // labels only once a stable sender ID anchors them; on their own they must
   // not turn a legacy/partial record into asserted author provenance.
-  return sender.id ? sender : undefined;
-}
-
-/**
- * Return exactly the persisted-sender text which is projected into a user
- * conversation label. Keep this shared with token accounting: adding a label
- * to the prompt without charging it can make bounded compaction overflow.
- */
-export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
-  const sender = readPersistedSender(message);
-  return sender ? ` sender=${JSON.stringify(sender)}` : "";
+  return sender.id ? ` sender=${JSON.stringify(sender)}` : "";
 }
 
 /** Serialize LLM messages to plain text for summarization prompts. */
@@ -296,27 +286,23 @@ const ENTRY_SEPARATOR = "\n\n";
 const MAX_CALL_LABEL_ARGUMENT_CHARS = 120;
 const MAX_CALL_LABEL_CHARS = 300;
 
-function formatCallLabel(name: string, args: Record<string, unknown>): string {
-  const label = `${name}(${Object.entries(args)
-    .map(([key, value]) => {
-      const text = stringifyCompactionValue(value);
-      return `${key}=${text.length > MAX_CALL_LABEL_ARGUMENT_CHARS ? `${truncateUtf16Safe(text, MAX_CALL_LABEL_ARGUMENT_CHARS)}...` : text}`;
-    })
+function formatCallLabel(name: string, args: ReadonlyArray<readonly [string, string]>): string {
+  const label = `${name}(${args
+    .map(
+      ([key, text]) =>
+        `${key}=${text.length > MAX_CALL_LABEL_ARGUMENT_CHARS ? `${truncateUtf16Safe(text, MAX_CALL_LABEL_ARGUMENT_CHARS)}...` : text}`,
+    )
     .join(", ")})`;
   return label.length > MAX_CALL_LABEL_CHARS
     ? `${truncateUtf16Safe(label, MAX_CALL_LABEL_CHARS)}...)`
     : label;
 }
 
-function serializeConversationEntries(messages: Message[]): {
-  entries: string[];
-  /** Tool-result entries rendered with the call that produced them, for sampled input. */
-  labeledResults: Map<number, string>;
-  /** User-message entries, which carry the asks, decisions and corrections. */
-  userEntries: number[];
-} {
+function serializeConversationEntries(messages: Message[]) {
   const parts: string[] = [];
+  /** Tool-result entries rendered with the call that produced them, for sampled input. */
   const labeledResults = new Map<number, string>();
+  /** User-message entries, which carry the asks, decisions and corrections. */
   const userEntries: number[] = [];
   // Providers may repeat a call ID; each result claims the oldest unanswered call with it.
   const callLabels = createToolCallOccurrenceQueue<string>();
@@ -365,11 +351,12 @@ function serializeConversationEntries(messages: Message[]): {
         if (block.type === "text") {
           textParts.push(block.text);
         } else if (block.type === "toolCall") {
-          const argsStr = Object.entries(block.arguments)
-            .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
-            .join(", ");
+          const args = Object.entries(block.arguments).map(
+            ([key, value]) => [key, stringifyCompactionValue(value)] as const,
+          );
+          const argsStr = args.map(([key, text]) => `${key}=${text}`).join(", ");
           toolCalls.push(`${block.name}(${argsStr})`);
-          callLabels.add(block.id, formatCallLabel(block.name, block.arguments));
+          callLabels.add(block.id, formatCallLabel(block.name, args));
         }
       }
 
@@ -394,7 +381,7 @@ export const MAX_SUMMARY_INPUT_CHARS = 160_000;
 const MAX_SAMPLED_ENTRY_CHARS = 6_000;
 const MIN_TRIMMED_ENTRY_CHARS = 200;
 const TRIMMED_ENTRY_HEAD_SHARE = 0.7;
-// Covers "\n\n[... N characters omitted ...]\n\n" for any UTF-16 length.
+// Covers truncation and elision markers for any UTF-16 length.
 const ELISION_MARKER_RESERVE_CHARS = 64;
 const SUMMARY_INPUT_TAIL_SHARE = 0.5;
 const SUMMARY_INPUT_USER_SHARE = 0.25;

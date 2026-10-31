@@ -4,13 +4,12 @@ import type {
   MentionInboxItem,
   MentionsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../api/gateway.ts";
+} from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveGatewayReadRetryDelayMs } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -27,6 +26,7 @@ type MentionsSnapshot = {
 export type MentionsCapability = ReturnType<typeof createMentionsCapability>;
 
 type MentionConnection = {
+  retired: boolean;
   client: GatewayBrowserClient;
   hello: GatewayHelloOk;
   connectionRevision: number;
@@ -54,16 +54,15 @@ export function createMentionsCapability(
   };
   let connection: MentionConnection | null = null;
   let disposed = false;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   const publish = (patch: Partial<MentionsSnapshot>) => {
     snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.publish();
   };
   const isCurrent = (owner: MentionConnection) =>
     !disposed &&
     connection === owner &&
+    !owner.retired &&
     canCallGatewayMethod(gateway.snapshot, "mentions.list", "operator.read") &&
     gateway.snapshot.client === owner.client &&
     gateway.snapshot.hello === owner.hello &&
@@ -172,6 +171,29 @@ export function createMentionsCapability(
       return;
     }
     clearTimeout(connection?.retryTimer);
+    if (connection) {
+      // Keep its display identity, but never revive pre-disconnect requests.
+      connection.retired = true;
+    }
+    const sameIdentity =
+      connection?.client === next.client &&
+      connection?.connectionRevision === gateway.connectionRevision &&
+      (!profileId || connection.profileId === profileId) &&
+      (!gatewayInstanceId || connection.gatewayInstanceId === gatewayInstanceId);
+    if (!disposed && next.phase !== "connected" && sameIdentity) {
+      publish({ phase: "unavailable", dismissing: [], error: null });
+      return;
+    }
+    if (
+      !disposed &&
+      sameIdentity &&
+      next.selfUser === undefined &&
+      canCallGatewayMethod(next, "mentions.list", "operator.read")
+    ) {
+      // A fresh hello precedes users.self; unresolved identity is not access loss.
+      publish({ phase: "loading", dismissing: [], error: null });
+      return;
+    }
     if (
       disposed ||
       next.phase !== "connected" ||
@@ -186,6 +208,7 @@ export function createMentionsCapability(
       return;
     }
     const owner: MentionConnection = {
+      retired: false,
       client: next.client,
       hello: next.hello,
       connectionRevision: gateway.connectionRevision,
@@ -199,7 +222,12 @@ export function createMentionsCapability(
       retryAttempt: 0,
     };
     connection = owner;
-    publish({ phase: "loading", items: [], dismissing: [], error: null });
+    publish({
+      phase: "loading",
+      ...(!sameIdentity ? { items: [] } : {}),
+      dismissing: [],
+      error: null,
+    });
     if (!isCurrent(owner)) {
       return;
     }
@@ -227,6 +255,7 @@ export function createMentionsCapability(
     owner.refreshRequested = true;
     void refreshAutomatically(owner);
   });
+  // Retire prior identity requests before hydrating the next connection's Inbox.
   const stopGateway = gateway.subscribe(synchronize);
   synchronize();
 
@@ -271,7 +300,7 @@ export function createMentionsCapability(
         }
       }
     },
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       disposed = true;
       clearTimeout(connection?.retryTimer);

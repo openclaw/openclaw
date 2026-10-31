@@ -74,74 +74,10 @@ the Gateway already runs inside a managed Google Cloud environment.
   </Tab>
 
   <Tab title="Vertex AI (ADC)">
-    **Recommended for:** Gateway instances running inside Google Cloud (GCE,
-    GKE, Cloud Run) or workstations already authenticated through gcloud
-    Application Default Credentials.
-
-    <Steps>
-      <Step title="Authenticate with gcloud ADC">
-        On a workstation, run:
-
-        ```bash
-        gcloud auth application-default login
-        ```
-
-        On a Google Cloud VM with an attached service account, the metadata
-        server already provides credentials and no file is needed.
-      </Step>
-      <Step title="Set project and location">
-        Both are required in the gateway service environment:
-
-        ```bash
-        export GOOGLE_CLOUD_PROJECT="my-project"
-        export GOOGLE_CLOUD_LOCATION="us-central1"
-        ```
-
-        `GCLOUD_PROJECT` is also accepted for the project. Without a project,
-        runs fail with `Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.`
-        Without a location, the error is `Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.`
-      </Step>
-      <Step title="Credential: automatic discovery or manual sentinel">
-        With a recognized ADC file (created by
-        `gcloud auth application-default login`) **and** the project and
-        location variables set, OpenClaw discovers `google-vertex`
-        automatically — nothing needs to be stored.
-
-        Manual storage is only needed for metadata-only credentials (for
-        example a GCE VM with an attached service account and no ADC file on
-        disk) or to select the ADC path explicitly. The ADC path is selected
-        by a sentinel value, not a real key — store exactly
-        `gcp-vertex-credentials`:
-
-        ```bash
-        openclaw models auth paste-api-key --provider google-vertex
-        # paste exactly: gcp-vertex-credentials
-        ```
-
-        <Warning>
-        Other stored values are sent in the `x-goog-api-key` header, not as
-        ADC credentials. Do not paste an OAuth access token from
-        `gcloud auth print-access-token`: it is not an API key and can cause
-        an authentication error such as `401 UNAUTHENTICATED`.
-        </Warning>
-      </Step>
-      <Step title="List the Vertex catalog">
-        ```bash
-        openclaw models list --refresh --all --provider google-vertex
-        ```
-
-        `--all` includes models you have not configured. `--refresh` populates
-        the local catalog when it has not been loaded yet; it does not query
-        a live Vertex model inventory or verify that ADC can obtain a token.
-      </Step>
-    </Steps>
-
-    <Tip>
-    Vertex uses a separate static model catalog; new Gemini variants appear
-    there per OpenClaw release rather than through the live refresh used by the
-    AI Studio key path.
-    </Tip>
-
+    Use `google-vertex` for Gemini with Google Cloud project billing and
+    Application Default Credentials. Follow the [Google (Vertex AI)
+    setup guide](/providers/google-vertex) for gcloud user ADC, service account
+    keys, metadata-server credentials, and Gateway environment configuration.
   </Tab>
 
   <Tab title="Gemini CLI runtime">
@@ -254,6 +190,13 @@ Responses marked `MAX_TOKENS` or `CONTINUATION` reached a generation limit.
 OpenClaw preserves their partial content and reports a length-limited result.
 Function calls in that partial response remain incomplete instead of becoming
 an executable tool-use turn.
+
+The managed Gemini and Vertex transports stop reading when a compatible proxy
+sends `data: [DONE]`, release the response body, and ignore later frames. A valid
+candidate finish reason is still required for a successful result. First-frame
+quota errors participate in API-key rotation. For Gemini's first-response retry,
+usage metadata, response IDs, and empty or unspecified finish states do not count
+as generated output or disable the existing retry deadline.
 
 ## Web search
 
@@ -421,6 +364,10 @@ available.
 - Auth: `tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
+
+Malformed or oversized successful TTS responses are reported without automatically
+submitting another Google synthesis request. Transient network failures, HTTP 5xx
+responses, and responses with no audio retain one automatic retry.
 
 OpenClaw sends Gemini 3.8 TTS through the Interactions API
 (`POST /v1beta/interactions`) with `store: false`. Google also documents 3.8 on

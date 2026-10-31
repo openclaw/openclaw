@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DecisionBatchV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
+import type { DecisionRuntimeV2 } from "../decisions/runtime-types.js";
+import type { DecisionBatchV2 } from "../decisions/types-v2.js";
+import { encodePngRgba, fillPixel } from "../media/png-encode.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -18,10 +20,21 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runt
 const live =
   process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.OPENROUTER_API_KEY?.trim());
 
-it.skipIf(!live)(
-  "evaluates one mixed Jev batch through the registered OpenClaw provider",
+function redSquareImage(): string {
+  const width = 512;
+  const pixels = Buffer.alloc(width * width * 4, 255);
+  for (let y = 128; y < 384; y++) {
+    for (let x = 128; x < 384; x++) {
+      fillPixel(pixels, x, y, width, 255, 0, 0);
+    }
+  }
+  return `data:image/png;base64,${encodePngRgba(pixels, width, width).toString("base64")}`;
+}
+
+it.skipIf(!live).each(["typesafe/jev-1.13", "typesafe/jev-1.14"])(
+  "evaluates native decisions with %s through the registered OpenClaw provider",
   { timeout: 60_000, retry: 0 },
-  async () => {
+  async (model) => {
     await withOpenClawTestState({ layout: "home" }, async (state) => {
       const consumerId = "openrouter-live-decision-consumer";
       const consumerRoot = state.path("consumer");
@@ -40,7 +53,7 @@ it.skipIf(!live)(
         agents: {
           defaults: {
             model: "unrelated/not-configured",
-            decisionModel: "openrouter/typesafe/jev-1.13",
+            decisionModel: `openrouter/${model}`,
             workspace: state.workspaceDir,
           },
         },
@@ -87,25 +100,44 @@ it.skipIf(!live)(
             if (!runtime) {
               throw new Error("Missing registered decision SDK");
             }
-            const batch: DecisionBatchV2 = {
-              state: {
-                type: "text",
-                text: "A customer asks for a duplicate invoice. There is no outage or deadline.",
-              },
-              questions: {
-                urgent: { type: "boolean", instructions: "Does this require urgent action?" },
-                team: {
-                  type: "choice",
-                  instructions: "Which team should handle this?",
-                  criteria: { billing: "Invoices and payments", technical: "Software faults" },
-                },
-                severity: {
-                  type: "score",
-                  instructions: "Rate the severity.",
-                  criteria: ["Routine request", "Service affected", "Critical outage"],
-                },
-              },
-            };
+            const batch: DecisionBatchV2 =
+              model === "typesafe/jev-1.14"
+                ? {
+                    state: {
+                      type: "image",
+                      dataUri: redSquareImage(),
+                      text: "Synthetic image: a red square on a white background.",
+                    },
+                    questions: {
+                      present: {
+                        type: "boolean",
+                        instructions: "Is a red square present in the image?",
+                      },
+                      region: { type: "box", instructions: "the red square in the image" },
+                    },
+                  }
+                : {
+                    state: {
+                      type: "text",
+                      text: "A customer asks for a duplicate invoice. There is no outage or deadline.",
+                    },
+                    questions: {
+                      urgent: { type: "boolean", instructions: "Does this require urgent action?" },
+                      team: {
+                        type: "choice",
+                        instructions: "Which team should handle this?",
+                        criteria: {
+                          billing: "Invoices and payments",
+                          technical: "Software faults",
+                        },
+                      },
+                      severity: {
+                        type: "score",
+                        instructions: "Rate the severity.",
+                        criteria: ["Routine request", "Service affected", "Critical outage"],
+                      },
+                    },
+                  };
             const options = () => ({
               agentId: "main",
               purpose: "openrouter-native-live",
@@ -120,7 +152,7 @@ it.skipIf(!live)(
             });
             const allowed = structuredClone(cfg);
             allowed.plugins!.entries![consumerId]!.llm!.allowedCompletionModels = [
-              "openrouter/typesafe/jev-1.13",
+              `openrouter/${model}`,
             ];
             setRuntimeConfigSnapshot(allowed);
             // No direct vendor client, retries or alternate credentials. The normal
@@ -130,10 +162,23 @@ it.skipIf(!live)(
               throw new Error(`OpenRouter registered decision unavailable: ${outcome.reason}`);
             }
             expect(outcome.provenance.providerId).toBe("openrouter");
-            expect(outcome.result.model).toMatch(/^typesafe\/jev-1\.13(?:-|$)/);
-            expect(outcome.result.answers.urgent?.type).toBe("boolean");
-            expect(outcome.result.answers.team?.type).toBe("choice");
-            expect(outcome.result.answers.severity?.type).toBe("score");
+            expect(outcome.result.model.startsWith(`${model}-`)).toBe(true);
+            if (model === "typesafe/jev-1.14") {
+              expect(outcome.result.answers.present).toMatchObject({ type: "boolean" });
+              const region = outcome.result.answers.region;
+              expect(region?.type).toBe("box");
+              if (region?.type !== "box") {
+                throw new Error("Missing native image box");
+              }
+              expect(region.box.left).toBeLessThan(0.5);
+              expect(region.box.right).toBeGreaterThan(0.5);
+              expect(region.box.top).toBeLessThan(0.5);
+              expect(region.box.bottom).toBeGreaterThan(0.5);
+            } else {
+              expect(outcome.result.answers.urgent?.type).toBe("boolean");
+              expect(outcome.result.answers.team?.type).toBe("choice");
+              expect(outcome.result.answers.severity?.type).toBe("score");
+            }
             expect(outcome.result.usage?.inputTokens).toBeGreaterThan(0);
             expect(outcome.result.usage?.outputTokens).toBeGreaterThanOrEqual(0);
             expect(outcome.result.usage?.costUsd).toBeGreaterThanOrEqual(0);

@@ -1,25 +1,76 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
-import type {
-  ControlUiHost,
-  ControlUiReplacement,
-} from "../../../../../src/plugin-sdk/control-ui.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
+import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
+import { collapseCompletedTurnWork } from "../chat-turn-presentation.ts";
+import { buildLocalUserMessage } from "../user-message-content.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
 import { prepareGroupMessage } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
+
+it("shares the mobile layout query while preserving initial and updated message actions", () => {
+  const query =
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+  const media = Object.assign(new EventTarget(), { matches: true });
+  const matchMedia = vi.fn((value: string) =>
+    value === query ? media : Object.assign(new EventTarget(), { matches: false }),
+  );
+  vi.stubGlobal("matchMedia", matchMedia);
+  const subscribe = vi.spyOn(media, "addEventListener");
+  const unsubscribe = vi.spyOn(media, "removeEventListener");
+  const message = { role: "user", content: "First message", timestamp: 1000 };
+  const group = createMessageGroup(message, "user", {
+    messages: [
+      { key: "first", message },
+      { key: "second", message: { ...message, content: "Second message", timestamp: 1001 } },
+    ],
+  });
+  const view = mountSolid(() => (
+    <>
+      <MessageGroup group={group} options={{ showReasoning: false, onReply: vi.fn() }} />
+      <MessageGroup
+        group={{ ...group, key: "another-group" }}
+        options={{ showReasoning: false, onReply: vi.fn() }}
+      />
+    </>
+  ));
+  try {
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
+    expect(view.container.querySelectorAll(".chat-message-footer")).toHaveLength(2);
+    flush();
+    expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(1);
+    expect(subscribe).toHaveBeenCalledOnce();
+    media.matches = false;
+    media.dispatchEvent(new Event("change"));
+    flush();
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(2);
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  } finally {
+    view.unmount();
+    vi.unstubAllGlobals();
+  }
+});
 
 it.each([false, true])(
   "does not present a partial response group as complete usage (unavailable: %s)",
@@ -56,8 +107,10 @@ it.each([false, true])(
     expect(
       [...(metadata?.querySelectorAll(".msg-meta__tokens") ?? [])].map((node) => node.textContent),
     ).toEqual(unavailable ? ["Token usage and cost unavailable"] : ["↑150", "↓70"]);
-    expect(metadata?.querySelector(".msg-meta__cost") === null).toBe(unavailable);
-    expect(metadata?.querySelector(".msg-meta__ctx") === null).toBe(unavailable);
+    expect([
+      metadata?.querySelector(".msg-meta__cost") === null,
+      metadata?.querySelector(".msg-meta__ctx") === null,
+    ]).toEqual([unavailable, unavailable]);
   },
 );
 
@@ -108,6 +161,75 @@ it.each([
     answered ? ["answer"] : [],
   );
 });
+
+it.each([false, true])(
+  "keeps a mixed terminal answer visible with its actions (bubble=%s)",
+  (bubbleMode) => {
+    const answer = {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "read-a", name: "read", arguments: {} },
+        { type: "toolCall", id: "read-b", name: "read", arguments: {} },
+        { type: "text", text: "Both files are correct." },
+      ],
+      timestamp: 2000,
+      __openclaw: { id: "mixed-answer", runId: "mixed-run" },
+    };
+    const messages = [
+      {
+        role: "user",
+        content: "Check the files",
+        timestamp: 1000,
+        __openclaw: { id: "prompt", runId: "mixed-run" },
+      },
+      answer,
+    ];
+    const grouped = groupMessages(
+      messages.map((message, index) => ({ kind: "message", key: String(index), message })),
+    );
+    const frame = coalesceAgentRunFrames(
+      collapseCompletedTurnWork(grouped, {
+        sessionKey: "agent:main:dashboard:mixed",
+        runWorking: false,
+        bubbleMode,
+      }),
+      { messages },
+    ).find((item) => item.kind === "agent-run-frame");
+    if (!frame) {
+      throw new Error("Missing answer frame");
+    }
+    const onReply = vi.fn();
+    const view = mountSolid(() => (
+      <AgentRunFrame
+        frame={frame}
+        options={{
+          streamOptions: { bubbleMode },
+          renderGroupOptions: () => ({
+            bubbleMode,
+            showReasoning: false,
+            onReply,
+            onReact: vi.fn(),
+          }),
+          isWorkExpanded: () => false,
+          onToggleWork: () => {},
+        }}
+      />
+    ));
+    flush();
+    expect(view.container.textContent).toContain("Both files are correct.");
+    const reply = view.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reply to message"]',
+    );
+    expect(reply).not.toBeNull();
+    reply!.click();
+    expect(onReply.mock.calls[0]?.[0]).toMatchObject({
+      sourceMessageId: "mixed-answer",
+      text: "Both files are correct.",
+    });
+    expect(view.container.querySelector('button[aria-label="Copy as markdown"]')).not.toBeNull();
+    expect(view.container.querySelector(".chat-reaction-action")).not.toBeNull();
+  },
+);
 
 it("does not give provider speech unframed answer actions", () => {
   const speech = {
@@ -174,7 +296,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(avatars[0]).not.toBe(avatars[1]);
   avatars.forEach((avatar, index) => {
     expect(avatar.closest(".chat-bubble")).toBe(bubbles[index]);
-    expect(avatar.querySelector('[aria-label="Peer"]')).not.toBeNull();
+    expect(avatar.getAttribute("aria-label")).toBe("Peer");
   });
   const control = view.getByRole("button", { name: "Open image Peer image" });
   const image = control.querySelector("img")!;
@@ -207,7 +329,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(updatedAvatars).toHaveLength(2);
   expect(updatedAvatars[0]).not.toBe(updatedAvatars[1]);
   expect(
-    updatedAvatars.every((avatar) => avatar.querySelector('[aria-label="Peer Updated"]') !== null),
+    updatedAvatars.every((avatar) => avatar.getAttribute("aria-label") === "Peer Updated"),
   ).toBe(true);
 });
 
@@ -236,7 +358,7 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
   ));
   await waitForSolid(() => {
     expect(
-      view.container.querySelectorAll(".chat-tools-inline .chat-tool-msg-collapse"),
+      view.container.querySelectorAll(".chat-tools-inline .chat-tool-row:not([aria-busy])"),
     ).toHaveLength(2);
   });
   const summary = view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
@@ -259,22 +381,17 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const listeners = new Set<() => void>();
   const abort = new AbortController();
   // SAFETY: This mounted-view fixture supplies the service objects scoped by the host; it never calls their methods.
-  const pluginHost = {
-    signal: abort.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as ControlUiHost;
+  const pluginHost = createInertViewHost(abort.signal);
   let selected: ControlUiReplacement | undefined;
   const reportError = vi.fn();
   const plugins: ControlUiPluginCapability = {
     errors: [],
     hasPlugins: true,
+    revision: 0,
     registryStatus: "complete",
     canReload: false,
     isLoading: () => false,
+    inlineViewLabel: () => undefined,
     reload: async () => undefined,
     refresh: async () => undefined,
     registrations: () => [],
@@ -447,4 +564,159 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   } finally {
     view.unmount();
   }
+});
+
+describe("owned message controls", () => {
+  beforeEach(() => localStorage.removeItem("openclaw:skip-rewind-confirm"));
+  afterEach(() => dismissConfirmedActionPopovers(document.body));
+
+  it("keeps an open work-context disclosure when the same message key receives fresh metadata", () => {
+    const message = (title: string) =>
+      buildLocalUserMessage({
+        text: "Explain this selection",
+        createdAt: 1000,
+        workContext: { title, page: "chat" },
+      });
+    const [source, setSource] = createSignal(message("Before"));
+    const view = mountSolid(() => (
+      <GroupedMessage
+        preparation={prepareChatMessageRender(source())}
+        messageKey="same-message"
+        options={{ isStreaming: false, showReasoning: false }}
+      />
+    ));
+    const disclosure = view.container.querySelector<HTMLDetailsElement>(
+      ".chat-context-attachment",
+    )!;
+    expect(disclosure).not.toBeNull();
+    disclosure.open = true;
+    setSource(message("After"));
+    flush();
+    expect(view.container.querySelector(".chat-context-attachment")).toBe(disclosure);
+    expect(disclosure.open).toBe(true);
+    expect(disclosure.textContent).toContain("After");
+  });
+
+  it("retains grouped rewind and timestamp controls with current callbacks and metadata", () => {
+    const previous = vi.fn();
+    const current = vi.fn();
+    const prompt = createMessageGroup({ role: "user", content: "Prompt", timestamp: 1000 }, "user");
+    const answerAt = (timestamp: number, input: number, output: number) => ({
+      role: "assistant",
+      content: "Answer",
+      timestamp,
+      usage: { input, output },
+    });
+    const answer = createMessageGroup(answerAt(1001, 100, 10), "assistant");
+    const [options, setOptions] = createSignal({ onRewind: previous, contextWindow: 4000 });
+    const [assistant, setAssistant] = createSignal(answer);
+    const view = mountSolid(() => (
+      <>
+        <MessageGroup group={prompt} options={{ showReasoning: false, ...options() }} />
+        <MessageGroup
+          group={assistant()}
+          options={{ showReasoning: false, contextWindow: options().contextWindow }}
+        />
+      </>
+    ));
+    const trigger = view.getByRole("button", { name: "Rewind" });
+    trigger.click();
+    const confirmation = document.querySelector<HTMLElement>(".chat-confirm-popover")!;
+    expect(confirmation).not.toBeNull();
+    setOptions({ onRewind: current, contextWindow: 8000 });
+    flush();
+    expect(view.getByRole("button", { name: "Rewind" })).toBe(trigger);
+    expect(document.querySelector(".chat-confirm-popover")).toBe(confirmation);
+    confirmation.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!.click();
+    expect(previous).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledOnce();
+
+    const timestamp = view.container.querySelector<HTMLButtonElement>(
+      ".chat-group.assistant .msg-meta__summary",
+    )!;
+    expect(timestamp).not.toBeNull();
+    timestamp.focus();
+    setAssistant({
+      ...answer,
+      timestamp: 2001,
+      messages: [{ ...answer.messages[0]!, message: answerAt(2001, 200, 20) }],
+    });
+    flush();
+    expect(view.container.querySelector(".chat-group.assistant .msg-meta__summary")).toBe(
+      timestamp,
+    );
+    expect(document.activeElement).toBe(timestamp);
+  });
+});
+
+it("prepares the detailed timestamp only when metadata exposes its label", () => {
+  const title = new Date(1000).toLocaleString([], {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const [metadata, setMetadata] = createSignal(false);
+  const view = mountSolid(() => (
+    <ChatTimestamp timestamp={1000} metadata={metadata() ? [<span>Usage</span>] : undefined} />
+  ));
+  try {
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(0);
+    setMetadata(true);
+    flush();
+    expect(view.getByRole("button").getAttribute("aria-label")).toContain(title);
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(1);
+  } finally {
+    view.unmount();
+    calendarFormat.mockRestore();
+  }
+});
+
+it("leaves timestamp attributes untouched when only message usage changes", () => {
+  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(301_000);
+  const answer = createMessageGroup(
+    { role: "assistant", content: "Answer", timestamp: 1000, usage: { input: 100, output: 10 } },
+    "assistant",
+  );
+  const [group, setGroup] = createSignal(answer);
+  const view = mountSolid(() => (
+    <MessageGroup group={group()} options={{ showReasoning: false, contextWindow: 4000 }} />
+  ));
+  const time = view.container.querySelector<HTMLTimeElement>(".chat-group-timestamp")!;
+  const summary = view.container.querySelector<HTMLButtonElement>(".msg-meta__summary")!;
+  expect(time.textContent).toBe("5m ago");
+  const observer = new MutationObserver(() => {});
+  observer.observe(time, { attributes: true });
+  observer.observe(summary, { attributes: true });
+  calendarFormat.mockClear();
+  clock.mockReturnValue(361_000);
+  setGroup({
+    ...answer,
+    messages: [
+      {
+        ...answer.messages[0]!,
+        message: {
+          role: "assistant",
+          content: "Answer",
+          timestamp: 1000,
+          usage: { input: 200, output: 20 },
+        },
+      },
+    ],
+  });
+  flush();
+  expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
+  expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
+  expect(time.textContent).toBe("6m ago");
+  expect(observer.takeRecords()).toEqual([]);
+  observer.disconnect();
+  clock.mockRestore();
+  expect(calendarFormat).not.toHaveBeenCalled();
+  calendarFormat.mockRestore();
 });

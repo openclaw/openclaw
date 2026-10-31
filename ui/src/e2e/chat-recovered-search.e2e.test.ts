@@ -2,8 +2,9 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
-  controlUiSessionUrl,
+  captureUiProofEnabled,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
@@ -21,6 +22,12 @@ suite.define(() => {
       const fullText = `# Museum inventory\n\nThe restored exhibit is ${keyword}.`;
       const gateway = await installMockGateway(page, {
         sessionKey,
+        sessions: [
+          createControlUiSessionRow(sessionKey, "Recovered search", 1_800_000_000_000, {
+            sessionId: "recovered-search-session",
+            lifecycleRevision: "recovered-search-revision-1",
+          }),
+        ],
         deferredMethods: ["chat.message.get"],
         historyMessages: [
           {
@@ -37,7 +44,13 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      // Search recovery uses the settled roster's message scope, independent of boot ordering.
+      await page.goto(`${suite.server.baseUrl}activity`);
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+        )
+        .click();
       const pane = page.locator(".chat-pane-cache__pane--active");
       const reply = pane.locator(`.chat-bubble[data-entry-id="${messageId}"]`);
       const prompt = pane.locator('.chat-bubble[data-entry-id="recovered-search-prompt"]');
@@ -50,7 +63,9 @@ suite.define(() => {
         message: { role: "assistant", content: fullText },
       });
       await expect.poll(() => reply.textContent()).toContain(keyword);
-      await page.screenshot({ path: path.join(artifactDir, "recovered.png") });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(artifactDir, "recovered.png") });
+      }
 
       const composer = pane.locator(".agent-chat__composer-combobox textarea");
       await composer.focus();
@@ -63,14 +78,18 @@ suite.define(() => {
       // The unrelated prompt leaving the DOM proves the filter has committed.
       await expect.poll(() => prompt.count()).toBe(0);
       const filteredReplyTexts = await reply.allTextContents();
-      await page.screenshot({ path: path.join(artifactDir, "search.png") });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(artifactDir, "search.png") });
+      }
 
       await pane.getByRole("button", { name: "Close search", exact: true }).click();
       await expect.poll(() => reply.textContent()).toContain(keyword);
       expect(await search.count()).toBe(0);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
-      await page.screenshot({ path: path.join(artifactDir, "cleared.png") });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(artifactDir, "cleared.png") });
+      }
       await writeFile(
         path.join(artifactDir, "result.json"),
         JSON.stringify(

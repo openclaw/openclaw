@@ -5,7 +5,8 @@ import type { PreparedTranscriptMessageAppend } from "../../config/sessions/sess
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   assertSessionTranscriptInitialWriter,
@@ -27,7 +28,6 @@ import {
   type PersistRecordOptions,
   type PersistRecordResult,
 } from "./session-manager-persistence-entry.js";
-import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 /** Released synchronous SDK methods keep their native transaction and publication contract. */
@@ -98,7 +98,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     );
   }
 
-  /** @deprecated Await persistAsync. Supported through 2026-12-31. */
+  /** @deprecated Await persistAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
     prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);

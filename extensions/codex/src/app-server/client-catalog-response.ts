@@ -1,29 +1,31 @@
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import {
   projectCodexCatalogNativeResponse,
   projectCodexCatalogNativeThread,
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
 import type { CodexCatalogNativeThread } from "../session-catalog-types.js";
+import { codexCatalogResponseRoute, type CodexCatalogDecodeRoute } from "./client-catalog-route.js";
 import {
   parseCodexAppServerMessage,
   type CodexAppServerParseFailure,
 } from "./client-message-decoder.js";
-import {
-  codexCatalogResponseRoute,
-  type CodexCatalogDecodeRoute,
-} from "./client-message-frames.js";
 import { isJsonObject, isRpcResponse } from "./protocol.js";
 import type { CodexRequestAttempt } from "./request-attempt.js";
 
 export type CodexClientRequestAttempt = CodexRequestAttempt & {
-  catalogProjection?: { preview?: CodexCatalogPreviewCache; remainingRows?: number };
+  catalogProjection?: {
+    preview?: CodexCatalogPreviewCache;
+    remainingRows?: number;
+    singleThread?: boolean;
+  };
 };
 
 export type CodexCatalogDecodeInput = {
   bytes: Uint8Array<ArrayBuffer>;
   route: CodexCatalogDecodeRoute;
   remainingRows?: number;
+  oversizedSingleton?: boolean;
 };
 export type CodexCatalogDecodeResult = {
   message?: unknown;
@@ -41,6 +43,35 @@ export function decodeCodexCatalogFrame(input: CodexCatalogDecodeInput): CodexCa
     ),
     (failure) => failures.push(failure),
   );
+  if (input.oversizedSingleton) {
+    try {
+      if (
+        input.route === "unresolved" ||
+        !isRpcResponse(parsed) ||
+        parsed.id !== input.route.id ||
+        parsed.error ||
+        !isJsonObject(parsed.result) ||
+        !Array.isArray(parsed.result.data) ||
+        parsed.result.data.length !== 1 ||
+        parsed.result.nextCursor === undefined
+      ) {
+        return { failures };
+      }
+      const page = projectCodexCatalogNativeResponse(
+        parsed.result,
+        sanitizeTerminalText,
+        undefined,
+        1,
+      );
+      page.data[0]!.catalogError = "oversized-thread";
+      if (input.remainingRows === 0) {
+        page.data = [];
+      }
+      return { message: { id: parsed.id, result: page }, failures };
+    } catch {
+      return { failures };
+    }
+  }
   return { ...projectCodexCatalogMessage(parsed, input), failures };
 }
 
@@ -77,14 +108,14 @@ export function projectCodexCatalogMessage(
       );
       message.result = page;
       if (!cachedPreview) {
-        const states = Array.isArray(raw.data)
-          ? raw.data
-              .slice(0, page.data.length)
-              .map((row) =>
-                isJsonObject(row) && typeof row.preview === "string"
-                  ? Boolean(row.preview)
-                  : undefined,
-              )
+        const rows = raw.data;
+        const states = Array.isArray(rows)
+          ? page.data.map((_, index) => {
+              const row = rows[index];
+              return isJsonObject(row) && typeof row.preview === "string"
+                ? Boolean(row.preview)
+                : undefined;
+            })
           : [];
         result.preview = { rows: page.data, states };
       }

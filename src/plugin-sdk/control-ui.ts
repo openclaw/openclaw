@@ -14,6 +14,8 @@ export type {
   ControlUiDashboardProps,
   ControlUiDialogProps,
 } from "./control-ui-components.js";
+export type { AgentsWorkspaceGetResult } from "@openclaw/gateway-protocol";
+export type { MemorySearchResponse } from "../../packages/memory-host-sdk/src/host/types.js";
 export type ControlUiDisposer = () => void;
 
 export type ControlUiConnection = {
@@ -115,6 +117,8 @@ export type ControlUiViewContext<T = Readonly<Record<string, string>>> = {
   readonly host: ControlUiHost;
   readonly signal: AbortSignal;
   readonly props: T;
+  /** Report a fatal mount failure; the host disposes this instance and offers Retry. */
+  reportError?: (error: unknown) => void;
   /** Presentation can pause a retained view without ending its host lifetime. */
   readonly presented: boolean;
   /** Mount the host's built-in view inside a replacement; it keeps receiving host updates. */
@@ -156,6 +160,20 @@ export type ControlUiNavigationItem = {
   defaultVisible?: boolean;
   /** Context menu actions, available by right-click or the keyboard menu shortcut. */
   actions?: ControlUiNavigationAction[];
+};
+
+/** A predefined installed renderer. Payload is data, never a generated template. */
+type ControlUiInlineView = {
+  id: string;
+  /** Exact component/payload interface version (1–65535), not the package version. */
+  version: number;
+  mount: ControlUiView<
+    BoardGetParams & {
+      payload: import("../plugins/host-hook-json.js").PluginJsonValue;
+      toolCallId: string;
+      toolName: string;
+    }
+  >;
 };
 
 export type ControlUiPanel = {
@@ -223,6 +241,12 @@ export type ControlUiHost = {
    * The Gateway enforces connection scopes, not a per-plugin RPC allowlist.
    */
   request: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
+  /**
+   * `session.message` listeners receive complete message bodies. Registration is
+   * synchronous, but delivery starts after the Gateway acknowledges full-body
+   * interest. In-flight roster events without bodies are skipped during admission;
+   * the host never delivers a bodyless `session.message` to a plugin listener.
+   */
   onEvent: (event: string, listener: (payload: unknown) => void) => ControlUiDisposer;
   subscribe: (listener: () => void) => ControlUiDisposer;
   sessions: {
@@ -296,6 +320,7 @@ export type ControlUiHost = {
     registerAction: (action: ControlUiAction) => ControlUiDisposer;
     registerAccessory: (accessory: ControlUiAccessory) => ControlUiDisposer;
     registerWidget: (widget: ControlUiWidget) => ControlUiDisposer;
+    registerInlineView: (view: ControlUiInlineView) => ControlUiDisposer;
     registerReplacement: (replacement: ControlUiReplacement) => ControlUiDisposer;
     /** Select an owned replacement, or restore the built-in view for this surface. */
     selectReplacement: (surface: ControlUiSurface, id: string | null) => void;
@@ -317,4 +342,7 @@ export type {
   ControlUiSettingsComponents,
   ControlUiSettingsContext,
   ControlUiSettingsView,
+  ControlUiChannelSettingsSnapshot,
+  ControlUiChannelSettingsContext,
+  ControlUiChannelSettingsView,
 } from "./control-ui-settings.js";

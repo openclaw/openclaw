@@ -1,6 +1,6 @@
 // Discord question custom-id envelope tests.
 import { describe, expect, it } from "vitest";
-import { parseCustomId } from "./internal/discord.js";
+import { parseCustomId } from "./internal/components.base.js";
 import { buildDiscordQuestionCustomId, parseDiscordQuestionData } from "./question-custom-id.js";
 
 describe("question custom id", () => {

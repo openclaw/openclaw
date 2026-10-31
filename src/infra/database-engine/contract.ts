@@ -30,12 +30,7 @@ export type StoreSearchCapabilities = {
   rebuild?: () => void;
 };
 
-export type DatabaseErrorKind =
-  | "constraint"
-  | "busy"
-  | "connection-lost"
-  | "outcome-unknown"
-  | "other";
+type DatabaseErrorKind = "constraint" | "busy" | "connection-lost" | "outcome-unknown" | "other";
 export type PostgresSchemaFragment = {
   id: string;
   tables: readonly string[];
@@ -46,6 +41,12 @@ export type PostgresSchemaFragment = {
 type PostgresSchemaDefinition = {
   postgres: string;
   postgresFragments?: readonly PostgresSchemaFragment[];
+  /** Historical schemas default to the original vector decoder. */
+  postgresVectorDecoderVersion?: 1 | 2;
+  /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */
+  postgresVectorSearchVersion?: 1 | 2;
+  /** Version 2 splits punctuation-joined tokens like SQLite FTS5; historical schemas stay exact. */
+  postgresTextSearchVersion?: 1 | 2;
 };
 export type StoreSchema = {
   id: string;
@@ -62,17 +63,30 @@ export type StoreSchema = {
     backup?: PortDescriptor;
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
+  /** Historical schemas default to the original vector decoder. */
+  postgresVectorDecoderVersion?: 1 | 2;
+  /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */
+  postgresVectorSearchVersion?: 1 | 2;
+  /** Version 2 splits punctuation-joined tokens like SQLite FTS5; historical schemas stay exact. */
+  postgresTextSearchVersion?: 1 | 2;
   search?: SearchSchema;
   /** Persisted, owner-registered derived search definitions. */
   searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
+  reusePostgresConnection?: boolean;
   anchor: DatabaseSync;
   schema: StoreSchema;
   input: DatabaseEngineInput;
   openSqlite: () => void;
   storeId?: string;
   namespace?: string;
+  /** Source tables are verified inside this transaction, before runtime admission exists. */
+  beforeMigrate?: (
+    database: EngineConnection,
+    fromVersion: number,
+    sourceTables: ReadonlySet<string>,
+  ) => void;
 };
 type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;

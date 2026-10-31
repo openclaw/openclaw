@@ -80,7 +80,6 @@ export class DefaultResourceLoader implements ResourceLoader {
         cwd: this.cwd,
         agentDir: this.agentDir,
         skillPaths,
-        includeDefaults: false,
       });
       return { resources: skills, diagnostics };
     },
@@ -245,9 +244,7 @@ export class DefaultResourceLoader implements ResourceLoader {
       source: "local",
       scope: "temporary",
       origin: "top-level",
-      baseDir: statSync(normalizedPath).isDirectory()
-        ? normalizedPath
-        : resolve(normalizedPath, ".."),
+      baseDir: resolve(normalizedPath, ".."),
     };
   }
 
@@ -291,9 +288,6 @@ export class DefaultResourceLoader implements ResourceLoader {
         const stats = statSync(resolved);
         let filePaths: string[];
         if (stats.isDirectory()) {
-          if (!existsSync(resolved)) {
-            continue;
-          }
           failureMessage = "failed to read theme directory";
           const { entries, failedDirs } = walkDirectorySync(resolved, {
             maxDepth: 1,

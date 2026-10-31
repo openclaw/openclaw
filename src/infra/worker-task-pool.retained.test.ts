@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import type { WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   installDatabaseEngineSelection,
@@ -20,6 +23,7 @@ import type {
   ResourceFixtureReply,
 } from "./worker-task-pool.resources.test-support.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
+import type { WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 const pools: Array<{ close(): Promise<void> }> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,25 +32,40 @@ afterEach(async () => {
   resetDatabaseEngineSelectionForTest();
 });
 
+function createPool<Input, Output>(
+  file: string,
+  retainedTransport = true,
+  options: Partial<WorkerTaskPoolOptions<Output>> = {},
+) {
+  const pool = createOwnedWorkerTaskPool<Input, Output>(
+    { workerUrl: new URL(file, import.meta.url), maxWorkers: 1, idleTimeoutMs: 0, ...options },
+    retainedTransport ? { retainedTransport: true } : undefined,
+  );
+  pools.push(pool);
+  return pool;
+}
+
+const taskFixture = (retained = true, workerOptions?: WorkerOptions) =>
+  createPool<PoolFixtureInput, PoolFixtureResult>("./worker-task-pool.test-support.ts", retained, {
+    workerOptions,
+  });
+const fixture = (retained = true) =>
+  createPool<ResourceFixtureInput, ResourceFixtureReply>(
+    "./worker-task-pool.resources.test-support.ts",
+    retained,
+    retained ? {} : { idleTimeoutMs: undefined },
+  );
+
 it.each([false, true])(
   "carries boot and offline selections through a reused task worker (retained: %s)",
   async (retainedTransport) => {
-    const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
-      {
-        workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
-        maxWorkers: 1,
-        idleTimeoutMs: 0,
-      },
-      retainedTransport ? { retainedTransport: true } : undefined,
-    );
-    pools.push(pool);
+    const pool = taskFixture(retainedTransport);
     const run = () => pool.run({ label: "selection", readEngineSelection: true }, {});
     const prewarmed = await run();
     expect(prewarmed.engineSelection).toBeUndefined();
     const sqlite = { effectiveEngines: resolveDatabaseFamilyEngines({}) };
     const offline = await withDatabaseEngineSelection(sqlite, run);
-    expect(offline.threadId).toBe(prewarmed.threadId);
-    expect(offline.engineSelection).toEqual(sqlite);
+    expect(offline).toMatchObject({ threadId: prewarmed.threadId, engineSelection: sqlite });
     expect((await run()).engineSelection).toBeUndefined();
     const selection = {
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
@@ -54,8 +73,7 @@ it.each([false, true])(
     };
     installDatabaseEngineSelection(selection);
     const selected = await run();
-    expect(selected.threadId).toBe(prewarmed.threadId);
-    expect(selected.engineSelection).toEqual(selection);
+    expect(selected).toMatchObject({ threadId: prewarmed.threadId, engineSelection: selection });
     expect((await run()).engineSelection).toEqual(selection);
     for (const scoped of [
       sqlite,
@@ -65,8 +83,7 @@ it.each([false, true])(
       },
     ]) {
       const reply = await withDatabaseEngineSelection(scoped, run);
-      expect(reply.threadId).toBe(prewarmed.threadId);
-      expect(reply.engineSelection).toEqual(scoped);
+      expect(reply).toMatchObject({ threadId: prewarmed.threadId, engineSelection: scoped });
       expect((await run()).engineSelection).toEqual(selection);
     }
   },
@@ -74,50 +91,39 @@ it.each([false, true])(
 
 it("preserves workerData through retained task startup", async () => {
   const workerData = { type: "user data", port: "user port" };
-  const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
-    {
-      workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
-      workerOptions: { workerData },
-      maxWorkers: 1,
-      idleTimeoutMs: 0,
-    },
-    { retainedTransport: true },
-  );
-  pools.push(pool);
+  const pool = taskFixture(true, { workerData });
   const reply = await pool.run({ label: "startup", readStartupOptions: true }, {});
   expect(reply.startupOptions?.data).toEqual(workerData);
 });
 
-function fixture() {
-  const pool = createOwnedWorkerTaskPool<ResourceFixtureInput, ResourceFixtureReply>(
-    {
-      workerUrl: new URL("./worker-task-pool.resources.test-support.ts", import.meta.url),
-      maxWorkers: 1,
-      idleTimeoutMs: 0,
-    },
-    { retainedTransport: true },
-  );
-  pools.push(pool);
-  return pool;
-}
-
 const pause = new Int32Array(new SharedArrayBuffer(4));
-function serviceUntil(service: () => void, ready: () => boolean): void {
+function blockingInput() {
+  const words = new Int32Array(new SharedArrayBuffer(8));
+  return {
+    input: { wait: words.buffer },
+    entered: () => Atomics.load(words, 0) === 1,
+    release() {
+      Atomics.store(words, 1, 1);
+      Atomics.notify(words, 1);
+    },
+  };
+}
+function serviceUntil(
+  port: Pick<RetainedOperation<unknown>, "service">,
+  ready: () => boolean,
+): void {
   const deadline = performance.now() + 10_000;
   while (!ready()) {
     if (performance.now() >= deadline) {
       throw new Error("Retained worker operation did not settle");
     }
-    service();
+    port.service();
     Atomics.wait(pause, 0, 0, 1);
   }
 }
 
 function read<T>(operation: RetainedOperation<T>): T {
-  serviceUntil(
-    () => operation.service(),
-    () => operation.read().status !== "pending",
-  );
+  serviceUntil(operation, () => operation.read().status !== "pending");
   const outcome = operation.read();
   if (outcome.status === "rejected") {
     throw outcome.error;
@@ -132,31 +138,19 @@ it("services an earlier task before a queued read and preserves settlement conte
   const pool = fixture();
   const context = new AsyncLocalStorage<string>();
   const settlements: Array<string | undefined> = [];
-  const barrier = new Int32Array(new SharedArrayBuffer(8));
-  let promiseReaction = false;
-  const first = context.run("first", () =>
-    pool.startTask(
-      { retain: "first", wait: barrier.buffer },
-      { onExecutionSettled: () => settlements.push(context.getStore()) },
-    ),
-  );
-  const second = context.run("second", () =>
-    pool.startTask(
-      { retain: "second" },
-      { onExecutionSettled: () => settlements.push(context.getStore()) },
-    ),
-  );
-  void first.result.then(() => {
-    promiseReaction = true;
-  });
-  try {
-    serviceUntil(
-      () => second.service(),
-      () => Atomics.load(barrier, 0) === 1,
+  const barrier = blockingInput();
+  const promiseReaction = vi.fn();
+  const start = (owner: string, input: ResourceFixtureInput) =>
+    context.run(owner, () =>
+      pool.startTask(input, { onExecutionSettled: () => settlements.push(context.getStore()) }),
     );
+  const first = start("first", { retain: "first", ...barrier.input });
+  const second = start("second", { retain: "second" });
+  void first.result.then(promiseReaction);
+  try {
+    serviceUntil(second, barrier.entered);
     expect(second.read().status).toBe("pending");
-    Atomics.store(barrier, 1, 1);
-    Atomics.notify(barrier, 1);
+    barrier.release();
     const firstReply = read(first);
     expect(firstReply.keys).toEqual(["first"]);
     expect(second.read().status).toBe("pending");
@@ -169,10 +163,9 @@ it("services an earlier task before a queued read and preserves settlement conte
     read(second.release({ retire: true }));
     expect(settlements).toEqual(["first", "second"]);
     expect(pool.getSnapshot().workers).toBe(0);
-    expect(promiseReaction).toBe(false);
+    expect(promiseReaction).not.toHaveBeenCalled();
   } finally {
-    Atomics.store(barrier, 1, 1);
-    Atomics.notify(barrier, 1);
+    barrier.release();
   }
 });
 
@@ -204,14 +197,11 @@ it("enforces the existing task deadline while the caller cannot run timers and j
   const warm = pool.startTask({}, {});
   const oldThread = read(warm).threadId;
   read(warm.release());
-  const barrier = new Int32Array(new SharedArrayBuffer(8));
-  const blocked = pool.startTask({ wait: barrier.buffer }, { timeoutMs: 500 });
+  const barrier = blockingInput();
+  const blocked = pool.startTask(barrier.input, { timeoutMs: 500 });
   const successor = pool.startTask({ retain: "successor" }, {});
   try {
-    serviceUntil(
-      () => blocked.service(),
-      () => Atomics.load(barrier, 0) === 1,
-    );
+    serviceUntil(blocked, barrier.entered);
     expect(() => read(blocked)).toThrow("worker task timed out");
     read(blocked.release());
     const reply = read(successor);
@@ -220,21 +210,44 @@ it("enforces the existing task deadline while the caller cannot run timers and j
     read(successor.release({ retire: true }));
     expect(pool.getSnapshot().workers).toBe(0);
   } finally {
-    Atomics.store(barrier, 1, 1);
-    Atomics.notify(barrier, 1);
+    barrier.release();
   }
 });
 
+it.each(["service", "timer"] as const)(
+  "starts an owned task deadline after queueing and enforces it through %s",
+  async (expiry) => {
+    const pool = fixture();
+    const preceding = pool.startTask({}, {});
+    read(preceding);
+    const barrier = blockingInput();
+    const now = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(now);
+    const queued = pool.startTask(barrier.input, { timeoutMs: 100, timeoutFrom: "dispatch" });
+    void queued.result.catch(() => {});
+    try {
+      clock.mockReturnValue(now + 1_000);
+      queued.service();
+      expect(queued.read().status).toBe("pending");
+      read(preceding.release());
+      serviceUntil(queued, barrier.entered);
+      if (expiry === "service") {
+        clock.mockReturnValue(now + 1_101);
+        expect(() => read(queued)).toThrow("worker task timed out");
+      } else {
+        await expect(queued.result).rejects.toThrow("worker task timed out");
+      }
+      read(queued.release());
+      expect(pool.getSnapshot().workers).toBe(0);
+    } finally {
+      clock.mockRestore();
+      barrier.release();
+    }
+  },
+);
+
 it("answers an earlier task's synchronous host exchange while servicing a queued task", () => {
-  const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
-    {
-      workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
-      maxWorkers: 1,
-      idleTimeoutMs: 0,
-    },
-    { retainedTransport: true },
-  );
-  pools.push(pool);
+  const pool = taskFixture();
   const context = new AsyncLocalStorage<string>();
   const callbacks: Array<string | undefined> = [];
   const consumed: Array<string | undefined> = [];
@@ -254,114 +267,65 @@ it("answers an earlier task's synchronous host exchange while servicing a queued
       },
     ),
   );
-  let promiseReaction = false;
-  void first.result.then(
-    () => {
-      promiseReaction = true;
-    },
-    () => undefined,
-  );
+  const promiseReaction = vi.fn();
+  void first.result.then(promiseReaction, () => undefined);
   const second = pool.startTask({ label: "second" }, {});
-  context.run("second", () =>
-    serviceUntil(
-      () => second.service(),
-      () => first.read().status !== "pending",
-    ),
-  );
+  context.run("second", () => serviceUntil(second, () => first.read().status !== "pending"));
   const firstReply = read(first);
   expect(firstReply.label).toBe("first");
-  expect(callbacks).toEqual(["first"]);
-  expect(consumed).toEqual(["first"]);
-  expect(promiseReaction).toBe(false);
+  expect({ callbacks, consumed }).toEqual({ callbacks: ["first"], consumed: ["first"] });
+  expect(promiseReaction).not.toHaveBeenCalled();
   read(first.release());
   const secondReply = read(second);
-  expect(secondReply.label).toBe("second");
-  expect(secondReply.threadId).toBe(firstReply.threadId);
+  expect(secondReply).toMatchObject({ label: "second", threadId: firstReply.threadId });
   read(second.release({ retire: true }));
 });
 
 it("services a sibling pool's database facts while the host event loop is blocked", async () => {
   const blockedPool = fixture();
-  const admissionPool = createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>(
-    {
-      workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
-      maxWorkers: 1,
-      idleTimeoutMs: 0,
-    },
-    { retainedTransport: true },
+  const admissionPool = createPool<AdmissionTaskInput, AdmissionTaskResult>(
+    "./sqlite-database-admission.task.test-support.ts",
   );
-  pools.push(admissionPool);
   await Promise.all([blockedPool.run({}, {}), admissionPool.run({}, {})]);
   const location = path.join(tempDirs.make("cross-pool-admission-"), "shared.sqlite");
   const database = new DatabaseSync(location);
   database.exec("CREATE TABLE proof (value INTEGER)");
   database.close();
-  const barrier = new Int32Array(new SharedArrayBuffer(8));
-  const blocked = blockedPool.startTask({ wait: barrier.buffer }, {});
+  const barrier = blockingInput();
+  const blocked = blockedPool.startTask(barrier.input, {});
   const admission = admissionPool.startTask({ path: location }, {});
-  let promiseReaction = false;
-  void admission.result.then(
-    () => {
-      promiseReaction = true;
-    },
-    () => undefined,
-  );
+  const promiseReaction = vi.fn();
+  void admission.result.then(promiseReaction, () => undefined);
   try {
-    serviceUntil(
-      () => blocked.service(),
-      () => admission.read().status !== "pending",
-    );
+    serviceUntil(blocked, () => admission.read().status !== "pending");
     expect(read(admission).sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
-    expect(promiseReaction).toBe(false);
+    expect(promiseReaction).not.toHaveBeenCalled();
   } finally {
-    Atomics.store(barrier, 1, 1);
-    Atomics.notify(barrier, 1);
+    barrier.release();
     read(admission.release());
     read(blocked);
     read(blocked.release());
   }
 });
 
-function ordinaryFixture() {
-  const pool = createOwnedWorkerTaskPool<ResourceFixtureInput, ResourceFixtureReply>({
-    workerUrl: new URL("./worker-task-pool.resources.test-support.ts", import.meta.url),
-    maxWorkers: 1,
-  });
-  pools.push(pool);
-  const run = async (input: ResourceFixtureInput) => {
-    const task = pool.runTask(input, {});
-    try {
-      return await task.result;
-    } finally {
-      await task.close();
-    }
-  };
-  return { pool, run };
-}
-
 it("serializes resource cleanup after an asynchronous task without cancelling it", async () => {
-  const { pool, run } = ordinaryFixture();
+  const pool = fixture(false);
+  const run = (input: ResourceFixtureInput) => pool.run(input, {});
   const first = await run({ retain: "source" });
-  const barrier = new Int32Array(new SharedArrayBuffer(8));
-  const task = pool.runTask({ wait: barrier.buffer }, {});
-  await expect.poll(() => Atomics.load(barrier, 0)).toBe(1);
-  let closed = false;
-  const cleanup = pool.closeResources("source").then(() => {
-    closed = true;
-  });
+  const barrier = blockingInput();
+  const task = pool.runTask(barrier.input, {});
+  await expect.poll(barrier.entered).toBe(true);
+  const closed = vi.fn();
+  const cleanup = pool.closeResources("source").then(closed);
   try {
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(closed).toBe(false);
-    Atomics.store(barrier, 1, 1);
-    Atomics.notify(barrier, 1);
+    await nextTurn();
+    expect(closed).not.toHaveBeenCalled();
+    barrier.release();
     expect(await task.result).toEqual({ keys: ["source"], threadId: first.threadId });
     await cleanup;
-    expect(closed).toBe(true);
+    expect(closed).toHaveBeenCalledOnce();
   } finally {
-    Atomics.store(barrier, 1, 1);
-    Atomics.notify(barrier, 1);
+    barrier.release();
     await task.close();
     await cleanup;
   }

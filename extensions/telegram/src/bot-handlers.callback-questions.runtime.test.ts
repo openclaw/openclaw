@@ -1,4 +1,5 @@
 // Telegram question callback feedback tests.
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   handleTelegramQuestionCallback,
@@ -68,6 +69,11 @@ describe("sendTelegramQuestionFeedback", () => {
 
 describe("handleTelegramQuestionCallback", () => {
   it("does not turn a committed answer into an error when feedback fails", async () => {
+    using _ = vi.spyOn(questionGatewayRuntime, "resolveOption").mockResolvedValue({
+      status: "answered",
+      questionId: "target",
+      optionValue: "Production",
+    });
     const feedback = vi.fn(async () => {
       throw new Error("receipt failed");
     });
@@ -78,11 +84,6 @@ describe("handleTelegramQuestionCallback", () => {
         cfg: {} as never,
         senderId: "42",
         feedback,
-        resolveQuestion: vi.fn(async () => ({
-          status: "answered" as const,
-          questionId: "target",
-          optionValue: "Production",
-        })),
       }),
     ).resolves.toBeUndefined();
     expect(feedback).toHaveBeenCalledOnce();

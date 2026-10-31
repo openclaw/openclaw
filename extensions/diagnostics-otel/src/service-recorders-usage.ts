@@ -3,10 +3,10 @@ import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOtelContentValue } from "./service-content-normalization.js";
+import { assignOtelContentAttr } from "./service-content-normalization.js";
+import type { DiagnosticHandlers } from "./service-events.js";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
@@ -20,17 +20,53 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     "openclaw.delivery.kind": normalizeDiagnosticValue(evt.deliveryKind, "other"),
   });
 
+  function recordMessageDeliveryFinished(
+    evt: Extract<
+      DiagnosticEventPayload,
+      { type: "message.delivery.completed" | "message.delivery.error" }
+    >,
+    metadata: DiagnosticEventMetadata,
+  ) {
+    const attrs = {
+      ...messageDeliveryAttrs(evt),
+      "openclaw.outcome": evt.type === "message.delivery.error" ? "error" : "completed",
+      ...(evt.type === "message.delivery.error"
+        ? { "openclaw.errorCategory": normalizeDiagnosticValue(evt.errorCategory, "other") }
+        : {}),
+    };
+    runtime.messageDeliveryDurationHistogram.record(evt.durationMs, attrs);
+    if (!runtime.tracesEnabled) {
+      return;
+    }
+    const span = runtime.spanWithDuration(
+      "openclaw.message.delivery",
+      {
+        ...attrs,
+        ...(evt.type === "message.delivery.completed"
+          ? { "openclaw.delivery.result_count": evt.resultCount }
+          : {}),
+      },
+      evt.durationMs,
+      { parentContext: runtime.activeInternalOrTrustedContext(evt, metadata), endTimeMs: evt.ts },
+    );
+    if (evt.type === "message.delivery.error") {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: redactSensitiveText(evt.errorCategory),
+      });
+    }
+    span.end(evt.ts);
+  }
+
   return {
-    recordModelUsage(
-      evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>,
-      metadata: DiagnosticEventMetadata,
-      hostPluginId?: string,
-    ) {
+    "model.usage"(evt, metadata, { hostPluginId }) {
       const attrs = {
         "openclaw.channel": evt.channel ?? "unknown",
         "openclaw.agent": normalizeDiagnosticValue(evt.agentId),
         "openclaw.provider": evt.provider ?? "unknown",
         "openclaw.model": evt.model ?? "unknown",
+        ...(evt.purpose ? { "openclaw.purpose": evt.purpose } : {}),
+        ...(evt.runtimeKind ? { "openclaw.runtime.kind": evt.runtimeKind } : {}),
       };
       const genAiAttrs: Record<string, string> = {
         "gen_ai.operation.name": "chat",
@@ -38,7 +74,8 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         "gen_ai.request.model": normalizeDiagnosticValue(evt.model),
       };
 
-      const usage = evt.usage;
+      const unavailable = evt.usageReport?.state === "unavailable";
+      const usage: typeof evt.usage = unavailable ? {} : evt.usage;
       for (const [tokenType, field] of [
         ["input", "input"],
         ["output", "output"],
@@ -60,7 +97,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         }
       }
 
-      if (evt.costUsd) {
+      if (!unavailable && evt.costUsd) {
         runtime.costCounter.add(evt.costUsd, attrs);
       }
       if (evt.durationMs) {
@@ -76,15 +113,23 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (!runtime.tracesEnabled) {
         return;
       }
-      const genAiInputTokens =
-        usage.promptTokens ?? (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      const genAiInputTokens = unavailable
+        ? undefined
+        : (usage.promptTokens ??
+          (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0));
       const spanAttrs: Record<string, string | number> = {
         ...attrs,
-        "openclaw.tokens.input": usage.input ?? 0,
-        "openclaw.tokens.output": usage.output ?? 0,
-        "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
-        "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
-        "openclaw.tokens.total": usage.total ?? 0,
+        ...(evt.usageReport ? { "openclaw.usage.state": evt.usageReport.state } : {}),
+        // Missing accounting is not a measured zero, including an aborted auxiliary attempt.
+        ...(!unavailable
+          ? {
+              "openclaw.tokens.input": usage.input ?? 0,
+              "openclaw.tokens.output": usage.output ?? 0,
+              "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
+              "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
+              "openclaw.tokens.total": usage.total ?? 0,
+            }
+          : {}),
       };
       if (metadata.trusted && metadata.internal && hostPluginId) {
         spanAttrs["openclaw.plugin"] = normalizeDiagnosticValue(hostPluginId);
@@ -106,14 +151,14 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
       span.end(evt.ts);
     },
-    recordWebhookReceived(evt: Extract<DiagnosticEventPayload, { type: "webhook.received" }>) {
+    "webhook.received"(evt) {
       const attrs = {
         "openclaw.channel": evt.channel ?? "unknown",
         "openclaw.webhook": evt.updateType ?? "unknown",
       };
       runtime.webhookReceivedCounter.add(1, attrs);
     },
-    recordWebhookProcessed(evt: Extract<DiagnosticEventPayload, { type: "webhook.processed" }>) {
+    "webhook.processed"(evt) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
         "openclaw.webhook": normalizeDiagnosticValue(evt.updateType),
@@ -132,7 +177,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       );
       span.end();
     },
-    recordWebhookError(evt: Extract<DiagnosticEventPayload, { type: "webhook.error" }>) {
+    "webhook.error"(evt) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
         "openclaw.webhook": normalizeDiagnosticValue(evt.updateType),
@@ -152,7 +197,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: redactedError });
       span.end();
     },
-    recordMessageQueued(evt: Extract<DiagnosticEventPayload, { type: "message.queued" }>) {
+    "message.queued"(evt) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
         "openclaw.source": normalizeDiagnosticValue(evt.source),
@@ -162,16 +207,13 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.queueDepthHistogram.record(evt.queueDepth, attrs);
       }
     },
-    recordMessageReceived(evt: Extract<DiagnosticEventPayload, { type: "message.received" }>) {
+    "message.received"(evt) {
       runtime.messageReceivedCounter.add(1, {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
         "openclaw.source": normalizeDiagnosticValue(evt.source),
       });
     },
-    recordMessageDispatchStarted(
-      evt: Extract<DiagnosticEventPayload, { type: "message.dispatch.started" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "message.dispatch.started"(evt, metadata) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
         "openclaw.source": normalizeDiagnosticValue(evt.source),
@@ -193,9 +235,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         }),
       );
     },
-    recordMessageDispatchCompleted(
-      evt: Extract<DiagnosticEventPayload, { type: "message.dispatch.completed" }>,
-    ) {
+    "message.dispatch.completed"(evt) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
         "openclaw.outcome": evt.outcome,
@@ -205,11 +245,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       runtime.messageDispatchCompletedCounter.add(1, attrs);
       runtime.messageDispatchDurationHistogram.record(evt.durationMs, attrs);
     },
-    recordMessageProcessed(
-      evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
-      metadata: DiagnosticEventMetadata,
-      privateData: DiagnosticEventPrivateData,
-    ) {
+    "message.processed"(evt, metadata, privateData) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
         "openclaw.outcome": evt.outcome ?? "unknown",
@@ -226,17 +262,9 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (evt.reason) {
         spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
       }
-      const inputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
-        : undefined;
-      if (inputValue) {
-        spanAttrs["input.value"] = inputValue;
-      }
-      const outputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
-        : undefined;
-      if (outputValue) {
-        spanAttrs["output.value"] = outputValue;
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.messageContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.messageContent?.finalResponse);
       }
       const trackedSpan = runtime.getTrackedInternalOrTrustedSpan(evt, metadata);
       const span =
@@ -252,52 +280,10 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       const traceContext = runtime.internalOrTrustedTraceContext(evt, metadata);
       runtime.completeTrackedLifecycleSpan(trackedSpan ? traceContext : undefined, span, evt.ts);
     },
-    recordMessageDeliveryStarted(
-      evt: Extract<DiagnosticEventPayload, { type: "message.delivery.started" }>,
-    ) {
+    "message.delivery.started"(evt) {
       runtime.messageDeliveryStartedCounter.add(1, messageDeliveryAttrs(evt));
     },
-    recordMessageDeliveryFinished(
-      evt: Extract<
-        DiagnosticEventPayload,
-        { type: "message.delivery.completed" | "message.delivery.error" }
-      >,
-      metadata: DiagnosticEventMetadata,
-    ) {
-      const attrs = {
-        ...messageDeliveryAttrs(evt),
-        "openclaw.outcome": evt.type === "message.delivery.error" ? "error" : "completed",
-        ...(evt.type === "message.delivery.error"
-          ? { "openclaw.errorCategory": normalizeDiagnosticValue(evt.errorCategory, "other") }
-          : {}),
-      };
-      runtime.messageDeliveryDurationHistogram.record(evt.durationMs, attrs);
-      if (!runtime.tracesEnabled) {
-        return;
-      }
-      const span = runtime.spanWithDuration(
-        "openclaw.message.delivery",
-        {
-          ...attrs,
-          ...(evt.type === "message.delivery.completed"
-            ? { "openclaw.delivery.result_count": evt.resultCount }
-            : {}),
-        },
-        evt.durationMs,
-        { parentContext: runtime.activeInternalOrTrustedContext(evt, metadata), endTimeMs: evt.ts },
-      );
-      if (evt.type === "message.delivery.error") {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: redactSensitiveText(evt.errorCategory),
-        });
-      }
-      span.end(evt.ts);
-    },
-    recordRunStarted(
-      evt: Extract<DiagnosticEventPayload, { type: "run.started" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "run.started"(evt, metadata) {
       if (!runtime.tracesEnabled || !metadata.trusted) {
         return;
       }
@@ -321,5 +307,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         });
       }
     },
-  };
+    "message.delivery.completed": recordMessageDeliveryFinished,
+    "message.delivery.error": recordMessageDeliveryFinished,
+  } satisfies DiagnosticHandlers;
 }

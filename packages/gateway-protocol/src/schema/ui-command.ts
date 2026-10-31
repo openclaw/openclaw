@@ -24,6 +24,7 @@ export const UiSidebarCommandSchema = closedObject({
 const UiPanelCommandFields = {
   kind: Type.Literal("panel"),
   open: Type.Boolean(),
+  expanded: Type.Optional(Type.Boolean()),
   dock: Type.Optional(stringLiteralUnion(["bottom", "right"])),
 };
 export const UiPanelCommandSchema = Type.Union([

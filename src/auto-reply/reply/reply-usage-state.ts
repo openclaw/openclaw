@@ -69,12 +69,7 @@ export function buildReplyUsageState(
     compactionCount: params.compactionCount,
     contextTokenBudget: asFiniteNumber(params.contextTokenBudget),
     contextUsedTokens:
-      asFiniteNumber(params.contextUsedTokens) ??
-      deriveContextPromptTokens({
-        lastCallUsage: params.lastCallUsage,
-        promptTokens: params.promptTokens,
-        usage: params.usage,
-      }),
+      asFiniteNumber(params.contextUsedTokens) ?? deriveContextPromptTokens(params),
     usage: projectHookUsage(params.usage),
     lastUsage: projectHookUsage(params.lastCallUsage),
   };

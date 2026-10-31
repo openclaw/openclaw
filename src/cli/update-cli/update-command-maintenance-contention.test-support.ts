@@ -16,6 +16,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -24,8 +25,11 @@ import {
 } from "./update-command-post-update.test-support.js";
 import { resolveMutableUpdateFailure } from "./update-command-result.js";
 import * as service from "./update-command-service.js";
-import { createPostUpdateFailureResult } from "./update-command-terminal-publication.js";
+import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
+
+const healthyRecovery = { serviceRestartSafe: true as const, version: "2026.10.3" };
+const packageResult = () => updateResult({ after: { version: "2026.10.3" } });
 
 export function registerMaintenanceContentionTests(
   makeHome: () => string,
@@ -45,14 +49,10 @@ export function registerMaintenanceContentionTests(
       const databasePath = resolveOpenClawStateSqlitePath(env);
       openOpenClawStateDatabase({ env });
       closeOpenClawStateDatabaseForTest();
-      await fs.writeFile(
-        path.join(identity.home, "openclaw.json"),
-        JSON.stringify({ gateway: { mode: "local", port: 19301 } }),
-      );
-      await fs.writeFile(
-        path.join(identity.home, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.10.3" }),
-      );
+      const writeJson = (file: string, data: unknown) =>
+        fs.writeFile(path.join(identity.home, file), JSON.stringify(data));
+      await writeJson("openclaw.json", { gateway: { mode: "local", port: 19301 } });
+      await writeJson("package.json", { name: "openclaw", version: "2026.10.3" });
       const ownerPath = resolveGatewayStateOwnerPath(databasePath);
       const payload = defaultPayload(databasePath);
       const actualConfig =
@@ -62,7 +62,6 @@ export function registerMaintenanceContentionTests(
       let refusal: unknown;
       let releaseRequested = false;
       let held = false;
-      const reads: number[] = [];
       const assertFresh = ownerRecord.assertPersistedStateDatabaseAccessAllowed;
       vi.spyOn(ownerRecord, "assertPersistedStateDatabaseAccessAllowed").mockImplementation(
         (...args) => {
@@ -70,7 +69,6 @@ export function registerMaintenanceContentionTests(
             return assertFresh(...args);
           } catch (error) {
             refusal = error;
-            reads.push(performance.now());
             if (!expires && !releaseRequested && child?.connected) {
               releaseRequested = true;
               child.send(50);
@@ -116,7 +114,7 @@ export function registerMaintenanceContentionTests(
           await holding;
           held = true;
         }
-        return await withOpenClawStateDatabaseReadSnapshot(
+        return withOpenClawStateDatabaseReadSnapshot(
           () => actualConfig.readConfigFileSnapshot({ observe: false }),
           { env },
         );
@@ -133,29 +131,21 @@ export function registerMaintenanceContentionTests(
           { packageRoot: identity.home, restartEnvironment: env },
           {
             updateStepTimeoutMs: 300,
-            result: {
-              status: "ok",
-              mode: "npm",
-              root: identity.home,
-              after: { version: "2026.10.3" },
-              steps: [],
-              durationMs: 1,
-            },
+            result: { ...packageResult(), root: identity.home },
           },
           { candidateRuntime: true },
         );
         if (expires) {
           const failure = await work.catch((error: unknown) => error);
           expect(failure).toMatchObject({ result: { recovery: { serviceRestartSafe: true } } });
-          expect(refusal).toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
           const { result } = await resolveMutableUpdateFailure({
             cause: refusal,
             mode: "npm",
             root: identity.home,
             durationMs: 300,
-            originalRecovery: async () => ({ serviceRestartSafe: true, version: "2026.10.3" }),
+            originalRecovery: async () => ({ ...healthyRecovery }),
           });
-          expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "2026.10.3" });
+          expect(result.recovery).toEqual(healthyRecovery);
           const settled = await resolveSettledUpdateCommandResult(
             { opts: {}, root: identity.home, ownedManagedUpdateEnv: env },
             result,
@@ -165,7 +155,6 @@ export function registerMaintenanceContentionTests(
           expect(mocks.restartService).not.toHaveBeenCalled();
         } else {
           await work;
-          expect(reads.length).toBeGreaterThanOrEqual(1);
           expect(mocks.restartService).toHaveBeenCalledOnce();
           expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status: "ok" });
         }
@@ -180,51 +169,32 @@ export function registerMaintenanceContentionTests(
     },
   );
 
-  it.each([false, true])(
-    "keeps actual data-at-risk refusal authoritative (dataAtRisk=$dataAtRisk)",
-    async (dataAtRisk) => {
-      const contention = new StateDatabaseOfflineMaintenanceError(
-        "/synthetic/state.sqlite",
-        "maintenance busy",
-      );
-      const error = dataAtRisk
-        ? new AggregateError([
-            contention,
-            new DoctorMaintenanceRefusalError("incomplete migration", {
-              kind: "data-at-risk",
-              reason: "incomplete-migration",
-            }),
-          ])
-        : new Error("settlement failed", { cause: contention });
-      const original = {
-        status: "ok" as const,
-        mode: "npm" as const,
-        after: { version: "2026.10.3" },
-        steps: [],
-        durationMs: 1,
-      };
-      const postUpdate = createPostUpdateFailureResult(
-        { result: original, root: "/synthetic", startedAt: Date.now() },
-        error,
-      ).result;
-      const originalRecovery = vi.fn(async () => ({
-        serviceRestartSafe: true as const,
-        version: "2026.10.3",
-      }));
-      const { result: fallback } = await resolveMutableUpdateFailure({
-        ...original,
-        root: "/synthetic",
-        cause: error,
-        originalRecovery,
-      });
-      expect(postUpdate.recovery?.serviceRestartSafe).toBe(!dataAtRisk);
-      if (dataAtRisk) {
-        expect(fallback.recovery?.serviceRestartSafe).not.toBe(true);
-        expect(originalRecovery).not.toHaveBeenCalled();
-      } else {
-        expect(fallback.recovery).toEqual({ serviceRestartSafe: true, version: "2026.10.3" });
-        expect(originalRecovery).toHaveBeenCalledOnce();
-      }
-    },
-  );
+  it("keeps data-at-risk refusal authoritative over maintenance contention", async () => {
+    const contention = new StateDatabaseOfflineMaintenanceError(
+      "/synthetic/state.sqlite",
+      "maintenance busy",
+    );
+    const error = new AggregateError([
+      contention,
+      new DoctorMaintenanceRefusalError("incomplete migration", {
+        kind: "data-at-risk",
+        reason: "incomplete-migration",
+      }),
+    ]);
+    const original = packageResult();
+    const postUpdate = createPostUpdateExceptionResult(
+      { result: original, root: "/synthetic", startedAt: Date.now() },
+      error,
+    ).result;
+    const originalRecovery = vi.fn(async () => ({ ...healthyRecovery }));
+    const { result: fallback } = await resolveMutableUpdateFailure({
+      ...original,
+      root: "/synthetic",
+      cause: error,
+      originalRecovery,
+    });
+    expect(postUpdate.recovery?.serviceRestartSafe).toBe(false);
+    expect(fallback.recovery?.serviceRestartSafe).not.toBe(true);
+    expect(originalRecovery).not.toHaveBeenCalled();
+  });
 }

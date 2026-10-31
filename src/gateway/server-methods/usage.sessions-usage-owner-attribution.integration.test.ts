@@ -1,20 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.native.js";
 import {
+  appendTranscriptMessage,
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
+  rewindSessionToMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
   projectionLane,
@@ -232,28 +234,24 @@ it("keeps same-key overview context reports with their selected agent", async ()
       ["opus", "global"],
     ]);
     // Federation picks one public sentinel today; assembly must retain each physical owner supplied by selection.
-    const selection = vi
+    using _ = vi
       .spyOn(usageSessionSelection, "selectUsageSessions")
       .mockResolvedValueOnce(candidates);
-    try {
-      const result = await readUsage({
-        agentScope: "all",
-        range: "all",
-        projection: "overview",
-        includeContextWeight: true,
+    const result = await readUsage({
+      agentScope: "all",
+      range: "all",
+      projection: "overview",
+      includeContextWeight: true,
+    });
+    expect(result.sessions).toHaveLength(2);
+    for (const [index, agentId] of ["main", "opus"].entries()) {
+      expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
+        key: "global",
+        agentId,
+        sessionId: `${agentId}-global-context`,
+        hasContextWeight: true,
+        contextWeight: reports[index],
       });
-      expect(result.sessions).toHaveLength(2);
-      for (const [index, agentId] of ["main", "opus"].entries()) {
-        expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
-          key: "global",
-          agentId,
-          sessionId: `${agentId}-global-context`,
-          hasContextWeight: true,
-          contextWeight: reports[index],
-        });
-      }
-    } finally {
-      selection.mockRestore();
     }
   });
 });
@@ -276,12 +274,11 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
         cronSession,
         agentSessionKey: sessionKey,
         workspaceDir: state.workspaceDir,
-        persistSessionEntry: async ({ storePath, fallbackEntry, update }) => {
-          await patchSessionEntryCore(
-            { ...scope, storePath },
-            (_entry, context) => update(context.existingEntry),
-            { fallbackEntry, replaceEntry: true },
-          );
+        persistSessionEntry: async ({ storePath, operation }) => {
+          return await applySessionEntryOperation({ ...scope, storePath }, operation, {
+            fallbackEntry: operation.next,
+            replaceEntry: true,
+          });
         },
       })();
       const sessionId = cronSession.sessionEntry.sessionId;
@@ -354,6 +351,51 @@ it("uses committed metadata for selected usage and families with an empty curren
         },
       ]);
       expect(result.totals.totalTokens).toBe(17);
+    }
+  });
+});
+
+it("keeps a rewound window in its session's usage family", async () => {
+  await withUsageState(async (state) => {
+    const key = "agent:main:usage-rewind";
+    const scope = sessionScope(state, "main", key);
+    const firstId = "usage-rewind-first";
+    const timestamp = Date.now() - 60_000;
+    await upsertSessionEntryCore(scope, { sessionId: firstId, updatedAt: timestamp });
+    const target = { ...scope, sessionId: firstId };
+    await appendTranscriptMessage(target, {
+      eventId: "rewind-user",
+      message: { role: "user", content: "first prompt" },
+      now: timestamp - 1_000,
+      parentId: null,
+    });
+    await appendTranscriptMessage(target, {
+      eventId: "rewind-assistant",
+      message: usageMessage(23, timestamp),
+      now: timestamp,
+      parentId: "rewind-user",
+    });
+
+    const rewound = await rewindSessionToMessage({ ...scope, entryId: "rewind-user" });
+    assert(rewound.status === "created");
+    const currentId = rewound.entry.sessionId;
+    await warmUsage(["main"]);
+    for (const projection of [{}, { projection: "overview" }]) {
+      const result = await readUsage({
+        range: "all",
+        agentId: "main",
+        groupBy: "family",
+        ...projection,
+      });
+      expect(result.sessions).toMatchObject([
+        {
+          key,
+          currentSessionId: currentId,
+          includedSessionIds: [currentId, firstId],
+          usage: { totalTokens: 23 },
+        },
+      ]);
+      expect(result.totals.totalTokens).toBe(23);
     }
   });
 });
@@ -487,7 +529,7 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       session: { store: storePath },
       plugins: { enabled: false },
     });
-    const config = await captureRuntimeConfigAsyncReader()();
+    await captureRuntimeConfigAsyncReader()();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const [agentId, key] of [
       ["ops", "global"],
@@ -498,11 +540,6 @@ it("reads selected reports from the physical owner of shared-store sentinels and
         { agentId, sessionKey: key, storePath },
         { sessionId: `${agentId}-usage`, updatedAt: 1, systemPromptReport: contextWeight },
       );
-      const target = loadCombinedSessionStoreForGatewayCore(config, {
-        agentId,
-      }).targetsBySessionKey.get(key);
-      expect(target?.agentId).toBe(agentId);
-      expect(target?.storeTarget).toEqual({ agentId: "main", storePath });
       const params = { range: "all", key, includeContextWeight: true };
       for (const requestedAgent of [undefined, agentId]) {
         const payload = await readUsage({ ...params, agentId: requestedAgent });
@@ -523,7 +560,6 @@ it.each([
   "keeps independent same-id transcripts with $owner store key $key through the real usage handler",
   async ({ owner, key: opusKey }) => {
     await withUsageState(async (state) => {
-      const config = getRuntimeConfig();
       const sessionId = "shared-usage-session";
       const mainKey = "agent:main:telegram:dm";
       for (const agentId of ["main", owner]) {
@@ -554,11 +590,6 @@ it.each([
         });
       }
 
-      const projected = loadCombinedSessionStoreForGatewayCore(config);
-      expect(projected.targetsBySessionKey.get(mainKey)?.agentId).toBe("main");
-      if (opusKey) {
-        expect(projected.targetsBySessionKey.get(opusKey)?.agentId).toBe(owner);
-      }
       const result = await readUsage({ agentScope: "all", range: "all", limit: 50 });
       expect(result.sessions).toHaveLength(2);
       expect(result.sessions.map(({ key, agentId, label }) => ({ key, agentId, label }))).toEqual(

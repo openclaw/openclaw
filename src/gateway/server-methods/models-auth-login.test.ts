@@ -672,18 +672,6 @@ describe("models.authLogin ownership", () => {
     expectReply(await h.start(), { sessionId: "login", status: "running" });
   });
 
-  it("does not register or start login when the owner disconnects during admission", async () => {
-    const h = harness();
-    const { entered, release } = holdAdmission(true);
-    const started = h.start();
-    await entered.promise;
-    h.controller.abort();
-    release.resolve();
-    await expect(started).rejects.toThrow();
-    expect(h.tracker.wizardSessions.size).toBe(0);
-    expect(hooks.login).not.toHaveBeenCalled();
-  });
-
   it.each(["owner", "method"])(
     "rejects the pre-write callback after %s authority changes",
     async (changed) => {

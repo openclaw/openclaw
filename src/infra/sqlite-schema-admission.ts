@@ -8,23 +8,14 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import type { SqliteSchemaFacts } from "./sqlite-schema-scope.js";
 
-export type SqliteSchemaFacts = {
-  readonly admissionId: string;
-  readonly revision: number;
-  readonly userVersion: number;
-  readonly textEncoding: string;
-  readonly schemaVersion: number;
-  readonly tables: ReadonlySet<string>;
-  readonly views: ReadonlySet<string>;
-  readonly tableSql: ReadonlyMap<string, string | null>;
-  readonly indexes: ReadonlySet<string>;
-  readonly indexDefinitions: ReadonlyMap<string, { table: string; sql: string | null }>;
-  readonly triggers: ReadonlyMap<string, { table: string; sql: string | null }>;
-};
+export type { SqliteSchemaFacts } from "./sqlite-schema-scope.js";
 
 export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
   name: "sqlite-schema",
+  writer: "connection",
+  lifetime: "process",
   schemaDependent: true,
   read: (value) => {
     // SAFETY: Only the typed SQLite catalog owner publishes this private fact key.
@@ -34,6 +25,8 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
 
 const textEncodingAdmission: SqliteDatabaseAdmissionKey<string> = {
   name: "sqlite-text-encoding",
+  writer: "connection",
+  lifetime: "process",
   read: (value) => (typeof value === "string" ? value : undefined),
 };
 
@@ -50,6 +43,16 @@ export function readSqliteTextEncoding(database: DatabaseSync): string {
   return encoding.encoding;
 }
 
+/** Native catalog projection shared by admission and maintenance. */
+export function readSqliteSchemaObjects(database: DatabaseSync) {
+  return executeWithCachedStatement(
+    database,
+    "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
+    [],
+    (s) => s.all(),
+  );
+}
+
 /** Capture the physical catalog for admission or pre-admission schema maintenance. */
 export function captureSqliteSchemaFacts(
   database: DatabaseSync,
@@ -63,12 +66,7 @@ export function captureSqliteSchemaFacts(
     // Validate the captured header before catalog errors can mask its refusal.
     validateUserVersion?.(userVersion);
     const textEncoding = retainedTextEncoding ?? readSqliteTextEncoding(database);
-    const objects = executeWithCachedStatement(
-      database,
-      "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
-      [],
-      (s) => s.all(),
-    );
+    const objects = readSqliteSchemaObjects(database);
     const facts = {
       admissionId: randomUUID(),
       revision,

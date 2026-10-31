@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import * as candidateState from "../infra/update-candidate-state.js";
 import type { UpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -14,51 +15,16 @@ import {
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import {
-  commandCalls,
-  doctorCommandCall,
-  expectNoSideEffects,
-  freshRestartCalls,
-  getErrorOutput,
-  getLogOutput,
-  lastWriteJsonCall,
-  packageInstallCommandCall,
-  requireValue,
-} from "./update-cli-assertions.test-support.js";
+import * as assert from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
-import {
-  candidateValidation,
-  inferenceRepair,
-  loadInstalledPluginIndexInstallRecords,
-  restartHealthTestControl,
-  resumeScheduledTaskAutoStartAfterUpdate,
-  serviceDefinitionMutationCapability,
-  serviceLoaded,
-  serviceReadRuntime,
-  serviceRestart,
-  serviceStart,
-  serviceStop,
-  spawn,
-  suspendScheduledTaskAutoStartForUpdate,
-  syncPluginsForUpdateChannel,
-  triageCommand,
-} from "./update-cli-mocks.test-support.js";
-import {
-  defaultRuntime,
-  ExitError,
-  getUpdateRun,
-  invokeUpdateCli,
-  resolveGatewayInstallEntrypoint,
-  runCommandWithTimeout,
-  runDaemonRestart,
-  runExec,
-  updateCommand,
-  updateGitCheckout,
-} from "./update-cli-modules.test-support.js";
+import { candidateStartupStep as startupStep } from "./update-cli-lifecycle.test-support.js";
+import * as mocks from "./update-cli-mocks.test-support.js";
+import * as update from "./update-cli-modules.test-support.js";
 import { pluginSyncResult } from "./update-cli/update-cli-config.test-support.js";
 import { recoveryVerificationStep } from "./update-cli/update-cli-failure-recovery.test-support.js";
 
@@ -66,37 +32,57 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
-  const {
-    mockCurrentProcessFreshDoctor,
-    mockFileBackedPathExists,
-    mockNpmGlobalCommands,
-    mockNpmGlobalRoot,
-    mockPackageInstallAtCaseDir,
-    mockRunningManagedGateway,
-    mockStoppedManagedGitGateway,
-    primeServiceCommand,
-    profileStateDir,
-    reportCandidateSteps,
-    setStdoutTty,
-    setTty,
-    setupInstalledPackageAtNodeModules,
-    setupInstalledPackageRoot,
-    tempDirs,
-  } = createUpdateCliFixture();
+  const setup = createUpdateCliFixture();
+  const { updateCommand, ExitError } = update;
+
+  async function expectPackageVersion(root: string, version: string) {
+    expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
+      version,
+    });
+  }
+
+  function callOrder(mock: { mock: { invocationCallOrder: number[] } }, index = 0) {
+    return assert.requireValue(mock.mock.invocationCallOrder[index], "expected call order");
+  }
+  async function runningPackage(prefix: string, node = process.execPath) {
+    const root = await setup.mockPackageInstallAtCaseDir(prefix);
+    setup.mockFileBackedPathExists();
+    setup.mockRunningManagedGateway([node, path.join(root, "dist", "index.js"), "gateway", "run"]);
+    return root;
+  }
+  async function stoppedPackage(
+    platform: NodeJS.Platform,
+    prefix: string,
+    env?: NodeJS.ProcessEnv,
+  ) {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    const dir = setup.tempDirs.make(prefix);
+    const installed = await setup.setupInstalledPackageRoot(dir);
+    setup.primeServiceCommand(
+      [nodeExecutable, installed.entryPath, "gateway", "run"],
+      env,
+      env?.OPENCLAW_SERVICE_MARKER && platform === "win32"
+        ? resolveGatewayTaskScriptPath(process.env)
+        : undefined,
+    );
+    mocks.serviceLoaded.mockResolvedValue(true);
+    mocks.serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    setup.mockFileBackedPathExists();
+    return { ...installed, platformSpy };
+  }
 
   it.each(["config-change", "legacy-config-change", "invalid"] as const)(
     "validates the staged candidate without inference while the previous gateway serves (%s)",
     async (outcome) => {
       const valid = outcome !== "invalid";
       const legacyConfigChange = outcome === "legacy-config-change";
-      const succeeds = valid;
-      const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
-        path.join(tempDirs.make("openclaw-update-candidate-order-"), "lib", "node_modules"),
+      const { nodeModules, pkgRoot, entryPath } = await setup.setupInstalledPackageAtNodeModules(
+        path.join(setup.tempDirs.make("openclaw-update-candidate-order-"), "lib", "node_modules"),
         "1.0.0",
       );
-      mockNpmGlobalRoot(nodeModules);
-      mockFileBackedPathExists();
-      mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
+      setup.mockNpmGlobalRoot(nodeModules);
+      setup.mockFileBackedPathExists();
+      setup.mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
       const doctorChanges: UpdateDoctorConfigChange[] = [
         { kind: "key", key: "meta" },
         { kind: "key", key: "plugins" },
@@ -104,14 +90,19 @@ describe("update-cli", () => {
         { kind: "migration", message: "Enabled the configured provider plugin." },
       ];
       if (outcome === "config-change") {
-        const runCommand = requireValue(
-          vi.mocked(runCommandWithTimeout).getMockImplementation(),
+        const readGenerations = candidateState.readUpdateDatabaseGenerationsIsolated;
+        // The dummy installed package has no workers; retain real reads in the harness runtime.
+        vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
+          (paths, options) => readGenerations(paths, { ...options, root: undefined }),
+        );
+        const runCommand = assert.requireValue(
+          vi.mocked(update.runCommandWithTimeout).getMockImplementation(),
           "configured updater commands",
         );
-        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+        vi.mocked(update.runCommandWithTimeout).mockImplementation(async (argv, options) => {
           if (argv.at(-1) === "--doctor") {
             const env = typeof options === "number" ? undefined : options.env;
-            const resultPath = requireValue(
+            const resultPath = assert.requireValue(
               env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
               "Doctor receipt path",
             );
@@ -124,7 +115,7 @@ describe("update-cli", () => {
         });
       }
       const events: string[] = [];
-      spawn.mockImplementationOnce((_node, _argv, options: { env: NodeJS.ProcessEnv }) => {
+      mocks.spawn.mockImplementationOnce((_node, _argv, options: { env: NodeJS.ProcessEnv }) => {
         const resultPath = options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
         if (!resultPath) {
           throw new Error("post-core result path missing");
@@ -150,8 +141,7 @@ describe("update-cli", () => {
             },
           )
             .then(async () => {
-              // Real child environments cannot overlap the parent. Restore this
-              // emulated child before its result lets the parent resume.
+              // Restore the emulated child's environment before the parent can read its receipt.
               await fs.rename(childResultPath, resultPath);
               child.emit("exit", 0, null);
               child.emit("close", 0, null);
@@ -164,24 +154,16 @@ describe("update-cli", () => {
         return child;
       });
       let candidateRoot: string | undefined;
-      candidateValidation.mockImplementation(async (options) => {
+      mocks.candidateValidation.mockImplementation(async (options) => {
         const { root } = options;
         candidateRoot = root;
         events.push("validate");
-        expect(serviceStop).not.toHaveBeenCalled();
-        expect(await serviceReadRuntime()).toMatchObject({ status: "running" });
+        expect(mocks.serviceStop).not.toHaveBeenCalled();
+        expect(await mocks.serviceReadRuntime()).toMatchObject({ status: "running" });
         expect(root).not.toBe(pkgRoot);
-        expect(
-          JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")),
-        ).toMatchObject({
-          version: "9999.0.0",
-        });
-        expect(
-          JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
-        ).toMatchObject({
-          version: "1.0.0",
-        });
-        return reportCandidateSteps(options, {
+        await expectPackageVersion(root, "9999.0.0");
+        await expectPackageVersion(pkgRoot, "1.0.0");
+        return setup.reportCandidateSteps(options, {
           status: valid ? "ok" : "error",
           durationMs: 1,
           logTail: ["candidate readiness failed"],
@@ -194,48 +176,35 @@ describe("update-cli", () => {
           ...(legacyConfigChange || outcome === "config-change"
             ? { doctorConfigChanges: doctorChanges }
             : {}),
-          steps: [
-            {
-              name: "candidate-gateway-startup",
-              command: "openclaw gateway",
-              cwd: root,
-              durationMs: 1,
-              exitCode: valid ? 0 : 1,
-              ...(!valid ? { stderrTail: "candidate readiness failed" } : {}),
-            },
-          ],
+          steps: [startupStep(root, valid)],
         });
       });
-      serviceStop.mockImplementationOnce(async () => {
+      mocks.serviceStop.mockImplementationOnce(async () => {
         events.push("stop");
-        expect(
-          JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
-        ).toMatchObject({
-          version: "1.0.0",
-        });
-        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+        await expectPackageVersion(pkgRoot, "1.0.0");
+        mocks.serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
       });
-      syncPluginsForUpdateChannel.mockImplementationOnce(async ({ config }) => {
+      mocks.syncPluginsForUpdateChannel.mockImplementationOnce(async ({ config }) => {
         events.push("plugins");
-        expect(await serviceReadRuntime()).toMatchObject({ status: "stopped" });
+        expect(await mocks.serviceReadRuntime()).toMatchObject({ status: "stopped" });
         return pluginSyncResult(config);
       });
 
-      if (succeeds) {
-        await updateCommand({ yes: true, json: true }).catch((cause: unknown) => {
-          throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, { cause });
-        });
+      if (valid) {
+        await updateCommand({ yes: true, json: true });
         expect(events).toEqual(["validate", "stop", "plugins"]);
-        expect(spawn).toHaveBeenCalledOnce();
-        expect(runExec).toHaveBeenCalledWith(
+        expect(mocks.spawn).toHaveBeenCalledOnce();
+        expect(update.runExec).toHaveBeenCalledWith(
           expect.any(String),
           [entryPath, "config", "validate", "--json"],
           expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
         );
         expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-        const result = lastWriteJsonCall() as UpdateRunResult;
+        const result = assert.lastWriteJsonCall() as UpdateRunResult;
         expect(result.status).toBe("ok");
-        expect(getUpdateRun(requireValue(result.runId, "updated run id"))).toMatchObject({
+        expect(
+          update.getUpdateRun(assert.requireValue(result.runId, "updated run id")),
+        ).toMatchObject({
           status: "succeeded",
           downtimeMs: expect.any(Number),
           verification: { readyz: true, serviceRunning: true },
@@ -243,24 +212,20 @@ describe("update-cli", () => {
       } else {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(events).toEqual(["validate"]);
-        expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
-        expect(freshRestartCalls()).toHaveLength(0);
-        expect(
-          JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
-        ).toMatchObject({
-          version: "1.0.0",
-        });
-        expect(lastWriteJsonCall()).toMatchObject({
+        assert.expectNoSideEffects(mocks.serviceStop, mocks.serviceStart, mocks.serviceRestart);
+        expect(assert.freshRestartCalls()).toHaveLength(0);
+        await expectPackageVersion(pkgRoot, "1.0.0");
+        expect(assert.lastWriteJsonCall()).toMatchObject({
           status: "error",
           reason: "runtime-verification-failed",
         });
         await expect(
-          fs.access(requireValue(candidateRoot, "candidate root")),
+          fs.access(assert.requireValue(candidateRoot, "candidate root")),
         ).rejects.toMatchObject({ code: "ENOENT" });
       }
-      const result = lastWriteJsonCall() as UpdateRunResult;
-      const record = getUpdateRun(requireValue(result.runId, "run id"));
-      expect(inferenceRepair).not.toHaveBeenCalled();
+      const result = assert.lastWriteJsonCall() as UpdateRunResult;
+      const record = update.getUpdateRun(assert.requireValue(result.runId, "run id"));
+      expect(mocks.inferenceRepair).not.toHaveBeenCalled();
       expect(record?.repair).toEqual([]);
       expect(record?.steps.some((step) => step.step === "repairing")).toBe(false);
       if (outcome === "config-change") {
@@ -279,10 +244,10 @@ describe("update-cli", () => {
             detail: warning,
           }),
         );
-        expect(renderUpdateRunReport(requireValue(record, "update run")).lines).toContain(
+        expect(renderUpdateRunReport(assert.requireValue(record, "update run")).lines).toContain(
           `Warning: ${warning}`,
         );
-        expect(doctorCommandCall()).toBeDefined();
+        expect(assert.doctorCommandCall()).toBeDefined();
       }
     },
   );
@@ -290,38 +255,27 @@ describe("update-cli", () => {
   it.each(["owned-running", "no-restart"] as const)(
     "uses compatibility-checked package update without full-state startup (%s)",
     async (mode) => {
-      const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
-      mockCurrentProcessFreshDoctor({
-        packageRoot: root,
-      });
-      mockFileBackedPathExists();
-      mockRunningManagedGateway([
-        process.execPath,
-        path.join(root, "dist", "index.js"),
-        "gateway",
-        "run",
-      ]);
-      await invokeUpdateCli({
-        yes: true,
-        json: true,
-        restart: mode !== "no-restart",
-      }).then(
-        () => null,
-        (error: unknown) => error,
-      );
-      expect(candidateValidation).toHaveBeenCalled();
-      expect(doctorCommandCall()).toBeDefined();
-      expect(await fs.readdir(path.dirname(profileStateDir()))).not.toContain(
-        `.${path.basename(profileStateDir())}-update-checkpoints`,
+      await runningPackage("openclaw-update-startup-admission");
+      await update
+        .invokeUpdateCli({
+          yes: true,
+          json: true,
+          restart: mode !== "no-restart",
+        })
+        .catch(() => {});
+      expect(mocks.candidateValidation).toHaveBeenCalled();
+      expect(assert.doctorCommandCall()).toBeDefined();
+      expect(await fs.readdir(path.dirname(setup.profileStateDir()))).not.toContain(
+        `.${path.basename(setup.profileStateDir())}-update-checkpoints`,
       );
     },
   );
 
   it("keeps the live package unchanged when its executor is rebound during candidate validation", async () => {
-    const root = await mockPackageInstallAtCaseDir("openclaw-update-revoked-executor");
-    mockFileBackedPathExists();
+    const root = await setup.mockPackageInstallAtCaseDir("openclaw-update-revoked-executor");
+    setup.mockFileBackedPathExists();
     const before = await fs.readFile(path.join(root, "package.json"));
-    candidateValidation.mockImplementationOnce(async (options) => {
+    mocks.candidateValidation.mockImplementationOnce(async (options) => {
       const { createManagedHandoffLeaseStore } =
         await import("../infra/update-managed-service-handoff-lease.js");
       const store = createManagedHandoffLeaseStore();
@@ -331,57 +285,40 @@ describe("update-cli", () => {
       }
       await Promise.resolve();
       expect(store.bind(found.lease, process.pid)).not.toBeNull();
-      return reportCandidateSteps(options, {
+      return setup.reportCandidateSteps(options, {
         status: "ok",
-        steps: [
-          {
-            name: "candidate-gateway-startup",
-            command: "openclaw gateway",
-            cwd: options.root,
-            durationMs: 1,
-            exitCode: 0,
-          },
-        ],
+        steps: [startupStep(options.root)],
       });
     });
     await expect(updateCommand({ yes: true, json: true })).rejects.toThrow();
     expect(await fs.readFile(path.join(root, "package.json"))).toEqual(before);
-    expect(doctorCommandCall()).toBeUndefined();
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(serviceRestart).not.toHaveBeenCalled();
+    expect(assert.doctorCommandCall()).toBeUndefined();
+    assert.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart);
   });
 
   it("refuses activation when successful Doctor leaves the validated candidate schema unapplied", async () => {
-    const root = await mockPackageInstallAtCaseDir("openclaw-update-incomplete-migration");
-    mockFileBackedPathExists();
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
+    const root = await setup.mockPackageInstallAtCaseDir("openclaw-update-incomplete-migration");
+    setup.mockFileBackedPathExists();
+    vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValue(
       path.join(root, "dist", "index.js"),
     );
-    candidateValidation.mockImplementationOnce(async (options) =>
-      reportCandidateSteps(options, {
+    mocks.candidateValidation.mockImplementationOnce(async (options) =>
+      setup.reportCandidateSteps(options, {
         status: "ok",
         candidateSchemaVersions: {
           state: OPENCLAW_STATE_SCHEMA_VERSION + 1,
           agent: OPENCLAW_AGENT_SCHEMA_VERSION,
         },
-        steps: [
-          {
-            name: "candidate-gateway-startup",
-            command: "openclaw gateway",
-            cwd: root,
-            durationMs: 1,
-            exitCode: 0,
-          },
-        ],
+        steps: [startupStep(root)],
       }),
     );
 
     await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
 
-    expect(doctorCommandCall()).toBeDefined();
-    expectNoSideEffects(serviceStart, serviceRestart, runDaemonRestart);
-    expect(freshRestartCalls()).toEqual([]);
-    expect(lastWriteJsonCall()).toMatchObject({
+    expect(assert.doctorCommandCall()).toBeDefined();
+    assert.expectNoSideEffects(mocks.serviceStart, mocks.serviceRestart, update.runDaemonRestart);
+    expect(assert.freshRestartCalls()).toEqual([]);
+    expect(assert.lastWriteJsonCall()).toMatchObject({
       status: "error",
       reason: "openclaw doctor",
       steps: expect.arrayContaining([
@@ -395,101 +332,66 @@ describe("update-cli", () => {
 
   it("stages and validates before suspending and stopping a running managed gateway", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const processOnSpy = vi.spyOn(process, "on");
-    const processOffSpy = vi.spyOn(process, "off");
-    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
-    resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
-    const root = await mockPackageInstallAtCaseDir("openclaw-update-stop-service");
-    vi.mocked(resolveGatewayInstallEntrypoint)
+    using processOnSpy = vi.spyOn(process, "on");
+    using processOffSpy = vi.spyOn(process, "off");
+    mocks.suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+    mocks.resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+    const root = await runningPackage("openclaw-update-stop-service", nodeExecutable);
+    vi.mocked(update.resolveGatewayInstallEntrypoint)
       .mockReset()
       .mockResolvedValue(path.join(root, "dist", "index.js"));
-    mockRunningManagedGateway([
-      nodeExecutable,
-      path.join(root, "dist", "index.js"),
-      "gateway",
-      "run",
-    ]);
-    serviceDefinitionMutationCapability.mockResolvedValue({ kind: "sealed", detail: "fixture" });
-    mockFileBackedPathExists();
-
-    await updateCommand({ yes: true }).catch((cause: unknown) => {
-      throw new Error(`${getErrorOutput()}\n${getLogOutput()}`, { cause });
+    mocks.serviceDefinitionMutationCapability.mockResolvedValue({
+      kind: "sealed",
+      detail: "fixture",
     });
+    await updateCommand({ yes: true });
     platformSpy.mockRestore();
 
-    const doctorCall = doctorCommandCall();
+    const doctorCall = assert.doctorCommandCall();
     expect(doctorCall).toBeDefined();
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
-    ).toBe("0");
-    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
-    const npmInstallCallIndex = vi
-      .mocked(runCommandWithTimeout)
-      .mock.calls.findIndex(
-        (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "i",
-      );
-    const npmInstallCallOrder =
-      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[npmInstallCallIndex];
-    const serviceStopCall = serviceStop.mock.calls[0]?.[0] as
+    expect(doctorCall?.[1].env).toMatchObject({
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+    });
+    expect(assert.getLogOutput()).toContain("Gateway: restarted and verified.");
+    const npmInstallCallIndex = assert
+      .commandCalls()
+      .findIndex(([argv]) => argv[0] === "npm" && argv[1] === "i");
+    const serviceStopCall = mocks.serviceStop.mock.calls[0]?.[0] as
       | { env?: NodeJS.ProcessEnv }
       | undefined;
-    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
-    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_KIND).toBe("gateway");
-    const serviceStopCallOrder = serviceStop.mock.invocationCallOrder[0];
-    const requiredServiceStopCallOrder = requireValue(
-      serviceStopCallOrder,
-      "service stop call order",
-    );
-    const requiredNpmInstallCallOrder = requireValue(npmInstallCallOrder, "npm install call order");
-    const suspendOrder = requireValue(
-      suspendScheduledTaskAutoStartForUpdate.mock.invocationCallOrder[0],
-      "Scheduled Task suspend order",
-    );
-    const resumeOrder = requireValue(
-      resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0],
-      "Scheduled Task resume order",
-    );
+    expect(serviceStopCall?.env).toMatchObject({
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    });
+    const suspendOrder = callOrder(mocks.suspendScheduledTaskAutoStartForUpdate);
     const sigintListenerIndex = processOnSpy.mock.calls.findIndex(([event]) => event === "SIGINT");
-    const sigintListenerOrder = requireValue(
-      processOnSpy.mock.invocationCallOrder[sigintListenerIndex],
-      "SIGINT recovery listener order",
+    for (const action of [
+      mocks.suspendScheduledTaskAutoStartForUpdate,
+      mocks.resumeScheduledTaskAutoStartAfterUpdate,
+    ]) {
+      expect(action).toHaveBeenCalledWith(
+        expect.objectContaining({
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        }),
+        expect.objectContaining({ beforeMutation: expect.any(Function) }),
+      );
+    }
+    expect(callOrder(processOnSpy, sigintListenerIndex)).toBeLessThan(suspendOrder);
+    expect(suspendOrder).toBeLessThan(callOrder(mocks.serviceStop));
+    const validationOrder = callOrder(mocks.candidateValidation);
+    expect(callOrder(vi.mocked(update.runCommandWithTimeout), npmInstallCallIndex)).toBeLessThan(
+      validationOrder,
     );
-    expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      }),
-      expect.objectContaining({ beforeMutation: expect.any(Function) }),
-    );
-    expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      }),
-      expect.objectContaining({ beforeMutation: expect.any(Function) }),
-    );
-    expect(sigintListenerOrder).toBeLessThan(suspendOrder);
-    expect(suspendOrder).toBeLessThan(requiredServiceStopCallOrder);
-    const validationOrder = requireValue(
-      candidateValidation.mock.invocationCallOrder[0],
-      "candidate validation order",
-    );
-    expect(requiredNpmInstallCallOrder).toBeLessThan(validationOrder);
     expect(validationOrder).toBeLessThan(suspendOrder);
-    expect(requiredServiceStopCallOrder).toBeLessThan(resumeOrder);
-    expect(processOnSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
-    expect(processOnSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
-    expect(processOnSpy).toHaveBeenCalledWith("SIGBREAK", expect.any(Function));
-    expect(processOffSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
-    expect(processOffSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
-    expect(processOffSpy).toHaveBeenCalledWith("SIGBREAK", expect.any(Function));
-    processOnSpy.mockRestore();
-    processOffSpy.mockRestore();
+    expect(callOrder(mocks.serviceStop)).toBeLessThan(
+      callOrder(mocks.resumeScheduledTaskAutoStartAfterUpdate),
+    );
+    for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) {
+      expect(processOnSpy).toHaveBeenCalledWith(signal, expect.any(Function));
+      expect(processOffSpy).toHaveBeenCalledWith(signal, expect.any(Function));
+    }
   });
 
   it.each([
@@ -498,150 +400,110 @@ describe("update-cli", () => {
   ])(
     "quiesces a stopped loaded managed gateway on $platform before package replacement",
     async ({ platform, handoff }) => {
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      const tempDir = tempDirs.make(`openclaw-update-stopped-loaded-${platform}-`);
-      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
-      primeServiceCommand(
-        [nodeExecutable, entryPath, "gateway", "run"],
+      const { nodeModules, platformSpy } = await stoppedPackage(
+        platform,
+        `openclaw-update-stopped-loaded-${platform}-`,
         { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
-        platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined,
       );
-      serviceLoaded.mockResolvedValue(true);
-      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-      mockFileBackedPathExists();
-      mockNpmGlobalRoot(nodeModules);
-      let finishStop: (() => void) | undefined;
-      let markStopStarted: (() => void) | undefined;
-      const stopStarted = new Promise<void>((resolve) => {
-        markStopStarted = resolve;
-      });
-      serviceStop.mockImplementationOnce(() => {
-        markStopStarted?.();
-        return new Promise<void>((resolve) => {
-          finishStop = resolve;
-        });
+      using _ = platformSpy;
+      setup.mockNpmGlobalRoot(nodeModules);
+      const stopStarted = createDeferredCore();
+      const stopFinished = createDeferredCore();
+      mocks.serviceStop.mockImplementationOnce(() => {
+        stopStarted.resolve();
+        return stopFinished.promise;
       });
 
-      try {
-        await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
-          const updatePromise = updateCommand({ yes: true });
-          const firstOutcome = await Promise.race([
-            stopStarted.then(() => "stop" as const),
-            updatePromise.then(() => "update" as const),
-          ]);
+      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
+        const updatePromise = updateCommand({ yes: true });
+        const firstOutcome = await Promise.race([
+          stopStarted.promise.then(() => "stop" as const),
+          updatePromise.then(() => "update" as const),
+        ]);
 
-          expect(firstOutcome).toBe("stop");
-          expect(serviceStop).toHaveBeenCalledOnce();
-          expect(packageInstallCommandCall()).toBeDefined();
-          expect(candidateValidation).toHaveBeenCalledOnce();
-          expect(
-            JSON.parse(
-              await fs.readFile(path.join(nodeModules, "openclaw", "package.json"), "utf8"),
-            ),
-          ).toMatchObject({
-            version: "2026.4.21",
-          });
-          const pluginRecordCallsBeforeStop =
-            loadInstalledPluginIndexInstallRecords.mock.calls.length;
-          if (!finishStop) {
-            throw new Error("expected the managed service stop to remain pending");
-          }
-          finishStop();
-          await updatePromise;
-          expect(loadInstalledPluginIndexInstallRecords.mock.calls.length).toBeGreaterThan(
-            pluginRecordCallsBeforeStop,
-          );
-        });
-      } finally {
-        platformSpy.mockRestore();
-      }
+        expect(firstOutcome).toBe("stop");
+        expect(mocks.serviceStop).toHaveBeenCalledOnce();
+        expect(assert.packageInstallCommandCall()).toBeDefined();
+        expect(mocks.candidateValidation).toHaveBeenCalledOnce();
+        await expectPackageVersion(path.join(nodeModules, "openclaw"), "2026.4.21");
+        const pluginRecordCallsBeforeStop =
+          mocks.loadInstalledPluginIndexInstallRecords.mock.calls.length;
+        stopFinished.resolve();
+        await updatePromise;
+        expect(mocks.loadInstalledPluginIndexInstallRecords.mock.calls.length).toBeGreaterThan(
+          pluginRecordCallsBeforeStop,
+        );
+      });
 
-      expect(packageInstallCommandCall()).toBeDefined();
-      expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalled();
-      expect(serviceStop.mock.invocationCallOrder[0]).toBeLessThan(
-        requireValue(
-          loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder.at(-1),
+      expect(assert.packageInstallCommandCall()).toBeDefined();
+      expect(mocks.loadInstalledPluginIndexInstallRecords).toHaveBeenCalled();
+      expect(mocks.serviceStop.mock.invocationCallOrder[0]).toBeLessThan(
+        assert.requireValue(
+          mocks.loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder.at(-1),
           "owned managed update context capture order",
         ),
       );
     },
   );
 
-  it.each([
-    { name: "an ordinary stopped Scheduled Task", platform: "win32" as const, loaded: true },
-  ])("leaves $name stopped during package replacement", async ({ platform, loaded }) => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    const tempDir = tempDirs.make(`openclaw-update-stopped-${platform}-`);
-    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
-    primeServiceCommand([nodeExecutable, entryPath, "gateway", "run"]);
-    serviceLoaded.mockResolvedValue(loaded);
-    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-    mockFileBackedPathExists();
-    mockNpmGlobalRoot(nodeModules);
+  it("leaves an ordinary stopped Scheduled Task stopped during package replacement", async () => {
+    const { nodeModules, platformSpy } = await stoppedPackage(
+      "win32",
+      "openclaw-update-stopped-win32-",
+    );
+    using _ = platformSpy;
+    setup.mockNpmGlobalRoot(nodeModules);
 
-    try {
-      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, async () => {
-        await updateCommand({ yes: true });
-      });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, () =>
+      updateCommand({ yes: true }),
+    );
 
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(serviceRestart).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()).toBeDefined();
+    assert.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart);
+    expect(assert.packageInstallCommandCall()).toBeDefined();
   });
 
   it("leaves an enabled LaunchAgent untouched when staged installation fails", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const tempDir = tempDirs.make("openclaw-update-stopped-launchagent-failure-");
-    const { nodeModules, entryPath } = await setupInstalledPackageAtNodeModules(
-      path.join(tempDir, "lib", "node_modules"),
+    const { nodeModules, platformSpy } = await stoppedPackage(
+      "darwin",
+      "openclaw-update-stopped-launchagent-failure-",
+      { OPENCLAW_STATE_DIR: setup.profileStateDir() },
     );
-    primeServiceCommand([nodeExecutable, entryPath, "gateway", "run"], {
-      OPENCLAW_STATE_DIR: profileStateDir(),
-    });
-    serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-    mockFileBackedPathExists();
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
+    using _ = platformSpy;
+    setup.mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
         throw new Error("package replacement failed");
       }
     });
 
-    try {
-      await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19999" }, async () => {
-        await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toEqual(new ExitError(1));
-      });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19999" }, async () => {
+      await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toEqual(new ExitError(1));
+    });
 
-    expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(freshRestartCalls()).toEqual([]);
+    assert.expectNoSideEffects(mocks.serviceStop, mocks.serviceStart, mocks.serviceRestart);
+    expect(update.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(assert.freshRestartCalls()).toEqual([]);
 
-    const packageInstallCallIndex = commandCalls().findIndex(
-      ([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
-    );
-    expect(commandCalls()[packageInstallCallIndex]?.[0]).toContain("--prefix");
+    expect(assert.packageInstallCommandCall()?.[0]).toContain("--prefix");
   });
 
-  it.each([{ json: false, handoff: undefined, expectedExitCode: 1 }])(
-    "attempts recovery after Git mutation throws and preserves failed readiness (json=$json)",
-    async ({ json, handoff, expectedExitCode }) => {
-      mockStoppedManagedGitGateway();
-      setTty(true);
-      setStdoutTty(true);
-      const cause = new Error("ENOSPC while replacing runtime files");
+  it.each([false, true])(
+    "attempts recovery after Git mutation throws and preserves failed readiness (json=%s)",
+    async (json) => {
+      setup.mockStoppedManagedGitGateway();
+      setup.setTty(true);
+      setup.setStdoutTty(true);
+      const cause = new Error(
+        json ? "The pipe is being closed (0x800700e8)" : "ENOSPC while replacing runtime files",
+      );
       const failure = new Error(
-        `updater interrupted after mutation: ${"replacement verification detail; ".repeat(12)}`,
+        json
+          ? `SQLite read-only worker failed to start for state.sqlite: ${cause.message}`
+          : `updater interrupted after mutation: ${"replacement verification detail; ".repeat(12)}`,
         { cause },
       );
-      vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
-        await requireValue(opts.beforeGitMutation, "Git mutation admission")({});
-        restartHealthTestControl.snapshot = {
+      vi.mocked(update.updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
+        await assert.requireValue(opts.beforeGitMutation, "Git mutation admission")({});
+        mocks.restartHealthTestControl.snapshot = {
           runtime: { status: "stopped", pid: null, state: "stopped" },
           portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
           healthy: false,
@@ -653,16 +515,16 @@ describe("update-cli", () => {
       });
 
       await expect(
-        withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, () => updateCommand({ json })),
-      ).rejects.toEqual(new ExitError(expectedExitCode));
-      expect(serviceStop).toHaveBeenCalledOnce();
-      expect(freshRestartCalls()).toHaveLength(1);
-      expectNoSideEffects(serviceStart, serviceRestart);
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(triageCommand).toHaveBeenCalledTimes(json ? 0 : 1);
+        withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, () => updateCommand({ json })),
+      ).rejects.toEqual(new ExitError(1));
+      expect(mocks.serviceStop).toHaveBeenCalledOnce();
+      expect(assert.freshRestartCalls()).toHaveLength(1);
+      assert.expectNoSideEffects(mocks.serviceStart, mocks.serviceRestart);
+      expect(update.defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(mocks.triageCommand).toHaveBeenCalledTimes(json ? 0 : 1);
       const reportedFailure = json
-        ? { result: lastWriteJsonCall() }
-        : triageCommand.mock.calls[0]?.[1]?.recovery?.updateFailure;
+        ? { result: assert.lastWriteJsonCall() }
+        : mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.updateFailure;
       expect(reportedFailure).toMatchObject({
         result: {
           status: "error",
@@ -685,16 +547,16 @@ describe("update-cli", () => {
           ],
         },
       });
-      expect(getLogOutput()).not.toMatch(/keep the gateway stopped/i);
-      expect(getLogOutput()).toContain("openclaw update repair");
+      expect(assert.getLogOutput()).not.toMatch(/keep the gateway stopped/i);
+      expect(assert.getLogOutput()).toContain("openclaw update repair");
       if (!json) {
         const recovery = expectDefined(
-          triageCommand.mock.calls[0]?.[1]?.recovery,
+          mocks.triageCommand.mock.calls[0]?.[1]?.recovery,
           "captured failed-update recovery",
         );
         const diagnostic = sanitizeTriageUpdateFailure(recovery.updateFailure, {
           env: {},
-          stateDir: profileStateDir(),
+          stateDir: setup.profileStateDir(),
         });
         expect(diagnostic).toMatchObject({
           error: expect.stringContaining("updater interrupted after mutation"),

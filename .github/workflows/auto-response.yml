@@ -40,7 +40,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
         with:
@@ -50,7 +50,7 @@ jobs:
           permission-members: read
           permission-metadata: read
           permission-pull-requests: write
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
@@ -71,4 +71,4 @@ jobs:
             );
             const { runBarnacleAutoResponse } = await import(moduleUrl.href);
 
-            await runBarnacleAutoResponse({ github, context, core });
+            await runBarnacleAutoResponse({ github, context, core, expectedAppId: Number("${{ steps.app-token.outputs.token && '2729701' || '2971289' }}") });

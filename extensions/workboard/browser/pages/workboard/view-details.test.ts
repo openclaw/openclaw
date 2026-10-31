@@ -17,6 +17,7 @@ import {
   buttonByLabel,
   buttonByText,
   requireButton,
+  openCardMenu,
   textButton,
   sessionPicker,
 } from "./view.test-support.ts";
@@ -148,12 +149,11 @@ describe("WorkboardView", () => {
   });
 
   it.each([
-    { label: "id", failedId: "a", completedId: "z", failedSequence: 1, completedSequence: 1 },
+    { label: "id", failedId: "a", completedId: "z", completedSequence: 1 },
     {
       label: "legacy entry",
       failedId: "z",
       completedId: "a",
-      failedSequence: 1,
       completedSequence: undefined,
     },
   ])(
@@ -288,7 +288,7 @@ describe("WorkboardView", () => {
     expect(container.textContent).toContain("Bad timestamp card");
     expect(container.querySelector(".workboard-card__updated")).toBeNull();
     expect(container.textContent).not.toContain("Invalid Date");
-    buttonByLabel(container, "View details")!.click();
+    requireButton(openCardMenu(container), "View details").click();
     renderView();
     buttonByText(container.querySelector('[role="tablist"]')!, "Details")!.click();
     renderView();
@@ -331,7 +331,7 @@ describe("WorkboardView", () => {
     );
     expect(card.getAttribute("aria-pressed")).toBeNull();
     expect(card.getAttribute("aria-haspopup")).toBe("dialog");
-    requireButton(card, "Open session").click();
+    requireButton(openCardMenu(card), "Open session").click();
     expect(onOpenSession).toHaveBeenCalledWith({ sessionKey: "agent:main:dashboard:1" });
     expect(state.detailCardId).toBeNull();
     expect(container.querySelector(".workboard-detail")).toBeNull();
@@ -395,6 +395,7 @@ describe("WorkboardView", () => {
       ],
     });
     state.cards = [createWorkboardCard({ status: "todo", sessionKey: "agent:main:queued" })];
+    const addListener = vi.spyOn(document, "addEventListener");
     renderView();
     const status = expectDefined(
       container.querySelector<HTMLElement>("openclaw-workboard-session-status"),
@@ -422,9 +423,11 @@ describe("WorkboardView", () => {
     }
     const removeListener = vi.spyOn(document, "removeEventListener");
     try {
+      expect(addListener).not.toHaveBeenCalledWith("scroll", expect.any(Function), true);
       // Pointer activation focuses the button before its click opens the explanation.
       trigger.focus();
       trigger.click();
+      expect(addListener).toHaveBeenCalledWith("scroll", expect.any(Function), true);
       expect(trigger.getAttribute("aria-expanded")).toBe("true");
       expect(state.detailCardId).toBeNull();
       panel.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
@@ -434,13 +437,20 @@ describe("WorkboardView", () => {
       container.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
       expect(document.activeElement).toBe(trigger);
       expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(removeListener).toHaveBeenCalledWith("scroll", expect.any(Function), true);
       trigger.click();
       expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      renderView();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      trigger.click();
       state.cards = [];
       renderView();
       expect(status.isConnected).toBe(false);
       expect(removeListener).toHaveBeenCalledWith("pointerdown", expect.any(Function), true);
     } finally {
+      addListener.mockRestore();
       removeListener.mockRestore();
     }
   });
@@ -467,9 +477,7 @@ describe("WorkboardView", () => {
     ];
     renderView();
     expect(container.querySelector(".workboard-events")).toBeNull();
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(openCardMenu(container), "View details").click();
     renderView();
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Done");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Backlog");
@@ -541,9 +549,7 @@ describe("WorkboardView", () => {
     renderView();
     expect(container.textContent).toContain("Archived task");
     expect(archivedToggle.checked).toBe(true);
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(openCardMenu(container), "View details").click();
     renderView();
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 attempts");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
@@ -579,8 +585,9 @@ describe("WorkboardView", () => {
     const article = container.querySelector<HTMLElement>(".workboard-card--archived");
     expect(article).not.toBeNull();
     expect(article?.getAttribute("draggable")).toBe("false");
-    expect(article?.querySelector(".workboard-card__move-select")).toBeNull();
-    expect(buttonByLabel(article!, "Restore from archive")).not.toBeNull();
+    const menu = openCardMenu(expectDefined(article, "archived card"));
+    expect(menu.querySelector(".workboard-card__move-select")).toBeNull();
+    expect(buttonByLabel(menu, "Restore from archive")).not.toBeNull();
     expect(
       article!.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true })),
     ).toBe(false);
@@ -613,17 +620,7 @@ describe("WorkboardView", () => {
         createWorkboardCard({
           title: "Watch stale run",
           status: "running",
-          execution: {
-            id: "exec-1",
-            kind: "agent-session",
-            engine: "codex",
-            mode: "autonomous",
-            status: "running",
-            model: "openai/gpt-5.5",
-            sessionKey: "agent:main:dashboard:1",
-            startedAt: 1,
-            updatedAt: 1,
-          },
+          execution: createWorkboardExecution(),
         }),
       ];
       const { container, renderView } = createWorkboardView(
@@ -659,16 +656,11 @@ describe("WorkboardView", () => {
     }
   });
 
-  it.each([
-    {
-      scenario: "the authoritative top-level session",
-      sessionKey: "agent:main:top-level-linked-session",
-      topLevelSessionKey: "agent:main:top-level-linked-session",
-    },
-  ])("preserves $scenario when editing a Workboard card", async (testCase) => {
+  it("preserves the authoritative top-level session when editing a Workboard card", async () => {
+    const sessionKey = "agent:main:top-level-linked-session";
     const card = createWorkboardCard({
       title: "Keep my linked session",
-      ...(testCase.topLevelSessionKey ? { sessionKey: testCase.topLevelSessionKey } : {}),
+      sessionKey,
       execution: createWorkboardExecution({ sessionKey: "agent:main:execution-linked-session" }),
     });
     const request = vi.fn(async () => ({
@@ -679,7 +671,7 @@ describe("WorkboardView", () => {
       onRequestUpdate: () => undefined,
       sessions: [
         {
-          key: testCase.sessionKey,
+          key: sessionKey,
           kind: "direct",
           displayName: "Active linked session",
           updatedAt: 1,
@@ -694,8 +686,8 @@ describe("WorkboardView", () => {
     expect(editButton).not.toBeNull();
     editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     renderView();
-    expect(state.draftSessionKey).toBe(testCase.sessionKey);
-    expect(sessionPicker(container).value).toBe(testCase.sessionKey);
+    expect(state.draftSessionKey).toBe(sessionKey);
+    expect(sessionPicker(container).value).toBe(sessionKey);
     const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
     expect(title).not.toBeNull();
     title!.value = "Renamed without unlinking";

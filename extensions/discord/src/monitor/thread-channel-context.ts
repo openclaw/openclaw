@@ -54,7 +54,6 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
     threadParentId,
     threadParentName,
     threadParentSlug,
-    channelInfo,
   };
 }
 

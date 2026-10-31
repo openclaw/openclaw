@@ -254,6 +254,58 @@ it.each(
 );
 
 describe("eligible status recovery", () => {
+  it.each([false, true])(
+    "keeps host warnings separate from unit repair (repairable=%s)",
+    async (repairable) => {
+      await withStatusFixture(
+        () => ({}),
+        async (accountHome, print) => {
+          const status = await createStatus("config-audit", accountHome);
+          const host = {
+            code: "systemd-user-manager-stop-timeout",
+            message: "Host shutdown limits the Gateway drain to 5s",
+            repair: "host" as const,
+          };
+          status.service.configAudit = {
+            ok: false,
+            issues: [...(repairable ? status.service.configAudit!.issues : []), host],
+          };
+          print(status, { json: false });
+          expect(humanOutput()).toContain(host.message);
+          expect(humanOutput().includes("openclaw gateway install --force")).toBe(repairable);
+        },
+      );
+    },
+  );
+
+  it("reports incomplete definition inspection without recommending a reinstall", async () => {
+    await withStatusFixture(
+      () => ({}),
+      async (_accountHome, print) => {
+        const diagnostic = "Backup inspection failed; check /fixture/gateway.service.bak.";
+        const status: DaemonStatus = {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadState: { status: "loaded" },
+            loadedText: "enabled",
+            notLoadedText: "disabled",
+            runtime: { status: "running", pid: 4242 },
+            configAudit: { ok: true, issues: [], definitionDriftError: diagnostic },
+          },
+          extraServices: [],
+        };
+
+        print(status, { json: false });
+
+        const output = humanOutput();
+        expect(output).toContain(`Service definition inspection incomplete: ${diagnostic}`);
+        expect(output).not.toContain("Service config looks out of date or non-standard.");
+        expect(output).not.toMatch(/\bgateway\s+install\b/);
+      },
+    );
+  });
+
   it("directs version-manager runtime findings to Doctor before reinstall", async () => {
     await withStatusFixture(
       () => ({}),

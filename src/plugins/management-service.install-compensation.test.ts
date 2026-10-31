@@ -21,6 +21,7 @@ import {
 } from "./lifecycle.js";
 import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
+import { createEmptyPluginMetadataSnapshot } from "./plugin-metadata-empty.test-support.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
@@ -85,7 +86,7 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
 });
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: () => ({ index: { plugins: [] }, byPluginId: new Map() }),
+  loadPluginMetadataSnapshot: () => createEmptyPluginMetadataSnapshot(),
 }));
 vi.mock("./slot-selection.js", () => ({
   applySlotSelectionForPlugin: (config: unknown) => config,
@@ -258,7 +259,11 @@ describe("managed plugin install transactions", () => {
           const transactionRequest = resolvePluginInstallTransactionRequest(params);
           const copied = await installPackageDir(
             transactionRequest
-              ? requestDeferredPackageDirInstall(copy, transactionRequest.assertOwned)
+              ? requestDeferredPackageDirInstall(
+                  copy,
+                  transactionRequest.assertOwned,
+                  transactionRequest.prepareSettlement,
+                )
               : copy,
           );
           if (!copied.ok) {

@@ -786,7 +786,7 @@ export function buildOpenAIImageGenerationProvider(
           sanitizeConfiguredModelProviderRequest,
         },
         { readOpenAIImageGenerationResponse },
-        { resolveClosestSize, resolveGeneratedMediaMaxBytes },
+        { resolveClosestSize, resolveGeneratedImageDownloadMaxBytes },
       ] = await Promise.all([
         import("openclaw/plugin-sdk/provider-http"),
         import("./image-generation-response.js"),
@@ -828,7 +828,6 @@ export function buildOpenAIImageGenerationProvider(
             },
             resolveClosestSize,
           );
-      const size = sizeResolution.size;
       const url = isAzure
         ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
         : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
@@ -836,7 +835,7 @@ export function buildOpenAIImageGenerationProvider(
         ...(!isAzure ? { model } : {}),
         prompt: req.prompt,
         n: count,
-        size,
+        size: sizeResolution.size,
         ...resolveOpenAIImageOptions(req),
         ...(req.providerOptions?.openai?.user !== undefined
           ? { user: req.providerOptions.openai.user }
@@ -873,14 +872,14 @@ export function buildOpenAIImageGenerationProvider(
         : await postJsonRequest({ ...requestOptions, body });
       const { response, release } = requestResult;
       try {
-        const images = await readOpenAIImageGenerationResponse(response, {
+        const { images, usage } = await readOpenAIImageGenerationResponse(response, {
           operation,
           providerUrl: url,
           deadline,
           timeoutMs,
           maxImages: count,
           maxDownloads: OPENAI_MAX_IMAGE_RESULTS,
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          maxBytes: resolveGeneratedImageDownloadMaxBytes(req.cfg),
           defaultMimeType: resolveOutputMime(req.outputFormat).mimeType,
           allowPrivateNetwork:
             isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy) ||
@@ -889,10 +888,11 @@ export function buildOpenAIImageGenerationProvider(
           dispatcherPolicy,
         });
 
+        const metadata = usage ? { ...sizeResolution.metadata, usage } : sizeResolution.metadata;
         return {
           images,
           model,
-          ...(sizeResolution.metadata ? { metadata: sizeResolution.metadata } : {}),
+          ...(metadata ? { metadata } : {}),
         };
       } finally {
         await release();

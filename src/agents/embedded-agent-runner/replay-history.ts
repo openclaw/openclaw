@@ -13,6 +13,7 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -25,24 +26,25 @@ import {
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isSilentAssistantTranscriptMessage } from "../../shared/chat-message-content.js";
+import { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   isTranscriptOnlyOpenClawAssistantMessage,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
+import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.js";
 import {
   dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
-  sanitizeGoogleTurnOrdering,
-  sanitizeSessionMessagesImages,
-  validateAnthropicTurns,
-  validateGeminiTurns,
-} from "../embedded-agent-helpers.js";
+} from "../embedded-agent-helpers/openai.js";
 import {
   providerRequiresSignedThinking,
   shouldAllowProviderOwnedThinkingReplay,
   shouldMergeConsecutiveTurns,
+  validateAnthropicTurns,
+  validateGeminiTurns,
 } from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -91,6 +93,8 @@ const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
   "video",
 ]);
 type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
+// Only immutable publications qualify; replacing a transcript message starts a new revision.
+const normalizedReplayMessages = new WeakMap<AgentMessage, AgentMessage | null>();
 
 type ProviderReplayHookParams = {
   config?: OpenClawConfig;
@@ -296,7 +300,6 @@ function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantRepla
 
 function normalizeAssistantReplayMessage(
   message: AssistantReplayMessage,
-  out: AgentMessage[],
 ): AssistantReplayMessage | null {
   if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
     // Drop from the in-memory replay copy; the persisted JSONL keeps the
@@ -341,10 +344,7 @@ function normalizeAssistantReplayMessage(
   if (!normalized || isReasoningOnlyLengthAssistantTurn(normalized)) {
     return null;
   }
-  // Historical side-branch rebuilds could strip every mirror marker while
-  // retaining the zero-usage receipt immediately after its source reply.
-  // Keep this recovery shape narrow; ordinary repeated model turns survive.
-  return isBareDeliveryMirrorDuplicate(out, normalized) ? null : normalized;
+  return normalized;
 }
 
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
@@ -356,10 +356,28 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       out.push(message);
       continue;
     }
-    let normalized =
-      message.role === "user"
-        ? sanitizeUserReplayContent(message)
-        : normalizeAssistantReplayMessage(message, out);
+    let normalized = normalizedReplayMessages.get(message);
+    if (normalized === undefined) {
+      normalized =
+        message.role === "user"
+          ? sanitizeUserReplayContent(message)
+          : normalizeAssistantReplayMessage(message);
+      if (isOwnedTranscriptPayload(message)) {
+        normalizedReplayMessages.set(
+          message,
+          normalized === message ? message : freezeJsonSnapshot(normalized),
+        );
+      }
+    }
+    // Mirrors depend on the preceding replay turn; newly appended tool results below
+    // can also repair an older failed turn. Neither decision belongs in the memo.
+    if (
+      normalized?.role === "assistant" &&
+      typeof message.content !== "string" &&
+      isBareDeliveryMirrorDuplicate(out, normalized)
+    ) {
+      normalized = null;
+    }
     if (
       normalized?.role === "assistant" &&
       (normalized.stopReason === "error" || normalized.stopReason === "aborted") &&
@@ -710,10 +728,7 @@ export async function sanitizeSessionHistory(
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  const googleOrdered = sanitizeGoogleTurnOrdering(messages);
-  return isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
-    : googleOrdered;
+  return sanitizeGoogleTurnOrdering(messages);
 }
 
 /**

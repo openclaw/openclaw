@@ -79,6 +79,27 @@
             "title": "REM 阶段"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "搜索记忆",
+        "searchPlaceholder": "搜索此智能体的记忆",
+        "searchButton": "搜索",
+        "idle": "搜索此智能体记得的人物、项目、决策或其他任何内容。",
+        "searching": "正在搜索记忆…",
+        "results": "{count} 条结果",
+        "empty": "没有与“{query}”匹配的记忆。",
+        "error": "记忆搜索失败：{message}",
+        "retry": "重试",
+        "gatewayUpdateRequired": "更新 Gateway 以从 Control UI 搜索记忆。",
+        "hybridSearch": "混合搜索",
+        "keywordSearch": "关键词搜索",
+        "lineRange": "第 {start}–{end} 行",
+        "score": "评分 {score}",
+        "sourceMemory": "记忆",
+        "sourceSessions": "会话",
+        "fileLoading": "正在加载完整的记忆文件…",
+        "fileError": "无法加载此记忆文件: {message}",
+        "fileUnsupported": "此记忆文件无法以文本形式显示。"
       }
     }
   },
@@ -162,6 +183,27 @@
             "title": "REM 階段"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "搜尋記憶",
+        "searchPlaceholder": "搜尋此代理的記憶",
+        "searchButton": "搜尋",
+        "idle": "搜尋此代理記得的人物、專案、決策或任何其他事物。",
+        "searching": "正在搜尋記憶…",
+        "results": "{count} 筆結果",
+        "empty": "沒有符合 “{query}” 的記憶。",
+        "error": "記憶搜尋失敗: {message}",
+        "retry": "重試",
+        "gatewayUpdateRequired": "更新 Gateway，即可從 Control UI 搜尋記憶。",
+        "hybridSearch": "混合搜尋",
+        "keywordSearch": "關鍵字搜尋",
+        "lineRange": "第 {start}–{end} 行",
+        "score": "分數 {score}",
+        "sourceMemory": "記憶",
+        "sourceSessions": "工作階段",
+        "fileLoading": "正在載入完整記憶檔案…",
+        "fileError": "無法載入此記憶檔案: {message}",
+        "fileUnsupported": "此記憶檔案無法以文字顯示。"
       }
     }
   },
@@ -245,6 +287,27 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Buscar memórias",
+        "searchPlaceholder": "Buscar nas memórias deste agente",
+        "searchButton": "Buscar",
+        "idle": "Busque uma pessoa, um projeto, uma decisão ou qualquer outra coisa de que este agente se lembre.",
+        "searching": "Buscando memórias…",
+        "results": "{count} resultados",
+        "empty": "Nenhuma memória corresponde a “{query}”.",
+        "error": "Falha na busca de memórias: {message}",
+        "retry": "Tentar novamente",
+        "gatewayUpdateRequired": "Atualize o Gateway para buscar memórias pela Control UI.",
+        "hybridSearch": "busca híbrida",
+        "keywordSearch": "busca por palavra-chave",
+        "lineRange": "linhas {start}–{end}",
+        "score": "pontuação {score}",
+        "sourceMemory": "memória",
+        "sourceSessions": "sessões",
+        "fileLoading": "Carregando o arquivo de memória completo…",
+        "fileError": "Não foi possível carregar este arquivo de memória: {message}",
+        "fileUnsupported": "Este arquivo de memória não pode ser exibido como texto."
       }
     }
   },
@@ -328,6 +391,27 @@
             "title": "REM-Phase"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Erinnerungen durchsuchen",
+        "searchPlaceholder": "Erinnerungen dieses Agenten durchsuchen",
+        "searchButton": "Suchen",
+        "idle": "Suchen Sie nach einer Person, einem Projekt, einer Entscheidung oder etwas anderem, woran sich dieser Agent erinnert.",
+        "searching": "Erinnerungen werden durchsucht…",
+        "results": "{count} Ergebnisse",
+        "empty": "Keine Erinnerungen stimmen mit “{query}” überein.",
+        "error": "Suche nach Erinnerungen fehlgeschlagen: {message}",
+        "retry": "Erneut versuchen",
+        "gatewayUpdateRequired": "Aktualisieren Sie das Gateway, um Erinnerungen über die Control UI zu durchsuchen.",
+        "hybridSearch": "hybride Suche",
+        "keywordSearch": "Stichwortsuche",
+        "lineRange": "Zeilen {start}–{end}",
+        "score": "Bewertung {score}",
+        "sourceMemory": "Gedächtnis",
+        "sourceSessions": "Sitzungen",
+        "fileLoading": "Vollständige Gedächtnisdatei wird geladen…",
+        "fileError": "Diese Gedächtnisdatei konnte nicht geladen werden: {message}",
+        "fileUnsupported": "Diese Gedächtnisdatei kann nicht als Text angezeigt werden."
       }
     }
   },
@@ -411,6 +495,27 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Buscar recuerdos",
+        "searchPlaceholder": "Buscar en los recuerdos de este agente",
+        "searchButton": "Buscar",
+        "idle": "Busca una persona, un proyecto, una decisión o cualquier otra cosa que este agente recuerde.",
+        "searching": "Buscando recuerdos…",
+        "results": "{count} resultados",
+        "empty": "Ningún recuerdo coincide con “{query}”.",
+        "error": "Error al buscar recuerdos: {message}",
+        "retry": "Reintentar",
+        "gatewayUpdateRequired": "Actualiza el Gateway para buscar recuerdos desde la Control UI.",
+        "hybridSearch": "búsqueda híbrida",
+        "keywordSearch": "búsqueda por palabras clave",
+        "lineRange": "líneas {start}–{end}",
+        "score": "puntuación {score}",
+        "sourceMemory": "memoria",
+        "sourceSessions": "sesiones",
+        "fileLoading": "Cargando el archivo de memoria completo…",
+        "fileError": "No se pudo cargar este archivo de memoria: {message}",
+        "fileUnsupported": "Este archivo de memoria no se puede mostrar como texto."
       }
     }
   },
@@ -494,6 +599,27 @@
             "title": "REMフェーズ"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "メモリを検索",
+        "searchPlaceholder": "このエージェントのメモリを検索",
+        "searchButton": "検索",
+        "idle": "人物、プロジェクト、決定事項など、このエージェントが記憶している情報を検索できます。",
+        "searching": "メモリを検索中…",
+        "results": "{count} 件の結果",
+        "empty": "“{query}”に一致するメモリはありませんでした。",
+        "error": "メモリの検索に失敗しました: {message}",
+        "retry": "再試行",
+        "gatewayUpdateRequired": "Control UI からメモリを検索するには、Gateway を更新してください。",
+        "hybridSearch": "ハイブリッド検索",
+        "keywordSearch": "キーワード検索",
+        "lineRange": "{start}–{end} 行",
+        "score": "スコア {score}",
+        "sourceMemory": "メモリ",
+        "sourceSessions": "セッション",
+        "fileLoading": "メモリファイル全体を読み込み中…",
+        "fileError": "このメモリファイルを読み込めませんでした: {message}",
+        "fileUnsupported": "このメモリファイルはテキストとして表示できません。"
       }
     }
   },
@@ -577,6 +703,27 @@
             "title": "REM 단계"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "메모리 검색",
+        "searchPlaceholder": "이 에이전트의 메모리 검색",
+        "searchButton": "검색",
+        "idle": "사람, 프로젝트, 결정 사항 등 이 에이전트가 기억하는 내용을 검색하세요.",
+        "searching": "메모리 검색 중…",
+        "results": "결과 {count}개",
+        "empty": "“{query}”와 일치하는 메모리가 없습니다.",
+        "error": "메모리 검색 실패: {message}",
+        "retry": "다시 시도",
+        "gatewayUpdateRequired": "Control UI에서 메모리를 검색하려면 Gateway를 업데이트하세요.",
+        "hybridSearch": "하이브리드 검색",
+        "keywordSearch": "키워드 검색",
+        "lineRange": "{start}–{end}행",
+        "score": "점수 {score}",
+        "sourceMemory": "메모리",
+        "sourceSessions": "세션",
+        "fileLoading": "전체 메모리 파일을 불러오는 중…",
+        "fileError": "이 메모리 파일을 불러올 수 없습니다: {message}",
+        "fileUnsupported": "이 메모리 파일은 텍스트로 표시할 수 없습니다."
       }
     }
   },
@@ -660,6 +807,27 @@
             "title": "Phase de sommeil paradoxal"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Rechercher des souvenirs",
+        "searchPlaceholder": "Rechercher dans les souvenirs de cet agent",
+        "searchButton": "Rechercher",
+        "idle": "Recherchez une personne, un projet, une décision ou tout autre élément dont cet agent se souvient.",
+        "searching": "Recherche de souvenirs…",
+        "results": "{count} résultats",
+        "empty": "Aucun souvenir ne correspond à “{query}”.",
+        "error": "La recherche de souvenirs a échoué : {message}",
+        "retry": "Réessayer",
+        "gatewayUpdateRequired": "Mettez à jour le Gateway pour rechercher des souvenirs depuis la Control UI.",
+        "hybridSearch": "recherche hybride",
+        "keywordSearch": "recherche par mots-clés",
+        "lineRange": "lignes {start}–{end}",
+        "score": "score {score}",
+        "sourceMemory": "mémoire",
+        "sourceSessions": "sessions",
+        "fileLoading": "Chargement du fichier mémoire complet…",
+        "fileError": "Impossible de charger ce fichier mémoire : {message}",
+        "fileUnsupported": "Ce fichier mémoire ne peut pas être affiché sous forme de texte."
       }
     }
   },
@@ -743,6 +911,27 @@
             "title": "REM चरण"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "स्मृतियाँ खोजें",
+        "searchPlaceholder": "इस एजेंट की स्मृतियाँ खोजें",
+        "searchButton": "खोजें",
+        "idle": "किसी व्यक्ति, प्रोजेक्ट, निर्णय या इस एजेंट को याद रहने वाली किसी भी अन्य चीज़ को खोजें.",
+        "searching": "स्मृतियाँ खोजी जा रही हैं…",
+        "results": "{count} परिणाम",
+        "empty": "“{query}” से मेल खाने वाली कोई स्मृति नहीं मिली.",
+        "error": "स्मृति खोज विफल रही: {message}",
+        "retry": "फिर से प्रयास करें",
+        "gatewayUpdateRequired": "Control UI से स्मृतियाँ खोजने के लिए Gateway अपडेट करें.",
+        "hybridSearch": "हाइब्रिड खोज",
+        "keywordSearch": "कीवर्ड खोज",
+        "lineRange": "पंक्तियाँ {start}–{end}",
+        "score": "स्कोर {score}",
+        "sourceMemory": "मेमोरी",
+        "sourceSessions": "सत्र",
+        "fileLoading": "पूरी मेमोरी फ़ाइल लोड हो रही है…",
+        "fileError": "यह मेमोरी फ़ाइल लोड नहीं हो सकी: {message}",
+        "fileUnsupported": "यह मेमोरी फ़ाइल टेक्स्ट के रूप में नहीं दिखाई जा सकती."
       }
     }
   },
@@ -826,6 +1015,27 @@
             "title": "مرحلة حركة العين السريعة"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "البحث في الذكريات",
+        "searchPlaceholder": "ابحث في ذكريات هذا الوكيل",
+        "searchButton": "بحث",
+        "idle": "ابحث عن شخص أو مشروع أو قرار أو أي شيء آخر يتذكره هذا الوكيل.",
+        "searching": "جارٍ البحث في الذكريات…",
+        "results": "{count} نتيجة",
+        "empty": "لا توجد ذكريات تطابق “{query}”.",
+        "error": "فشل البحث في الذاكرة: {message}",
+        "retry": "إعادة المحاولة",
+        "gatewayUpdateRequired": "حدّث Gateway للبحث في الذكريات من Control UI.",
+        "hybridSearch": "بحث هجين",
+        "keywordSearch": "بحث بالكلمات المفتاحية",
+        "lineRange": "الأسطر {start}–{end}",
+        "score": "الدرجة {score}",
+        "sourceMemory": "الذاكرة",
+        "sourceSessions": "الجلسات",
+        "fileLoading": "جارٍ تحميل ملف الذاكرة بالكامل…",
+        "fileError": "تعذّر تحميل ملف الذاكرة هذا: {message}",
+        "fileUnsupported": "لا يمكن عرض ملف الذاكرة هذا كنص."
       }
     }
   },
@@ -909,6 +1119,27 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Cerca nei ricordi",
+        "searchPlaceholder": "Cerca nei ricordi di questo agente",
+        "searchButton": "Cerca",
+        "idle": "Cerca una persona, un progetto, una decisione o qualsiasi altra cosa questo agente ricordi.",
+        "searching": "Ricerca nei ricordi in corso…",
+        "results": "{count} risultati",
+        "empty": "Nessun ricordo corrisponde a “{query}”.",
+        "error": "Ricerca nei ricordi non riuscita: {message}",
+        "retry": "Riprova",
+        "gatewayUpdateRequired": "Aggiorna il gateway per cercare nei ricordi dalla Control UI.",
+        "hybridSearch": "ricerca ibrida",
+        "keywordSearch": "ricerca per parole chiave",
+        "lineRange": "righe {start}–{end}",
+        "score": "punteggio {score}",
+        "sourceMemory": "memoria",
+        "sourceSessions": "sessioni",
+        "fileLoading": "Caricamento del file di memoria completo…",
+        "fileError": "Impossibile caricare questo file di memoria: {message}",
+        "fileUnsupported": "Questo file di memoria non può essere visualizzato come testo."
       }
     }
   },
@@ -992,6 +1223,27 @@
             "title": "REM evresi"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Anılarda ara",
+        "searchPlaceholder": "Bu ajanın anılarında ara",
+        "searchButton": "Ara",
+        "idle": "Bir kişiyi, projeyi, kararı veya bu ajanın hatırladığı başka herhangi bir şeyi arayın.",
+        "searching": "Anılarda aranıyor…",
+        "results": "{count} sonuç",
+        "empty": "“{query}” ile eşleşen anı bulunamadı.",
+        "error": "Anı araması başarısız oldu: {message}",
+        "retry": "Yeniden dene",
+        "gatewayUpdateRequired": "Control UI üzerinden anılarda arama yapmak için Gateway'i güncelleyin.",
+        "hybridSearch": "hibrit arama",
+        "keywordSearch": "anahtar kelime araması",
+        "lineRange": "satırlar {start}–{end}",
+        "score": "puan {score}",
+        "sourceMemory": "bellek",
+        "sourceSessions": "oturumlar",
+        "fileLoading": "Bellek dosyasının tamamı yükleniyor…",
+        "fileError": "Bu bellek dosyası yüklenemedi: {message}",
+        "fileUnsupported": "Bu bellek dosyası metin olarak gösterilemiyor."
       }
     }
   },
@@ -1075,6 +1327,27 @@
             "title": "Фаза швидкого сну"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Пошук спогадів",
+        "searchPlaceholder": "Пошук у спогадах цього агента",
+        "searchButton": "Шукати",
+        "idle": "Шукайте людину, проєкт, рішення або будь-що інше, що пам’ятає цей агент.",
+        "searching": "Пошук спогадів…",
+        "results": "Результатів: {count}",
+        "empty": "Немає спогадів, що відповідають запиту “{query}”.",
+        "error": "Не вдалося виконати пошук спогадів: {message}",
+        "retry": "Повторити",
+        "gatewayUpdateRequired": "Оновіть Gateway, щоб шукати спогади в Control UI.",
+        "hybridSearch": "гібридний пошук",
+        "keywordSearch": "пошук за ключовими словами",
+        "lineRange": "рядки {start}–{end}",
+        "score": "оцінка {score}",
+        "sourceMemory": "пам’ять",
+        "sourceSessions": "сеанси",
+        "fileLoading": "Завантаження повного файлу пам’яті…",
+        "fileError": "Не вдалося завантажити цей файл пам’яті: {message}",
+        "fileUnsupported": "Цей файл пам’яті неможливо відобразити як текст."
       }
     }
   },
@@ -1158,6 +1431,27 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Cari memori",
+        "searchPlaceholder": "Cari memori agen ini",
+        "searchButton": "Cari",
+        "idle": "Cari orang, proyek, keputusan, atau apa pun yang diingat agen ini.",
+        "searching": "Mencari memori…",
+        "results": "{count} hasil",
+        "empty": "Tidak ada memori yang cocok dengan “{query}”.",
+        "error": "Pencarian memori gagal: {message}",
+        "retry": "Coba lagi",
+        "gatewayUpdateRequired": "Perbarui Gateway untuk mencari memori dari Control UI.",
+        "hybridSearch": "pencarian hibrida",
+        "keywordSearch": "pencarian kata kunci",
+        "lineRange": "baris {start}–{end}",
+        "score": "skor {score}",
+        "sourceMemory": "memori",
+        "sourceSessions": "sesi",
+        "fileLoading": "Memuat seluruh file memori…",
+        "fileError": "Tidak dapat memuat file memori ini: {message}",
+        "fileUnsupported": "File memori ini tidak dapat ditampilkan sebagai teks."
       }
     }
   },
@@ -1241,6 +1535,27 @@
             "title": "Faza REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Szukaj wspomnień",
+        "searchPlaceholder": "Przeszukaj wspomnienia tego agenta",
+        "searchButton": "Szukaj",
+        "idle": "Wyszukaj osobę, projekt, decyzję lub cokolwiek innego, co pamięta ten agent.",
+        "searching": "Wyszukiwanie wspomnień…",
+        "results": "Liczba wyników: {count}",
+        "empty": "Żadne wspomnienia nie pasują do “{query}”.",
+        "error": "Wyszukiwanie w pamięci nie powiodło się: {message}",
+        "retry": "Spróbuj ponownie",
+        "gatewayUpdateRequired": "Zaktualizuj Gateway, aby wyszukiwać wspomnienia w Control UI.",
+        "hybridSearch": "wyszukiwanie hybrydowe",
+        "keywordSearch": "wyszukiwanie według słów kluczowych",
+        "lineRange": "wiersze {start}–{end}",
+        "score": "ocena {score}",
+        "sourceMemory": "pamięć",
+        "sourceSessions": "sesje",
+        "fileLoading": "Ładowanie pełnego pliku pamięci…",
+        "fileError": "Nie udało się załadować tego pliku pamięci: {message}",
+        "fileUnsupported": "Tego pliku pamięci nie można wyświetlić jako tekstu."
       }
     }
   },
@@ -1324,6 +1639,27 @@
             "title": "ระยะ REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "ค้นหาความทรงจำ",
+        "searchPlaceholder": "ค้นหาความทรงจำของเอเจนต์นี้",
+        "searchButton": "ค้นหา",
+        "idle": "ค้นหาบุคคล โครงการ การตัดสินใจ หรือสิ่งอื่นใดที่เอเจนต์นี้จดจำไว้.",
+        "searching": "กำลังค้นหาความทรงจำ…",
+        "results": "{count} ผลลัพธ์",
+        "empty": "ไม่พบความทรงจำที่ตรงกับ “{query}”.",
+        "error": "ค้นหาความทรงจำไม่สำเร็จ: {message}",
+        "retry": "ลองอีกครั้ง",
+        "gatewayUpdateRequired": "อัปเดต Gateway เพื่อค้นหาความทรงจำจาก Control UI.",
+        "hybridSearch": "การค้นหาแบบผสม",
+        "keywordSearch": "การค้นหาด้วยคำสำคัญ",
+        "lineRange": "บรรทัด {start}–{end}",
+        "score": "คะแนน {score}",
+        "sourceMemory": "ความจำ",
+        "sourceSessions": "เซสชัน",
+        "fileLoading": "กำลังโหลดไฟล์ความจำฉบับเต็ม…",
+        "fileError": "ไม่สามารถโหลดไฟล์ความจำนี้ได้: {message}",
+        "fileUnsupported": "ไม่สามารถแสดงไฟล์ความจำนี้เป็นข้อความได้"
       }
     }
   },
@@ -1407,6 +1743,27 @@
             "title": "Giai đoạn REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Tìm kiếm ký ức",
+        "searchPlaceholder": "Tìm kiếm ký ức của tác nhân này",
+        "searchButton": "Tìm kiếm",
+        "idle": "Tìm kiếm một người, dự án, quyết định hoặc bất cứ điều gì khác mà tác nhân này ghi nhớ.",
+        "searching": "Đang tìm kiếm ký ức…",
+        "results": "{count} kết quả",
+        "empty": "Không có ký ức nào khớp với “{query}”.",
+        "error": "Tìm kiếm ký ức thất bại: {message}",
+        "retry": "Thử lại",
+        "gatewayUpdateRequired": "Cập nhật Gateway để tìm kiếm ký ức từ Control UI.",
+        "hybridSearch": "tìm kiếm kết hợp",
+        "keywordSearch": "tìm kiếm theo từ khóa",
+        "lineRange": "dòng {start}–{end}",
+        "score": "điểm {score}",
+        "sourceMemory": "bộ nhớ",
+        "sourceSessions": "phiên",
+        "fileLoading": "Đang tải toàn bộ tệp bộ nhớ…",
+        "fileError": "Không thể tải tệp bộ nhớ này: {message}",
+        "fileUnsupported": "Không thể hiển thị tệp bộ nhớ này dưới dạng văn bản."
       }
     }
   },
@@ -1490,6 +1847,27 @@
             "title": "REM-fase"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Herinneringen doorzoeken",
+        "searchPlaceholder": "Doorzoek de herinneringen van deze agent",
+        "searchButton": "Zoeken",
+        "idle": "Zoek naar een persoon, project, beslissing of iets anders dat deze agent zich herinnert.",
+        "searching": "Herinneringen doorzoeken…",
+        "results": "{count} resultaten",
+        "empty": "Geen herinneringen gevonden voor “{query}”.",
+        "error": "Zoeken in het geheugen mislukt: {message}",
+        "retry": "Opnieuw proberen",
+        "gatewayUpdateRequired": "Werk de Gateway bij om herinneringen te doorzoeken vanuit de Control UI.",
+        "hybridSearch": "hybride zoeken",
+        "keywordSearch": "zoeken op trefwoorden",
+        "lineRange": "regels {start}–{end}",
+        "score": "score {score}",
+        "sourceMemory": "geheugen",
+        "sourceSessions": "sessies",
+        "fileLoading": "Het volledige geheugenbestand wordt geladen…",
+        "fileError": "Dit geheugenbestand kon niet worden geladen: {message}",
+        "fileUnsupported": "Dit geheugenbestand kan niet als tekst worden weergegeven."
       }
     }
   },
@@ -1573,6 +1951,27 @@
             "title": "مرحلهٔ REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "جستجوی خاطرات",
+        "searchPlaceholder": "جستجو در خاطرات این عامل",
+        "searchButton": "جستجو",
+        "idle": "شخص، پروژه، تصمیم یا هر چیز دیگری را که این عامل به خاطر دارد جستجو کنید.",
+        "searching": "در حال جستجوی خاطرات…",
+        "results": "{count} نتیجه",
+        "empty": "هیچ خاطره‌ای با “{query}” مطابقت نداشت.",
+        "error": "جستجوی خاطرات ناموفق بود: {message}",
+        "retry": "تلاش مجدد",
+        "gatewayUpdateRequired": "برای جستجوی خاطرات از طریق Control UI، Gateway را به‌روزرسانی کنید.",
+        "hybridSearch": "جستجوی ترکیبی",
+        "keywordSearch": "جستجوی کلیدواژه‌ای",
+        "lineRange": "خطوط {start}–{end}",
+        "score": "امتیاز {score}",
+        "sourceMemory": "حافظه",
+        "sourceSessions": "نشست‌ها",
+        "fileLoading": "در حال بارگذاری فایل کامل حافظه…",
+        "fileError": "بارگذاری این فایل حافظه ممکن نشد: {message}",
+        "fileUnsupported": "این فایل حافظه را نمی‌توان به‌صورت متن نمایش داد."
       }
     }
   },
@@ -1654,6 +2053,131 @@
           },
           "rem": {
             "title": "Фаза быстрого сна"
+          }
+        }
+      },
+      "memories": {
+        "searchLabel": "Поиск воспоминаний",
+        "searchPlaceholder": "Поиск в воспоминаниях этого агента",
+        "searchButton": "Найти",
+        "idle": "Найдите человека, проект, решение или что-либо ещё, что помнит этот агент.",
+        "searching": "Поиск воспоминаний…",
+        "results": "Результатов: {count}",
+        "empty": "По запросу “{query}” воспоминаний не найдено.",
+        "error": "Не удалось выполнить поиск воспоминаний: {message}",
+        "retry": "Повторить",
+        "gatewayUpdateRequired": "Обновите Gateway, чтобы искать воспоминания через Control UI.",
+        "hybridSearch": "гибридный поиск",
+        "keywordSearch": "поиск по ключевым словам",
+        "lineRange": "строки {start}–{end}",
+        "score": "оценка {score}",
+        "sourceMemory": "память",
+        "sourceSessions": "сеансы",
+        "fileLoading": "Загрузка полного файла памяти…",
+        "fileError": "Не удалось загрузить этот файл памяти: {message}",
+        "fileUnsupported": "Этот файл памяти нельзя отобразить как текст."
+      }
+    }
+  },
+  "sv": {
+    "common": {
+      "loading": "Läser in…",
+      "enabled": "Aktiverad",
+      "disabled": "Inaktiverad",
+      "na": "ej tillämpligt",
+      "unknown": "Okänd"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Sök i minnen",
+        "searchPlaceholder": "Sök i den här agentens minnen",
+        "searchButton": "Sök",
+        "idle": "Sök efter en person, ett projekt, ett beslut eller något annat som den här agenten minns.",
+        "searching": "Söker i minnen…",
+        "results": "{count} resultat",
+        "empty": "Inga minnen matchade ”{query}”.",
+        "error": "Sökningen i minnen misslyckades: {message}",
+        "retry": "Försök igen",
+        "gatewayUpdateRequired": "Uppdatera Gateway för att söka i minnen från Control UI.",
+        "hybridSearch": "hybridsökning",
+        "keywordSearch": "nyckelordssökning",
+        "lineRange": "rader {start}–{end}",
+        "score": "poäng {score}",
+        "sourceMemory": "minne",
+        "sourceSessions": "sessioner",
+        "fileLoading": "Läser in hela minnesfilen…",
+        "fileError": "Kunde inte läsa in den här minnesfilen: {message}",
+        "fileUnsupported": "Den här minnesfilen kan inte visas som text."
+      },
+      "overview": {
+        "hero": {
+          "awake": "Minnet är vaket",
+          "waking": "Väcker minnet…",
+          "hibernating": "Minnet är i viloläge",
+          "needsAttention": "Minnet behöver uppmärksamhet",
+          "noSearchRuntime": "Minnesökning på värden är inte tillgänglig",
+          "noSearchRuntimeDescription": "{engine} tillhandahåller ingen körmiljö för minnesökning på värden. Andra minnesintegrationer kan köras oberoende.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Kontrollerar den här agentens minnesmotor och drömcykel.",
+          "offDescription": "Välj en minnesmotor i Inställningar för att väcka minnet.",
+          "disabledDescription": "Den valda minnesmotorn är inaktiverad. Aktivera den igen i Inställningar.",
+          "gatewayOffline": "Gateway är offline, så minnets status är inte tillgänglig.",
+          "hybridSearch": "hybridsökning",
+          "keywordSearch": "nyckelordssökning (utan inbäddningar)",
+          "openSettings": "Öppna inställningar",
+          "retry": "Försök igen",
+          "refresh": "Uppdatera status"
+        },
+        "schedule": {
+          "title": "Sömnschema",
+          "lightDescription": "Sorterar nya korttidsanteckningar och förbereder lovande kandidater utan att ändra långtidsminnet.",
+          "remDescription": "Reflekterar över teman och återkommande idéer i den senaste aktiviteten för att förbättra rangordningen utan att ändra långtidsminnet.",
+          "deepDescription": "Poängsätter förberedda kandidater, för över de som är värda att behålla till långtidsminnet (MEMORY.md) och skriver drömdagboken.",
+          "nextRun": "nästa {time}",
+          "lastRun": "senaste {time}",
+          "notScheduled": "Inte schemalagt",
+          "learnMore": "Så fungerar drömmar",
+          "openDocs": "Öppna drömguiden"
+        },
+        "activity": {
+          "title": "Aktivitet",
+          "promotedToday": "Överförda till långtidsminnet idag",
+          "promotedTotal": "Överförda till långtidsminnet totalt",
+          "shortTermCount": "Väntande korttidsposter",
+          "phaseHitCount": "Fassignaler",
+          "lightPhaseHitCount": "Träffar i lättsömnfasen",
+          "remPhaseHitCount": "Träffar i REM-fasen"
+        },
+        "health": {
+          "title": "Motorns hälsostatus",
+          "provider": "Leverantör",
+          "embeddings": "Vektorinbäddningar",
+          "runtime": "Körmiljö för vektorinbäddningar",
+          "healthy": "Redo",
+          "unavailable": "Inte tillgänglig",
+          "notChecked": "Inte kontrollerad",
+          "notCheckedDescription": "Det har ännu inte kontrollerats om inbäddningar är redo att användas.",
+          "checking": "Kontrollerar…",
+          "test": "Testa",
+          "testing": "Testar…"
+        },
+        "shortcuts": {
+          "title": "Utforska minnet",
+          "memories": "Sök bland minnen",
+          "diary": "Läs drömdagboken",
+          "settings": "Konfigurera minnet"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Lätt sömnfas"
+          },
+          "deep": {
+            "title": "Djup sömnfas"
+          },
+          "rem": {
+            "title": "REM-fas"
           }
         }
       }

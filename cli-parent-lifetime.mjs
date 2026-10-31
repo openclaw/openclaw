@@ -1,6 +1,14 @@
 import { GATEWAY_SHUTDOWN_RESERVE_MS } from "./gateway-shutdown-budget.mjs";
 
 const parentKey = Symbol.for("openclaw.cliRespawnParent");
+export const CLI_RESPAWN_PARENT_ENV = "OPENCLAW_CLI_RESPAWN_PARENT";
+// Compiled executables cannot run a preload. Consume its one-child equivalent
+// before any detached worker can inherit it, and reject a different parent.
+const inheritedParent = process.env[CLI_RESPAWN_PARENT_ENV];
+delete process.env[CLI_RESPAWN_PARENT_ENV];
+if (inheritedParent === String(process.ppid)) {
+  globalThis[parentKey] = { pid: process.ppid };
+}
 // Consume the private preload so later detached workers cannot inherit this contract.
 export const CLI_PARENT_BOUND_PRELOAD = `data:text/javascript,${encodeURIComponent(`
   globalThis[Symbol.for("openclaw.cliRespawnParent")] = { pid: process.ppid };

@@ -19,7 +19,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
-import { parseDiscordTarget } from "../targets.js";
+import { parseDiscordTarget } from "../target-parsing.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
 import { removeBindingRecordSync } from "./thread-bindings.persistence.js";

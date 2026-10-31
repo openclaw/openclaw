@@ -14,6 +14,7 @@ import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
 } from "../../infra/error-diagnostics.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -33,7 +34,11 @@ import {
   type WorkerSessionWorkspace,
 } from "./session-workspace.js";
 import { transferSkillResources } from "./skill-resource-transfer.js";
-import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerRunnerUnavailableError,
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelHandle,
+} from "./tunnel-contract.js";
 import { latestDurableWorkspaceConflict, waitForTurnOperation } from "./worker-turn-admission.js";
 import { prepareWorkerTurnAttachments } from "./worker-turn-attachments.js";
 import { WorkerWorkspaceReconciliationError } from "./worker-turn-failure.js";
@@ -46,7 +51,6 @@ import {
 } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
@@ -55,9 +59,6 @@ import {
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
-type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
-  Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
-
 type WorkspaceConflictReport = Required<WorkerWorkspaceResultConflict> & {
   summary: string;
 };
@@ -101,8 +102,10 @@ export function workerWorkspaceFailure(
 }
 
 export async function recoverWorkspaceBeforeTurn(params: {
+  tunnel: WorkerTunnelHandle;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
+  turn: Parameters<typeof resolveWorkerTurnTranscriptTarget>[0];
   turnClaim: WorkerSessionTurnClaim;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   workspace: WorkerSessionWorkspace;
@@ -111,38 +114,42 @@ export async function recoverWorkspaceBeforeTurn(params: {
   if (params.workspace.kind !== "local") {
     return;
   }
-  const localWorkspaceDir = params.workspace.path;
   const assertCurrent = () => {
+    params.signal?.throwIfAborted();
     if (!params.placements.validateTurnClaim(params.turnClaim)) {
       throw new Error("Cloud worker workspace recovery lost its turn claim");
     }
   };
-  const journal = createWorkspaceResultJournal({ ...params, assertCurrent }).adapter;
   try {
-    await params.workspaceOperations.run(
-      params.placement.environmentId,
-      async () => {
-        assertCurrent();
-        const pending = await journal.load();
-        if (pending) {
-          await recoverWorkerWorkspaceReconciliation({
-            root: localWorkspaceDir,
-            journal: pending,
-            assertCurrent,
-          });
-          await journal.abort();
-        }
-      },
-      params.signal,
-    );
+    assertCurrent();
+    await params.placements.markWorkspaceResultPending(params.turnClaim, assertCurrent);
+    await reconcileWorkspaceAfterTurn({
+      placement: params.placement,
+      placements: params.placements,
+      turnClaim: params.turnClaim,
+      workspaceOperations: params.workspaceOperations,
+      workspace: params.workspace,
+      beforeTurnSignal: params.signal,
+      tunnel: params.tunnel,
+      transcriptTarget: resolveWorkerTurnTranscriptTarget(params.turn),
+      beforeTurn: true,
+    });
   } catch (error) {
+    if (params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      await params.placements.handoffWorkspaceResultRecovery(params.turnClaim);
+    }
     if (params.signal?.aborted && error === params.signal.reason) {
       throw error;
     }
-    throw new WorkerWorkspaceReconciliationError(
-      `Cloud worker workspace recovery could not complete: ${workspaceError(error)}`,
-      { cause: error },
+    const disconnected = collectNestedErrorCandidates(error).some(
+      (cause) => cause instanceof WorkerTunnelOwnerDisconnectedError,
     );
+    throw disconnected
+      ? new WorkerRunnerUnavailableError()
+      : new WorkerWorkspaceReconciliationError(
+          `Cloud worker workspace recovery could not complete: ${workspaceError(error)}`,
+          { cause: error },
+        );
   }
 }
 
@@ -154,6 +161,8 @@ export async function reconcileWorkspaceAfterTurn(params: {
   workspace: WorkerSessionWorkspace;
   transcriptTarget: ReturnType<typeof resolveWorkerTurnTranscriptTarget>;
   tunnel: WorkerTunnelHandle;
+  beforeTurn?: true;
+  beforeTurnSignal?: AbortSignal;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
@@ -193,6 +202,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
   const assertWorkspaceResultCurrent = () => {
+    params.beforeTurnSignal?.throwIfAborted();
     if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
       throw new Error("Cloud worker workspace result lost its placement owner");
     }
@@ -205,14 +215,16 @@ export async function reconcileWorkspaceAfterTurn(params: {
   });
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
-    await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
+    const reconcile = async () => {
       if (!params.placements.validateTurnClaim(params.turnClaim)) {
         throw new Error("Cloud worker workspace result lost its turn claim");
       }
       const quiescence = await params.tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
       let resumed = false;
       try {
-        const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
+        const stagedResultRef = workerWorkspaceResultRef(
+          params.turnClaim.claimId + (params.beforeTurn ? "-inputs" : ""),
+        );
         const reconciliation = await params.tunnel.reconcileWorkspace(
           createWorkerWorkspaceReconcileRequest({
             workspace: params.workspace,
@@ -247,12 +259,13 @@ export async function reconcileWorkspaceAfterTurn(params: {
         if (applied?.conflictPaths.length && !recordedStagedResultRef) {
           throw new Error("Cloud workspace conflict has no staged result reference");
         }
-        const finalized = await finalizeWorkspaceResultConflicts({
+        const conflictRetained = await finalizeWorkspaceResultConflicts({
           assertCurrent: assertResultCurrent,
           placements: params.placements,
           turnClaim: params.turnClaim,
           conflictPaths: applied?.conflictPaths ?? [],
           priorConflict: priorWorkspaceConflict,
+          retainPriorConflict: params.beforeTurn,
           stagedResultRef: recordedStagedResultRef,
           workspace: params.workspace,
           report: async (report) => {
@@ -301,7 +314,21 @@ export async function reconcileWorkspaceAfterTurn(params: {
           turnClaim: params.turnClaim,
           workspace: params.workspace,
           stagedResultRef: recordedStagedResultRef,
-          conflictRetained: finalized.conflictRetained,
+          conflictRetained,
+          ...(params.beforeTurn
+            ? {
+                closeToolState: false as const,
+                complete: async () => {
+                  const pending = params.placements.preparedWorkspaceResult(params.turnClaim);
+                  if (!pending) {
+                    throw new Error("Cloud worker input refresh lost its pending result");
+                  }
+                  // Input acceptance clears its fence; this claim still owns the upcoming turn.
+                  await params.placements.abandonWorkspaceResult(pending, assertResultCurrent);
+                  return currentPlacement;
+                },
+              }
+            : {}),
           beforeComplete: async () => {
             await quiescence.resume();
             resumed = true;
@@ -312,8 +339,17 @@ export async function reconcileWorkspaceAfterTurn(params: {
           await quiescence.resume();
         }
       }
-    });
+    };
+    await params.workspaceOperations.run(
+      currentPlacement.environmentId,
+      reconcile,
+      params.beforeTurnSignal,
+    );
   } catch (error) {
+    // Cancelling input refresh is not a reconciliation failure; its caller keeps the abort reason.
+    if (params.beforeTurnSignal?.aborted && error === params.beforeTurnSignal.reason) {
+      throw error;
+    }
     await createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertResultCurrent)
       .reportFailure(workspaceError(error))
       .catch(() => undefined);
@@ -346,7 +382,8 @@ function appendWorkspaceConflict(
 }
 
 export async function executeRemoteExecTurn(params: {
-  environments: RemoteExecEnvironmentService;
+  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
+    Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
   onHandoff: (custody?: { requiresTerminalReceipt: true }) => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
@@ -370,7 +407,6 @@ export async function executeRemoteExecTurn(params: {
   ) {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
-  await recoverWorkspaceBeforeTurn({ ...params, signal: params.turn.abortSignal });
   params.assertRunCurrent?.();
   const tunnel = await waitForTurnOperation({
     start: () =>
@@ -381,6 +417,9 @@ export async function executeRemoteExecTurn(params: {
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,
   });
+  params.assertRunCurrent?.();
+  await recoverWorkspaceBeforeTurn({ ...params, tunnel, signal: params.turn.abortSignal });
+  params.assertRunCurrent?.();
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(params.turn);
   const attachmentNote = await prepareWorkerTurnAttachments({
     turn: params.turn,

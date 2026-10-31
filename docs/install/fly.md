@@ -267,7 +267,7 @@ Container keeps restarting or getting killed. Signs: `SIGABRT`, `v8::internal::R
 
 ```toml
 [[vm]]
-  memory = "2048mb"
+memory = "2048mb"
 ```
 
 Or update an existing machine:

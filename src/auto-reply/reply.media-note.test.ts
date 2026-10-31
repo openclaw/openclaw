@@ -1,10 +1,10 @@
 /** Tests media-note behavior as it appears through reply prompt assembly. */
 import { describe, expect, it } from "vitest";
+import { prepareReadyReply } from "./reply/get-reply-run-context.test-support.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
-import { buildReplyPromptEnvelope } from "./reply/prompt-prelude.js";
 
 describe("getReplyFromConfig media note plumbing", () => {
-  it("includes all MediaPaths in the agent prompt", () => {
+  it("includes all MediaPaths in the agent prompt", async () => {
     const sessionCtx = finalizeInboundContext({
       Body: "hello",
       BodyForAgent: "hello",
@@ -13,17 +13,8 @@ describe("getReplyFromConfig media note plumbing", () => {
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["/tmp/a.png", "/tmp/b.png"],
     });
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: sessionCtx.BodyForAgent,
-      hasUserBody: true,
-      inboundUserContext: "",
-      isBareSessionReset: false,
-      startupAction: "new",
-      prefixedBody: sessionCtx.BodyForAgent,
-      sourceReplyDeliveryMode: "automatic",
-    });
+    const prepared = await prepareReadyReply({ ctx: sessionCtx, sessionCtx, isNewSession: false });
+    const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
     const prompt = envelope.prefixedCommandBody;
 
     const mediaNote = [
@@ -37,7 +28,7 @@ describe("getReplyFromConfig media note plumbing", () => {
     expect(envelope.media?.map(({ path }) => path)).toEqual(["/tmp/a.png", "/tmp/b.png"]);
   });
 
-  it("keeps the real image attachment note after image understanding rewrites the body", () => {
+  it("keeps the real image attachment note after image understanding rewrites the body", async () => {
     const describedBody = [
       "[Image]",
       "User text:",
@@ -62,15 +53,9 @@ describe("getReplyFromConfig media note plumbing", () => {
         },
       ],
     });
-    const prompt = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: sessionCtx.BodyForAgent,
-      hasUserBody: true,
-      inboundUserContext: "",
-      isBareSessionReset: false,
-      startupAction: "new",
-      prefixedBody: sessionCtx.BodyForAgent,
+    const prepared = await prepareReadyReply({ ctx: sessionCtx, sessionCtx, isNewSession: false });
+    const prompt = prepared.buildPromptBodies({
+      prefixedBody: prepared.prefixedBodyBase,
     }).prefixedCommandBody;
 
     expect(prompt).toContain(

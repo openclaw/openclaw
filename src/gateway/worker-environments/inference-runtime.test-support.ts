@@ -1,14 +1,20 @@
 import { afterEach, expect, vi } from "vitest";
 import type { WorkerInferenceStartParams } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import * as sessionAuthRuntime from "../../agents/auth-profiles/session-override.js";
+import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import * as authProfileUsage from "../../agents/auth-profiles/usage.js";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
 import * as diagnosticModelCallRuntime from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/stream-resolution.js";
+import * as modelAuth from "../../agents/model-auth.js";
 import * as modelSelectionRuntime from "../../agents/model-selection.js";
 import type { PreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime-auth.js";
 import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import * as providerStreamRuntime from "../../agents/provider-stream.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import { AuthStorage } from "../../agents/sessions/auth-storage.js";
+import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionEntryRuntime from "../../config/sessions/session-entry-read-runtime.js";
@@ -24,6 +30,7 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerInferenceExecutionParams } from "./inference-runtime.js";
 import { executeWorkerInference } from "./inference.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
@@ -38,6 +45,8 @@ type Deps = {
   resolveStream: typeof streamResolutionRuntime.resolveEmbeddedAgentStream;
 };
 export type Execution = WorkerInferenceExecutionParams;
+const prepareRealModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
+const registerRealProvider = providerStreamRuntime.registerProviderStreamForModel;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -87,24 +96,19 @@ export const sessionEntry: SessionEntry = {
   authProfileOverride: PROFILE,
   authProfileOverrideSource: "user",
 };
-const identity: WorkerConnectionIdentity = {
-  environmentId: "environment-runtime-test",
+const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+  sessionId: SESSION_ID,
+  claimId: "claim-runtime-test",
+  runId: "run-runtime-test",
+  placementGeneration: 4,
+  owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
+};
+const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
   credentialHash: ["credential", "hash", "runtime", "test"].join("-"),
   bundleHash: "bundle-hash-runtime-test",
-  sessionId: SESSION_ID,
-  runId: "run-runtime-test",
-  turnClaim: {
-    sessionId: SESSION_ID,
-    claimId: "claim-runtime-test",
-    runId: "run-runtime-test",
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
-  },
-  ownerEpoch: 3,
-  rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
   credentialExpiresAtMs: 100_000,
-};
+});
 export const usage: Usage = {
   input: 11,
   output: 7,
@@ -304,6 +308,7 @@ export function setup(
         pluginMetadataSnapshot: leased.metadataSnapshot,
         pluginRegistry: leased.pluginRegistry,
       },
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: releaseRuntime,
     };
   });
@@ -398,4 +403,39 @@ export function params(
     emit,
     isCurrent: () => true,
   };
+}
+
+export function useRealProviderPreparation(
+  runtime: ReturnType<typeof setup>,
+  resolveModel: (config: OpenClawConfig | undefined) => Model,
+  profiles: AuthProfileStore["profiles"] = {},
+) {
+  const authStorage = AuthStorage.inMemory({});
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  vi.spyOn(authProfileStore, "ensureAuthProfileStoreAsync").mockResolvedValue({
+    version: 1,
+    profiles,
+  });
+  vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
+  vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
+    apiKey: AUTH_MARKER,
+    mode: "api-key",
+    source: "worker provider fixture",
+  });
+  runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
+    prepareRealModel(
+      {
+        ...modelParams,
+        modelResolver: async (_provider, _modelId, _agentDir, cfg) => ({
+          model: resolveModel(cfg),
+          authStorage,
+          modelRegistry,
+        }),
+      },
+      assertCurrent,
+    ),
+  );
+  vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
+    registerRealProvider,
+  );
 }

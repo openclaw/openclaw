@@ -9,7 +9,10 @@ export type GoogleChatGroupConfig = NonNullable<
   NonNullable<GoogleChatAccountSchemaInput["groups"]>[string]
 >;
 
-type GoogleChatCompatibilityConfig = Pick<CommonChannelMessagingConfig, "dms" | "heartbeat">;
+type GoogleChatCompatibilityConfig = Pick<
+  CommonChannelMessagingConfig,
+  "dms" | "heartbeat" | "heartbeatVisibility"
+>;
 
 export type GoogleChatAccountConfig = Omit<GoogleChatAccountSchemaInput, "groups" | "dms"> &
   GoogleChatCompatibilityConfig & { groups?: Record<string, GoogleChatGroupConfig> };

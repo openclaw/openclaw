@@ -1,11 +1,10 @@
 import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
-import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
-import { codexHistoryWorkerEntrypoint } from "../../extensions/codex/session-history-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
 import { memoryForgetPlanningObserverEntrypoint } from "../../extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts";
 import { memoryAdmissionRestartEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts";
+import { memoryPublicationCrashEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-crash-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
 import { realtimeAudioTestEntrypoints } from "../../extensions/openai/realtime-audio-worker-entrypoints.test-support.ts";
@@ -29,7 +28,6 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
-import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
   adminStateOwnerFixtureEntrypoint,
   cliMessageExitEntrypoints,
@@ -47,6 +45,7 @@ import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config
 import { sessionNativeProcessEntrypoints } from "../../src/config/sessions/native-process-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-env-runtime.test-support.ts";
+import { dashboardTitleRuntimeEntrypoints } from "../../src/gateway/dashboard-session-title-runtime.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
@@ -90,13 +89,17 @@ import { gitBackupCommandRuntimeEntrypoint } from "../../src/snapshot/git-backup
 import { stateNativeProcessEntrypoints } from "../../src/state/native-process-runtime.test-support.ts";
 import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw-agent-db-module-identity-runtime.test-support.ts";
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
-import { databaseVerifyHostRuntimeEntrypoint } from "../../src/state/openclaw-database-verify-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
+  agentDeletionRecoveryHoldPostgresRuntimeEntrypoint,
+  cronOwnerInspectionPostgresRuntimeEntrypoint,
+  stateLeasePostgresRuntimeEntrypoint,
   stateLeaseProcessExitRuntimeEntrypoint,
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-groq-sdk.test-support.ts";
+import { clientVoiceEntryRuntimeEntrypoint } from "../../src/talk/client-voice-session-runtime.test-support.ts";
+import { templateProjectBuildEntrypoint } from "../../src/templates/project-runtime.test-support.ts";
 import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-support.ts";
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
@@ -200,6 +203,7 @@ export const preservedModuleBuildSources = [
   "src/agents/agent-bundle-mcp-manager.ts",
   "src/agents/agent-bundle-mcp-manager-api.ts",
   "src/agents/mcp-auth-profile.integration.test-support.ts",
+  "src/agents/mcp-auth-profile-authorization.ts",
   "src/agents/mcp-auth-profile.ts",
   "src/agents/mcp-auth-profile.runtime.ts",
   "src/agents/auth-profiles/oauth.ts",
@@ -283,6 +287,10 @@ export const preservedModuleBuildAssets = [
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
+  // Standalone skill discovery loads this sibling only when prepared contributions are absent.
+  "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
+  "plugins/test-helpers/installed-plugin-index":
+    "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
@@ -301,7 +309,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(proxyCaptureNativeProcessEntrypoints),
     ...Object.values(serviceProcessEnvEntrypoints),
     workerBundleArchiveEntrypoint,
-    clawProjectBuildEntrypoint,
+    templateProjectBuildEntrypoint,
     tempDirEntrypoint,
     ...Object.values(deliveryQueueProcessEntrypoints),
     ...Object.values(externalProxyTestEntrypoints),
@@ -313,11 +321,10 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(discordAudioTestEntrypoints),
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
-    codexCatalogPageWorkerEntrypoint,
-    codexHistoryWorkerEntrypoint,
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
+    memoryPublicationCrashEntrypoint,
     memoryAdmissionRestartEntrypoint,
     memoryForgetFaultEntrypoint,
     memoryForgetPlanningObserverEntrypoint,
@@ -375,6 +382,7 @@ export const vitestWorkerBuildEntries = {
       : []),
     ...Object.values(tuiPtyRuntimeEntrypoints),
     ...Object.values(sessionTitleRetentionEntrypoints),
+    ...Object.values(dashboardTitleRuntimeEntrypoints),
     sessionChildCacheRetentionEntrypoint,
     nodeHostConfigRuntimeEntrypoint,
     ...Object.values(workerBackgroundExecEntrypoints),
@@ -387,10 +395,13 @@ export const vitestWorkerBuildEntries = {
     updatePreflightTeamReportsEntrypoint,
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
+    agentDeletionRecoveryHoldPostgresRuntimeEntrypoint,
+    clientVoiceEntryRuntimeEntrypoint,
+    cronOwnerInspectionPostgresRuntimeEntrypoint,
+    stateLeasePostgresRuntimeEntrypoint,
     stateLeaseProcessExitRuntimeEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,
-    databaseVerifyHostRuntimeEntrypoint,
     transcriptLibraryTimezoneEntrypoint,
   ]),
   // The real ulimit fixture must import its parent before imposing a file-size limit.

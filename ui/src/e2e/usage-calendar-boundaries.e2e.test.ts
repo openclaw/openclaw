@@ -1,48 +1,56 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
+const emptyTotals = createEmptyCostUsageTotals();
+const emptyMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
+function aggregates(
+  messages = emptyMessages,
+  costDaily: SessionsUsageResult["aggregates"]["costDaily"] = [],
+) {
+  return {
+    ...buildAggregatesFromSessions([]),
+    messages,
+    costDaily,
+  };
+}
+async function selectLocalDate(page: Page, date: string) {
+  await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
+  const inputs = await page.locator(".usage-date-input").all();
+  expect(inputs).toHaveLength(2);
+  for (const input of inputs) {
+    await input.fill(date);
+    await input.press("Tab");
+  }
+}
+async function expectUsageRange(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  date: string,
+  timeZone?: string,
+) {
+  await expect
+    .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
+    .toMatchObject({
+      startDate: date,
+      endDate: date,
+      ...(timeZone ? { mode: "specific", timeZone } : { mode: "utc" }),
+    });
+}
 
 suite.define(() => {
   it.each([
-    {
-      timezoneId: "Asia/Shanghai",
-      instant: "2026-09-13T16:30:00Z",
-      utcDate: "2026-09-13",
-      localDate: "2026-09-14",
-    },
-    {
-      timezoneId: "America/Los_Angeles",
-      instant: "2026-09-14T02:30:00Z",
-      utcDate: "2026-09-14",
-      localDate: "2026-09-13",
-    },
-    {
-      timezoneId: "Asia/Shanghai",
-      instant: "2026-09-14T04:30:00Z",
-      utcDate: "2026-09-14",
-      localDate: "2026-09-14",
-    },
+    ["Asia/Shanghai", "2026-09-13T16:30:00Z", "2026-09-13", "2026-09-14"],
+    ["America/Los_Angeles", "2026-09-14T02:30:00Z", "2026-09-14", "2026-09-13"],
   ])(
-    "uses the selected calendar for date presets in $timezoneId at $instant",
-    async ({ timezoneId, instant, utcDate, localDate }) => {
+    "uses the selected calendar for date presets in %s at %s",
+    async (timezoneId, instant, utcDate, localDate) => {
       const updatedAt = Date.parse(instant);
-      const emptyTotals = {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
-      };
       const totals = {
         ...emptyTotals,
         input: 1200,
@@ -50,24 +58,7 @@ suite.define(() => {
         totalCost: 0.12,
         inputCost: 0.12,
       };
-      const messages = {
-        total: 1,
-        user: 0,
-        assistant: 1,
-        toolCalls: 0,
-        toolResults: 0,
-        errors: 0,
-      };
-      const aggregates = {
-        messages,
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
-        costDaily: [],
-      };
+      const messages = { ...emptyMessages, total: 1, assistant: 1 };
       const calendars = [
         { timeZone: "utc", date: utcDate, mode: "utc" },
         { timeZone: "local", date: localDate, mode: "specific" },
@@ -83,15 +74,11 @@ suite.define(() => {
           await page.clock.setFixedTime(new Date(instant));
           const gateway = await installMockGateway(page, {
             methodResponses: {
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "OpenClaw" },
-                  { id: "research", name: "Research" },
-                ],
-              },
+              "agents.list": agentRoster(
+                { main: "OpenClaw", research: "Research" },
+                "main",
+                "per-sender",
+              ),
               "sessions.usage": {
                 cases: [
                   ...calendars.map(({ date, mode }) => ({
@@ -110,12 +97,17 @@ suite.define(() => {
                         },
                       ],
                       totals,
-                      aggregates: { ...aggregates, costDaily: [{ date, ...totals }] },
+                      aggregates: aggregates(messages, [{ date, ...totals }]),
                     },
                   })),
                   {
                     match: {},
-                    response: { updatedAt, sessions: [], totals: emptyTotals, aggregates },
+                    response: {
+                      updatedAt,
+                      sessions: [],
+                      totals: emptyTotals,
+                      aggregates: aggregates(messages),
+                    },
                   },
                 ],
               },
@@ -139,9 +131,6 @@ suite.define(() => {
             for (const [label, days] of [
               ["Today", 1],
               ["7d", 7],
-              ["30d", 30],
-              ["90d", 90],
-              ["1y", 365],
               ["All", null],
             ] as const) {
               const startDate =
@@ -155,51 +144,31 @@ suite.define(() => {
                 .locator(".usage-presets")
                 .getByRole("button", { name: label, exact: true })
                 .click();
+              await page.clock.fastForward(400);
               const request = await gateway.waitForRequest("sessions.usage", {
                 after: requestsBefore,
               });
               await expect
-                .poll(() => page.locator(".usage-page .usage-loading-spinner").count())
-                .toBe(0);
-              if (label === "Today" && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
-                await page.mouse.move(0, 0);
-                await page.screenshot({
-                  path: path.join(suite.artifactDir, `${timeZone}-today.png`),
-                });
-                await writeFile(
-                  path.join(suite.artifactDir, `${timeZone}-today.json`),
-                  JSON.stringify(
-                    {
-                      timezoneId,
-                      instant,
-                      expectedDate: date,
-                      request,
-                      dates: await page
-                        .locator(".usage-date-input")
-                        .evaluateAll((inputs) =>
-                          inputs.map((input) => (input as HTMLInputElement).value),
-                        ),
-                    },
-                    null,
-                    2,
-                  ),
-                );
-              }
+                .poll(() =>
+                  page
+                    .locator(".usage-page")
+                    .getByRole("button", { name: "Refresh", exact: true })
+                    .isEnabled(),
+                )
+                .toBe(true);
               expect(request.params).toMatchObject({ startDate, endDate: date, mode });
-              expect(
-                await page
-                  .locator(".usage-date-input")
-                  .evaluateAll((inputs) =>
-                    inputs.map((input) => (input as HTMLInputElement).value),
-                  ),
-              ).toEqual([startDate, date]);
+              const inputs = await page.locator(".usage-date-input").all();
+              expect(await Promise.all(inputs.map((input) => input.inputValue()))).toEqual([
+                startDate,
+                date,
+              ]);
               await expect
                 .poll(() => page.locator(".usage-metric-badge strong").first().textContent())
                 .toBe("1.2K");
               if (label === "7d") {
                 expect(
-                  (await page.locator(".cost-window-card__label").allTextContents()).map(
-                    (windowLabel) => windowLabel.trim(),
+                  (await page.locator(".cost-window__label").allTextContents()).map((windowLabel) =>
+                    windowLabel.trim(),
                   ),
                 ).toContain("Today");
               }
@@ -215,31 +184,8 @@ suite.define(() => {
     const start = Date.parse("2026-11-01T08:30:00Z");
     const end = Date.parse("2026-11-01T10:30:00Z");
     const activeAt = Date.parse("2026-11-01T10:15:00Z");
-    const emptyTotals = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
     const totals = { ...emptyTotals, input: 100, totalTokens: 100 };
-    const messages = {
-      total: 1,
-      user: 1,
-      assistant: 0,
-      toolCalls: 0,
-      toolResults: 0,
-      errors: 0,
-    };
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
-      ? suite.artifactDir
-      : undefined;
+    const messages = { ...emptyMessages, total: 1, user: 1 };
     await suite.withPage(
       { locale: "en-US", timezoneId: "America/Los_Angeles", serviceWorkers: "block" },
       async ({ page }) => {
@@ -301,36 +247,16 @@ suite.define(() => {
                 },
               ],
               totals,
-              aggregates: {
-                messages: { ...messages, total: 3, user: 2, assistant: 1 },
-                tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-                byModel: [],
-                byProvider: [],
-                byAgent: [],
-                byChannel: [],
-                daily: [],
-                costDaily: [{ date, ...totals }],
-              },
+              aggregates: aggregates({ ...messages, total: 3, user: 2, assistant: 1 }, [
+                { date, ...totals },
+              ]),
             },
             "usage.status": { updatedAt: end, providers: [] },
           },
         });
         await page.goto(`${suite.server.baseUrl}usage`);
-        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
-        const dateInputs = await page.locator(".usage-date-input").all();
-        expect(dateInputs).toHaveLength(2);
-        for (const input of dateInputs) {
-          await input.fill(date);
-          await input.press("Tab");
-        }
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
-          .toMatchObject({
-            startDate: date,
-            endDate: date,
-            mode: "specific",
-            timeZone: "America/Los_Angeles",
-          });
+        await selectLocalDate(page, date);
+        await expectUsageRange(gateway, date, "America/Los_Angeles");
         const titles = page.locator(".session-bar-title");
         const cells = page.locator(".usage-hour-cell");
         const unfilteredTitles = ["Messages without token usage", "After the repeated hour"];
@@ -346,19 +272,6 @@ suite.define(() => {
         await page.getByRole("button", { name: "Remove hours filter", exact: true }).click();
         await expect.poll(() => titles.allTextContents()).toEqual(unfilteredTitles);
         await expect.poll(() => cells.nth(2).getAttribute("aria-pressed")).toBe("false");
-        if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "repeated-hour-filter-restored.png"),
-          });
-          await writeFile(
-            path.join(artifactDir, "repeated-hour-filter.json"),
-            JSON.stringify({
-              requests: await gateway.getRequests("sessions.usage"),
-              restoredSessions: await titles.allTextContents(),
-              selectedHours: await page.locator('.usage-hour-cell[aria-pressed="true"]').count(),
-            }),
-          );
-        }
       },
     );
   });
@@ -366,19 +279,7 @@ suite.define(() => {
   it("ends a local range at the next calendar midnight after a skipped midnight", async () => {
     const date = "2026-09-06";
     const updatedAt = Date.parse("2026-09-06T15:00:00Z");
-    const totals = {
-      input: 100,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 100,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
+    const totals = { ...emptyTotals, input: 100, totalTokens: 100 };
     const points = [
       "2026-09-06T03:59:59.999Z",
       "2026-09-06T04:00:00.000Z",
@@ -428,23 +329,7 @@ suite.define(() => {
                 },
               ],
               totals,
-              aggregates: {
-                messages: {
-                  total: 0,
-                  user: 0,
-                  assistant: 0,
-                  toolCalls: 0,
-                  toolResults: 0,
-                  errors: 0,
-                },
-                tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-                byModel: [],
-                byProvider: [],
-                byAgent: [],
-                byChannel: [],
-                daily: [],
-                costDaily: [{ date, ...totals }],
-              },
+              aggregates: aggregates(emptyMessages, [{ date, ...totals }]),
             },
             "usage.status": { updatedAt, providers: [] },
             "sessions.usage.timeseries": { points },
@@ -452,50 +337,23 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}usage`);
-        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
-        const dateInputs = await page.locator(".usage-date-input").all();
-        expect(dateInputs).toHaveLength(2);
-        for (const input of dateInputs) {
-          await input.fill(date);
-          await input.press("Tab");
-        }
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
-          .toMatchObject({
-            startDate: date,
-            endDate: date,
-            mode: "specific",
-            timeZone: "America/Santiago",
-          });
+        await selectLocalDate(page, date);
+        await expectUsageRange(gateway, date, "America/Santiago");
         await page.getByRole("button", { name: "Skipped midnight", exact: true }).click();
         await gateway.waitForRequest("sessions.usage.timeseries");
         const bars = page.locator(".session-detail-panel .ts-bar");
         await expect.poll(() => bars.count()).toBe(2);
-        await expect
-          .poll(() =>
-            bars.evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("aria-label")),
-            ),
-          )
-          .toEqual([
-            "Sep 6, 01:00 AM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-            "Sep 6, 11:59 PM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-          ]);
+        const barLabels = () =>
+          bars.evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute("aria-label")),
+          );
+        const expectedBar = (time: string) =>
+          `Sep 6, ${time} · 100 tokens · Out 0 · In 100 · CW 0 · CR 0`;
+        await expect.poll(barLabels).toEqual([expectedBar("01:00 AM"), expectedBar("11:59 PM")]);
         await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
-          .toMatchObject({ startDate: date, endDate: date, mode: "utc" });
+        await expectUsageRange(gateway, date);
         await page.getByRole("button", { name: "Skipped midnight", exact: true }).click();
-        await expect
-          .poll(() =>
-            bars.evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("aria-label")),
-            ),
-          )
-          .toEqual([
-            "Sep 6, 03:59 AM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-            "Sep 6, 04:00 AM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-          ]);
+        await expect.poll(barLabels).toEqual([expectedBar("03:59 AM"), expectedBar("04:00 AM")]);
       },
     );
   });

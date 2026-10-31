@@ -1,14 +1,61 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { configureSqliteSnapshotReadCache } from "../infra/sqlite-snapshot.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
-import type { RetainedReadScope } from "./openclaw-state-read.types.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
+import {
+  openOpenClawStateReadOnlyLocation,
+  withOpenClawStateReadOnlyLocation,
+} from "./openclaw-state-db-read-connection.js";
+import type {
+  OpenClawStateReadOnlyDatabase,
+  RetainedReadScope,
+} from "./openclaw-state-read.types.js";
+
+/** The report owns immutable bytes and their page cache until its readers drain. */
+export function readRetainedStateSnapshot<T>(
+  scope: RetainedReadScope & { reader?: ReturnType<typeof openOpenClawStateReadOnlyLocation> },
+  source: { location: string; cleanClose?: boolean },
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+): T {
+  const location = source.cleanClose
+    ? resolveImmutableSqliteFileUri(source.location)
+    : source.location;
+  if (isStatePostgres()) {
+    return withOpenClawStateReadOnlyLocation(operation, scope.path, location);
+  }
+  if (!scope.reader) {
+    const reader = openOpenClawStateReadOnlyLocation(scope.path, location);
+    let closed = false;
+    scope.resources.add({
+      async close() {
+        if (!closed) {
+          if (!reader.close()) {
+            throw new Error("Shared-state report reader cleanup is incomplete");
+          }
+          closed = true;
+        }
+      },
+    });
+    if (!isPostgresSqlConnection(reader.database.db)) {
+      configureSqliteSnapshotReadCache(reader.database.db);
+    }
+    scope.reader = reader;
+  }
+  return withOpenClawStateReadOnlyLocation(operation, scope.path, {
+    location,
+    connection: scope.reader,
+  });
+}
 
 /** Normal drainage and explicit abort retain the selected callback's context. */
 export function bindRetainedReadScope(scope: RetainedReadScope) {
@@ -34,7 +81,7 @@ export function assertRetainedReadScopeAdmission(
 
 export function createRetainedReadScope(
   pathname: string,
-  identity: DatabasePathIdentity,
+  identity: DatabasePathIdentity | (() => DatabasePathIdentity | undefined),
   cleanup?: () => Promise<void>,
 ): RetainedReadScope {
   let pending: Promise<void> | undefined;
@@ -49,17 +96,20 @@ export function createRetainedReadScope(
         return Promise.resolve();
       }
       // The callback owns its private copy until settlement, even if live writers close.
-      unregister ??= registerOpenClawStateDatabaseAsyncResource({
-        async close(current) {
-          if (
-            !current ||
-            current.key === identity.key ||
-            current.canonicalPath === identity.canonicalPath
-          ) {
-            await scope.close();
-          }
-        },
-      });
+      const ownedIdentity = typeof identity === "function" ? identity() : identity;
+      if (ownedIdentity) {
+        unregister ??= registerOpenClawStateDatabaseAsyncResource({
+          async close(current) {
+            if (
+              !current ||
+              current.key === ownedIdentity.key ||
+              current.canonicalPath === ownedIdentity.canonicalPath
+            ) {
+              await scope.close();
+            }
+          },
+        });
+      }
       return (pending ??= (async () => {
         await scope.work.drain();
         const settled = await Promise.allSettled(

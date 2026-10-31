@@ -171,12 +171,4 @@ export async function ensureMeetingAudioBackend(params: {
     "remix=no",
     `source_properties='device.description="${PIPEWIRE_MEETING_AUDIO_DEVICE_LABEL}"'`,
   ]);
-  const sinks = await params.run(["pactl", "list", "short", "sinks"], params.timeoutMs);
-  const sources = await params.run(["pactl", "list", "short", "sources"], params.timeoutMs);
-  if (
-    !pulseListContains(sinks.stdout ?? "", PIPEWIRE_SINK_NAME) ||
-    !pulseListContains(sources.stdout ?? "", PIPEWIRE_SOURCE_NAME)
-  ) {
-    throw new Error("OpenClaw PipeWire-Pulse sink or monitor source was not created.");
-  }
 }

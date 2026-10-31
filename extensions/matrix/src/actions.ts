@@ -61,52 +61,6 @@ const MATRIX_PROFILE_MEDIA_PROPERTIES = {
 } as const;
 const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = ["avatarUrl", "avatarPath"] as const;
 
-function createMatrixExposedActions(params: {
-  gate: ReturnType<typeof createActionGate>;
-  encryptionEnabled: boolean;
-  senderIsOwner?: boolean;
-}) {
-  const actions = new Set<ChannelMessageActionName>(["poll", "poll-vote"]);
-  const addGatedActions = (gate: string, ...names: ChannelMessageActionName[]) => {
-    if (params.gate(gate)) {
-      for (const name of names) {
-        actions.add(name);
-      }
-    }
-  };
-  addGatedActions("messages", "send", "read", "edit", "delete");
-  addGatedActions("reactions", "react", "reactions", "emoji-list");
-  addGatedActions("pins", "pin", "unpin", "list-pins");
-  if (params.gate("profile") && params.senderIsOwner === true) {
-    actions.add("set-profile");
-  }
-  addGatedActions("memberInfo", "member-info");
-  addGatedActions("channelInfo", "channel-info");
-  if (params.encryptionEnabled && params.gate("verification") && params.senderIsOwner === true) {
-    actions.add("permissions");
-  }
-  return actions;
-}
-
-function buildMatrixProfileToolSchema(): ChannelMessageToolSchemaContribution {
-  return {
-    actions: ["set-profile"],
-    properties: {
-      displayName: Type.Optional(
-        Type.String({
-          description: "Profile display name for Matrix self-profile update actions.",
-        }),
-      ),
-      display_name: Type.Optional(
-        Type.String({
-          description: "snake_case alias of displayName for Matrix self-profile update actions.",
-        }),
-      ),
-      ...MATRIX_PROFILE_MEDIA_PROPERTIES,
-    },
-  };
-}
-
 function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: string | null }) {
   if (!params.accountId && requiresExplicitMatrixDefaultAccount(params.cfg)) {
     return null;
@@ -126,15 +80,65 @@ function describeMatrixMessageTool(
     return { actions: [], capabilities: [] };
   }
   const gate = createActionGate(account.config.actions);
-  const actions = createMatrixExposedActions({
-    gate,
-    encryptionEnabled: account.config.encryption === true,
-    senderIsOwner,
-  });
+  const encryptionEnabled = account.config.encryption === true;
+  const actions = new Set<ChannelMessageActionName>(["poll", "poll-vote"]);
+  const addGatedActions = (
+    key: Parameters<typeof gate>[0],
+    ...names: ChannelMessageActionName[]
+  ) => {
+    if (gate(key)) {
+      for (const name of names) {
+        actions.add(name);
+      }
+    }
+  };
+  addGatedActions("messages", "send", "read", "edit", "delete");
+  addGatedActions("reactions", "react", "reactions", "emoji-list");
+  addGatedActions("pins", "pin", "unpin", "list-pins");
+  if (gate("profile") && senderIsOwner === true) {
+    actions.add("set-profile");
+  }
+  addGatedActions("memberInfo", "member-info");
+  addGatedActions("channelInfo", "channel-info");
+  if (encryptionEnabled && gate("verification") && senderIsOwner === true) {
+    actions.add("permissions");
+  }
   const listedActions = Array.from(actions);
   const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.has("read")) {
+    const cursor =
+      "Matrix read: pagination token from a previous read's nextBatch/prevBatch, not an event id;";
+    schema.push({
+      // The shared before/after parameters keep read valid across channels; this
+      // contribution only adds Matrix cursor guidance for those parameters.
+      actions: [],
+      properties: {
+        before: Type.Optional(
+          Type.String({ description: `${cursor} pages toward older messages.` }),
+        ),
+        after: Type.Optional(
+          Type.String({ description: `${cursor} pages toward newer messages.` }),
+        ),
+      },
+    });
+  }
   if (actions.has("set-profile")) {
-    schema.push(buildMatrixProfileToolSchema());
+    schema.push({
+      actions: ["set-profile"],
+      properties: {
+        displayName: Type.Optional(
+          Type.String({
+            description: "Profile display name for Matrix self-profile update actions.",
+          }),
+        ),
+        display_name: Type.Optional(
+          Type.String({
+            description: "snake_case alias of displayName for Matrix self-profile update actions.",
+          }),
+        ),
+        ...MATRIX_PROFILE_MEDIA_PROPERTIES,
+      },
+    });
   }
   if (actions.has("react")) {
     schema.push({
@@ -168,7 +172,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     "member-info",
     "channel-info",
   ],
-  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     return describeMatrixMessageTool(
       resolveMatrixActionAccount({ cfg: cfg as CoreConfig, accountId }),

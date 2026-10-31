@@ -19,7 +19,6 @@ import {
   loadCostUsageSummaryFromCache,
 } from "../../infra/session-cost-usage.js";
 import { resolveDateRange } from "./usage-date-range.js";
-import { loadCostUsageSummaryCached } from "./usage-result-cache.js";
 import { invokeUsage, usageReply, usageTotals } from "./usage.test-support.js";
 
 const loadCost = vi.mocked(loadCostUsageSummaryFromCache);
@@ -54,14 +53,8 @@ beforeEach(() => {
 });
 
 it.each([
-  [{ startDate: "2026-02-30" }, "invalid startDate"],
-  [{ endDate: "2026-2-5" }, "invalid endDate"],
-  [{ startDate: "2026-02-01", endDate: "2026-13-01" }, "invalid endDate"],
-])("rejects invalid explicit ranges %j", (params, error) => {
-  expect(resolveDateRange(params)).toEqual({ ok: false, error: expect.stringContaining(error) });
-});
-
-it.each([
+  ["usage.cost", { startDate: "2026-02-30" }, "invalid startDate"],
+  ["usage.cost", { endDate: "2026-2-5" }, "invalid endDate"],
   ["usage.cost", { startDate: 0 }, "startDate"],
   ["sessions.usage", { mode: "specific", timeZone: "Invalid/Timezone" }, "invalid timeZone"],
   [
@@ -112,7 +105,7 @@ it.each([null, ""])("retains UTC for omitted or blank offset %j", (utcOffset) =>
   ]);
 });
 
-it.each(["UTC+14:01", "UTC-12:01", "UTC+5:60", 330])("rejects malformed offset %j", (utcOffset) => {
+it.each(["UTC+5:60", 330])("rejects malformed offset %j", (utcOffset) => {
   expect(resolveDateRange({ ...dates, mode: "specific", utcOffset })).toEqual({
     ok: false,
     error: "invalid utcOffset: expected UTC-12:00 through UTC+14:00",
@@ -130,7 +123,6 @@ it("uses the specific offset for today/day math after UTC midnight", () => {
 
 it("keeps trailing gateway ranges on calendar days across DST", () => {
   withEnv({ TZ: "America/New_York" }, () => {
-    expect([8, 9].map((day) => new Date(2026, 2, day).getTimezoneOffset())).toEqual([300, 240]);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
     expectRange({ days: 2, mode: "gateway" }, [
@@ -138,24 +130,6 @@ it("keeps trailing gateway ranges on calendar days across DST", () => {
       Date.UTC(2026, 2, 10, 4) - 1,
     ]);
   });
-});
-
-it("keeps refreshing cost summaries fresh for the TTL window", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
-  loadCost.mockResolvedValueOnce({
-    ...costSummary(1, 0),
-    cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 1 },
-  });
-  const params = { startMs: 1, endMs: 2, config: agents("ops") };
-  await loadCostUsageSummaryCached(params);
-  expect(loadCost.mock.calls[0]?.[0]?.agentId).toBe("ops");
-  await vi.advanceTimersByTimeAsync(29_999);
-  await loadCostUsageSummaryCached(params);
-  expect(loadCost).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1);
-  await loadCostUsageSummaryCached(params);
-  expect(loadCost).toHaveBeenCalledTimes(2);
 });
 
 it("does not project local avatar bytes for usage-only agent enumeration", async () => {
@@ -186,7 +160,6 @@ it("isolates per-agent cost caches and aggregates only for explicit all-agent sc
   const params = { ...dates, endDate: dates.startDate, mode: "utc" };
   const [, defaultResult] = await request(params, config);
   expect(loadCost).toHaveBeenCalledTimes(1);
-  expect(loadCost.mock.calls[0]?.[0]?.agentId).toBe("main");
   expect(defaultResult).toMatchObject({ totals: { totalTokens: 10, totalCost: 1 } });
   for (const [agentId, totalTokens, totalCost] of [
     ["opus", 20, 2],

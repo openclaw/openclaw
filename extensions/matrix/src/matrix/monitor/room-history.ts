@@ -174,10 +174,8 @@ export function createRoomHistoryTracker(
 
   function rememberWatermark(key: string, snapshotIdx: number): void {
     const nextSnapshotIdx = Math.max(agentWatermarks.get(key) ?? 0, snapshotIdx);
-    if (agentWatermarks.has(key)) {
-      // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
-      agentWatermarks.delete(key);
-    }
+    // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
+    agentWatermarks.delete(key);
     setBoundedMap(agentWatermarks, key, nextSnapshotIdx, maxWatermarkEntries);
   }
 
@@ -203,39 +201,10 @@ export function createRoomHistoryTracker(
     retryKey: string,
     prepared: PreparedTriggerResult,
   ): PreparedTriggerResult {
-    if (queue.preparedTriggers.has(retryKey)) {
-      // Refresh insertion order so capped eviction keeps actively retried events hot.
-      queue.preparedTriggers.delete(retryKey);
-    }
+    // Refresh insertion order so capped eviction keeps actively retried events hot.
+    queue.preparedTriggers.delete(retryKey);
     setBoundedMap(queue.preparedTriggers, retryKey, prepared, maxPreparedTriggerEntries);
     return prepared;
-  }
-
-  function computePendingHistory(
-    queue: HistoryQueue,
-    agentId: string,
-    roomId: string,
-    limit: number,
-    endAbsExclusive = queue.baseIndex + queue.entries.length,
-    startAbsOverride?: number,
-    threadRootId?: string,
-  ): HistoryEntry[] {
-    if (limit <= 0 || queue.entries.length === 0) {
-      return [];
-    }
-    const key = wmKey(agentId, roomId, threadRootId);
-    const wm = startAbsOverride ?? agentWatermarks.get(key) ?? 0;
-    // startAbs: the first absolute index the agent hasn't seen yet
-    const startAbs = Math.max(wm, queue.baseIndex);
-    const startRel = startAbs - queue.baseIndex;
-    const endRel = Math.max(
-      startRel,
-      Math.min(endAbsExclusive - queue.baseIndex, queue.entries.length),
-    );
-    const available = queue.entries
-      .slice(startRel, endRel)
-      .filter((entry) => !entry.discarded && !entry.reserved && !entry.consumedBy?.has(key));
-    return available.length > limit ? available.slice(-limit) : available;
   }
 
   function prepareTrigger(
@@ -267,16 +236,27 @@ export function createRoomHistoryTracker(
     if (slot) {
       queue.entries[slot.slotIdx - queue.baseIndex] = entry;
     }
+    const requestedEndAbsExclusive = slot?.slotIdx;
+    const startAbsOverride = slot?.watermarkIdx;
+    const endAbsExclusive = requestedEndAbsExclusive ?? queue.baseIndex + queue.entries.length;
+    let history: HistoryEntry[] = [];
+    if (!(limit <= 0 || queue.entries.length === 0)) {
+      const key = wmKey(agentId, roomId, threadRootId);
+      const wm = startAbsOverride ?? agentWatermarks.get(key) ?? 0;
+      // startAbs: the first absolute index the agent hasn't seen yet
+      const startAbs = Math.max(wm, queue.baseIndex);
+      const startRel = startAbs - queue.baseIndex;
+      const endRel = Math.max(
+        startRel,
+        Math.min(endAbsExclusive - queue.baseIndex, queue.entries.length),
+      );
+      const available = queue.entries
+        .slice(startRel, endRel)
+        .filter((queued) => !queued.discarded && !queued.reserved && !queued.consumedBy?.has(key));
+      history = available.length > limit ? available.slice(-limit) : available;
+    }
     const prepared = {
-      history: computePendingHistory(
-        queue,
-        agentId,
-        roomId,
-        limit,
-        slot?.slotIdx,
-        slot?.watermarkIdx,
-        threadRootId,
-      ),
+      history,
       ...(slot ? { snapshotIdx: slot.slotIdx + 1 } : appendToQueue(queue, entry)),
     };
     if (retryKey) {

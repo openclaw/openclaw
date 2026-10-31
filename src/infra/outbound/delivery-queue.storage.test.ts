@@ -49,6 +49,8 @@ describe("delivery-queue storage", () => {
     enqueueDelivery(textDelivery(params), tmpDir());
   const openDb = () =>
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() } });
+  const enqueueStable = (id: string, params: Parameters<typeof textDelivery>[0]) =>
+    enqueueDeliveryOnce(textDelivery(params), id, tmpDir());
   async function rejectLostClaims(id: string, operations: (() => Promise<unknown>)[]) {
     for (const operation of operations) {
       await expect(operation()).rejects.toThrow(`Delivery platform claim was lost: ${id}`);
@@ -117,14 +119,10 @@ describe("delivery-queue storage", () => {
     const stateDir = tmpDir();
     const id = "cron-direct-delivery:v1:fenced-stale-terminal-media";
     const artifact = await createMedia("000000000090", "newer owner still needs these bytes");
-    await enqueueDeliveryOnce(
-      textDelivery({
-        payloads: [{ text: "x".repeat(64 * 1024), mediaUrl: artifact, audioAsVoice: true }],
-        completionRetention,
-      }),
-      id,
-      stateDir,
-    );
+    await enqueueStable(id, {
+      payloads: [{ text: "x".repeat(64 * 1024), mediaUrl: artifact, audioAsVoice: true }],
+      completionRetention,
+    });
     const unclaimedSnapshot = await loadPendingDelivery(id, stateDir);
     assert(unclaimedSnapshot, "test invariant: the unclaimed bounded row must be readable");
     const firstAttemptId = await claimDeliveryPlatformSendAttempt(id, stateDir);
@@ -290,20 +288,54 @@ describe("delivery-queue storage", () => {
     expect(pending).toMatchObject({ id, producerClaimId: attemptId });
     expect(readStatus(id)).toBe("pending");
   });
+
+  it("claimless ack reads the current retention policy only once", async () => {
+    const stateDir = tmpDir();
+    const id = "cron-direct-delivery:v1:claimless-current-retention";
+    await enqueueStable(id, {
+      payloads: [{ text: "retained receipt" }],
+      completionRetention: "permanent",
+    });
+    const database = openDb();
+    updateDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id, (entry) => ({
+      ...entry,
+      completionRetention,
+    }));
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["queue"],
+      (sql) =>
+        /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
+          ? "queue"
+          : null,
+    );
+    try {
+      runOpenClawStateWriteTransaction((db) => ackDeliveryInDatabase(db, id, stateDir), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        database,
+      });
+      // One pending payload and the two compact custody/receipt reads.
+      expect(reads.counts.queue).toBeLessThanOrEqual(3);
+    } finally {
+      reads.restore();
+    }
+    expect(readStatus(id)).toBe("completed");
+    expect(readQueuedEntry(stateDir, id)).toMatchObject({
+      completionRetention,
+      recoveryState: "completed_bounded",
+    });
+  });
+
   it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
     const stateDir = tmpDir();
     const id = "cron-direct-delivery:v1:unknown-owner-lease";
-    await enqueueDeliveryOnce(
-      {
-        channel: "forum",
-        to: "123",
-        payloads: [{ text: "test" }],
-        completionRetention,
-        requiresProducerClaim: true,
-      },
-      id,
-      stateDir,
-    );
+    await enqueueStable(id, {
+      channel: "forum",
+      to: "123",
+      payloads: [{ text: "test" }],
+      completionRetention,
+      requiresProducerClaim: true,
+    });
     const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
     assert(claimId, "test invariant: explicit producer must own the stable row");
     await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
@@ -364,14 +396,10 @@ describe("delivery-queue storage", () => {
       vi.setSystemTime(1_000);
       const artifact = await createMedia("000000000091", "private rejected media");
       const id = "stable-rejected-after-crash-claim";
-      await enqueueDeliveryOnce(
-        textDelivery({
-          payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
-          requiresProducerClaim: true,
-        }),
-        id,
-        tmpDir(),
-      );
+      await enqueueStable(id, {
+        payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+        requiresProducerClaim: true,
+      });
       const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
       assert(claimId, "test invariant: stable rejection must own a producer claim");
       vi.setSystemTime(60_000);
@@ -414,25 +442,21 @@ describe("delivery-queue storage", () => {
   });
   it("retains a minimal stable fence that later producers cannot replace", async () => {
     const id = "stable-failed-delivery";
-    await enqueueDeliveryOnce(
-      {
-        channel: "workspace",
-        to: "#general",
-        payloads: [{ text: "private stable payload" }],
-      },
-      id,
-      tmpDir(),
-    );
+    await enqueueStable(id, {
+      channel: "workspace",
+      to: "#general",
+      payloads: [{ text: "private stable payload" }],
+    });
     await moveToFailed(id, tmpDir());
     await ackDelivery(id, tmpDir());
     expect(readStatus(id)).toBe("failed");
     expect(readQueuedEntry(tmpDir(), id)).toEqual(failedFence(id, expect.any(Number)));
     await expect(
-      enqueueDeliveryOnce(
-        { channel: "workspace", to: "#general", payloads: [{ text: "replacement" }] },
-        id,
-        tmpDir(),
-      ),
+      enqueueStable(id, {
+        channel: "workspace",
+        to: "#general",
+        payloads: [{ text: "replacement" }],
+      }),
     ).resolves.toEqual({ id, created: false });
   });
 });

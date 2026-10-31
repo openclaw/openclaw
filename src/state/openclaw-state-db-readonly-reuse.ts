@@ -10,7 +10,7 @@ import {
 import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
-  registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStatePathAsyncResource,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
@@ -18,7 +18,6 @@ import {
   assertStateReadSchema,
   openOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
-import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { isManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { allowsMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
@@ -62,16 +61,8 @@ export function withMaintenanceOpenClawStateDatabaseReadOnly<T>(
       readers.delete(pathname);
       unregister();
     };
-    const unregister = registerOpenClawStateDatabaseAsyncResource({
-      async close(identity) {
-        if (
-          !identity ||
-          identity.key === admission.identity.key ||
-          identity.canonicalPath === admission.identity.canonicalPath
-        ) {
-          close();
-        }
-      },
+    const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+      close();
     });
     scope.own(connection, "shared-handles", close);
     reader = {
@@ -119,9 +110,7 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
         }
         try {
           // Cache admission and the consuming read share this operation's fresh revision.
-          if (isExistingOpenClawStateSchema(pathname, opened.db)) {
-            assertStateReadSchema(opened.db, pathname);
-          }
+          assertStateReadSchema(opened.db, pathname);
           observeOpenClawDatabaseMaintenanceResource(opened.db);
           const value = operation(opened);
           if (ownedTransaction && isPromiseLike(value)) {

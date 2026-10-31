@@ -6,7 +6,7 @@ import {
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
   publishSqliteDatabaseSchemaChange,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -19,6 +19,7 @@ import {
   admitPostgresCapabilities,
   postgresSchemaMetadataSql,
   getAdmittedPostgresSchema,
+  postgresStoreNamespace,
 } from "./postgres-schema.js";
 import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
@@ -26,33 +27,8 @@ import type { DatabaseEngineInput } from "./types.js";
 type EngineAdmission =
   | { engine: "sqlite" }
   | { engine: "postgres"; storeId: string; namespace: string; version: number };
-const admissionKey: SqliteDatabaseAdmissionKey<EngineAdmission> = {
+const admissionKey: SqliteDatabaseFactKey<EngineAdmission> = {
   name: "database.engine",
-  read: (value) => {
-    if (!value || typeof value !== "object" || !("engine" in value)) {
-      return undefined;
-    }
-    if (value.engine === "sqlite") {
-      return { engine: "sqlite" };
-    }
-    if (
-      value.engine === "postgres" &&
-      "storeId" in value &&
-      typeof value.storeId === "string" &&
-      "namespace" in value &&
-      typeof value.namespace === "string" &&
-      "version" in value &&
-      typeof value.version === "number"
-    ) {
-      return {
-        engine: "postgres",
-        storeId: value.storeId,
-        namespace: value.namespace,
-        version: value.version,
-      };
-    }
-    return undefined;
-  },
 };
 
 export function readEngineAnchor(
@@ -98,9 +74,14 @@ export function openEngineStore(ref: {
   prepareAnchor: () => void;
   inspectSqlite: () => { hasExistingData: boolean; hasEngineAnchor: boolean };
   existingOnly?: boolean;
+  /** Existing-state short leases may retain an idle PG transport in this worker. */
+  reusePostgresConnection?: boolean;
   /** Inspection admits the declared source schema without running its migration. */
   existingVersion?: boolean;
+  /** Bind owner-local state inside the new anchor transaction before connecting. */
+  onFreshAnchor?: (anchor: DatabaseSync) => void;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
+  beforeMigrate?: AdmittedStore["beforeMigrate"];
   /** Family custody for schema writes; shared state defaults to its physical owner. */
   assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
@@ -130,58 +111,61 @@ export function openEngineStore(ref: {
     );
   }
   ref.prepareAnchor();
+  const readOrCreateAnchor = () => {
+    const inspection = ref.inspectSqlite();
+    if (inspection.hasExistingData) {
+      throw new Error(
+        `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
+      );
+    }
+    if (!inspection.hasEngineAnchor && ref.existingOnly) {
+      throw new Error(
+        "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
+      );
+    }
+    if (!inspection.hasEngineAnchor) {
+      anchor.exec(
+        "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
+      );
+    }
+    const rows = readEngineAnchor(anchor, "identity", true) ?? [];
+    if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
+      throw new Error(
+        "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
+      );
+    }
+    const row = rows[0];
+    if (row) {
+      if (
+        typeof row.store_id !== "string" ||
+        row.engine !== "postgres" ||
+        typeof row.schema !== "string"
+      ) {
+        throw new Error("Invalid PostgreSQL anchor identity. Restore a matching backup.");
+      }
+      return { storeId: row.store_id, namespace: row.schema };
+    }
+    const storeId = randomUUID();
+    const namespace = postgresStoreNamespace(ref.input!.schemaPrefix, schema.id, storeId);
+    anchor
+      .prepare(
+        "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
+      )
+      .run(storeId, namespace);
+    ref.onFreshAnchor?.(anchor);
+    return { storeId, namespace };
+  };
   const identity =
     known?.engine === "postgres"
       ? known
-      : runSqliteImmediateTransactionSync(anchor, () => {
-          const inspection = ref.inspectSqlite();
-          if (inspection.hasExistingData) {
-            throw new Error(
-              `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
-            );
-          }
-          if (!inspection.hasEngineAnchor && ref.existingOnly) {
-            throw new Error(
-              "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
-            );
-          }
-          if (!inspection.hasEngineAnchor) {
-            anchor.exec(
-              "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
-            );
-          }
-          const rows = readEngineAnchor(anchor, "identity", true) ?? [];
-          if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
-            throw new Error(
-              "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
-            );
-          }
-          const row = rows[0];
-          if (row) {
-            if (
-              typeof row.store_id !== "string" ||
-              row.engine !== "postgres" ||
-              typeof row.schema !== "string"
-            ) {
-              throw new Error("Invalid PostgreSQL anchor identity. Restore a matching backup.");
-            }
-            return { storeId: row.store_id, namespace: row.schema };
-          }
-          const storeId = randomUUID();
-          const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
-          anchor
-            .prepare(
-              "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
-            )
-            .run(storeId, namespace);
-          return { storeId, namespace };
-        });
+      : ref.existingOnly
+        ? readOrCreateAnchor()
+        : runSqliteImmediateTransactionSync(anchor, readOrCreateAnchor);
   const store: AdmittedStore = { ...ref, input: ref.input, ...identity };
   const adapter = databaseEngineAdapters.postgres;
   const db = adapter.openConnection(store);
   const admit = (fresh: boolean) => {
     admitPostgresPhysicalFacts({
-      anchor,
       db,
       namespace: identity.namespace,
       storeId: identity.storeId,
@@ -189,12 +173,18 @@ export function openEngineStore(ref: {
       version: schema.version,
       schema,
       recordSchema: fresh,
+      preserveSchemaSeal: ref.existingVersion,
     });
     ref.admitPostgres?.(db, fresh);
   };
   try {
     const publishSearch = schema.search
-      ? admitPostgresSearch(db, schema.search, identity.namespace)
+      ? admitPostgresSearch(
+          db,
+          schema.search,
+          identity.namespace,
+          ref.existingVersion ? 1 : schema.postgresVectorSearchVersion,
+        )
       : undefined;
     if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
@@ -243,7 +233,14 @@ export function openEngineStore(ref: {
                 if (!source) {
                   throw new Error("Missing PostgreSQL source schema for inspection");
                 }
-                schema = { ...schema, ...source, version: Number(meta.version) };
+                schema = {
+                  ...schema,
+                  ...source,
+                  postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
+                  postgresVectorSearchVersion: source.postgresVectorSearchVersion,
+                  postgresTextSearchVersion: source.postgresTextSearchVersion,
+                  version: Number(meta.version),
+                };
               } else {
                 assertMigrationCurrent = ref.assertMigrationCurrent;
                 assertMigrationCurrent?.();
@@ -255,7 +252,12 @@ export function openEngineStore(ref: {
                   commit: () => publishSqliteDatabaseSchemaChange(db),
                   invalidate: () => publishSqliteDatabaseSchemaChange(db),
                 });
-                adapter.schema.migrate(store, Number(meta.version), db);
+                const migrate = () => adapter.schema.migrate(store, Number(meta.version), db);
+                if (migration) {
+                  migration.run(migrate);
+                } else {
+                  migrate();
+                }
               }
             }
           }
@@ -284,7 +286,12 @@ export function openEngineStore(ref: {
     // Publish against the committed schema revision, after bootstrap/migration settles.
     publishSearch?.();
     for (const extension of Object.values(getAdmittedPostgresSchema(db)?.searchExtensions ?? {})) {
-      admitPostgresSearch(db, extension, identity.namespace)?.();
+      admitPostgresSearch(
+        db,
+        extension,
+        identity.namespace,
+        schema.postgresVectorSearchVersion,
+      )?.();
     }
     return db;
   } catch (error) {

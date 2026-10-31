@@ -2,6 +2,7 @@ package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.ChatSendAck
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.TalkSessionCancelOutputResult
@@ -53,6 +54,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -457,7 +459,7 @@ class TalkModeManager internal constructor(
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
-    mainSessionKey = trimmed
+    synchronized(realtimeCapturePauseLock) { mainSessionKey = trimmed }
   }
 
   fun setEnabled(enabled: Boolean) {
@@ -2566,17 +2568,27 @@ class TalkModeManager internal constructor(
     }
 
   private suspend fun sendChat(message: String): ChatSendAck {
+    val sessionKey = synchronized(realtimeCapturePauseLock) { mainSessionKey }
     val runId = UUID.randomUUID().toString()
     armPendingRun(runId)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey))
+        put("sessionKey", JsonPrimitive(sessionKey))
         put("message", JsonPrimitive(message))
-        put("timeoutMs", JsonPrimitive(30_000))
+        // Omit the run deadline so the Gateway's configured agent timeout applies.
         put("idempotencyKey", JsonPrimitive(runId))
       }
     try {
-      val res = requestGateway("chat.send", params.toString())
+      val lease =
+        session.captureRequestLease(gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() })
+          ?: throw GatewayRequestNotEnqueued("not connected")
+      val res =
+        lease.requestAwaitingStartup("chat.send", params.toString()) { enqueue ->
+          synchronized(realtimeCapturePauseLock) {
+            if (mainSessionKey != sessionKey) throw CancellationException("Talk session changed")
+            enqueue()
+          }
+        }
       val parsed = parseChatSendAck(json, res)
       val actualRunId = parsed.runId ?: runId
       if (actualRunId != runId) {
@@ -2598,17 +2610,41 @@ class TalkModeManager internal constructor(
 
     consumeRunCompletion(runId)?.let { return it }
 
-    val result =
+    val sessionKey = mainSessionKey
+    return coroutineScope {
+      // History backs up missed events; a slow probe must not delay completion or Stop.
+      val observer =
+        launch {
+          try {
+            do {
+              delay(chatFinalWaitMs)
+            } while (isRunInFlight(sessionKey, runId))
+          } catch (_: Exception) {
+            currentCoroutineContext().ensureActive()
+            // An unavailable snapshot falls through to the existing reply-history recovery.
+          }
+          deferred.complete(false)
+        }
       try {
-        withTimeout(chatFinalWaitMs) { deferred.await() }
-      } catch (_: TimeoutCancellationException) {
-        false
+        deferred.await()
+      } finally {
+        observer.cancel()
+        clearPendingRun(runId)
       }
-
-    if (!result && pendingRunId == runId) {
-      clearPendingRun(runId)
     }
-    return result
+  }
+
+  private suspend fun isRunInFlight(
+    sessionKey: String,
+    runId: String,
+  ): Boolean {
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        put("limit", JsonPrimitive(1))
+      }
+    val root = json.parseToJsonElement(requestGateway("chat.history", params.toString())).asObjectOrNull() ?: return false
+    return root["inFlightRun"].asObjectOrNull()?.get("runId").asJsonStringOrNull() == runId
   }
 
   private fun armPendingRun(runId: String): CompletableDeferred<Boolean> {

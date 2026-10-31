@@ -3,6 +3,7 @@ import type { SessionParticipant } from "../../packages/gateway-protocol/src/sch
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
@@ -32,9 +33,6 @@ async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
     { context, current: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userProfiles.catalogIdentity")) {
-    throw new Error("Session catalog identity reader returned an unexpected result");
-  }
   const result: UserProfileCatalogIdentityRead = reply?.result ?? {
     profiles: new Map(),
     accounts: new Map(),
@@ -112,11 +110,13 @@ export async function prepareSessionCatalogSourceParticipantProjector(
     ? await prepareIdentityFacts({ kind: "source", profileIds: ids })
     : undefined;
   return {
+    assertCurrent: () => prepared?.assertCurrent(),
     project: (params: SourceParticipantParams): SessionParticipant =>
       projectSourceParticipant(params, (id) => {
         if (!prepared) {
           throw new Error("Session catalog sender was not prepared");
         }
+        prepared.assertCurrent();
         return prepared.readProfile(id);
       }),
   };
@@ -126,7 +126,7 @@ function projectSourceActor(
   params: CatalogSourceIdentity & { actor: StoredSessionActor | undefined },
   resolveProfile: typeof readSourceProfileFacts,
 ): SessionCreatedActor | undefined {
-  const { actor } = params;
+  const actor = resolveSessionCreatorActor(params.actor);
   if (!actor) {
     return undefined;
   }
@@ -152,7 +152,7 @@ function projectSourceActor(
 
 /**
  * Prepare portable creator claims for one synchronous page; claims never grant access.
- * @deprecated Use prepareSessionCatalogSourceActorProjector before rendering the page. Final compatibility day: 2026-12-31.
+ * @deprecated Use prepareSessionCatalogSourceActorProjector before rendering the page. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function createSessionCatalogSourceActorProjector(
   params: CatalogSourceIdentity & { actors: readonly (StoredSessionActor | undefined)[] },
@@ -211,13 +211,15 @@ export async function prepareSessionCatalogSourceActorProjector(
   const prepared = ids.length
     ? await prepareIdentityFacts({ kind: "source", profileIds: ids })
     : undefined;
-  return (actor: StoredSessionActor | undefined) =>
-    projectSourceActor({ ...params, actor }, (id) => {
+  return (actor: StoredSessionActor | undefined) => {
+    prepared?.assertCurrent();
+    return projectSourceActor({ ...params, actor }, (id) => {
       if (!prepared) {
         throw new Error("Session catalog creator was not prepared");
       }
       return prepared.readProfile(id);
     });
+  };
 }
 
 /** Link only the selected page's portable claims; these display facts never grant access. */
@@ -284,7 +286,7 @@ export async function prepareSessionCatalogGitHubLinker(params: {
 
 /**
  * Snapshot attribution links once per catalog page; claims never grant access.
- * @deprecated Use prepareSessionCatalogGitHubLinker before rendering the page. Final compatibility day: 2026-12-31.
+ * @deprecated Use prepareSessionCatalogGitHubLinker before rendering the page. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function createSessionCatalogGitHubLinker() {
   warnPluginSdkDeprecation({

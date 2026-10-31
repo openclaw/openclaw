@@ -6,6 +6,7 @@ import {
   type UsersPersonalFileGetResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import {
@@ -16,7 +17,7 @@ import { bindAgentToolGatewayRequest } from "./in-process-gateway.js";
 
 const PersonalInstructionsSchema = Type.Object(
   {
-    action: Type.Union([Type.Literal("get"), Type.Literal("set")]),
+    action: stringEnum(["get", "set"]),
     agentId: Type.Optional(Type.String({ minLength: 1 })),
     content: Type.Optional(Type.String({ maxLength: 4_000 })),
     expectedHash: Type.Optional(

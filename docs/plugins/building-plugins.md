@@ -17,17 +17,17 @@ You do not need to add an external plugin to the OpenClaw repository. Publish
 the package to [ClawHub](/clawhub) and users install it with:
 
 ```bash
-openclaw plugins install clawhub:<package-name>
+openclaw plugins install <package-name>
 ```
 
-Bare package specs install from npm. Use the `clawhub:` prefix when you want
-ClawHub resolution.
+Package specs install from ClawHub by default. Use `npm:<package>` to install
+from npm, or `clawhub:<package>` to select ClawHub explicitly.
 
 ## Requirements
 
 - All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
   Pin your OpenClaw host version and test each version you declare compatible.
-- Node 24.16+ or Node 26.1+, and `npm` or `pnpm`.
+- Node 24.22.1+ or Node 26.12.1+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers
@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.36"
+    "typebox": "1.3.37"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -246,7 +246,7 @@ local proof.
     Install the published package through ClawHub:
 
     ```bash
-    openclaw plugins install clawhub:your-org/your-plugin
+    openclaw plugins install your-org/your-plugin
     ```
 
   </Step>
@@ -345,6 +345,21 @@ start while checkout continues. Plain tool objects default to `"execute"` becaus
 they have no runtime factory. `defineToolPlugin` accepts the same option on each
 tool definition.
 
+To tell the model when and how to use a tool, set `promptGuidance` in the
+registration options. OpenClaw adds that text to the system prompt only while
+one of the registration's named tools is callable in the run, including tools
+found through Tool Search, on every bundled agent harness. A run that denies the
+tool gets no guidance. The registration must name its tools with `name` or
+`names`. Use this instead of a `before_prompt_build` hook for tool guidance:
+that hook adds its text even when the tool is denied.
+
+```typescript
+api.registerTool(createWorkflowTool, {
+  name: "workflow_tool",
+  promptGuidance: "## Workflows\nUse `workflow_tool` for multi-step pipelines.",
+});
+```
+
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
 
@@ -436,6 +451,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
 <Check>**openclaw.plugin.json** manifest is present and valid</Check>
+<Check>Manifest declares `reload.turnHandover` if the plugin keeps no per-turn in-memory state ([Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins))</Check>
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>

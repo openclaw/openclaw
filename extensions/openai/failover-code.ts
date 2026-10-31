@@ -1,10 +1,13 @@
-/** Maps OpenAI error codes to OpenClaw failover reasons. */
 export function classifyOpenAiFailoverCode(code: string | undefined) {
   switch (code?.trim().toUpperCase()) {
     case "SERVER_ERROR":
       return "server_error" as const;
     case "INSUFFICIENT_QUOTA":
     case "USAGE_NOT_INCLUDED":
+    case "CREDIT_BALANCE_EXHAUSTED":
+    case "ORGANIZATION_SPEND_LIMIT_EXCEEDED":
+    case "ORGANIZATION_USAGE_LIMIT_EXCEEDED":
+    case "PROJECT_SPEND_LIMIT_EXCEEDED":
       return "billing" as const;
     case "USAGE_LIMIT_REACHED":
       return "rate_limit" as const;

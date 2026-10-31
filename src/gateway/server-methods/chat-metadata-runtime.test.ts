@@ -11,6 +11,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  chatMetadataCommandFields,
   createChatMetadataHarness as createHarness,
   createChatMetadataOwner,
   createDraftChatMetadataScope,
@@ -169,6 +170,7 @@ describe("gateway chat metadata runtime", () => {
     async (surface) => {
       const harness = await preparedHarness();
       await harness.read();
+      const compact = await harness.read({ includeModels: false });
       const coldReads = [
         harness.getPreparedOwner,
         harness.getPreparedAuthStore,
@@ -188,16 +190,39 @@ describe("gateway chat metadata runtime", () => {
           expect.objectContaining({ id: "first", provider: "test" }),
         ]);
         expect(first?.defaultModelCatalog).toBe(first?.sessionModelCatalog);
-        expect(first?.metadata?.models).toEqual(first?.sessionModelCatalog);
+        expect(first?.metadata).toEqual({
+          commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+          swarmEnabled: true,
+        });
+        expect(first?.commandsRevision).toBe(compact.revision);
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
       expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);
       expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-      expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
+      expect(harness.getAuthStoreRevision.mock.calls.map(([agentDir]) => agentDir)).toContain(
+        undefined,
+      );
     },
   );
 
-  test("reads settled history catalogs without projecting public model metadata", async () => {
+  test("serves prepared neutral commands without preparing catalogs", async () => {
+    const harness = await preparedHarness();
+    await expect(harness.startup()).resolves.toBeUndefined();
+    expect(harness.buildCommands).not.toHaveBeenCalled();
+
+    await harness.startup({ sessionEntry: savedSelection() });
+    await expect(harness.startup()).resolves.toMatchObject({
+      metadata: {
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+        swarmEnabled: true,
+      },
+    });
+    await expect(harness.startup({ readPolicy: "ready" })).resolves.toBeUndefined();
+    expect(harness.buildCommands).toHaveBeenCalledOnce();
+    expect(harness.buildProjection).not.toHaveBeenCalled();
+  });
+
+  test("reads settled history and startup catalogs without serializing the model picker", async () => {
     const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     await harness.runtime.read({ agentId: "main" });
@@ -217,11 +242,14 @@ describe("gateway chat metadata runtime", () => {
 
     expect(harness.readProjection).not.toHaveBeenCalled();
     const startup = await harness.runtime.readStartup({ agentId: "main" });
-    expect(startup?.metadata?.models).toEqual(startup?.sessionModelCatalog);
-    expect(harness.readProjection).toHaveBeenCalledOnce();
+    expect(startup?.metadata).toMatchObject({
+      commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+    });
+    expect(startup?.metadata).not.toHaveProperty("models");
+    expect(harness.readProjection).not.toHaveBeenCalled();
   });
 
-  test("ready reads never prepare or await a cold or pending exact profile", async () => {
+  test("startup reads do not await a pending exact catalog projection", async () => {
     const harness = createChatMetadataHarness();
     const sessionEntry = savedSelection();
     const params = { agentId: "MAIN", sessionEntry, readPolicy: "ready" as const };
@@ -234,22 +262,31 @@ describe("gateway chat metadata runtime", () => {
 
     const profileCatalog = [{ id: "profile-model", name: "Profile model", provider: "test" }];
     const { release } = pauseProjection(harness, profileCatalog);
-    const canonical = harness.startup({ sessionEntry });
+    const canonical = harness.read({ sessionEntry });
     await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(2));
     let settled = false;
     const optional = harness.startup(params).then((value) => {
       expect(value).toBeUndefined();
       settled = true;
     });
+    const startupSettled = vi.fn();
+    const startupRead = harness.startup({ sessionEntry }).then((value) => {
+      startupSettled(value);
+      return value;
+    });
     try {
       await vi.waitFor(() => expect(settled).toBe(true));
+      await vi.waitFor(() => expect(startupSettled).toHaveBeenCalledOnce());
+      expect(await startupRead).toMatchObject({ metadata: { commands: expect.any(Array) } });
+      expect((await startupRead)?.sessionModelCatalog).toBeUndefined();
+      expect((await startupRead)?.defaultModelCatalog).toBeUndefined();
       expect(harness.buildProjection).toHaveBeenCalledTimes(2);
     } finally {
       release.resolve();
-      await Promise.all([canonical, optional]);
+      await Promise.all([canonical, optional, startupRead]);
     }
     const ready = await harness.startup(params);
-    const startup = await canonical;
+    const startup = await harness.startup({ sessionEntry });
     expect(ready).toEqual({
       sessionModelCatalog: startup?.sessionModelCatalog,
       defaultModelCatalog: startup?.defaultModelCatalog,
@@ -273,6 +310,8 @@ describe("gateway chat metadata runtime", () => {
       const sessionEntry = savedSelection();
       const params = { agentId: "main", sessionEntry };
       await harness.refresh();
+      await harness.read();
+      await harness.read({ sessionEntry });
       const initial = await harness.startup(params);
       const stale =
         await harness.buildProjection.mock.results[invalid === "neutral" ? 0 : 1]!.value;
@@ -283,6 +322,7 @@ describe("gateway chat metadata runtime", () => {
 
       const replacement = [{ id: "replacement", name: "Replacement", provider: "test" }];
       harness.buildProjection.mockResolvedValueOnce(createProjection(replacement));
+      await harness.read(invalid === "neutral" ? {} : { sessionEntry });
       const canonical = await harness.startup(params);
       expect(canonical).toMatchObject(
         invalid === "neutral"
@@ -299,13 +339,46 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
+  test.each(["generation", "owner", "auth"] as const)(
+    "omits startup metadata when its %s changes during command preparation",
+    async (change) => {
+      const harness = createChatMetadataHarness();
+      let ownerCurrent = true;
+      harness.setOwner({ ...harness.getPreparedOwner()!, isCurrent: () => ownerCurrent });
+      await harness.refresh();
+      const entered = createDeferred();
+      const release = createDeferred();
+      harness.buildCommands.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { commands: [] };
+      });
+      const startup = harness.startup({ sessionEntry: savedSelection() });
+      try {
+        await entered.promise;
+        if (change === "generation") {
+          harness.runtime.invalidate();
+        } else if (change === "owner") {
+          ownerCurrent = false;
+        } else {
+          harness.setAuthStoreRevision(2);
+        }
+      } finally {
+        release.resolve();
+      }
+      await expect(startup).resolves.toBeUndefined();
+      expect(harness.buildProjection).not.toHaveBeenCalled();
+    },
+  );
+
   test.each(["invalidate", "pending projection", "failed", "stale auth"] as const)(
     "ready reads omit projections after %s without starting replacement work",
     async (state) => {
       const harness = createChatMetadataHarness();
       const sessionEntry = { authProfileOverride: "test:session" };
       await harness.refresh();
-      await harness.startup({ sessionEntry });
+      await harness.read();
+      await harness.read({ sessionEntry });
       const release = createDeferred();
       let reading: Promise<unknown> | undefined;
       if (state === "invalidate") {
@@ -484,9 +557,8 @@ describe("gateway chat metadata runtime", () => {
       authProfileOverride: "openai:missing-lock",
       authProfileOverrideSource: "user" as const,
     };
-    const startup = await harness.startup({ sessionEntry });
+    await harness.startup({ sessionEntry });
     const scoped = await harness.read({ sessionEntry });
-    expect(scoped).toEqual(startup?.metadata);
     expect(scoped.models).toEqual([
       expect.objectContaining({ available: false, unavailableReason: "auth-failed" }),
     ]);
@@ -566,10 +638,12 @@ describe("gateway chat metadata runtime", () => {
     expect(second).toEqual(first);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
     expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
+    expect(harness.getAuthStoreRevision.mock.calls.map(([agentDir]) => agentDir)).toContain(
+      undefined,
+    );
   });
 
-  test("waits for replacement only for canonical metadata and session auth projections", async () => {
+  test("waits for replacement only for canonical metadata, including session auth projections", async () => {
     const harness = await preparedHarness();
 
     harness.runtime.invalidate();
@@ -582,13 +656,11 @@ describe("gateway chat metadata runtime", () => {
     const draftRead = harness.read(draft.params).catch((error: unknown) => error);
     draft.close();
     const settled = vi.fn();
-    const overriddenSettled = vi.fn();
     void read.then(settled, settled);
-    void overriddenStartup.then(overriddenSettled, overriddenSettled);
     await expect(harness.startup()).resolves.toBeUndefined();
+    await expect(overriddenStartup).resolves.toBeUndefined();
     await Promise.resolve();
     expect(settled).not.toHaveBeenCalled();
-    expect(overriddenSettled).not.toHaveBeenCalled();
 
     const nextConfig = { agents: { entries: { main: {} } }, tools: { swarm: { enabled: true } } };
     harness.setConfig(nextConfig);
@@ -599,10 +671,15 @@ describe("gateway chat metadata runtime", () => {
       models: [{ id: "replacement" }],
       swarmEnabled: true,
     });
-    await expect(overriddenStartup).resolves.toMatchObject({
-      metadata: { models: [{ id: "replacement" }], swarmEnabled: true },
-      sessionModelCatalog: [{ id: "replacement" }],
+    const recoveredStartup = await harness.startup({ sessionEntry: savedSelection() });
+    expect(recoveredStartup).toMatchObject({
+      metadata: {
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+        swarmEnabled: true,
+      },
     });
+    expect(recoveredStartup?.sessionModelCatalog).toBeUndefined();
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
     expect(await draftRead).toEqual(draft.error);
   });
 

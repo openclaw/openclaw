@@ -7,15 +7,14 @@ import {
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
-import type { CronEvent } from "../service/state.js";
-import type { CronJob } from "../types.js";
+import type { CronEvent, CronJob } from "../types.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
 import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 
 /** The persisted terminal fact and the published event describe the same result. */
 export function cronRunResultEvent(
   job: CronJob,
-  result: CronRunFinalizationOutcome,
+  result: Omit<CronRunFinalizationOutcome, "errorReason">,
 ): CronEvent & { action: "finished" } {
   const quiet = result.status === "ok" && result.triggerEval?.fired === false;
   return {
@@ -26,6 +25,7 @@ export function cronRunResultEvent(
     completionStatus: quiet ? "failed" : result.completionStatus,
     error: quiet ? "queued manual run skipped: trigger condition not met" : result.error,
     summary: quiet ? undefined : result.summary,
+    result: quiet ? undefined : result.result,
     diagnostics: result.diagnostics,
     delivered: result.deliveryState.delivered,
     deliveryStatus: result.deliveryState.status,
@@ -39,7 +39,7 @@ export function cronRunResultEvent(
     runAtMs: result.startedAt,
     durationMs: Math.max(0, result.endedAt - result.startedAt),
     nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
+    ...(result.triggerEval ? { triggerFired: result.triggerEval.fired } : {}),
     model: result.model,
     provider: result.provider,
     usage: result.usage,
@@ -56,7 +56,7 @@ export function cronRunResultHistory(
   const entry = cronRunLogEntryFromEvent(
     cronRunResultEvent(job, result),
     result.endedAt,
-    result.errorClassification,
+    result.errorReason,
   );
   return {
     storeKey,

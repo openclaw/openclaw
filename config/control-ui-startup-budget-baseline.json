@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 374285,
-  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
-  "updatedAt": "2026-10-12"
+  "startupJsGzipBytes": 88758,
+  "reason": "Current-main Board containment build measures 88,758 B gzip, 7 B above its matched base, with three startup JavaScript requests and one CSS request; paired CPU qualification demonstrates the rendering win.",
+  "updatedAt": "2026-10-30"
 }

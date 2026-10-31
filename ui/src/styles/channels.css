@@ -3,8 +3,12 @@
    shared settings design language. */
 
 /* Compact refresh actions should not retain the spacing reserved for settings
-   headers with full-size controls. */
-.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+   headers with full-size controls. Actions are direct children or have one tooltip/form
+   wrapper; bounded child paths avoid scanning large section lists. */
+.settings-section:has(
+  > * > .settings-section__actions > .btn--xs.btn--icon,
+  > * > .settings-section__actions > * > .btn--xs.btn--icon
+) {
   gap: var(--space-2);
 }
 
@@ -330,9 +334,7 @@
   background: var(--bg-elevated);
 }
 
-.channels-wizard__option[aria-pressed="true"],
-.channels-wizard__option[checked],
-.channels-wizard__option:state(checked) {
+.channels-wizard__option[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: var(--accent-subtle);
 }
@@ -384,17 +386,4 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.channels-item__detail:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }

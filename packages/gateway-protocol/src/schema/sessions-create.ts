@@ -5,6 +5,7 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  CyberAccessProgramSchema,
   SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
@@ -12,7 +13,7 @@ import {
 } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-export const SESSION_CREATE_RETRY_WINDOW_MS = 4 * 60_000;
+export { SESSION_CREATE_RETRY_WINDOW_MS } from "../session-limits.js";
 export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
 
 /** Creates or adopts a session with optional model, thinking, fast mode, label, and parent linkage. */
@@ -47,6 +48,7 @@ export const SessionsCreateParamsSchema = closedObject({
   agentRuntime: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   fastMode: Type.Optional(
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
   ),

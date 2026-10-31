@@ -2,10 +2,10 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { classifyDoctorMaintenanceRefusal } from "../../commands/doctor-maintenance-inspection.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { acquireWithWait } from "../../infra/acquire-with-wait.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -22,15 +22,15 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
+import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import {
   createUpdateErrorFact,
-  createUpdateFailureFact,
+  normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
-import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
@@ -60,28 +60,31 @@ import {
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
+import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import type {
   OriginalManagedServiceRuntime,
-  ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  collectServiceInspectionFailureFacts,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 export function failUpdateCommandRun(
   error: unknown,
   run: NonNullable<UpdateCommandOptions["run"]>,
 ): ReturnType<typeof createUpdateErrorFact> | undefined {
-  const options = { env: run.env };
   // Recovery owns failure/outcome publication; outer unwind must not rewrite a
   // database whose exact contents may still be needed to reconcile restoration.
-  if (loadUpdateRecovery(run.runId, options)) {
+  if (loadUpdateRecovery(run.runId, run)) {
     return undefined;
   }
-  const active = getUpdateRun(run.runId, options);
+  const active = getUpdateRun(run.runId, run);
   if (active?.status !== "running") {
     return undefined;
   }
@@ -92,7 +95,7 @@ export function failUpdateCommandRun(
     run.runId,
     { failure: { step, detail: fact.message, failureFacts: [fact] } },
     defaultRuntime.error,
-    options,
+    run,
   );
   if (!active.verification.rollbackOutcome) {
     recordUpdateRunDiagnostics(
@@ -109,28 +112,10 @@ export function failUpdateCommandRun(
               }),
       }),
       defaultRuntime.error,
-      options,
+      run,
     );
   }
   return fact;
-}
-
-export function collectServiceInspectionFailureFacts(
-  verdict: ManagedGatewayUpdateVerdict | undefined,
-): UpdateFailureFact[] | undefined {
-  return verdict?.kind === "unavailable"
-    ? [
-        createUpdateFailureFact({
-          check: "managed-service",
-          code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message:
-            verdict.inspectionReason &&
-            verdict.inspectionReason !== "windows-task-inspection-failed"
-              ? formatServiceInspectionReason(verdict.inspectionReason)
-              : verdict.message,
-        }),
-      ]
-    : undefined;
 }
 
 export function recordServiceReconciliationWarning(
@@ -169,7 +154,7 @@ export function recordServiceReconciliationWarnings(
   if (run) {
     try {
       for (const row of updateRunStepsFromResultStep(step)) {
-        recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, { env: run.env });
+        recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, run);
       }
     } catch {
       assertCurrent();
@@ -192,7 +177,7 @@ export function recordServiceTimedStep(
   const startedAtMs = Math.max(0, endedAtMs - step.durationMs);
   try {
     for (const row of updateRunStepsFromResultStep(step)) {
-      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, { env: run.env });
+      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, run);
     }
   } catch {
     // The result step still reports the measured phase.
@@ -289,25 +274,43 @@ export function createUpdateCommandFailureResult(
   },
 ): UpdateRunResult & { failedStep: UpdateStepResult } {
   const { failure, admission, phase, ...result } = params;
-  const { detail } = failure;
   const cause = primaryUpdateFailure(failure.cause);
+  const ownershipFailure = resolveUpdateOwnershipFailure(failure.cause);
   const refusal = classifyDoctorMaintenanceRefusal(failure.cause);
   const preMutationFailure = cause instanceof UpdatePreMutationError;
   const pkgOwnershipFailure = cause instanceof SystemPackageOwnershipError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
+  const lockFailure = collectNestedErrorCandidates(cause).find((candidate) =>
+    hasErrnoCode(candidate, "file_lock_timeout"),
+  );
+  const detail =
+    ownershipFailure?.message ??
+    (admissionFailure
+      ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
+      : failure.detail);
   const reason =
     cause instanceof UpdateRequesterRevokedError
       ? cause.code
-      : preMutationFailure || pkgOwnershipFailure
-        ? cause.reason
-        : admissionFailure
-          ? "managed-service-preflight"
-          : "update-failed";
+      : ownershipFailure && admission
+        ? "config-read-failed"
+        : preMutationFailure || pkgOwnershipFailure
+          ? cause.reason
+          : admissionFailure
+            ? "managed-service-preflight"
+            : lockFailure
+              ? "file_lock_timeout"
+              : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
+  const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
     name:
-      preMutationFailure || pkgOwnershipFailure || admissionFailure ? reason : (phase ?? "update"),
+      (ownershipFailure && admission) ||
+      preMutationFailure ||
+      pkgOwnershipFailure ||
+      admissionFailure
+        ? reason
+        : (phase ?? "update"),
     command: "openclaw update",
     cwd: result.root ?? process.cwd(),
     durationMs: result.durationMs,
@@ -317,9 +320,12 @@ export function createUpdateCommandFailureResult(
     ...(preMutationFailure && cause.recoverySteps ? { recoverySteps: cause.recoverySteps } : {}),
     // Recorded diagnostics do not change post-mutation recovery eligibility.
     failureFacts:
-      preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
+      ownershipFailure?.failureFacts ??
+      (preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
         ? cause.failureFacts
-        : [createUpdateErrorFact(phase ?? "update", failure.cause)],
+        : doctorFailureFacts.length
+          ? doctorFailureFacts
+          : [createUpdateErrorFact(phase ?? "update", failure.cause)]),
   };
   if (refusal.kind === "data-at-risk") {
     result.recovery = {
@@ -331,7 +337,7 @@ export function createUpdateCommandFailureResult(
   return {
     ...result,
     status: "error",
-    reason,
+    reason: cause instanceof UpdateActivationTimeoutError ? cause.reason : reason,
     failedStep,
     steps: stepResult?.failedStep ? stepResult.steps : [...(stepResult?.steps ?? []), failedStep],
   };
@@ -372,7 +378,11 @@ export async function resolveMutableUpdateFailure(params: {
           cause: params.cause,
         });
   }
-  const failure = { cause: params.cause, detail: formatErrorMessage(params.cause) };
+  const failure = {
+    cause: params.cause,
+    detail:
+      resolveUpdateOwnershipFailure(params.cause)?.message ?? formatErrorMessage(params.cause),
+  };
   defaultRuntime.error(failure.detail);
   let phase: string | undefined;
   if (params.run) {
@@ -402,66 +412,10 @@ export async function resolveMutableUpdateFailure(params: {
   };
 }
 
-/** Report rejected read-only admission without creating a run or recovery diagnostics. */
-export async function withUpdateAdmissionReporting<T>(
-  opts: UpdateCommandOptions,
-  admit: () => Promise<T>,
-  mode: "unknown" | "finalize" = "unknown",
-): Promise<T> {
-  const startedAt = Date.now();
-  try {
-    return await admit();
-  } catch (error) {
-    if (
-      error instanceof UpdateRunAdmissionBusyError ||
-      (error instanceof SystemPackageOwnershipError && error.owned)
-    ) {
-      const result = {
-        status: "skipped",
-        mode,
-        reason: error.reason,
-        steps: [],
-        durationMs: Date.now() - startedAt,
-        ...(opts.dryRun ? { dryRun: true } : {}),
-        notes: [error.message],
-      };
-      if (opts.json) {
-        defaultRuntime.writeJson(result);
-      } else {
-        defaultRuntime.log(theme.warn(error.message));
-      }
-      // Existing parents treat zero as completed convergence, even without reading JSON.
-      return exitCliAfterOutput(defaultRuntime, result.mode === "finalize" ? 1 : 0);
-    }
-    if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      return reportUpdateCommandPendingRecovery(error, opts);
-    }
-    if (
-      !(error instanceof GatewayServiceUpdateOwnershipError) &&
-      !(error instanceof SystemPackageOwnershipError)
-    ) {
-      throw error;
-    }
-    const message =
-      error instanceof SystemPackageOwnershipError
-        ? error.message
-        : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
-    if (opts.json) {
-      defaultRuntime.error(message);
-    }
-    await printResult(
-      createUpdateCommandFailureResult({
-        mode: "unknown",
-        admission: true,
-        failure: { cause: error },
-        durationMs: 0,
-      }),
-      opts,
-      { readHistory: false, nextAction: message },
-    );
-    return exitCliAfterOutput(defaultRuntime, 1);
-  }
-}
+type UpdateAdmissionReportHints = Pick<
+  NonNullable<Parameters<typeof printResult>[2]>,
+  "writeArtifacts"
+>;
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
@@ -505,8 +459,13 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
 export async function reportUpdateCommandPendingRecovery(
   error: UpdateCommandPendingRecoveryFailure,
   opts: Pick<UpdateCommandOptions, "json">,
+  reportHints: UpdateAdmissionReportHints = {},
 ): Promise<never> {
-  await printResult(error.result, opts, { readHistory: false, nextAction: error.detail });
+  await printResult(error.result, opts, {
+    ...reportHints,
+    readHistory: false,
+    nextAction: error.detail,
+  });
   defaultRuntime.error(
     `Update recovery remains pending (${error.result.reason ?? "update-failed"}). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.${error.detail ? `\n${error.detail}` : ""}`,
   );
@@ -544,7 +503,9 @@ export function mergeWindowsTaskRecoveryFailure(
 }
 
 export type UpdateAdmissionReportParams = {
+  malformedPreview?: boolean;
   mode?: UpdateRunResult["mode"];
+  before?: UpdateRunResult["before"];
   stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: readonly UpdateFailureFact[];
@@ -557,6 +518,47 @@ export type UpdateAdmissionReportParams = {
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
 };
+
+export function createPreMutationUpdateResult(
+  params: UpdateAdmissionReportParams,
+  outcome: Pick<UpdateRunResult, "status" | "recovery">,
+  phase = "requested",
+): UpdateRunResult {
+  const run = params.opts.run;
+  const stepResult = outcome.status === "error" ? params.stepResult : undefined;
+  const failedStep: UpdateStepResult | undefined =
+    stepResult?.failedStep ??
+    (outcome.status === "error" || params.failureFacts?.length
+      ? {
+          // A skipped admission adds facts to its phase, not evidence of update work.
+          name: outcome.status === "skipped" ? phase : params.reason,
+          command: "openclaw update",
+          cwd: params.root,
+          durationMs: 0,
+          exitCode: outcome.status === "error" ? 1 : 0,
+          stderrTail: params.message,
+          ...(params.recoverySteps ? { recoverySteps: params.recoverySteps } : {}),
+          failureFacts: normalizeUpdateFailureFacts(
+            params.failureFacts ?? [
+              { check: params.reason, code: params.reason, message: params.message },
+            ],
+            run?.env,
+          ),
+        }
+      : undefined);
+  return {
+    ...outcome,
+    mode: params.mode ?? (params.installKind === "git" ? "git" : "unknown"),
+    root: params.root,
+    reason: params.reason,
+    ...(params.before ? { before: params.before } : {}),
+    failedStep: outcome.status === "error" ? failedStep : undefined,
+    steps: stepResult?.failedStep
+      ? stepResult.steps
+      : [...(stepResult?.steps ?? []), ...(failedStep ? [failedStep] : [])],
+    durationMs: 0,
+  };
+}
 
 export type RefuseUpdate = (
   reason: string,
@@ -676,7 +678,7 @@ export function recordUpdateResultNextAction(
         record.origin.nextAction = nextAction;
       }
     },
-    { env: run.env },
+    run,
   );
   return nextAction;
 }

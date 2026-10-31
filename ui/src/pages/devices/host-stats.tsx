@@ -2,7 +2,7 @@ import type { SystemInfoResult } from "@openclaw/gateway-protocol";
 import { createMemo, For, Show } from "solid-js";
 import { CapacityMeter } from "../../components/solid/capacity-meter.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
-import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
+import { formatResourceBytes, formatTimeAgo } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -24,15 +24,6 @@ type Resource = {
   warn?: number;
   danger?: number;
 };
-
-function formatResourceBytes(bytes: number): string {
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "tera",
-    separator: " ",
-    fractionDigits: (value, unit) => (unit === "tera" || value < 10 ? 1 : 0),
-  });
-}
 
 function resourceValues(stats: HostResources | null | undefined): Resource[] {
   if (!stats) {

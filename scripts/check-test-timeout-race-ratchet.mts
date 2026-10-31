@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   createNativeTypeScriptParser,
   type NativeTypeScriptParser,
@@ -96,15 +96,19 @@ function collectTestTimeoutRaceCounts(root: string, options: { staged: boolean }
       ]);
   using parser = createNativeTypeScriptParser({ cwd: root });
   const counts = new Map<string, number>();
-  for (const [filePath, source] of sources) {
-    const count = countTestTimeoutRaceReferences(
-      filePath,
-      parser.parseSourceFile(filePath, source),
-      parser,
-    );
-    if (count > 0) {
-      counts.set(filePath, count);
-    }
+  const candidates = [...sources];
+  // Bound retained syntax trees while avoiding a new native snapshot for every file.
+  const batchSize = 32;
+  for (let offset = 0; offset < candidates.length; offset += batchSize) {
+    const batch = candidates.slice(offset, offset + batchSize);
+    const syntax = parser.parseSourceFiles(batch.map(([fileName, text]) => ({ fileName, text })));
+    syntax.forEach((source, index) => {
+      const filePath = batch[index]![0];
+      const count = countTestTimeoutRaceReferences(filePath, source, parser);
+      if (count > 0) {
+        counts.set(filePath, count);
+      }
+    });
   }
   return counts;
 }

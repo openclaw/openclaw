@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { consumeAcpTurnStream } from "../../acp/control-plane/manager.turn-stream.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HookMappingConfig } from "../../config/types.hooks.js";
@@ -358,9 +358,10 @@ describe("gateway hook early-failure recovery", () => {
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
-  it.each(["startTurn", "runTurn"] as const)(
+  it.for(["startTurn", "runTurn"] as const)(
     "does not invoke ACP %s after the final Gateway admission deadline rejects the prompt",
-    async (runtimeApi) => {
+    async (runtimeApi, { signal }) => {
+      const preparing = createDeferred<AbortSignal | undefined>();
       const releasePreparation = createDeferred();
       const handle = {
         sessionKey: "agent:hooks:acp:gateway-admission",
@@ -386,6 +387,7 @@ describe("gateway hook early-failure recovery", () => {
 
       mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
         async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
+          preparing.resolve(params.abortSignal);
           await releasePreparation.promise;
           const streamOptions = {
             runtime,
@@ -405,22 +407,33 @@ describe("gateway hook early-failure recovery", () => {
         },
       );
 
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const responsePromise = postAgentHook(false, {
+        admissionTimeoutMs: 10,
+        rejectInitialConfig: false,
+      });
       try {
-        const response = await postAgentHook(false, {
-          admissionTimeoutMs: 10,
-          rejectInitialConfig: false,
-        });
+        const abortSignal = await withinTest(preparing.promise, signal);
+        await vi.advanceTimersByTimeAsync(10);
+        const response = await withinTest(responsePromise, signal);
 
         expect(response.status).toBe(503);
         expect(response.body).toMatchObject({
           ok: false,
           error: "hook agent run did not start before admission timeout",
         });
+        expect(abortSignal?.aborted).toBe(true);
       } finally {
         releasePreparation.resolve();
+        try {
+          await vi.advanceTimersByTimeAsync(10);
+        } finally {
+          vi.useRealTimers();
+        }
+        await Promise.allSettled([withinTest(responsePromise, signal)]);
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       }
 
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
       expect(startTurn).not.toHaveBeenCalled();
       expect(runTurn).not.toHaveBeenCalled();
@@ -783,29 +796,6 @@ describe("hook background admission", () => {
         "Hook Gmail (error): execution failed",
       ]),
     );
-  });
-
-  it("keeps the bounded admission cancel for direct agent hooks", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    let sawAbort = false;
-    mocks.runCronIsolatedAgentTurn.mockImplementation(
-      async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
-        await delay(60);
-        sawAbort = params.abortSignal?.aborted === true;
-        if (!sawAbort) {
-          params.onExecutionStarted?.();
-        }
-        return { status: "ok" as const };
-      },
-    );
-    const handler = createHandler(20);
-
-    const response = await post(handler, "/hooks/agent", { message: "Direct", name: "Bounded" });
-
-    expect(response.res.statusCode).toBe(503);
-    // The canceled run must not proceed after the 503.
-    await delay(80);
-    expect(sawAbort).toBe(true);
   });
 
   it.each([{ deliverySuppressionReason: "empty", replyDisposition: "empty" }] as const)(

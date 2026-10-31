@@ -10,11 +10,14 @@ import { recordSessionParticipant } from "../../config/sessions/session-accessor
 import * as sessionHistoryWorkers from "../../config/sessions/session-history-worker-runtime.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import {
@@ -25,7 +28,6 @@ import {
 import {
   disposeSessionReadContexts,
   identifiedClient,
-  initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
@@ -34,8 +36,9 @@ setupGatewaySessionsHandlerTestHarness();
 afterEach(async () => {
   await disposeSessionReadContexts();
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 test("projects recap eligibility from current sharing authority, including capped shared viewers", async () => {
@@ -143,7 +146,7 @@ test.each([
     };
     if (transcript) {
       const backfilled = observeSessionRowBackfill([sessionKey]);
-      await initializeSessionReadContext(context);
+      await listSessions({ client, context, request });
       await backfilled;
     }
     const result = await listSessions({ client, context, request });

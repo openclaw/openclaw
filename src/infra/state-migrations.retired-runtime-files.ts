@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { listRetiredRestartSentinelFiles } from "./state-migrations.restart-sentinel.js";
 import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
 
 export function listImportableRetiredRuntimeStateFiles(
@@ -29,8 +30,7 @@ export function listRetiredRuntimeStateFiles(
     ...listImportableRetiredRuntimeStateFiles(stateDir, env, homedir),
     path.join(stateDir, "acp", "event-ledger.json"),
     path.join(stateDir, "acp", "event-ledger.json.doctor-import"),
-    path.join(stateDir, "restart-sentinel.json"),
-    path.join(stateDir, "restart-sentinel.json.doctor-importing"),
+    ...listRetiredRestartSentinelFiles(stateDir),
   ];
 }
 

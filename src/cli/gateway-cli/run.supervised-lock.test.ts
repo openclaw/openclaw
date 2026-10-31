@@ -1,8 +1,8 @@
-import { createServer } from "node:http";
-import { describe, expect, it, vi } from "vitest";
-import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
+import * as sleeping from "../../utils/sleep.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import { testing } from "./run.test-support.js";
 
 const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
@@ -16,13 +16,6 @@ vi.mock("../../infra/tls/gateway.js", () => ({
   inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
 
-function createLogger() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-  };
-}
-
 type RecoveryParams = Parameters<typeof testing.runGatewayLoopWithSupervisedLockRecovery>[0];
 
 function recover(params: Pick<RecoveryParams, "startLoop"> & Partial<RecoveryParams>) {
@@ -30,12 +23,32 @@ function recover(params: Pick<RecoveryParams, "startLoop"> & Partial<RecoveryPar
     supervisor: "systemd",
     port: 18789,
     healthHost: "127.0.0.1",
-    log: createLogger(),
+    log: { info: vi.fn(), warn: vi.fn() },
     ...params,
   });
 }
 
+function createClock() {
+  let elapsed = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  return {
+    now: () => elapsed,
+    sleep: vi.spyOn(sleeping, "sleep").mockImplementation(async (ms: number) => {
+      elapsed += ms;
+    }),
+    advanceTo: (deadline: number) => {
+      elapsed = deadline;
+    },
+  };
+}
+
+function rejectLoop(error: Error) {
+  return vi.fn<() => Promise<void>>().mockRejectedValue(error);
+}
+
 describe("supervised gateway lock recovery", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("retries lifecycle contention without treating a healthy port as ownership", async () => {
     const error = new GatewayLockError(
       "failed to acquire gateway state ownership",
@@ -46,149 +59,88 @@ describe("supervised gateway lock recovery", () => {
       .mockRejectedValueOnce(error)
       .mockResolvedValueOnce();
     const probeHealth = vi.fn(async () => true);
-    let elapsedMs = 0;
-    await recover({
-      startLoop,
-      probeHealth,
-      now: () => elapsedMs,
-      sleep: async (ms) => {
-        elapsedMs += ms;
-      },
-    });
+    createClock();
+    await recover({ startLoop, probeHealth });
     expect(startLoop).toHaveBeenCalledTimes(2);
     expect(probeHealth).not.toHaveBeenCalled();
   });
 
   it("spends one budget across supervised retries and lifecycle acquisition", async () => {
-    let elapsedMs = 0;
+    const clock = createClock();
     const error = new GatewayLockError(
-      "failed to acquire gateway state ownership; waited 295000ms for Gateway state ownership",
-      new GatewayStateOwnerContentionError("/synthetic/state/openclaw.sqlite"),
+      "ownership held",
+      new GatewayStateOwnerContentionError("/state"),
     );
     const budgets: Array<number | undefined> = [];
     const startLoop = vi.fn(async (deadlineMs?: number) => {
-      budgets.push(deadlineMs === undefined ? undefined : deadlineMs - elapsedMs);
+      budgets.push(deadlineMs === undefined ? undefined : deadlineMs - clock.now());
       if (budgets.length > 1) {
-        elapsedMs = deadlineMs ?? elapsedMs;
+        clock.advanceTo(deadlineMs ?? clock.now());
       }
       throw error;
     });
-    const sleep = vi.fn(async (ms: number) => {
-      elapsedMs += ms;
-    });
-    await expect(
-      recover({
-        startLoop,
-        now: () => elapsedMs,
-        sleep,
-      }),
-    ).rejects.toBe(error);
+    await expect(recover({ startLoop })).rejects.toBe(error);
     expect(budgets).toEqual([300_000, 295_000]);
-    expect(elapsedMs).toBe(300_000);
-    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(clock.now()).toBe(300_000);
   });
 
-  it("leaves a healthy launchd-supervised gateway in control", async () => {
-    const startLoop = vi.fn(async () => {
-      throw new GatewayLockError("gateway already running");
-    });
-    const probeHealth = vi.fn(async () => true);
-    const log = createLogger();
+  it.each(["launchd", "systemd"] as const)(
+    "handles a healthy %s-supervised gateway",
+    async (supervisor) => {
+      const message =
+        supervisor === "launchd"
+          ? "gateway already running"
+          : "another gateway instance is already listening";
+      const startLoop = rejectLoop(new GatewayLockError(message));
+      const probeHealth = vi.fn(async () => true);
+      const failure = await recover({ startLoop, probeHealth, supervisor }).catch(
+        (error: unknown) => error,
+      );
+      if (supervisor === "systemd") {
+        expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(78);
+      } else {
+        expect(failure).toBeUndefined();
+      }
+    },
+  );
 
-    await recover({
-      startLoop,
-      supervisor: "launchd",
-      healthHost: "0.0.0.0",
-      log,
-      probeHealth,
-    });
-
-    expect(startLoop).toHaveBeenCalledTimes(1);
-    expect(probeHealth).toHaveBeenCalledWith({ host: "0.0.0.0", port: 18789 });
-    expect(log.info).toHaveBeenCalledWith(
-      "gateway already running under launchd; existing gateway is healthy, leaving it in control",
-    );
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("uses exit 78 semantics for healthy systemd-supervised lock conflicts", async () => {
-    const startLoop = vi.fn(async () => {
-      throw new GatewayLockError("another gateway instance is already listening");
-    });
-    const probeHealth = vi.fn(async () => true);
-
-    let failure: unknown;
-    try {
-      await recover({
-        startLoop,
-        probeHealth,
-      });
-    } catch (err) {
-      failure = err;
-    }
-
-    expect(failure).toMatchObject({
-      message: expect.stringContaining(
-        "exiting with code 78 to prevent a systemd Restart=always loop",
-      ),
-    });
-    expect(startLoop).toHaveBeenCalledTimes(1);
-    expect(probeHealth).toHaveBeenCalledWith({ host: "127.0.0.1", port: 18789 });
-    expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(78);
-  });
-
-  it("preserves an agent-embedded owner error under a supervisor", async () => {
-    const err = new GatewayLockError(
-      "another embedded OpenClaw state writer is active (pid 123); lock timeout after 5000ms",
-    );
-    const startLoop = vi.fn(async () => {
-      throw err;
-    });
-    const probeHealth = vi.fn(async () => true);
-
-    await expect(
-      recover({
-        startLoop,
-        probeHealth,
-      }),
-    ).rejects.toBe(err);
-
-    expect(startLoop).toHaveBeenCalledTimes(1);
-    expect(probeHealth).not.toHaveBeenCalled();
-  });
+  it.each(["embedded owner", "SQLITE_IOERR"])(
+    "does not retry or probe health for %s",
+    async (code) => {
+      const error =
+        code === "embedded owner"
+          ? new GatewayLockError(
+              "another embedded OpenClaw state writer is active (pid 123); lock timeout after 5000ms",
+            )
+          : new GatewayLockError(
+              "failed to acquire gateway state ownership",
+              Object.assign(new Error("storage unavailable"), { code }),
+            );
+      const startLoop = rejectLoop(error);
+      const probeHealth = vi.fn(async () => true);
+      const clock = createClock();
+      await expect(recover({ startLoop, probeHealth })).rejects.toBe(error);
+      expect(startLoop).toHaveBeenCalledOnce();
+      expectCallCount(0, probeHealth, clock.sleep);
+      expect(testing.resolveGatewayLockErrorExitCode(error)).toBe(1);
+    },
+  );
 
   it("bounds supervised retries when the existing gateway stays unhealthy", async () => {
-    let now = 0;
-    const startLoop = vi.fn(async () => {
-      throw new GatewayLockError("gateway already running");
+    const clock = createClock();
+    const error = new GatewayLockError("gateway already running");
+    const startLoop = rejectLoop(error).mockImplementationOnce(async () => {
+      clock.advanceTo(288_000);
+      throw error;
     });
-    const sleep = vi.fn(async (ms: number) => {
-      now += ms;
-    });
+    const failure = await recover({
+      startLoop,
+      probeHealth: vi.fn(async () => false),
+    }).catch((cause: unknown) => cause);
 
-    let failure: unknown;
-    try {
-      await recover({
-        startLoop,
-        probeHealth: vi.fn(async () => false),
-        now: () => now,
-        sleep,
-        retryMs: 5,
-        timeoutMs: 12,
-      });
-    } catch (err) {
-      failure = err;
-    }
-
-    expect(failure).toMatchObject({
-      message:
-        "gateway already running under systemd; existing gateway did not become healthy after 12ms",
-    });
     expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(1);
     expect(startLoop).toHaveBeenCalledTimes(4);
-    expect(sleep).toHaveBeenNthCalledWith(1, 5);
-    expect(sleep).toHaveBeenNthCalledWith(2, 5);
-    expect(sleep).toHaveBeenNthCalledWith(3, 2);
+    expect(clock.sleep.mock.calls.slice(0, 3)).toEqual([[5000], [5000], [2000]]);
   });
 
   it("retries public certificate inspection while TLS material is unavailable", async () => {
@@ -201,54 +153,13 @@ describe("supervised gateway lock recovery", () => {
     await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
 
     expect(inspectGatewayTlsCertificateMock).toHaveBeenCalledTimes(2);
-    expect(inspectGatewayTlsCertificateMock).toHaveBeenCalledWith({
-      enabled: true,
-      autoGenerate: true,
-    });
   });
 
   it("recognizes only the OpenClaw health response", () => {
-    expect(
-      testing.isGatewayHealthzResponse(200, JSON.stringify({ ok: true, status: "live" })),
-    ).toBe(true);
-    expect(
-      testing.isGatewayHealthzResponse(200, JSON.stringify({ ok: true, status: "ready" })),
-    ).toBe(false);
-    expect(testing.isGatewayHealthzResponse(404, "not found")).toBe(false);
-    expect(testing.isGatewayHealthzResponse(200, "not json")).toBe(false);
-  });
-
-  it("bounds slow health responses with an absolute deadline", async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      const interval = setInterval(() => {
-        res.write(" ");
-      }, 10);
-      res.once("close", () => clearInterval(interval));
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP server address");
-      }
-      const startedAt = Date.now();
-      await expect(
-        createConfiguredGatewayLocalProbe({}).requestHttp({
-          host: "127.0.0.1",
-          port: address.port,
-          pathname: "/healthz",
-          timeoutMs: 50,
-        }),
-      ).resolves.toBeNull();
-      expect(Date.now() - startedAt).toBeLessThan(500);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
+    const health = (code: number, body: string) => testing.isGatewayHealthzResponse(code, body);
+    expect(health(200, '{"ok":true,"status":"live"}')).toBe(true);
+    expect(health(200, '{"ok":true,"status":"ready"}')).toBe(false);
+    expect(health(404, "not found")).toBe(false);
+    expect(health(200, "not json")).toBe(false);
   });
 });

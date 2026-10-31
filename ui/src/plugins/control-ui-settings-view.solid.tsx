@@ -1,29 +1,46 @@
-import { createEffect, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import type {
   ControlUiSettingsContext,
-  ControlUiSettingsPlacement,
+  ControlUiSettingsView,
   ControlUiSettingsSnapshot,
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { createControlUiSettingsComponents } from "./control-ui-settings-components.solid.tsx";
 
-function authority(snapshot: ControlUiSettingsSnapshot): string {
-  return JSON.stringify([
-    snapshot.agentId,
-    snapshot.engine,
-    snapshot.connected,
-    snapshot.connectionEpoch,
-    snapshot.routeIntent,
-  ]);
+/**
+ * Facts that end a mounted view. Connection state and the transport epoch reach the
+ * view through update(), so a same-client reconnect keeps its presentation and drafts.
+ */
+function viewLifetime(application: ApplicationContext, snapshot: ControlUiSettingsSnapshot) {
+  const gateway = application.gateway.snapshot;
+  return {
+    client: gateway.client,
+    key: JSON.stringify([
+      gatewayPresentationScope(application.gateway).key,
+      // A transport drop retains hello; a connect rejection clears it.
+      gateway.hello ? hasOperatorReadAccess(gateway.hello.auth ?? null) : null,
+      snapshot.agentId,
+      snapshot.engine.kind,
+      snapshot.engine.id,
+      snapshot.advertisedMethods,
+      snapshot.routeIntent,
+    ]),
+  };
+}
+
+function sameLifetime(a: ReturnType<typeof viewLifetime>, b: ReturnType<typeof viewLifetime>) {
+  return a.client === b.client && a.key === b.key;
 }
 
 export function ControlUiSettingsPresentation(props: {
   application: ApplicationContext;
-  placement: ControlUiSettingsPlacement;
-  readSnapshot: () => ControlUiSettingsSnapshot;
+  placement: ControlUiSettingsView["placement"];
+  readSnapshot: () => ControlUiSettingsSnapshot | null;
   subscribe: (listener: () => void) => () => void;
   navigate: ControlUiSettingsContext["navigate"];
   refreshAgents: () => void;
@@ -33,7 +50,7 @@ export function ControlUiSettingsPresentation(props: {
   let owner:
     | {
         abort: AbortController;
-        identity: string;
+        identity: ReturnType<typeof viewLifetime>;
         update?: (snapshot: ControlUiSettingsSnapshot) => void;
         dispose?: () => void;
       }
@@ -52,17 +69,19 @@ export function ControlUiSettingsPresentation(props: {
   };
   const fail = (error: unknown) => {
     retire();
-    if (container) {
-      container.textContent = formatUiError(error, "Settings presentation could not load.");
-    }
+    container?.append(formatUiError(error, "Settings presentation could not load."));
   };
   const sync = () => {
     if (!active || !container) {
       return;
     }
     const snapshot = props.readSnapshot();
-    const identity = authority(snapshot);
-    if (owner?.identity === identity) {
+    if (!snapshot) {
+      retire();
+      return;
+    }
+    const identity = viewLifetime(props.application, snapshot);
+    if (owner && sameLifetime(owner.identity, identity)) {
       try {
         owner.update?.(snapshot);
       } catch (error) {
@@ -76,35 +95,30 @@ export function ControlUiSettingsPresentation(props: {
     owner = next;
     const current = () => {
       lifetime.throwIfAborted();
-      if (!active || owner !== next || authority(props.readSnapshot()) !== identity) {
+      const currentSnapshot = props.readSnapshot();
+      if (
+        !currentSnapshot ||
+        !active ||
+        owner !== next ||
+        !sameLifetime(identity, viewLifetime(props.application, currentSnapshot))
+      ) {
         throw new Error("This Settings presentation has ended.");
       }
+      return currentSnapshot;
     };
     void props.application.plugins
       .loadSettingsView(props.placement, next.abort.signal)
       .then((loaded) => {
-        if (owner !== next || next.abort.signal.aborted) {
-          loaded.dispose();
-          return;
-        }
         lifetime = loaded.signal;
-        let assetsDisposed = false;
-        const disposeAssets = () => {
-          if (assetsDisposed) {
-            return;
-          }
-          assetsDisposed = true;
-          loaded.dispose();
-        };
-        next.dispose = disposeAssets;
-        current();
+        const loadedSnapshot = current();
         const context: ControlUiSettingsContext = {
-          props: props.readSnapshot(),
+          props: loadedSnapshot,
           signal: lifetime,
           components: createControlUiSettingsComponents(lifetime),
           async request<T>(method: string, params?: unknown) {
-            current();
+            const requestSnapshot = current();
             const gateway = props.application.gateway.snapshot;
+            const epoch = requestSnapshot.connectionEpoch;
             if (
               !gateway.client ||
               gateway.phase !== "connected" ||
@@ -113,7 +127,10 @@ export function ControlUiSettingsPresentation(props: {
               throw new Error("The Gateway is offline or operator access is unavailable.");
             }
             const result = await gateway.client.request<T>(method, params);
-            current();
+            // The view survives reconnects; replies from an earlier transport epoch do not.
+            if (current().connectionEpoch !== epoch) {
+              throw new Error("The Gateway connection changed before this request completed.");
+            }
             return result;
           },
           navigate(destination) {
@@ -134,23 +151,15 @@ export function ControlUiSettingsPresentation(props: {
           },
         };
         const mounted = loaded.view.mount(container!, context);
-        let disposed = false;
-        next.dispose = () => {
-          if (disposed) {
-            return;
-          }
-          disposed = true;
-          try {
-            mounted.dispose();
-          } finally {
-            disposeAssets();
-          }
-        };
+        // The runtime owns assets through abort; this owner disposes only the mounted view.
+        next.dispose = () => mounted.dispose();
         if (lifetime.aborted || owner !== next) {
           next.dispose();
           return;
         }
-        lifetime.addEventListener(
+        // The loaded view's abort also owns retirement of its mounted presentation.
+        listen(
+          lifetime,
           "abort",
           () => {
             if (owner === next) {
@@ -160,7 +169,7 @@ export function ControlUiSettingsPresentation(props: {
           { once: true },
         );
         next.update = mounted.update;
-        mounted.update(props.readSnapshot());
+        mounted.update(current());
       })
       .catch((error: unknown) => {
         if (owner === next && !next.abort.signal.aborted) {
@@ -168,9 +177,7 @@ export function ControlUiSettingsPresentation(props: {
         }
       });
   };
-  // The imperative plugin view receives live host props; transport owners also
-  // notify synchronously so a batched disconnect/reconnect retires old authority.
-  createEffect(props.readSnapshot, sync);
+  // Owner notifications retire authority synchronously and publish committed presentation facts.
   onSettled(() => {
     const stop = props.subscribe(sync);
     sync();

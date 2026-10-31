@@ -2,21 +2,25 @@ import fs from "node:fs";
 import os from "node:os";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 // Sidecar mtime is the cross-namespace heartbeat; payload bytes and ownership stay immutable.
-// Owners renew every 15 seconds and forfeit foreign-namespace custody after 90 seconds.
+// Renewal age is diagnostic only: a paused or unreachable owner may still be alive.
 export const GATEWAY_OWNER_HEARTBEAT_MS = 15_000;
 export const GATEWAY_OWNER_HEARTBEAT_STALE_MS = 90_000;
 
 const [uuidBoot, windowsBoot, freebsdBoot] = managedHandoffBootSchema.options;
 const host = z.string().min(1);
+export const MachineIdentitySchema = z.string().regex(/^[a-f0-9]{64}$/u);
 export const GatewayProcessNamespaceSchema = z.discriminatedUnion("platform", [
   uuidBoot.extend({ host, platform: z.literal("linux"), pidNsInode: z.string().min(1) }),
   uuidBoot.extend({ host, platform: z.literal("darwin") }),
-  windowsBoot.extend({ host }),
+  // Windows uses host-scoped PIDs and absolute process-start identity. Keep
+  // accepting recorded boot timestamps, but do not require an unused CIM probe.
+  windowsBoot.extend({ host, identity: windowsBoot.shape.identity.optional() }),
   freebsdBoot.extend({ host }),
 ]);
 type ProcessNamespace = z.infer<typeof GatewayProcessNamespaceSchema>;
@@ -26,20 +30,27 @@ let processNamespace: { platform: NodeJS.Platform; value: ProcessNamespace | nul
 export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
   if (
     processNamespace?.platform === process.platform &&
-    (processNamespace.value !== null || process.platform !== "linux")
+    (processNamespace.value !== null ||
+      (process.platform !== "linux" && process.platform !== "android"))
   ) {
     return processNamespace.value;
   }
   try {
-    const boot = createManagedHandoffBootIdentityReader(process.env)();
+    const boot =
+      process.platform === "win32"
+        ? { platform: "win32" as const }
+        : createManagedHandoffBootIdentityReader(process.env)();
     const value = GatewayProcessNamespaceSchema.parse({
       host: os.hostname(),
       ...boot,
       ...(boot.platform === "linux"
-        ? { pidNsInode: fs.statSync("/proc/self/ns/pid", { bigint: true }).ino.toString() }
+        ? {
+            // PRoot can read this magic link but cannot follow its synthetic target with stat.
+            pidNsInode: fs.readlinkSync("/proc/self/ns/pid").match(/^pid:\[(\d+)\]$/u)?.[1],
+          }
         : {}),
     });
-    processNamespace = { platform: value.platform, value };
+    processNamespace = { platform: process.platform, value };
     return value;
   } catch {
     processNamespace = { platform: process.platform, value: null };
@@ -73,75 +84,104 @@ export function describeGatewayLockHolder(
     localState === "live"
       ? `The holder ${holder.pid} is alive on this host, stop it first`
       : localState === "unknown"
-        ? "Stop the holder before retrying"
-        : `wait ${Math.max(1, Math.floor((GATEWAY_OWNER_HEARTBEAT_STALE_MS - (ageMs ?? 0)) / 1000) + 1)} s and retry`;
+        ? "Stop the holder before retrying; if it has already stopped, run `openclaw gateway recover-lock` to inspect and explicitly recover the unchanged owner"
+        : "Run this command inside the Gateway container or with a shared PID namespace; if the holder has stopped, run `openclaw gateway recover-lock` to inspect and explicitly recover the unchanged owner";
   return `holder ${holder.pid ?? "unknown"} at ${location}, last renewed ${ageMs === undefined ? "at an unknown time" : `${Math.max(0, Math.floor(ageMs / 1000))} s ago`}. ${action}.`;
 }
 
 export class GatewayLockNamespaceError extends Error {
   constructor(holder: GatewayLockHolder, lockPath?: string) {
     super(
-      `cannot verify Gateway ownership from this process (different PID namespace); the owner heartbeat is fresh — run this command inside the Gateway container or with a shared PID namespace. If the previous Gateway stopped, wait up to 90 seconds after its last heartbeat. ${describeGatewayLockHolder(holder, lockPath)}`,
+      `cannot verify Gateway ownership from this process; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
     );
     this.name = "GatewayLockNamespaceError";
   }
 }
 
-/** Qualify PID evidence before any local process probe or same-PID authority shortcut. */
+/** File-lock recovery also covers pre-namespace Windows records from supported upgrades. */
 export function classifyGatewayLockProcessNamespace(
-  value: unknown,
+  holder:
+    | { processNamespace?: unknown; machineIdentity?: unknown; pid?: unknown; startTime?: unknown }
+    | null
+    | undefined,
   lockPath?: string,
 ): "same" | "dead" | "unknown" {
-  return classifyGatewayOwnerProcessNamespace(value, {
-    readHeartbeatAt: () => (lockPath ? fs.statSync(lockPath).mtimeMs : undefined),
+  if (process.platform === "win32" && holder && holder.processNamespace === undefined && lockPath) {
+    try {
+      // A missing namespace never grants local authority. Only an expired heartbeat
+      // plus native proof of process death can retire this legacy file owner.
+      if (
+        Date.now() - fs.statSync(lockPath).mtimeMs > GATEWAY_OWNER_HEARTBEAT_STALE_MS &&
+        isLockOwnerDefinitelyStale({ payload: { pid: holder.pid, starttime: holder.startTime } })
+      ) {
+        return "dead";
+      }
+    } catch {
+      // Unavailable heartbeat or process observations preserve the owner.
+    }
+    return "unknown";
+  }
+  return classifyGatewayOwnerProcessNamespace(holder?.processNamespace, {
+    machineIdentity: holder?.machineIdentity,
   });
 }
 
-/** File locks and SQLite leases share one boot/namespace and heartbeat policy. */
+/** File locks and SQLite leases require comparable evidence of process death. */
 export function classifyGatewayOwnerProcessNamespace(
   value: unknown,
-  options: { readHeartbeatAt?: () => number | undefined; ownerHost?: string } = {},
+  options: { ownerHost?: string; machineIdentity?: unknown } = {},
 ): "same" | "dead" | "unknown" {
-  // Legacy local records or comparable boot/namespace identity: existing PID rules.
-  // Different boot on the same host: dead.
-  // Foreign/unreadable namespace: heartbeat >90s old => dead; otherwise unknown/preserve.
   const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
-  const ownerHost = owner?.host ?? options.ownerHost;
-  const foreignHost = ownerHost !== undefined && ownerHost !== os.hostname();
-  if (value === undefined && !foreignHost) {
-    return "same";
-  }
-  const current = readGatewayLockProcessNamespace();
-  if (owner && current) {
-    if (
-      owner.platform === current.platform &&
-      owner.host === current.host &&
-      owner.identity !== current.identity
-    ) {
-      return "dead";
-    }
-    if (
-      owner.platform === current.platform &&
-      owner.identity === current.identity &&
-      (owner.platform !== "linux" ||
-        (current.platform === "linux" && owner.pidNsInode === current.pidNsInode))
-    ) {
-      return "same";
-    }
-  } else if (process.platform !== "linux" && !foreignHost) {
-    return "same";
-  }
-  try {
-    const heartbeatAt = options.readHeartbeatAt?.();
-    return heartbeatAt !== undefined && Date.now() - heartbeatAt > GATEWAY_OWNER_HEARTBEAT_STALE_MS
-      ? "dead"
-      : "unknown";
-  } catch {
+  if (!owner || (options.ownerHost !== undefined && options.ownerHost !== owner.host)) {
     return "unknown";
   }
+  const current = readGatewayLockProcessNamespace();
+  if (!current) {
+    return "unknown";
+  }
+  if (owner.platform !== current.platform) {
+    return "unknown";
+  }
+  if (owner.platform === "darwin" && options.machineIdentity !== undefined) {
+    const machine = MachineIdentitySchema.safeParse(options.machineIdentity).data;
+    const currentMachine = readProcessMachineIdentity();
+    if (machine && currentMachine) {
+      if (machine !== currentMachine) {
+        return "unknown";
+      }
+      // A reboot ends every process on this Mac, even if its hostname changed.
+      if (owner.identity !== current.identity) {
+        return "dead";
+      }
+    }
+  }
+  // macOS hostnames can change within one boot; the kernel UUID still binds
+  // PID inspection to that same kernel. Legacy records with a different host and boot stay unknown.
+  const sameDarwinBoot =
+    owner.platform === "darwin" &&
+    current.platform === "darwin" &&
+    owner.identity === current.identity;
+  if (owner.host !== current.host && !sameDarwinBoot) {
+    return "unknown";
+  }
+  // Windows boot observations can disagree within one boot. Local Windows owners
+  // use PID and absolute process-start identity; heartbeat age cannot revoke them.
+  if (owner.platform === "win32") {
+    return "same";
+  }
+  if (owner.identity !== current.identity) {
+    return "dead";
+  }
+  if (
+    owner.platform !== "linux" ||
+    (current.platform === "linux" && owner.pidNsInode === current.pidNsInode)
+  ) {
+    return "same";
+  }
+  return "unknown";
 }
 
-const LockPayloadSchema = z.object({
+export const LockPayloadSchema = z.object({
   pid: z.number(),
   ownerId: z.string().min(1).optional(),
   /** A cold opener may wait for this transient owner, never enter while it is held. */
@@ -159,8 +199,10 @@ const LockPayloadSchema = z.object({
   startTime: z.number().optional(),
   parentPid: z.number().int().positive().optional(),
   parentStartTime: z.number().optional(),
-  // Null records an unavailable identity; absent fields retain legacy PID recovery.
+  // Null and absent identities cannot establish the owner's process namespace.
   processNamespace: GatewayProcessNamespaceSchema.nullable().optional(),
+  // Shipped readers ignore this sibling; the nested namespace must remain rollback-compatible.
+  machineIdentity: MachineIdentitySchema.nullable().optional(),
 });
 
 export type LockPayload = z.infer<typeof LockPayloadSchema>;

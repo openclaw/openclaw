@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -7,18 +8,23 @@ import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
-import type { SolidController } from "../lib/reactive/solid-controller-host.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
-import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
+import type { GatewayStatusProps } from "./gateway-status.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
-import type { ContextualSidebar } from "./sidebar-context-state.ts";
+import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
@@ -29,7 +35,13 @@ export type AppSidebarProps = {
   enabledRouteIds: readonly NavigationRouteId[] | undefined;
   connected: boolean;
   connectionStatus: GatewayStatus | null;
-  lastError: string | null;
+  gatewayStatus: GatewayStatusProps | null;
+  connectionRecovery: boolean;
+  connectionFlagVisible: boolean;
+  connectionFlagAllowed: boolean;
+  footerControlsOverlap:
+    | ((bounds: Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">) => boolean)
+    | undefined;
   storedOutboxes: SidebarOutboxSummary | undefined;
   terminalAvailable: boolean;
   catalogOpenTarget: CatalogOpenTarget;
@@ -55,7 +67,6 @@ export type AppSidebarProps = {
   onNavigate:
     | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
     | undefined;
-  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
 };
 
 export const appSidebarProperties = {
@@ -66,7 +77,11 @@ export const appSidebarProperties = {
   enabledRouteIds: { default: undefined, attribute: false },
   connected: { default: false, attribute: false },
   connectionStatus: { default: null, attribute: false },
-  lastError: { default: null, attribute: false },
+  gatewayStatus: { default: null, attribute: false },
+  connectionRecovery: { default: false, attribute: false },
+  connectionFlagVisible: { default: false, attribute: false },
+  connectionFlagAllowed: { default: false, attribute: false },
+  footerControlsOverlap: { default: undefined, attribute: false },
   storedOutboxes: { default: undefined, attribute: false },
   terminalAvailable: { default: false, attribute: false },
   catalogOpenTarget: { default: "viewer", attribute: false },
@@ -90,7 +105,6 @@ export const appSidebarProperties = {
   onUpdateSidebarEntries: { default: undefined, attribute: false },
   onPairMobile: { default: undefined, attribute: false },
   onNavigate: { default: undefined, attribute: false },
-  onPreloadRoute: { default: undefined, attribute: false },
 } satisfies {
   [Key in keyof AppSidebarProps]: {
     default: AppSidebarProps[Key];
@@ -99,7 +113,7 @@ export const appSidebarProperties = {
   };
 };
 
-/** Synchronous sidebar state and controller lifecycle; Solid owns its DOM. */
+/** Synchronous sidebar state and native attachment; Solid owns its DOM. */
 export abstract class AppSidebarBase {
   declare basePath: AppSidebarProps["basePath"];
   declare activeRouteId: AppSidebarProps["activeRouteId"];
@@ -108,7 +122,11 @@ export abstract class AppSidebarBase {
   declare enabledRouteIds: AppSidebarProps["enabledRouteIds"];
   declare connected: AppSidebarProps["connected"];
   declare connectionStatus: AppSidebarProps["connectionStatus"];
-  declare lastError: AppSidebarProps["lastError"];
+  declare gatewayStatus: AppSidebarProps["gatewayStatus"];
+  declare connectionRecovery: AppSidebarProps["connectionRecovery"];
+  declare connectionFlagVisible: AppSidebarProps["connectionFlagVisible"];
+  declare connectionFlagAllowed: AppSidebarProps["connectionFlagAllowed"];
+  declare footerControlsOverlap: AppSidebarProps["footerControlsOverlap"];
   declare storedOutboxes: AppSidebarProps["storedOutboxes"];
   declare terminalAvailable: AppSidebarProps["terminalAvailable"];
   declare catalogOpenTarget: AppSidebarProps["catalogOpenTarget"];
@@ -132,63 +150,53 @@ export abstract class AppSidebarBase {
   declare onUpdateSidebarEntries: AppSidebarProps["onUpdateSidebarEntries"];
   declare onPairMobile: AppSidebarProps["onPairMobile"];
   declare onNavigate: AppSidebarProps["onNavigate"];
-  declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
-  declare readonly ownerDocument: HTMLElement["ownerDocument"];
-  declare readonly classList: HTMLElement["classList"];
-  declare readonly querySelector: HTMLElement["querySelector"];
-  declare readonly querySelectorAll: HTMLElement["querySelectorAll"];
-  declare readonly addEventListener: HTMLElement["addEventListener"];
-  declare readonly removeEventListener: HTMLElement["removeEventListener"];
-  declare readonly contains: HTMLElement["contains"];
-  declare readonly matches: HTMLElement["matches"];
+  get ownerDocument(): Document {
+    return this.hostElement.ownerDocument;
+  }
 
-  private readonly controllers = new Set<SolidController>();
-  private readonly listeners = new Set<() => void>();
+  readonly navigationViewElements = new Map<AppSidebarProps["navigationView"], HTMLElement>();
+
+  activeNavigationViewElement(): HTMLElement | undefined {
+    if (!this.navigationVisible || this.navigationCollapsed) {
+      return undefined;
+    }
+    const element = this.navigationViewElements.get(this.navigationView);
+    return element?.isConnected ? element : undefined;
+  }
+
+  private readonly listeners = createChangeListeners();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
-  contextualSidebar: ContextualSidebar | undefined;
+  get contextualSidebar(): ContextualSidebar | undefined {
+    return this.isConnected && this.router
+      ? selectSidebarContext(this.router.getState())
+      : undefined;
+  }
 
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
   constructor(
-    private props: AppSidebarProps,
     protected context: ApplicationContext,
-    readonly hostElement: HTMLElement,
+    readonly hostElement: HTMLElement & AppSidebarProps,
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
         get: () =>
           key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(this.props, key))
-            : Reflect.get(this.props, key),
+            ? (this.sidebarSnapshot?.mode ?? Reflect.get(hostElement, key))
+            : Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
       });
     }
-    for (const key of [
-      "ownerDocument",
-      "classList",
-      "querySelector",
-      "querySelectorAll",
-      "addEventListener",
-      "removeEventListener",
-      "contains",
-      "matches",
-    ] as const) {
-      const value = hostElement[key];
-      Object.defineProperty(this, key, {
-        value: typeof value === "function" ? value.bind(hostElement) : value,
-      });
-    }
   }
 
-  bindInputs(props: AppSidebarProps, context: ApplicationContext): void {
-    this.props = props;
+  bindContext(context: ApplicationContext): void {
     this.context = context;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   attach(): void {
@@ -196,11 +204,8 @@ export abstract class AppSidebarBase {
       return;
     }
     this.attached = true;
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
     this.connectedCallback();
-    this.requestUpdate();
+    this.invalidate();
   }
   detach(): void {
     if (!this.attached) {
@@ -208,9 +213,6 @@ export abstract class AppSidebarBase {
     }
     this.attached = false;
     this.disconnectedCallback();
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
     this.finishUpdate?.(false);
     this.finishUpdate = undefined;
   }
@@ -218,28 +220,14 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  addController(controller: SolidController): void {
-    this.controllers.add(controller);
-    if (this.isConnected) {
-      controller.hostConnected?.();
-    }
-  }
-  removeController(controller: SolidController): void {
-    this.controllers.delete(controller);
-  }
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-  requestUpdate(): void {
+  readonly subscribe = this.listeners.subscribe;
+  invalidate(): void {
     if (!this.finishUpdate) {
       this.complete = new Promise((resolve) => {
         this.finishUpdate = resolve;
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
   get updateComplete(): Promise<boolean> {
     return this.complete;
@@ -249,9 +237,6 @@ export abstract class AppSidebarBase {
       return;
     }
     this.willUpdate();
-    for (const controller of this.controllers) {
-      controller.hostUpdate?.();
-    }
   }
   commitRender(): void {
     if (!this.isConnected) {
@@ -259,9 +244,6 @@ export abstract class AppSidebarBase {
     }
     const finish = this.finishUpdate;
     this.finishUpdate = undefined;
-    for (const controller of this.controllers) {
-      controller.hostUpdated?.();
-    }
     this.updated();
     finish?.(true);
   }
@@ -283,35 +265,52 @@ export abstract class AppSidebarBase {
   }
 
   abstract readonly sessionOwnerFilter: SessionOwnerFilter;
+  abstract readonly sessionData: Pick<SessionDataOwner, "sessionsResult">;
+  abstract readonly sessionsStatusFilter: SidebarSessionStatusFilter;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
+    if (this.sidebarSnapshot) {
+      // Keep the cached rows, but let explicit intent select the replacement query.
+      const selected = this.sessionOwnerFilter.read();
+      this.sidebarSnapshot.ownerId = selected.ownerId;
+      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+    }
   };
 
   pluginNavigation() {
-    return this.context?.plugins?.registrations("navigation") ?? [];
+    return this.context.plugins.registrations("navigation");
   }
 
   pendingSessionCreate() {
-    const pending = this.context?.chatSubmissions?.readCreate();
+    const pending = this.context.chatSubmissions.readCreate();
     return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
+  }
+
+  sessionCreateDisplay() {
+    const pending = this.pendingSessionCreate();
+    if (pending) {
+      return pending;
+    }
+    const accepted = this.context.chatSubmissions.readAcceptedCreate();
+    return this.activeRouteId === "chat" &&
+      this.sessionsStatusFilter === "active" &&
+      accepted &&
+      areUiSessionKeysEquivalent(accepted.creation.sessionKey, this.sessionKey) &&
+      !this.sessionData.sessionsResult?.sessions.some((row) =>
+        areUiSessionKeysEquivalent(row.key, accepted.creation.sessionKey),
+      )
+      ? accepted
+      : undefined;
   }
 
   public getRouteSessionKey(): string {
     // A provisional row owns only presentation, never the saved Gateway selection.
-    return (
-      this.pendingSessionCreate()?.creation.sessionKey ||
-      this.sessionKey.trim() ||
-      this.context?.gateway.snapshot.sessionKey.trim() ||
-      ""
-    );
+    return this.pendingSessionCreate()?.creation.sessionKey || this.sessionKey.trim();
   }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {
     const context = this.context;
-    if (!context) {
-      return;
-    }
     selectApplicationSession({
       selection: context.agentSelection,
       gateway: context.gateway,
@@ -321,42 +320,27 @@ export abstract class AppSidebarBase {
   }
 
   prepareSessionNavigation(sessionKey: string, pathname: string): void {
-    if (this.context) {
-      prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
-    }
-  }
-
-  protected bindLiteralSession(
-    sessionKey: string,
-    fallbackAgentId: string,
-    options: ApplicationNavigationOptions,
-  ): void {
-    if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
-      this.setApplicationSession(sessionKey, fallbackAgentId);
-    }
+    prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
   }
 
   protected sessionMainKey(): string {
     return resolveUiConfiguredMainKey({
-      agentsList: this.context?.agents.state.agentsList,
-      hello: this.context?.gateway.snapshot.hello,
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
     });
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return readSessionMethodAccess(
-      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
-      {
-        method: "sessions.create",
-        params: {},
-        sessionScope: true,
-      },
-    );
+    return this.readSessionMutationAccess({
+      method: "sessions.create",
+      params: {},
+      sessionScope: true,
+    });
   }
 
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
     return readSessionMethodAccess(
-      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      this.connected && !this.sidebarSnapshot ? this.context.gateway.snapshot : null,
       request,
     );
   }

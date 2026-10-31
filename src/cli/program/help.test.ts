@@ -1,204 +1,235 @@
-// Help tests cover command help generation and inherited help options.
+import { stripVTControlCharacters } from "node:util";
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExitError } from "../../runtime.js";
-import { captureEnv } from "../../test-utils/env.js";
+import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
 import { OpenClawCommand } from "./openclaw-command.js";
+import { outputRootHelp } from "./root-help.js";
 
-const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
-const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
-const formatDocsLinkMock = vi.hoisted(() =>
-  vi.fn((_path: string, full: string) => `https://${full}`),
-);
+function descriptor(
+  name: string,
+  description = name,
+  hasSubcommands = false,
+): NamedCommandDescriptor {
+  return { name, description, hasSubcommands };
+}
+const pluginDescriptors = vi.fn(async (_config?: unknown, _env?: unknown, _options?: unknown) => [
+  descriptor("matrix", "Matrix channel utilities", true),
+]);
+// mock-isolation: Render descriptor fixtures without loading live plugins.
+vi.mock("../../plugins/cli-root-descriptors.js", () => ({
+  getPluginCliCommandDescriptors: (...args: [unknown?, unknown?, unknown?]) =>
+    pluginDescriptors(...args),
+}));
+
 const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
+// mock-isolation: Make help link formatting deterministic across terminal capabilities.
 vi.mock("../../../packages/terminal-core/src/links.js", () => ({
-  formatDocsLink: formatDocsLinkMock,
+  formatDocsLink: (_path: string, full: string) => `https://${full}`,
 }));
 
-vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
-  isRich: () => false,
-  theme: {
-    heading: (s: string) => s,
-    muted: (s: string) => s,
-    option: (s: string) => s,
-    command: (s: string) => s,
-    error: (s: string) => s,
-  },
-}));
-
+// mock-isolation: Suppress banner side effects while checking command help output.
 vi.mock("../banner.js", () => ({
-  formatCliBannerLine: formatCliBannerLineMock,
-  hasEmittedCliBanner: hasEmittedCliBannerMock,
+  formatCliBannerLine: () => "BANNER-LINE",
+  hasEmittedCliBanner: () => false,
 }));
 
-vi.mock("../../infra/git-commit.js", () => ({
-  resolveCommitHash: resolveCommitHashMock,
-}));
+// mock-isolation: Help version fixtures must not read the host checkout or packaged build metadata.
+vi.mock("../../infra/git-commit.js", () => ({ resolveCommitHash: resolveCommitHashMock }));
 
 const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];
-  let originalEnv: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
-    originalEnv = captureEnv(["OPENCLAW_SUPPRESS_HELP_BANNER"]);
-    hasEmittedCliBannerMock.mockReturnValue(false);
     resolveCommitHashMock.mockReturnValue("abc1234");
-    delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
+    vi.stubEnv("OPENCLAW_SUPPRESS_HELP_BANNER", undefined);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     process.argv = originalArgv;
-    originalEnv.restore();
+    vi.unstubAllEnvs();
   });
 
-  function makeProgramWithCommands() {
-    const program = new Command();
-    program.command("models").description("models");
-    program.command("status").description("status");
-    return program;
-  }
-
-  function captureHelpOutput(program: Command): string {
-    let output = "";
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
-      chunk: string | Uint8Array,
-    ) => {
-      output += String(chunk);
-      return true;
-    }) as typeof process.stdout.write);
-    try {
-      program.outputHelp();
-      return output;
-    } finally {
-      writeSpy.mockRestore();
-    }
-  }
-
-  function expectVersionExit(params: { expectedVersion: string }) {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code ?? ""}`);
-    }) as typeof process.exit);
-
-    try {
-      const program = makeProgramWithCommands();
-      expect(() => configureProgramHelp(program, testProgramContext)).toThrow(new ExitError(0));
-      expect(logSpy).toHaveBeenCalledWith(params.expectedVersion);
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-      exitSpy.mockRestore();
-    }
-  }
-
-  async function parseHelp(argv: string[]) {
+  function createProgram(argv: string[]) {
     process.argv = ["node", "openclaw", ...argv];
-    let stdout = "";
-    let stderr = "";
+    const output = { stdout: "", stderr: "" };
     const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
     configureProgramHelp(program, testProgramContext);
     program.configureOutput({
       writeOut: (value) => {
-        stdout += formatProgramHelpOutput(value);
+        output.stdout += stripVTControlCharacters(formatProgramHelpOutput(value));
       },
       writeErr: (value) => {
-        stderr += value;
+        output.stderr += stripVTControlCharacters(value);
       },
     });
-    program.command("models").description("models");
-    program.command("status").description("status");
-    const plugins = program.command("plugins").description("Manage plugins");
-    plugins
-      .command("list")
-      .description("List plugins")
-      .action(() => {});
-
-    const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(CommanderError);
-    return { error: error as CommanderError, stderr, stdout };
+    return { program, output };
   }
 
-  it("keeps valid root, group, subcommand, short, and help-command output successful", async () => {
-    const rootHelp = await parseHelp(["--help"]);
-    const shortHelp = await parseHelp(["-h"]);
-    const groupHelp = await parseHelp(["plugins", "--help"]);
-    const subcommandHelp = await parseHelp(["plugins", "list", "--help"]);
-    const helpCommand = await parseHelp(["help", "plugins"]);
+  async function parseHelp(argv: string[]) {
+    const { program, output } = createProgram(argv);
+    program
+      .command("plugins")
+      .command("list")
+      .action(() => {});
+    const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(CommanderError);
+    expect(error).toMatchObject({ exitCode: 0 });
+    expect(output.stderr).toBe("");
+    return output.stdout;
+  }
 
-    for (const result of [rootHelp, shortHelp, groupHelp, subcommandHelp, helpCommand]) {
-      expect(result.error.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
-    }
-    expect(rootHelp.error.code).toBe("commander.helpDisplayed");
-    expect(rootHelp.stdout).toContain("Hint: commands suffixed with * have subcommands");
-    expect(rootHelp.stdout).toContain("models *");
-    expect(rootHelp.stdout).toContain("status");
-    expect(rootHelp.stdout).not.toContain("status *");
-    expect(rootHelp.stdout).toContain("BANNER-LINE");
-    expect(rootHelp.stdout).toContain("Examples:");
-    expect(rootHelp.stdout).toContain("openclaw setup --baseline");
-    expect(rootHelp.stdout).toContain("https://docs.openclaw.ai/cli");
-    expect(shortHelp.stdout).toBe(rootHelp.stdout);
-    expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
-    expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");
-    expect(helpCommand.stdout).toBe(groupHelp.stdout);
+  it("renders group help through both flag and help-command entrypoints", async () => {
+    const groupHelp = await parseHelp(["plugins", "--help"]);
+    expect(groupHelp).toContain("Usage: openclaw plugins [options] [command]");
+    expect(await parseHelp(["help", "plugins"])).toBe(groupHelp);
   });
 
   it("formats parse errors from the exact Commander command path", async () => {
-    let stderr = "";
-    process.argv = ["node", "openclaw", "plugins", "--source", "list", "list", "--wat"];
-    const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
-    configureProgramHelp(program, testProgramContext);
-    program.configureOutput({
-      writeErr: (value) => {
-        stderr += value;
-      },
-    });
+    const { program, output } = createProgram([]);
     program
       .command("plugins")
       .option("--source <source>")
       .command("list")
       .action(() => {});
 
-    const firstError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(firstError).toBeInstanceOf(CommanderError);
-    process.argv = ["node", "openclaw", "plugins", "list", "--still-wat"];
-    const secondError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(secondError).toBeInstanceOf(CommanderError);
-    process.argv = ["node", "openclaw", "plugins", "lis"];
-    const thirdError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(thirdError).toBeInstanceOf(CommanderError);
+    for (const args of [
+      ["plugins", "--source", "list", "list", "--wat"],
+      ["plugins", "lis"],
+    ]) {
+      process.argv = ["node", "openclaw", ...args];
+      expect(
+        await program.parseAsync(process.argv).catch((error: unknown) => error),
+      ).toBeInstanceOf(CommanderError);
+    }
 
-    expect(stderr.match(/Try: openclaw plugins list --help/g)).toHaveLength(2);
-    expect(stderr).not.toContain("openclaw plugins list list --help");
-    expect(stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
+    expect(output.stderr).toContain("Try: openclaw plugins list --help");
+    expect(output.stderr).not.toContain("openclaw plugins list list --help");
+    expect(output.stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
   });
 
-  it("suppresses banner formatting when parent default help requests it", () => {
-    process.argv = ["node", "openclaw", "channels"];
+  it.each<[string, string | null]>([
+    [" trace ", "trace"],
+    ["loud", null],
+  ])("parses --log-level %p", async (input, expected) => {
+    const { program } = createProgram(["--log-level", input]);
+    program.action(() => {});
+    if (expected) {
+      await program.parseAsync(process.argv);
+      expect(program.opts().logLevel).toBe(expected);
+    } else {
+      await expect(program.parseAsync(process.argv)).rejects.toMatchObject({
+        code: "commander.invalidArgument",
+        exitCode: 1,
+        message: expect.stringContaining("Invalid --log-level"),
+      });
+    }
+  });
+
+  it("suppresses banner formatting when parent default help requests it", async () => {
     process.env.OPENCLAW_SUPPRESS_HELP_BANNER = "1";
-    const program = makeProgramWithCommands();
-    configureProgramHelp(program, testProgramContext);
-
-    const help = captureHelpOutput(program);
-    expect(help).not.toContain("BANNER-LINE");
-    expect(formatCliBannerLineMock).not.toHaveBeenCalled();
+    const { program, output } = createProgram(["channels"]);
+    program.outputHelp();
+    expect(output.stdout).not.toContain("BANNER-LINE");
   });
 
-  it("prints version and exits immediately when version flags are present", () => {
+  it.each([
+    ["abc1234", "OpenClaw 9.9.9-test (abc1234)"],
+    [null, "OpenClaw 9.9.9-test"],
+  ])("prints version with commit %s and exits immediately", (commit, expectedVersion) => {
     process.argv = ["node", "openclaw", "--version"];
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test (abc1234)" });
+    resolveCommitHashMock.mockReturnValue(commit);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("unexpected exit");
+    });
+    expect(() => configureProgramHelp(new Command(), testProgramContext)).toThrow(new ExitError(0));
+    expect(log).toHaveBeenCalledWith(expectedVersion);
+    expect(exit).not.toHaveBeenCalled();
   });
 
-  it("prints version and exits immediately without commit metadata", () => {
-    process.argv = ["node", "openclaw", "--version"];
-    resolveCommitHashMock.mockReturnValue(null);
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
+  describe("root help", () => {
+    let text = "";
+    beforeEach(() => {
+      vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", undefined);
+      text = "";
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        text += String(chunk);
+        return true;
+      });
+    });
+
+    it("renders plugins using the supplied isolated config and env", async () => {
+      const config = { agents: { defaults: { workspace: "/tmp/openclaw-root-help-workspace" } } };
+      const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-root-help-state" };
+      await outputRootHelp({ config, env, pluginSdkResolution: "src" });
+      expect(pluginDescriptors).toHaveBeenCalledWith(config, env, { pluginSdkResolution: "src" });
+      expect(text).toContain("matrix *");
+      expect(text).toContain("Hint: commands suffixed with * have subcommands");
+      expect(text).toContain("models *");
+      expect(text).not.toContain("status *");
+      expect(text).toContain("BANNER-LINE");
+      expect(text).toContain("openclaw setup --baseline");
+      expect(text).toContain("https://docs.openclaw.ai/cli");
+      expect(text).toContain("Support: https://community.openclaw.ai/");
+    });
+
+    it.each([undefined, "1"])(
+      "loads no plugins by default and gates private QA (%s)",
+      async (enabled) => {
+        vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", enabled);
+        await outputRootHelp();
+        expect(pluginDescriptors).not.toHaveBeenCalled();
+        expect(/^\s+qa(?:\s+\*)?\s+Run QA scenarios/m.test(text)).toBe(enabled === "1");
+      },
+    );
+
+    it.each<[NamedCommandDescriptor[], string, string[]]>([
+      [
+        [
+          descriptor(
+            "safe-command",
+            "Open \u001B]8;;https://example.test\u0007link\u001B]8;;\u0007 now\u001B[2J",
+          ),
+        ],
+        "Open link now",
+        ["\u001B]8", "\u001B[2J"],
+      ],
+      [
+        [descriptor("visible", "Visible"), { ...descriptor("retired", "Retired"), hidden: true }],
+        "visible",
+        ["retired"],
+      ],
+      [
+        [descriptor(" alpha ", "First alpha"), descriptor("alpha", "Ignored normalized duplicate")],
+        "First alpha",
+        ["Ignored"],
+      ],
+    ])("renders safe unique visible descriptors: %j", async (entries, present, absent) => {
+      pluginDescriptors.mockResolvedValueOnce(entries);
+      await outputRootHelp({ config: {} });
+      expect(text).toContain(present);
+      for (const fragment of absent) {
+        expect(text).not.toContain(fragment);
+      }
+      if (present === "First alpha") {
+        expect(text.match(/^\s+alpha\s+/gm)).toHaveLength(1);
+      }
+    });
+
+    it("rejects unsafe command names before emitting help", async () => {
+      pluginDescriptors.mockResolvedValueOnce([descriptor("bad\nname", "Bad")]);
+      await expect(outputRootHelp({ config: {} })).rejects.toThrow(
+        'Invalid CLI command name: "bad\\nname"',
+      );
+      expect(text).toBe("");
+    });
   });
 });

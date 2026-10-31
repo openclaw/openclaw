@@ -2,21 +2,16 @@ import type { Context, Model } from "@openclaw/llm-core";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 import { applyCommonResponsesParams } from "../providers/openai-responses-shared.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { buildOpenAIResponsesParams } from "./openai-responses-params-internal.js";
 
 const context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] } satisfies Context;
-const model = {
-  id: "custom-model",
+const model = makeProviderModel("openai-responses", "custom", "custom-model", {
   name: "Custom Model",
-  api: "openai-responses",
-  provider: "custom",
   baseUrl: "https://proxy.example.com/v1",
   reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 128,
-} satisfies Model<"openai-responses">;
+});
 
 function responsesModel(overrides: Partial<Model>): Model {
   return { ...model, ...overrides };

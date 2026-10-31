@@ -11,6 +11,7 @@ import {
   type NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';
@@ -105,37 +106,21 @@ const startedPath = path.join(descriptor.assignment.workspaceDir, descriptor.ass
 const starts = fs.existsSync(startedPath) ? JSON.parse(fs.readFileSync(startedPath, "utf8")).starts + 1 : 1;
 writeArtifact(descriptor, "started", { pid: process.pid, starts });
 const mode = descriptor.assignment.prompt;
+const credential = descriptor.admission.credential;
 if (mode === "admission-rearm") {
   const marker = path.join(descriptor.assignment.workspaceDir, "admission-attempt");
   const first = !fs.existsSync(marker);
   fs.writeFileSync(marker, descriptor.assignment.turnId);
   finish(descriptor, first
-    ? { status: "not-started", reason: "admission-deadline", errorText: "gateway unreachable " + descriptor.admission.credential }
+    ? { status: "not-started", reason: "admission-deadline", errorText: "gateway unreachable " + credential }
     : completedResult);
-} else if (mode === "connection-failure" || mode === "connection-deadline") {
-  const target = new URL(descriptor.connectionEndpoint.url).host;
-  const report = (cause) => new Promise((resolve) => process.send(
-    { type: "openclaw-worker-connection-failure-v1", cause }, resolve,
-  ));
-  await report("worker could not reach gateway " + target + ": certificate rejected " +
-    descriptor.admission.credential + "; check TLS pin/publicUrl configuration");
-  if (mode === "connection-deadline") {
-    await report("worker admission deadline exceeded after 3 attempts to " + target +
-      ": connect failed: Opening handshake has timed out " + descriptor.admission.credential);
-    process.stderr.write("worker admission deadline exceeded\n");
-    exitWorker(7);
-  } else {
-    fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"), "reported");
-    setInterval(() => {}, 1000);
-  }
 } else if (mode === "wait") {
   return;
-} else if (mode === "tree" || mode === "tree-cancel-reject") {
-  grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
-} else if (mode === "escaped-tree") {
+} else if (["tree", "tree-cancel-reject", "escaped-tree"].includes(mode)) {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    detached: true, stdio: ["ignore", "ignore", "ignore", ...lineageFds],
+    ...(mode === "escaped-tree"
+      ? { detached: true, stdio: ["ignore", "ignore", "ignore", ...lineageFds] }
+      : { stdio: "ignore" }),
   });
   fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
 } else if (mode === "background-start" || mode.startsWith("background-start:")) {
@@ -162,34 +147,26 @@ if (mode === "admission-rearm") {
   if (!background) throw new Error("background process was not retained");
   return;
 } else if (mode === "diagnostic-retain") {
-  fs.writeSync(2, "previous turn stderr " + descriptor.admission.credential + "\n");
+  fs.writeSync(2, "previous turn stderr " + credential + "\n");
   await new Promise((resolve) => process.send({
     type: "openclaw-worker-connection-failure-v1",
-    cause: "previous turn connection " + descriptor.admission.credential,
+    cause: "previous turn connection " + credential,
   }, resolve));
   finish(descriptor, completedResult, true);
 } else if (mode === "quiet-fail") {
   exitWorker(7);
 } else if (mode === "secret-fail") {
-  const credential = descriptor.admission.credential;
   const escaped = JSON.stringify(credential).slice(1, -1);
   process.stderr.write(
     "failure " + "x".repeat(5000) + " " + credential + " " + encodeURIComponent(credential) + " " + escaped,
   );
   exitWorker(7);
-} else if (mode.startsWith("secret-cutoff-")) {
-  const credential = descriptor.admission.credential;
-  const representations = {
-    "secret-cutoff-raw": credential,
-    "secret-cutoff-url": encodeURIComponent(credential),
-    "secret-cutoff-json": JSON.stringify(credential).slice(1, -1),
-  };
-  const representation = representations[mode];
+} else if (mode === "secret-cutoff-url") {
+  const representation = encodeURIComponent(credential);
   const suffixBytes = 4096 - Math.floor(Buffer.byteLength(representation, "utf8") / 2);
   process.stderr.write("x".repeat(5000) + representation + "y".repeat(suffixBytes));
   exitWorker(7);
 } else if (mode === "secret-success") {
-  const credential = descriptor.admission.credential;
   finish(descriptor, {
     ...completedResult,
     transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential) +
@@ -207,6 +184,26 @@ if (mode === "admission-rearm") {
   await new Promise((resolve) => setTimeout(resolve, 100));
   fs.writeFileSync(marker, "normal");
   finish(descriptor);
+} else if (mode === "managed-identity") {
+  writeArtifact(descriptor, "env", process.env);
+  let output = "transport-unavailable";
+  if (process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER) {
+    const child = spawn(process.execPath, ["-e", [
+      "require('node:http').get(process.env.IDENTITY_ENDPOINT + '?resource=fixture-audience&client_id=fixture-client',",
+      "{ headers: { 'X-IDENTITY-HEADER': process.env.IDENTITY_HEADER } }, res => {",
+      "res.setEncoding('utf8'); res.on('data', chunk => process.stdout.write(chunk));",
+      "}).on('error', () => process.exit(32));",
+    ].join("\n")], { stdio: ["ignore", "pipe", "inherit"] });
+    output = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", chunk => { output += chunk; });
+    const code = await new Promise(resolve => child.once("exit", resolve));
+    if (code !== 0) exitWorker(32);
+  }
+  writeArtifact(descriptor, "identity", { home: process.env.HOME, output });
+  // Exercise the supervisor's diagnostic egress with a synthetic provider header.
+  process.stderr.write(process.env.IDENTITY_HEADER ?? "transport-unavailable");
+  exitWorker(7);
 } else if (mode === "env") {
   writeArtifact(descriptor, "env", process.env);
   finish(descriptor);
@@ -342,5 +339,30 @@ export function testWorkerLaunchInput(
       prompt,
       launchId,
     ),
+  };
+}
+
+export function testIsolatedWorkerLaunchInput(
+  workspaceDir: string,
+  launchId: string,
+  prompt = "success",
+) {
+  const input = testWorkerLaunchInput(workspaceDir, launchId, prompt);
+  input.descriptor.admission.environmentId = `environment-${launchId}`;
+  input.descriptor.admission.sessionId = `session-${launchId}`;
+  return input;
+}
+
+export function createPortalSupervisor(): NodeWorkerSupervisorControl {
+  const unexpectedSupervisorCommand = async (): Promise<never> => {
+    throw new Error("Portal stream must not call another supervisor command");
+  };
+  return {
+    launch: unexpectedSupervisorCommand,
+    status: unexpectedSupervisorCommand,
+    retainWorkspaces: unexpectedSupervisorCommand,
+    cancel: unexpectedSupervisorCommand,
+    observeProcesses: unexpectedSupervisorCommand,
+    stopEnvironment: unexpectedSupervisorCommand,
   };
 }

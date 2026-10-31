@@ -1,30 +1,25 @@
-// Real WebSocket credentials own the full staged install, ledger, and runtime transaction.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resetLogger } from "../logging/logger.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import type { GatewayClient, GatewayClientOptions } from "./client.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 const OLD_TOKEN = "shared-token-old";
 type ConfigSnapshot = { hash: string; config: OpenClawConfig };
+const wait = <T>(promise: Promise<T>, label: string) => withTestTimeout(promise, 10_000, label);
 
 type Phase = "stage" | "index" | "runtime";
 const observation = vi.hoisted(() => ({
@@ -111,37 +106,12 @@ describe("gateway plugin install authority", () => {
     state = await createOpenClawTestState({
       label: "plugin-install-authority",
       env: {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
     });
     port = await getFreePort();
-    await startGateway();
-  });
-
-  afterEach(async () => {
-    await runQaGatewayFixture(
-      async () => {},
-      ...clients.splice(0).map((client) => () => client.stopAndWait()),
-      async () => {
-        await server?.close();
-        server = undefined;
-      },
-      () => state.cleanup(),
-      () => resetLogger(),
-      () => clearPluginMetadataLifecycleCaches(),
-    );
-  });
-
-  async function startGateway() {
     await state.writeConfig({
       gateway: {
         mode: "local",
@@ -171,7 +141,21 @@ describe("gateway plugin install authority", () => {
     } finally {
       observer.mockRestore();
     }
-  }
+  });
+
+  afterEach(async () => {
+    await runQaGatewayFixture(
+      async () => {},
+      ...clients.splice(0).map((client) => () => client.stopAndWait()),
+      async () => {
+        await server?.close();
+        server = undefined;
+      },
+      () => state.cleanup(),
+      resetLogger,
+      clearPluginMetadataLifecycleCaches,
+    );
+  });
 
   async function connect(
     options: Pick<
@@ -179,67 +163,53 @@ describe("gateway plugin install authority", () => {
       "token" | "deviceToken" | "deviceIdentity" | "clientName" | "mode" | "origin"
     >,
   ) {
-    const connected = createDeferredCore<HelloOk>();
-    const closed = createDeferredCore<{ code: number; reason: string }>();
-    const client = new GatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      clientName: "gateway-client",
-      clientVersion: "1.0.0",
-      platform: "test",
-      mode: "backend",
-      deviceIdentity: null,
-      scopes: ["operator.admin"],
-      ...options,
-      // Each connection presents only its declared credential, never a cached fallback.
-      hostDeps: {
-        loadDeviceAuthToken: () => null,
-        storeDeviceAuthToken: () => {},
-        clearDeviceAuthToken: () => {},
+    const closed = createDeferredCore();
+    const client = await acquireGatewayTestClient(
+      {
+        url: `ws://127.0.0.1:${port}`,
+        clientName: "gateway-client",
+        clientVersion: "1.0.0",
+        platform: "test",
+        mode: "backend",
+        deviceIdentity: null,
+        scopes: ["operator.admin"],
+        ...options,
+        // Each connection presents only its declared credential, never a cached fallback.
+        hostDeps: {
+          loadDeviceAuthToken: () => null,
+          storeDeviceAuthToken: () => {},
+          clearDeviceAuthToken: () => {},
+        },
+        onClose: () => closed.resolve(),
       },
-      onHelloOk: (hello) => connected.resolve(hello),
-      onConnectError: (error) => connected.reject(error),
-      onClose: (code, reason) => {
-        connected.reject(new Error(`closed ${code}: ${reason}`));
-        closed.resolve({ code, reason });
+      {
+        timeoutMs: 10_000,
+        timeoutMessage: "gateway connect timeout",
+        closeMessage: "closed",
       },
-    });
+    );
     clients.push(client);
-    client.start();
-    await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
     return { client, closed: closed.promise };
   }
 
   async function openDeviceTokenClient(pluginId: string) {
-    const identity = loadOrCreateDeviceIdentity({
-      path: state.path(`${pluginId}-identity.sqlite`),
-    });
-    const clientName = "test";
-    const mode = "test";
-    const pending = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      clientId: clientName,
-      clientMode: mode,
-      role: "operator",
+    const client = { clientName: "test", mode: "test" } as const;
+    const { identity, issued: rotated } = await pairOperatorDeviceFixture({
+      identityPath: state.path(`${pluginId}-identity`, "client", "credentials.sqlite"),
       scopes: ["operator.admin"],
+      tokenScopes: ["operator.admin"],
+      clientId: client.clientName,
+      clientMode: client.mode,
+      callerScopes: ["operator.admin"],
     });
-    await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-    const rotated = await rotateDeviceToken({
-      deviceId: identity.deviceId,
-      role: "operator",
-      scopes: ["operator.admin"],
-    });
-    expect(rotated.ok).toBe(true);
-    const issued = rotated.ok ? rotated.entry : undefined;
-    expect(issued?.token).toBeTypeOf("string");
-    if (!issued) {
+    expect(rotated).toMatchObject({ ok: true, entry: { token: expect.any(String) } });
+    if (!rotated.ok) {
       throw new Error("expected issued device token");
     }
     const credentials = {
-      clientName,
-      mode,
+      ...client,
       deviceIdentity: identity,
-      deviceToken: issued.token,
+      deviceToken: rotated.entry.token,
     } satisfies Parameters<typeof connect>[0];
     const connection = await connect(credentials);
     return { ...connection, deviceId: identity.deviceId, reconnect: () => connect(credentials) };
@@ -259,7 +229,7 @@ describe("gateway plugin install authority", () => {
     };
     const request = requester.client.request("health").catch(() => undefined);
     try {
-      await withTestTimeout(reached.promise, 10_000, "retained request did not start");
+      await wait(reached.promise, "retained request did not start");
       await requester.client.stopAndWait();
       const config = structuredClone(getRuntimeConfig());
       for (const token of ["shared-token-replacement", OLD_TOKEN]) {
@@ -275,9 +245,7 @@ describe("gateway plugin install authority", () => {
         await current.client.request("config.get");
       }
       release.resolve();
-      expect(
-        await withTestTimeout(authority.promise, 10_000, "retained authority did not settle"),
-      ).toBe(false);
+      expect(await wait(authority.promise, "retained authority did not settle")).toBe(false);
       await request;
     } finally {
       release.resolve();
@@ -296,29 +264,21 @@ describe("gateway plugin install authority", () => {
     "$label preserves the initiating authority at $phase",
     async ({ label, phase, action }) => {
       const pluginId = `authority-${label}`;
-      const source = state.path(`sources/${pluginId}`);
-      await fs.mkdir(source, { recursive: true });
-      await fs.writeFile(
-        `${source}/package.json`,
-        JSON.stringify({
-          name: pluginId,
-          version: "1.0.0",
-          main: "index.cjs",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      await fs.writeFile(
-        `${source}/openclaw.plugin.json`,
-        JSON.stringify({
-          id: pluginId,
-          name: pluginId,
-          activation: { onStartup: true },
-          contracts: { tools: [`${pluginId.replaceAll("-", "_")}_probe`] },
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        }),
-      );
-      await fs.writeFile(
-        `${source}/index.cjs`,
+      const sourceDir = `sources/${pluginId}`;
+      const source = state.statePath(sourceDir);
+      await state.writeJson(`${sourceDir}/package.json`, {
+        name: pluginId,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      await state.writeJson(`${sourceDir}/openclaw.plugin.json`, {
+        id: pluginId,
+        activation: { onStartup: true },
+        contracts: { tools: [`${pluginId.replaceAll("-", "_")}_probe`] },
+        configSchema: { type: "object", additionalProperties: false },
+      });
+      await state.writeText(
+        `${sourceDir}/index.cjs`,
         `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
       api.registerGatewayMethod(${JSON.stringify(`${pluginId}.probe`)}, ({respond}) => respond(true, {active: true}));
       api.registerTool({name: ${JSON.stringify(`${pluginId.replaceAll("-", "_")}_probe`)}, description: "Report readiness", parameters: {type: "object", properties: {}}, execute: async () => ({content: [{type: "text", text: "ready"}]})});
@@ -345,22 +305,12 @@ describe("gateway plugin install authority", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await withTestTimeout(
-          Promise.race([
+        await wait(
+          awaitGateBeforeSettlement(
             reached.promise,
-            reply.then((response) => {
-              if ("error" in response) {
-                throw response.error;
-              }
-              throw new Error("Install replied before boundary");
-            }),
-            finished.promise.then(({ error }) => {
-              throw error instanceof Error
-                ? error
-                : new Error("Install settled before boundary", { cause: error });
-            }),
-          ]),
-          10_000,
+            Promise.race([request, finished.promise]),
+            "Install settled before boundary",
+          ),
           "install boundary not reached",
         );
         if (action === "disconnect-revoke") {
@@ -371,7 +321,7 @@ describe("gateway plugin install authority", () => {
             deviceId: device.deviceId,
             role: "operator",
           });
-          await withTestTimeout(device.closed, 10_000, "revoked socket remained open");
+          await wait(device.closed, "revoked socket remained open");
           await device.client.stopAndWait();
         } else if (action === "disconnect") {
           await device.client.stopAndWait();
@@ -379,7 +329,7 @@ describe("gateway plugin install authority", () => {
           await device.reconnect();
         }
         release.resolve();
-        const settled = await withTestTimeout(finished.promise, 10_000, "install did not settle");
+        const settled = await wait(finished.promise, "install did not settle");
         const response = await reply;
         if (action === "keep") {
           expect(response).toMatchObject({

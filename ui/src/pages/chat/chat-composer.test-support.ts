@@ -1,8 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n } from "../../i18n/index.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
+import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -10,33 +16,84 @@ import {
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import type { ChatProps } from "./chat-view-frame.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 
-type ComposerProps = ChatComposerProps;
-type NativeComposerProps = Parameters<typeof ChatComposer>[0];
+type ComposerProps = ChatComposerProps &
+  Pick<ChatProps, "connectionEpoch" | "onAsyncQuestionSubmit">;
 
 const providers = new WeakMap<
   HTMLElement,
   ReturnType<typeof createSolidApplicationContextProvider>
 >();
+
+export function composerContextWrapper(container: HTMLElement) {
+  return providers.get(container)?.wrapper;
+}
+
 const composers = new Map<
   HTMLElement,
-  { update: (props: NativeComposerProps) => void; unmount: () => void }
+  { update: (props: ComposerProps) => void; unmount: () => void }
 >();
 
 export function renderComposerInto(container: HTMLElement, props: ComposerProps) {
-  const next = { ...props, renderRevision: {} };
   const mounted = composers.get(container);
   if (mounted) {
-    mounted.update(next);
+    mounted.update(props);
   } else {
-    const [current, update] = createSignal<NativeComposerProps>(next, { ownedWrite: true });
-    const view = mountSolid(() => createComponent(ChatComposer, merge(current)), {
-      container,
-      wrapper: providers.get(container)!.wrapper,
+    let owner = props;
+    const draftSource = createComposerDraftSource(() => ({
+      draft: owner.getDraft?.() ?? owner.draft,
+      mentions: owner.getMentions?.() ?? owner.mentions ?? [],
+      attachments: owner.getAttachments?.() ?? owner.attachments ?? [],
+      pendingAttachmentReads:
+        owner.getPendingAttachmentReads?.() ?? owner.pendingAttachmentReads ?? 0,
+      goalDraftMode: owner.goalDraftMode,
+    }));
+    const bind = (): ComposerProps => ({
+      ...owner,
+      draftSource: owner.draftSource ?? draftSource,
+      onGoalDraftModeChange: (mode) => {
+        owner.onGoalDraftModeChange?.(mode);
+        if (!owner.draftSource) {
+          owner.goalDraftMode = mode;
+          draftSource.publish();
+        }
+      },
+      onDraftChange: (value: string, mentions?: readonly HumanMention[]) => {
+        const previous = owner.getDraft?.() ?? owner.draft;
+        owner.onDraftChange(value, mentions);
+        if (!owner.draftSource) {
+          owner.mentions =
+            owner.getMentions?.() ??
+            mentions ??
+            updateHumanMentions(previous, value, owner.mentions);
+          owner.draft = owner.getDraft?.() ?? value;
+          draftSource.publish();
+        }
+      },
     });
-    composers.set(container, { update, unmount: view.unmount });
+    const [current, update] = createSignal<ComposerProps>(bind(), { ownedWrite: true });
+    const view = mountSolid(
+      () => {
+        const questions = createComposerQuestions(props.paneId, current);
+        return createComponent(ChatComposer, merge(current, { questions }));
+      },
+      {
+        container,
+        wrapper: composerContextWrapper(container),
+      },
+    );
+    composers.set(container, {
+      update: (next) => {
+        owner = next;
+        update(bind());
+        draftSource.publish();
+      },
+      unmount: view.unmount,
+    });
     onTestFinished(() => disposeComposer(container));
   }
   if (!getOwner()) {
@@ -76,6 +133,32 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
   };
 }
 
+export function createComposerQuestionPrompt(id: string, question: string): QuestionPrompt {
+  return {
+    id,
+    questions: [
+      {
+        questionId: "choice",
+        header: "Choice",
+        question,
+        options: [{ label: "Yes" }, { label: "No" }],
+        isOther: false,
+      },
+    ],
+    sessionKey: "queue-test",
+    createdAtMs: 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    status: "pending",
+    answeredElsewhere: false,
+    localResolutionConfirmed: false,
+    locallyExpired: false,
+    submitting: false,
+    error: null,
+    drafts: new Map(),
+    revision: 1,
+  };
+}
+
 export function createComposerControlsFixture(): NonNullable<ComposerProps["composerControls"]> {
   return {
     component: () =>
@@ -111,10 +194,16 @@ export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
 export function createComposerContainer() {
   const gateway = createApplicationGateway().gateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const plugins = new ControlUiPluginRuntime(() => application);
   onTestFinished(() => runtimeConfig.dispose());
-  const context: Pick<ApplicationContext, "gateway" | "agentSelection" | "runtimeConfig"> = {
+  onTestFinished(() => plugins.dispose());
+  const context: Pick<
+    ApplicationContext,
+    "gateway" | "agentSelection" | "runtimeConfig" | "plugins"
+  > = {
     gateway,
     runtimeConfig,
+    plugins,
     agentSelection: {
       state: { selectedId: "main", scopeId: "main" },
       intentRevision: 0,
@@ -137,25 +226,20 @@ export function createComposerContainer() {
 }
 
 export function findComposerButton(container: Element, label: string): HTMLButtonElement {
-  const result = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  if (!result) {
-    throw new Error(`expected button ${label}`);
-  }
-  return result;
+  return expectDefined(
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`),
+    `expected button ${label}`,
+  );
 }
 
 export function findPrimaryButton(container: Element): HTMLButtonElement {
-  const actions = container.querySelector(".agent-chat__composer-actions");
-  const result = actions?.querySelector<HTMLButtonElement>(
-    ":scope > .chat-desktop-primary-action > openclaw-tooltip > button",
-  );
-  if (!result) {
-    throw new Error("expected one primary composer button");
-  }
-  expect(
-    actions?.querySelectorAll(":scope > .chat-desktop-primary-action > openclaw-tooltip > button"),
-  ).toHaveLength(1);
-  return result;
+  const buttons = container
+    .querySelector(".agent-chat__composer-actions")
+    ?.querySelectorAll<HTMLButtonElement>(
+      ":scope > .chat-desktop-primary-action > openclaw-tooltip > button",
+    );
+  expect(buttons).toHaveLength(1);
+  return expectDefined(buttons?.[0], "expected one primary composer button");
 }
 
 export async function resetComposerFixture(afterStateReset?: () => void): Promise<void> {

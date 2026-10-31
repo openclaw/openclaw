@@ -15,7 +15,7 @@ Runs Meta models through the Muse Code CLI.
 ## Distribution
 
 - Package: `@openclaw/muse`
-- Install route: npm or ClawHub: `clawhub:@openclaw/muse`
+- Install route: npm or ClawHub: `@openclaw/muse`
 
 ## Surface
 

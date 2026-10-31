@@ -35,7 +35,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { formatForLog } from "../ws-log.js";
 import { captureLocalStateMutationGuard } from "./local-state-owner.js";
-import { respondUnavailable, respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailable, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -131,7 +131,7 @@ function publicAccount(account: PairingAccount) {
     channelLabel: account.plugin.meta.label,
     accountId: account.accountId,
     ...(account.accountLabel ? { accountLabel: account.accountLabel } : {}),
-    notifySupported: Boolean(account.pairing.notifyApproval),
+    notifySupported: Boolean(account.pairing.notifyApproval || account.plugin.outbound?.sendText),
   };
 }
 
@@ -161,19 +161,16 @@ function publicRequest(params: {
 }
 
 function invalidPairingRequest(respond: RespondFn, message: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+  respondError(respond, ErrorCodes.INVALID_REQUEST, message);
 }
 
 function respondPairingFailure(respond: RespondFn, error: unknown): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      error instanceof InvalidPairingTargetError
-        ? ErrorCodes.INVALID_REQUEST
-        : ErrorCodes.UNAVAILABLE,
-      formatForLog(error),
-    ),
+  respondError(
+    respond,
+    error instanceof InvalidPairingTargetError
+      ? ErrorCodes.INVALID_REQUEST
+      : ErrorCodes.UNAVAILABLE,
+    formatForLog(error),
   );
 }
 
@@ -316,27 +313,23 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
           }
         }
 
-        let notification: "not-requested" | "sent" | "unsupported" | "failed" = "not-requested";
+        let notification: ChannelsPairingApproveResult["notification"] = "not-requested";
         if (params.notify === true) {
-          if (!account.pairing.notifyApproval) {
-            notification = "unsupported";
-          } else {
-            try {
-              await notifyPairingApproved({
-                channelId: account.plugin.id,
-                accountId: account.accountId,
-                id: approved.id,
-                cfg,
-                pairingAdapter: account.pairing,
-                ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
-              });
-              notification = "sent";
-            } catch (error) {
-              context.logGateway.warn(
-                `DM pairing approval notification failed channel=${account.plugin.id} account=${account.accountId}: ${formatForLog(error)}`,
-              );
-              notification = "failed";
-            }
+          try {
+            notification = await notifyPairingApproved({
+              channelId: account.plugin.id,
+              accountId: account.accountId,
+              id: approved.id,
+              cfg,
+              pairingAdapter: account.pairing,
+              gatewayOwnedDelivery: true,
+              ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
+            });
+          } catch (error) {
+            context.logGateway.warn(
+              `DM pairing approval notification failed channel=${account.plugin.id} account=${account.accountId}: ${formatForLog(error)}`,
+            );
+            notification = "failed";
           }
         }
 

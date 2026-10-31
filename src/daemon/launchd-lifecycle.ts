@@ -1,9 +1,9 @@
-/** LaunchAgent bootstrap recovery plus start and restart lifecycle controls. */
 import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { parseLaunchctlJob } from "./launchctl-job.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -16,7 +16,6 @@ import {
   bootstrapLaunchAgentOrThrow,
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
-  parseLaunchctlJob,
   probeLaunchAgentState,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
@@ -65,25 +64,11 @@ function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
   return pid;
 }
 
-type LaunchAgentBootstrapRepairResult =
-  | { ok: true; status: "repaired" | "already-loaded" }
-  | {
-      ok: false;
-      status: "bootstrap-failed" | "kickstart-failed";
-      detail?: string;
-    }
-  | {
-      ok: false;
-      status: "system-launchdaemon-conflict" | "system-launchdaemon-unverifiable";
-      detail: string;
-    }
-  | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
-
 export async function repairLaunchAgentBootstrap(args: {
   deadline?: GatewayServiceControlArgs["deadline"];
   env?: Record<string, string | undefined>;
   warn?: (message: string) => void;
-}): Promise<LaunchAgentBootstrapRepairResult> {
+}) {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
@@ -96,11 +81,11 @@ export async function repairLaunchAgentBootstrap(args: {
       throw error;
     }
     return {
-      ok: false,
+      ok: false as const,
       status:
         error.ownership.status === "unverifiable"
-          ? "system-launchdaemon-unverifiable"
-          : "system-launchdaemon-conflict",
+          ? ("system-launchdaemon-unverifiable" as const)
+          : ("system-launchdaemon-conflict" as const),
       detail: error.message,
     };
   }
@@ -117,7 +102,7 @@ export async function repairLaunchAgentBootstrap(args: {
       deadline: args.deadline,
     });
     if (bootstrap === "bootstrapped") {
-      return { ok: true, status: "repaired" };
+      return { ok: true as const, status: "repaired" as const };
     }
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
@@ -139,7 +124,7 @@ export async function repairLaunchAgentBootstrap(args: {
     }
     const detail = (boot.stderr || boot.stdout).trim();
     if (isUnsupportedGuiDomain(detail)) {
-      return { ok: false, status: "gui-session-unavailable", detail, domain };
+      return { ok: false as const, status: "gui-session-unavailable" as const, detail, domain };
     }
     if (
       boot.termination !== "exit" ||
@@ -150,7 +135,11 @@ export async function repairLaunchAgentBootstrap(args: {
         stdout: boot.stdout,
       })
     ) {
-      return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
+      return {
+        ok: false as const,
+        status: "bootstrap-failed" as const,
+        detail: detail || undefined,
+      };
     }
   }
 
@@ -158,18 +147,18 @@ export async function repairLaunchAgentBootstrap(args: {
   // kickstarting a healthy running service causes unnecessary session disconnects.
   const runtime = await readLaunchAgentRuntime(env, { timeoutMs: args.deadline?.remainingMs() });
   if (runtime.status === "running") {
-    return { ok: true, status: "already-loaded" };
+    return { ok: true as const, status: "already-loaded" as const };
   }
 
   const kick = await execLaunchctl(["kickstart", serviceTarget], args.deadline);
   if (kick.code !== 0) {
     return {
-      ok: false,
-      status: "kickstart-failed",
+      ok: false as const,
+      status: "kickstart-failed" as const,
       detail: (kick.stderr || kick.stdout).trim() || undefined,
     };
   }
-  return { ok: true, status: "already-loaded" };
+  return { ok: true as const, status: "already-loaded" as const };
 }
 type LaunchAgentRestoreResult = { loaded: true } | { loaded: false; detail: string };
 
@@ -434,6 +423,9 @@ export async function restartLaunchAgent(
     });
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.error}`);
+    }
+    if (!(await handoff.value)) {
+      throw new Error("launchd restart handoff failed: helper failed to spawn");
     }
     reportMutation(plistReloadNeeded ? "handoff-reload" : "handoff-kickstart");
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);

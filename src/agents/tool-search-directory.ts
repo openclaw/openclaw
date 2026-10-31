@@ -7,6 +7,7 @@ import {
   collectUniqueCatalogToolNames,
   isDirectVisibleCatalogTool,
   resolveCatalog,
+  toolSchemaDirectoryPromptCache,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
@@ -23,9 +24,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
-// Catalog entry arrays are immutable snapshots. Keying their rendered directory by
-// array identity preserves prompt-prefix bytes without retaining retired catalogs.
-const toolSchemaDirectoryPromptCache = new WeakMap<ToolSearchCatalogEntry[], Map<string, string>>();
 
 export function applyToolSchemaDirectoryCatalog(params: {
   tools: AnyAgentTool[];
@@ -47,6 +45,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
+    selection: config,
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
     // The unique-name gate defers any cross-source name collision before the
     // shared trust check runs.
@@ -113,11 +112,21 @@ export function resolveToolSearchCatalogTool(
     return undefined;
   }
   const matches = visibleCatalogEntries(catalog, options).filter((entry) => entry.name === needle);
-  return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
+  return matches.length === 1 && !matches[0]?.requiresExactId
+    ? (matches[0]?.tool as AnyAgentTool | undefined)
+    : undefined;
 }
 
 function compactDirectoryDescription(description: string, maxChars: number): string {
-  const normalized = description.replace(/\s+/g, " ").trim();
+  // Collapsing whitespace only shrinks text, so a normalized raw window longer than the
+  // limit already proves truncation without normalizing the whole description.
+  const window = description.slice(0, maxChars * 4);
+  let normalized = window.replace(/\s+/g, " ").trimStart();
+  if (window.length === description.length) {
+    normalized = normalized.trimEnd();
+  } else if (normalized.length <= maxChars + 1) {
+    normalized = description.replace(/\s+/g, " ").trim();
+  }
   if (normalized.length <= maxChars) {
     return normalized;
   }
@@ -129,10 +138,9 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
   return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
 }
 
-function formatToolDirectoryEntry(
-  entry: ToolSearchCatalogEntry,
-  descriptionMaxChars: number,
-): string | undefined {
+type ToolDirectoryRow = { label: string; description: string };
+
+function prepareToolDirectoryRow(entry: ToolSearchCatalogEntry): ToolDirectoryRow | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -141,12 +149,18 @@ function formatToolDirectoryEntry(
     return undefined;
   }
   const ownerName = formatToolDirectoryIdentifier(entry.sourceName);
-  const owner = ownerName ? ` (${ownerName})` : "";
+  return {
+    label: `- ${name}${ownerName ? ` (${ownerName})` : ""}`,
+    description: entry.description,
+  };
+}
+
+function formatToolDirectoryRow(row: ToolDirectoryRow, descriptionMaxChars: number): string {
   if (descriptionMaxChars === 0) {
-    return `- ${name}${owner}`;
+    return row.label;
   }
-  const description = compactDirectoryDescription(entry.description, descriptionMaxChars);
-  return `- ${name}${owner}: ${description || "No description."}`;
+  const description = compactDirectoryDescription(row.description, descriptionMaxChars);
+  return `${row.label}: ${description || "No description."}`;
 }
 
 function formatToolSearchCatalogDirectory(
@@ -165,24 +179,25 @@ function formatToolSearchCatalogDirectory(
   }
   // Count collisions before excluding native tools: their lookalikes remain ambiguous.
   const listedEntries = deferredEntries
-    .filter((entry) => nameCounts.get(entry.name) === 1)
+    .filter((entry) => !entry.requiresExactId && nameCounts.get(entry.name) === 1)
     .toSorted(
       (left, right) =>
         (left.name < right.name ? -1 : left.name > right.name ? 1 : 0) ||
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     );
+  const rows = listedEntries
+    .map(prepareToolDirectoryRow)
+    .filter((row): row is ToolDirectoryRow => row !== undefined);
   let descriptionMaxChars = initialDescriptionMaxChars;
-  const renderRows = () =>
-    listedEntries
-      .map((entry) => formatToolDirectoryEntry(entry, descriptionMaxChars))
-      .filter((line): line is string => Boolean(line));
+  const renderRows = () => rows.map((row) => formatToolDirectoryRow(row, descriptionMaxChars));
   let lines = renderRows();
   const heading = "Available deferred-schema tools:";
   const notice = "Policy-approved MCP and client tools may also be discoverable through search.";
   const omittedLabel = " additional tools omitted. ";
   // Each line includes its newline; three fixed separators remain outside the rows.
   let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
-  let omitted = deferredEntries.length - lines.length;
+  let omitted =
+    deferredEntries.filter((entry) => entry.source === "openclaw").length - lines.length;
   let guidance: string;
   for (;;) {
     guidance =

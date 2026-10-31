@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { registerListener } from "../shared/listeners.js";
 import { getPluginHttpRouteCanonicalPath } from "./http-path.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
@@ -27,19 +26,13 @@ const entryViews = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginHttpRouteEntryOwners"),
   () => new WeakMap<PluginHttpRouteRegistration, { owner: RouteOwner; views: RouteViews }>(),
 );
-const routeChangeListeners = resolveGlobalSingleton(
+export const pluginHttpRouteChanges = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginHttpRouteChangeListeners"),
-  () => new Set<() => void>(),
+  (): { onChange?: () => void } => ({}),
 );
 
-export function onPluginHttpRoutesChanged(listener: () => void): () => void {
-  return registerListener(routeChangeListeners, listener);
-}
-
 export function notifyPluginHttpRoutesChanged(): void {
-  for (const listener of routeChangeListeners) {
-    listener();
-  }
+  pluginHttpRouteChanges.onChange?.();
 }
 
 export function respondPluginHttpRouteHandoff(_req: IncomingMessage, res: ServerResponse): true {

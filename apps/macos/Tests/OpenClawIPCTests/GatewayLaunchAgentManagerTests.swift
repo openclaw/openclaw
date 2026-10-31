@@ -68,7 +68,8 @@ struct GatewayLaunchAgentManagerTests {
                     : #"{"definition":null,"revision":"observed-pin"}"#
                 let restoration = restoring == nil ? [] : [
                     "--restore-service-cli",
-                    #"{"entrypoint":"/fixture/old package/openclaw.mjs","executable":"/fixture/node","sqliteLibrary":null}"#,
+                    #"{"entrypoint":"/fixture/old package/openclaw.mjs","# +
+                        #""executable":"/fixture/node","sqliteLibrary":null}"#,
                 ]
                 #expect(calls == [
                     ["status", "--runtime-intent-only", "--json"],
@@ -342,6 +343,28 @@ struct GatewayLaunchAgentManagerTests {
             #expect(kickstartError == nil)
             #expect(FileManager().fileExists(atPath: marker.path))
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `disable delegates missing plist recovery to the daemon owner`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("disabled"))
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
+            #expect(!FileManager.default.fileExists(atPath: plist.path))
+
+            let error = await GatewayLaunchAgentManager.set(enabled: false, port: 18789)
+
+            #expect(error == nil)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [["uninstall"]])
         }
     }
 

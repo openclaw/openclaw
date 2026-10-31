@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import {
@@ -13,6 +12,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { isSessionRunActiveForKey } from "../sessions/session-controller.queries.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -27,6 +28,7 @@ import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import * as deletion from "./server-methods/sessions-delete.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const config = { agents: { entries: { main: {} } } };
@@ -39,26 +41,44 @@ afterEach(() => {
 });
 
 function observeSessionDeletion() {
-  const settled = createDeferredCore();
-  const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
-    try {
-      return await originalDelete(params);
-    } finally {
-      settled.resolve();
-    }
+  const settled = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
+  const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation((params) => {
+    const operation = originalDelete(params);
+    void operation.then(settled.resolve, settled.reject);
+    return operation;
   });
   return { deletes, deleted: settled.promise };
 }
 
+async function startLifetime(
+  time: ReturnType<typeof createGatewaySchedulerClock>,
+  context = createDirectChatContext({
+    getRuntimeConfig: () => config,
+    getSessionEventSubscriberConnIds: () => new Set(["observer"]),
+  }),
+  logWarning = vi.fn<(message: string) => void>(),
+) {
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const owner = createGatewaySidecarStopOwner();
+  await attachInitialGatewayLifetimeSidecars({
+    scheduler,
+    chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+    gatewayRequestContext: context,
+    flushPendingSessionsChangedEvents,
+    minimalTestGateway: true,
+    logWarning,
+    publishSidecars: owner.publish,
+  });
+  return { owner, context, logWarning, time, scheduler };
+}
+
 async function withLifetime(
-  run: (fixture: {
-    owner: ReturnType<typeof createGatewaySidecarStopOwner>;
-    context: ReturnType<typeof createDirectChatContext>;
-    logWarning: ReturnType<typeof vi.fn<(message: string) => void>>;
-    scope: { agentId: string; sessionKey: string; sessionId: string; storePath: string };
-    stateDir: string;
-    time: ReturnType<typeof createGatewaySchedulerClock>;
-  }) => Promise<void>,
+  run: (
+    fixture: Awaited<ReturnType<typeof startLifetime>> & {
+      scope: { agentId: string; sessionKey: string; sessionId: string; storePath: string };
+      stateDir: string;
+    },
+  ) => Promise<void>,
   creationStamp: "provided" | "omitted" = "provided",
 ) {
   await withOpenClawTestState({ label: "incognito-lifetime" }, async (state) => {
@@ -68,26 +88,11 @@ async function withLifetime(
     openOpenClawStateDatabase();
     const time = createGatewaySchedulerClock(Date.now());
     vi.spyOn(Date, "now").mockImplementation(time.clock.now);
-    const scheduler = createTestGatewayScheduler(time.clock);
     await upsertSessionEntryCore(ordinary, {
       sessionId: "ordinary",
       updatedAt: Date.now() - DAY_MS,
     });
-    const owner = createGatewaySidecarStopOwner();
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => config,
-      getSessionEventSubscriberConnIds: () => new Set(["observer"]),
-    });
-    const logWarning = vi.fn<(message: string) => void>();
-    await attachInitialGatewayLifetimeSidecars({
-      scheduler,
-      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
-      gatewayRequestContext: context,
-      flushPendingSessionsChangedEvents,
-      minimalTestGateway: true,
-      logWarning,
-      publishSidecars: owner.publish,
-    });
+    const lifetime = await startLifetime(time);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:dashboard:incognito-lifetime",
@@ -101,22 +106,17 @@ async function withLifetime(
         updatedAt: Date.now(),
         incognito: true,
       });
-      await run({ owner, context, logWarning, scope, stateDir: state.stateDir, time });
+      await run({ ...lifetime, scope, stateDir: state.stateDir });
     } finally {
-      await owner.stop();
-      await scheduler.stop();
+      await lifetime.owner.stop();
+      await lifetime.scheduler.stop();
     }
   });
 }
 
 it("expires Incognito at creation plus 24 hours, cancels work, and deletes without an archive", async () => {
   await withLifetime(async ({ context, logWarning, scope, time }) => {
-    const deleted = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
-    const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation((params) => {
-      const operation = originalDelete(params);
-      void operation.then(deleted.resolve, deleted.reject);
-      return operation;
-    });
+    const { deletes, deleted } = observeSessionDeletion();
     await appendTranscriptMessage(scope, {
       eventId: "private-input",
       message: { role: "user", content: "Ephemeral conversation", timestamp: Date.now() },
@@ -130,17 +130,23 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
     });
     await time.advanceBy(60 * 60_000 - 1);
     expect(loadSessionEntryReadOnly(scope)).toBeDefined();
-    const active = replyRunRegistry.begin({ ...scope, resetTriggered: false });
+    const source = createRpcSourceForTest({}, { ...scope, storeScope: scope.storePath });
+    const release = await claimRpcSourceForTest(source);
+    const active = source.input.claim?.operation;
+    if (!active) {
+      throw new Error("Expected the controller to own the Incognito turn");
+    }
+    active.abortSignal.addEventListener("abort", release, { once: true });
     try {
       await time.advanceBy(1);
-      const result = await deleted.promise;
+      const result = await deleted;
       expect(result, JSON.stringify(result)).toMatchObject({
         ok: true,
         result: { deleted: true, archived: [] },
       });
       expect(deletes).toHaveBeenCalledOnce();
       expect(active.abortSignal.aborted).toBe(true);
-      expect(replyRunRegistry.isActive(scope.sessionKey)).toBe(false);
+      expect(isSessionRunActiveForKey(scope.sessionKey)).toBe(false);
       await flushPendingSessionsChangedEvents(context);
       expect(logWarning).not.toHaveBeenCalled();
       expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
@@ -154,7 +160,7 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
         expect.any(Object),
       );
     } finally {
-      active.complete();
+      release();
     }
   });
 });
@@ -197,23 +203,13 @@ it("inherits the original deadline when a sibling outlives the creator", async (
     const createdAt = Date.now();
     expect(loadSessionEntryReadOnly(scope)?.createdAt).toBe(createdAt);
     expect(loadSessionEntryReadOnly(ordinary)?.createdAt).toBeUndefined();
-    const sibling = createGatewaySidecarStopOwner();
     const context = createDirectChatContext({ getRuntimeConfig: () => config });
     const { deletes, deleted } = observeSessionDeletion();
     await time.advanceBy(DAY_MS - 1);
     await patchSessionEntryCore(scope, () => ({ createdAt: Date.now(), updatedAt: Date.now() }));
     expect(loadSessionEntryReadOnly(scope)?.createdAt).toBe(createdAt);
     const siblingTime = createGatewaySchedulerClock(time.clock.now());
-    const siblingScheduler = createTestGatewayScheduler(siblingTime.clock);
-    await attachInitialGatewayLifetimeSidecars({
-      scheduler: siblingScheduler,
-      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
-      gatewayRequestContext: context,
-      flushPendingSessionsChangedEvents,
-      minimalTestGateway: true,
-      logWarning,
-      publishSidecars: sibling.publish,
-    });
+    const sibling = await startLifetime(siblingTime, context, logWarning);
     try {
       await owner.stop();
       expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(scope.sessionId);
@@ -224,8 +220,8 @@ it("inherits the original deadline when a sibling outlives the creator", async (
       expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
       expect(logWarning).not.toHaveBeenCalled();
     } finally {
-      await sibling.stop();
-      await siblingScheduler.stop();
+      await sibling.owner.stop();
+      await sibling.scheduler.stop();
     }
   }, "omitted");
 });
@@ -234,17 +230,10 @@ it("refuses work while session cleanup retries", async () => {
   await withLifetime(async ({ scope, context, logWarning, time }) => {
     const retrying = createDeferredCore();
     logWarning.mockImplementation(() => retrying.resolve());
-    const deleted = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
-    const deletes = vi
-      .spyOn(deletion, "deleteGatewaySession")
-      .mockImplementationOnce(async () => {
-        return { ok: false, error: { code: "UNAVAILABLE", message: "Cleanup still draining" } };
-      })
-      .mockImplementation((params) => {
-        const operation = originalDelete(params);
-        void operation.then(deleted.resolve, deleted.reject);
-        return operation;
-      });
+    const { deletes, deleted } = observeSessionDeletion();
+    deletes.mockImplementationOnce(async () => {
+      return { ok: false, error: { code: "UNAVAILABLE", message: "Cleanup still draining" } };
+    });
     await time.advanceBy(DAY_MS);
     await retrying.promise;
     expect(logWarning).toHaveBeenCalledOnce();
@@ -274,9 +263,9 @@ it("refuses work while session cleanup retries", async () => {
       }),
     );
     expect(await loadTranscriptEvents(scope)).toEqual([]);
-    expect(context.chatAbortControllers.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
     await time.advanceBy(60_000);
-    await expect(deleted.promise).resolves.toMatchObject({ ok: true, result: { deleted: true } });
+    await expect(deleted).resolves.toMatchObject({ ok: true, result: { deleted: true } });
     expect(deletes).toHaveBeenCalledTimes(2);
     expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
   });

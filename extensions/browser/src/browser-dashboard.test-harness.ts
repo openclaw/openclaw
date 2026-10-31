@@ -53,6 +53,9 @@ export function useBrowserDashboardTestHarness(
         async withSessionFacts() {
           throw new Error("Unexpected selected session facts request");
         },
+        async appendAgentMessage() {
+          throw new Error("Unexpected agent message");
+        },
         async openPluginPanel() {
           throw new Error("Unexpected plugin panel request");
         },

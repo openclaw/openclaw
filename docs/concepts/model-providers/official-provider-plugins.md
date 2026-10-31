@@ -130,7 +130,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.7-code`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
@@ -196,6 +196,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 | Provider                                | Id                               | Auth env                                       | Example model                                              |
 | --------------------------------------- | -------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| [Abliteration](/providers/abliteration) | `abliteration`                   | `ABLITERATION_API_KEY` or `ABLIT_KEY`          | `abliteration/abliterated-model-large-flash`               |
 | [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                             |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                            |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/gpt-oss-120b`                                    |
@@ -217,6 +218,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                               | `ollama-cloud/kimi-k2.6`                                   |
 | OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`       | `openrouter/auto`                                          |
 | Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                              | `qianfan/deepseek-v3.2`                                    |
+| [Requesty](/providers/requesty)         | `requesty`                       | `REQUESTY_API_KEY`                             | `requesty/claude-sonnet-5-5`                               |
 | Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                             | `tencent-tokenhub/hy3-preview`                             |
 | Together                                | `together`                       | `TOGETHER_API_KEY`                             | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
 | Venice                                  | `venice`                         | `VENICE_API_KEY`                               | -                                                          |

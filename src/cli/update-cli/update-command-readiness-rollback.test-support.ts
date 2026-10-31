@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expect, vi, type Mock } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import * as serviceOwner from "../../daemon/service.js";
 import {
   createMockGatewayService,
@@ -20,32 +20,24 @@ import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import * as serviceExports from "./update-command-service.js";
+import type { verifyUpdatedGateway } from "./update-command-verification.js";
+
+type Restart = typeof serviceExports.maybeRestartService;
 
 export async function createReadinessRollbackFixture(params: {
   packageRoot: string;
   launcher: string;
-  env: NodeJS.ProcessEnv & {
-    HOME: string;
-    USERPROFILE: string;
-    OPENCLAW_STATE_DIR: string;
-    OPENCLAW_CONFIG_PATH: string;
-  };
+  env: NodeJS.ProcessEnv &
+    Record<"HOME" | "USERPROFILE" | "OPENCLAW_STATE_DIR" | "OPENCLAW_CONFIG_PATH", string>;
   harness: {
     gatewayCommand: Mock<
       typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
     >;
-    restartCandidate: {
-      mockImplementationOnce: (
-        implementation: typeof serviceExports.maybeRestartService,
-      ) => unknown;
-    };
-    verifyGateway: {
-      mockImplementation: (
-        implementation: typeof import("./update-command-verification.js").verifyUpdatedGateway,
-      ) => unknown;
-    };
+    restartCandidate: { mockImplementationOnce: (implementation: Restart) => unknown };
+    verifyGateway: { mockImplementation: (implementation: typeof verifyUpdatedGateway) => unknown };
   };
 }) {
+  const { packageRoot, launcher, env, harness } = params;
   const entered = createDeferred();
   const released = createDeferred();
   let nowMs = 0;
@@ -62,7 +54,7 @@ export async function createReadinessRollbackFixture(params: {
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_CONFIG_PATH",
   ]) {
-    vi.stubEnv(key, params.env[key]);
+    vi.stubEnv(key, env[key]);
   }
   mockSystemAccountHome();
   vi.spyOn(performance, "now").mockImplementation(() => nowMs);
@@ -70,29 +62,25 @@ export async function createReadinessRollbackFixture(params: {
     signal?.throwIfAborted();
     nowMs += ms;
   });
-  const server = createServer((_req, res) => {
-    res.writeHead(servingVersion === "1.0.0" ? 200 : 503).end();
-  });
+  const server = createServer((_req, res) =>
+    res.writeHead(servingVersion === "1.0.0" ? 200 : 503).end(),
+  );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Missing recovery HTTP listener");
   }
+  const { HOME, USERPROFILE, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH } = env;
   const command = {
     programArguments: [
       process.execPath,
-      path.join(params.packageRoot, "dist", "index.js"),
+      path.join(packageRoot, "dist", "index.js"),
       "gateway",
       "--port",
       String(address.port),
     ],
-    environment: {
-      HOME: params.env.HOME,
-      USERPROFILE: params.env.USERPROFILE,
-      OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR,
-      OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH,
-    },
+    environment: { HOME, USERPROFILE, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH },
   };
   const service = createMockGatewayService({
     isLoaded: async () => true,
@@ -112,7 +100,7 @@ export async function createReadinessRollbackFixture(params: {
     installed: true,
     running: servingVersion !== undefined,
     loadState: { status: "loaded" },
-    env: params.env,
+    env,
     command,
   }));
   vi.spyOn(restartProbe, "resolveGatewayRestartProbeContext").mockResolvedValue({
@@ -133,9 +121,9 @@ export async function createReadinessRollbackFixture(params: {
       server: { version: servingVersion, bootId: "restored-gateway" },
     })(options);
   });
-  params.harness.gatewayCommand.mockImplementation(async (_activation, action) => {
+  harness.gatewayCommand.mockImplementation(async (_activation, action) => {
     expect(action).toBe("restart");
-    const installed = await readPackageVersion(params.packageRoot);
+    const installed = await readPackageVersion(packageRoot);
     if (!installed) {
       throw new Error("Gateway activation requires an installed package");
     }
@@ -145,7 +133,7 @@ export async function createReadinessRollbackFixture(params: {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     } else {
       expect(installed).toBe("1.0.0");
-      expect(await fs.readFile(params.launcher, "utf8")).toBe("old launcher\n");
+      expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
       servingVersion = installed;
     }
     return "accepted";
@@ -154,12 +142,12 @@ export async function createReadinessRollbackFixture(params: {
   vi.spyOn(serviceExports, "resolveUpdatedGatewayRestartPort").mockImplementation(
     actualService.resolveUpdatedGatewayRestartPort,
   );
-  params.harness.restartCandidate.mockImplementationOnce(actualService.maybeRestartService);
-  params.harness.restartCandidate.mockImplementationOnce(actualService.maybeRestartService);
+  harness.restartCandidate.mockImplementationOnce(actualService.maybeRestartService);
+  harness.restartCandidate.mockImplementationOnce(actualService.maybeRestartService);
   const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
     "./update-command-verification.js",
   );
-  params.harness.verifyGateway.mockImplementation(async (options) => {
+  harness.verifyGateway.mockImplementation(async (options) => {
     const candidate = activations.length === 1;
     try {
       return await verification.verifyUpdatedGateway(options);
@@ -175,24 +163,18 @@ export async function createReadinessRollbackFixture(params: {
       finishing: Promise<UpdateRunResult>,
       run: NonNullable<UpdateCommandOptions["run"]>,
     ) => {
-      const settled = finishing.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const settled = finishing.catch(() => undefined);
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          settled.then((outcome) => {
-            throw new Error("Finalization settled before the candidate readiness read", {
-              cause: "error" in outcome ? outcome.error : outcome.value,
-            });
-          }),
-        ]);
+          settled,
+          "Finalization settled before the candidate readiness read",
+        );
         nowMs = 6_500;
         await vi.advanceTimersByTimeAsync(6_500);
         expect(candidateSettled).toBe(true);
         vi.useRealTimers();
-        const outcome = await settled;
+        await settled;
         expect(activations).toEqual(["9999.1.1", "1.0.0"]);
         const recorded = getUpdateRun(run.runId, { env: run.env });
         expect(recorded?.status).toBe("rolled-back");
@@ -201,11 +183,8 @@ export async function createReadinessRollbackFixture(params: {
         await setImmediate();
         expect([rpc.mock.calls.length, portProbe.mock.calls.length]).toEqual(calls);
         expect(getUpdateRun(run.runId, { env: run.env })).toEqual(recorded);
-        expect(await readPackageVersion(params.packageRoot)).toBe("1.0.0");
-        if ("error" in outcome) {
-          throw outcome.error;
-        }
-        return outcome.value;
+        expect(await readPackageVersion(packageRoot)).toBe("1.0.0");
+        return await finishing;
       } finally {
         vi.useRealTimers();
         released.resolve();

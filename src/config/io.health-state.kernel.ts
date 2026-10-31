@@ -1,7 +1,13 @@
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
@@ -13,6 +19,21 @@ import type {
 } from "./io.health-state.types.js";
 
 type ConfigHealthDatabase = Pick<DB, "config_health_entries">;
+const healthReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "config.health",
+  read: (value) => (isRecord(value) ? value : undefined),
+  // Boot's private snapshot readers close between observations of the live owner.
+  lifetime: "process",
+};
+
+export function readConfigHealthReceipt(databasePath: string): object | undefined {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, healthReceipt, () => ({}));
+}
+
+export function publishConfigHealthChanged(db: EngineConnection): void {
+  publishSqliteDatabaseAdmission(db, healthReceipt, {});
+}
+
 type ConfigHealthWriteRow = Insertable<ConfigHealthDatabase["config_health_entries"]>;
 export type ConfigHealthPatch = Partial<
   Pick<
@@ -115,7 +136,7 @@ export function patchConfigHealthEntryInDatabase(
     return false;
   }
   const sql = getNodeSqliteKysely<ConfigHealthDatabase>(db);
-  // SQLite IS compares nulls as values, preserving the exact persisted read basis.
+  // Compare nulls explicitly while preserving the exact persisted text on either engine.
   const query =
     expected === null
       ? sql
@@ -133,11 +154,27 @@ export function patchConfigHealthEntryInDatabase(
           .updateTable("config_health_entries")
           .set({ ...patch, updated_at_ms: updatedAtMs })
           .where("config_path", "=", configPath)
-          .where("last_known_good_json", "is", expected.lastKnownGoodJson)
-          .where("last_promoted_good_json", "is", expected.lastPromotedGoodJson)
-          .where("last_observed_suspicious_signature", "is", expected.suspiciousSignature)
+          .where(
+            "last_known_good_json",
+            expected.lastKnownGoodJson === null ? "is" : "=",
+            expected.lastKnownGoodJson,
+          )
+          .where(
+            "last_promoted_good_json",
+            expected.lastPromotedGoodJson === null ? "is" : "=",
+            expected.lastPromotedGoodJson,
+          )
+          .where(
+            "last_observed_suspicious_signature",
+            expected.suspiciousSignature === null ? "is" : "=",
+            expected.suspiciousSignature,
+          )
           .where("updated_at_ms", "=", expected.updatedAtMs);
-  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+  const applied = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+  if (applied) {
+    publishConfigHealthChanged(db);
+  }
+  return applied;
 }
 
 /** The caller owns the transaction; omitted fields and sibling paths remain unchanged. */
@@ -166,4 +203,5 @@ export function writeConfigHealthPatchInDatabase(
         }),
       ),
   );
+  publishConfigHealthChanged(db);
 }

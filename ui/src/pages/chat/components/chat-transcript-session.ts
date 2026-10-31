@@ -7,12 +7,15 @@ import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
-import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import type {
+  ComposerActivityLayout,
+  TranscriptLayoutOwner,
+} from "./chat-transcript-layout-owner.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
+import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
@@ -26,6 +29,8 @@ export type ChatTranscriptPendingScrollOffset = {
 export type TranscriptCallbacks = {
   /** Sidebar commits originate on the pane element, separate from its state owner. */
   geometryEventTarget?: HTMLElement;
+  getComposerFloat?: () => HTMLElement | null;
+  getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
@@ -42,14 +47,16 @@ export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 export const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
 
 export type TranscriptHeader = {
-  props: ChatHistoryBoundaryProps;
+  content: JSX.Element;
   /** Fixed pixel height; becomes the virtualizer's scrollMargin so row offsets stay exact. */
   height: number;
 };
 
 export type ChatTranscriptSession = {
-  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
+  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending" | "configureRows" | "ready">;
   readonly entryAnimations: ChatMessageEntryAnimations;
+  readonly messageElements: TranscriptMessageElements;
+  readonly contentElement: HTMLDivElement | null;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
   readonly scrollElementRef: (element?: Element) => void;
@@ -70,7 +77,6 @@ export type ChatTranscriptSession = {
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
-  setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
 };
@@ -94,10 +100,11 @@ export type TranscriptRenderSnapshot<T> = {
 export function createTranscriptPresentation(
   scrollElement: () => HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
 ) {
   const readConnectedRows = (): (() => boolean) | null => {
-    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer);
+    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
     return apply
       ? () => {
           beforeMeasure();
@@ -108,6 +115,15 @@ export function createTranscriptPresentation(
 
   const presentation = {
     measureRows: () => readConnectedRows()?.() ?? false,
+    measureRowsWithoutScrollAdjustment() {
+      const adjustScroll = virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
+      virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+      try {
+        return presentation.measureRows();
+      } finally {
+        virtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjustScroll;
+      }
+    },
     queueRowMeasure() {
       const element = scrollElement();
       scheduleLayout(presentation, () =>

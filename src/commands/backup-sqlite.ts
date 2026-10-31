@@ -1,13 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import {
-  captureRuntimeConfigAsyncReader,
-  readConfigFileSnapshot,
-  resolveStateDir,
-} from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resolveStateDir } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
@@ -45,7 +41,6 @@ export async function backupSqliteCreateCommand(
     assertNotUpdateCapturePath(globalPath, resolveStateDir());
   }
   const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
-  assertHomogeneousDatabaseEngines(config, "backup");
   try {
     const database = await resolveSnapshotDatabase(options, config, globalPath);
     let postgres = false;
@@ -78,9 +73,9 @@ export async function backupSqliteCreateCommand(
     } else {
       runtime.log(
         [
-          `SQLite snapshot created: ${shortenHomePath(report.snapshotPath)}`,
-          `Database: ${formatDatabaseIdentity(report.manifest.database)}`,
-          `Size: ${report.manifest.artifact.sizeBytes} bytes`,
+          terminalText`SQLite snapshot created: ${shortenHomePath(report.snapshotPath)}`,
+          terminalText`Database: ${formatDatabaseIdentity(report.manifest.database)}`,
+          terminalText`Size: ${report.manifest.artifact.sizeBytes} bytes`,
         ].join("\n"),
       );
     }
@@ -113,13 +108,13 @@ export async function backupSqliteListCommand(
   if (options.json) {
     writeRuntimeJson(runtime, report);
   } else if (snapshots.length === 0) {
-    runtime.log(`No SQLite snapshots in ${shortenHomePath(repositoryPath)}.`);
+    runtime.log(terminalText`No SQLite snapshots in ${shortenHomePath(repositoryPath)}.`);
   } else {
     runtime.log(
       snapshots
         .map(
           (snapshot) =>
-            `${snapshot.manifest.createdAt}  ${formatDatabaseIdentity(snapshot.manifest.database)}  ${snapshot.manifest.artifact.sizeBytes} bytes  ${shortenHomePath(snapshot.ref.path)}`,
+            terminalText`${snapshot.manifest.createdAt}  ${formatDatabaseIdentity(snapshot.manifest.database)}  ${snapshot.manifest.artifact.sizeBytes} bytes  ${shortenHomePath(snapshot.ref.path)}`,
         )
         .join("\n"),
     );
@@ -143,7 +138,7 @@ export async function backupSqliteVerifyCommand(
     writeRuntimeJson(runtime, report);
   } else {
     runtime.log(
-      `SQLite snapshot verified: ${shortenHomePath(report.snapshotPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
+      terminalText`SQLite snapshot verified: ${shortenHomePath(report.snapshotPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
     );
   }
   return report;
@@ -156,8 +151,6 @@ export async function backupSqliteRestoreCommand(
 ) {
   const resolved = resolveSnapshot(snapshot);
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
-  const config = await readConfigFileSnapshot({ observe: false });
-  assertHomogeneousDatabaseEngines(config.config, "restore");
   const restored = await resolved.provider.restoreFresh(resolved.ref, targetPath);
   const report = {
     ok: true as const,
@@ -169,7 +162,7 @@ export async function backupSqliteRestoreCommand(
     writeRuntimeJson(runtime, report);
   } else {
     runtime.log(
-      `SQLite snapshot restored: ${shortenHomePath(report.targetPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
+      terminalText`SQLite snapshot restored: ${shortenHomePath(report.targetPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
     );
   }
   return report;

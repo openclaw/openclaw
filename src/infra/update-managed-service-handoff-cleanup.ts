@@ -4,13 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { ignoreMissingPath } from "./errno.js";
 import type { ManagedHandoffRepairFacts } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 
 type DiscoveredRepairFacts = ManagedHandoffRepairFacts & {
   windowsUserSid?: string;
   drivers?: ManagedHandoffLease["helper"][];
+  /** Other lease keys retired with this handoff. */
+  installationRoots?: string[];
 };
 
 /** v1 shipped in 2026.8.2. This proves cleanup eligibility, never v2 authority. */
@@ -80,6 +83,7 @@ export async function inspectManagedHandoffRepairFacts(
   previous: ManagedHandoffLease,
   discovered: DiscoveredRepairFacts,
   retained?: ManagedHandoffRepairFacts,
+  familyExited = false,
 ): Promise<ManagedHandoffRepairFacts> {
   const facts = {
     runIds: [...new Set([...(retained?.runIds ?? []), ...discovered.runIds])],
@@ -87,18 +91,25 @@ export async function inspectManagedHandoffRepairFacts(
     timeoutMs: Math.max(retained?.timeoutMs ?? 0, discovered.timeoutMs ?? 0) || null,
   };
   const grace = Math.max(45 * 60_000, facts.timeoutMs ?? 0);
-  if (Date.now() - previous.updatedAt < grace) {
+  if (!familyExited && Date.now() - previous.updatedAt < grace) {
     throw new Error(
       `Handoff was last recorded at ${new Date(previous.updatedAt).toISOString()}; its recovery grace ends at ${new Date(previous.updatedAt + grace).toISOString()}. Retry openclaw update repair then.`,
     );
   }
   const { inspectOtherOpenClawProcesses } = await import("./openclaw-process-census.js");
+  // Candidate and child roots are this run's own; installation and service roots are shared.
+  const sharedRoots = [...new Set([previous.key, ...(discovered.installationRoots ?? [])])].filter(
+    (key) => !key.includes("/.openclaw-update-child-"),
+  );
   for (const runId of facts.runIds) {
     const census = inspectOtherOpenClawProcesses({
       runId,
       artifactPaths: facts.artifactPaths,
+      sharedRoots,
+      familyDeadline: previous.updatedAt + grace,
       windowsUserSid: discovered.windowsUserSid,
       drivers: [previous.helper, previous.executor, ...(discovered.drivers ?? [])],
+      familyExited,
     });
     const pids = [...new Set([...census.matchingPids, ...census.unverifiedPids])];
     if (pids.length || census.error) {
@@ -125,8 +136,23 @@ export async function readManagedHandoffRepairFacts(
   const runIds = new Set<string>(boundRunId ? [boundRunId] : []);
   const artifactPaths = new Set<string>();
   let timeoutMs = 0;
-  const root = await fs.realpath(os.tmpdir());
-  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+  const roots = new Set([await fs.realpath(os.tmpdir())]);
+  if (process.platform === "darwin") {
+    // A Gateway-started handoff lives under the service TMPDIR, not this CLI's.
+    const { resolveServiceTmpDir } = await import("../daemon/service-tmp-dir.js");
+    const serviceRoot = await fs
+      .realpath(resolveServiceTmpDir(env, "darwin"))
+      .catch(ignoreMissingPath);
+    if (serviceRoot) {
+      roots.add(serviceRoot);
+    }
+  }
+  const entries = await Promise.all(
+    [...roots].map(async (root) =>
+      (await fs.readdir(root, { withFileTypes: true })).map((entry) => ({ root, entry })),
+    ),
+  );
+  for (const { root, entry } of entries.flat()) {
     if (
       !entry.isDirectory() ||
       !entry.name.startsWith(MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX)
@@ -171,11 +197,7 @@ export async function readManagedHandoffRepairFacts(
       }
     }
     const timeouts = [value.recoveryTimeoutMs, value.parentExitTimeoutMs];
-    const argv =
-      Array.isArray(value.commandArgv) &&
-      value.commandArgv.every((arg): arg is string => typeof arg === "string")
-        ? value.commandArgv
-        : [];
+    const argv = isStringArray(value.commandArgv) ? value.commandArgv : [];
     for (const [index, arg] of argv.entries()) {
       const seconds = arg === "--timeout" ? argv[index + 1] : arg.match(/^--timeout=(.*)$/u)?.[1];
       timeouts.push(positiveSecondsToSafeMilliseconds(seconds?.trim()));

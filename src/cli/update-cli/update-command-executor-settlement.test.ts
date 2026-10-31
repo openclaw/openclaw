@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { readSqliteDatabaseAdmissionDeadline } from "../../infra/sqlite-worker-database-admission-relay.js";
 import type {
   createManagedHandoffLeaseStore,
   ManagedHandoffLease,
@@ -11,8 +12,8 @@ import type {
 } from "../../infra/update-managed-service-handoff-lease.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import {
-  CommandProcessCleanupError,
-  hasCommandProcessCleanupError,
+  CommandProcessCleanupError as CleanupError,
+  hasCommandProcessCleanupError as hasCleanupError,
 } from "../../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
@@ -21,13 +22,15 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import {
-  captureUpdateCommandExecutorAuthority,
-  releaseUpdateCommandPreflightForHandoff,
-  withDelegatedUpdateCommandExecutor,
-  withUpdateCommandExecutor,
-  withUpdateCommandExecutorChild,
+  captureUpdateCommandExecutorAuthority as captureAuthority,
+  releaseUpdateCommandPreflightForHandoff as releasePreflight,
+  withDelegatedUpdateCommandExecutor as withDelegatedExecutor,
+  withUpdateCommandExecutor as withExecutor,
+  withUpdateCommandExecutorChild as withChild,
   type UpdateCommandExecutor,
+  registerUpdateCommandTerminalPreparation,
 } from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
@@ -69,11 +72,68 @@ type SettlementStore = Pick<
   | "cancelUpdate"
   | "current"
   | "owns"
+  | "ownsDelegation"
   | "isProcessIdentityCurrent"
+  | "inspectProcessIdentity"
   | "acceptParentBoundExecutor"
 >;
 const rows = new Map<string, ManagedHandoffLease>();
 const readers = new Set<Disposable>();
+const kinds = ["direct", "delegated"] as const;
+const cleanupResults = ["forced", "uncertain"] as const;
+const cleanupCases = kinds.flatMap((kind) =>
+  cleanupResults.map((cleanupResult) => ({ kind, cleanupResult })),
+);
+const fakeTimers = () =>
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
+
+function settlement(cleanupResult: "forced" | "uncertain" = "forced") {
+  const admitted = createDeferredCore();
+  const finish = createDeferredCore();
+  const cleanup = createDeferredCore<"forced" | "uncertain">();
+  let pending: Promise<unknown> | undefined;
+  const track = <T>(work: Promise<T>) => {
+    const tracked = work
+      .catch((error: unknown) => {
+        admitted.reject(error);
+        return error;
+      })
+      .finally(() => {
+        state.ended = true;
+      });
+    pending = tracked;
+    return tracked;
+  };
+  const state = {
+    admitted,
+    finish,
+    cleanup,
+    ended: false,
+    track,
+    run<T>(
+      kind: "direct" | "delegated",
+      operation: (fence: UpdateRecoveryFence) => Promise<T>,
+      timeout?: number,
+    ) {
+      return track(runWithExecutorFence(kind, operation, timeout));
+    },
+    direct<T>(operation: (executor: UpdateCommandExecutor) => Promise<T>) {
+      return track(withExecutor("run", operation));
+    },
+    async check(check: () => void | Promise<void>, child?: () => Promise<unknown> | undefined) {
+      try {
+        await admitted.promise;
+        await setImmediate();
+        await check();
+      } finally {
+        finish.resolve();
+        cleanup.resolve(cleanupResult);
+        await Promise.allSettled([pending, child?.()]);
+      }
+    },
+  };
+  return state;
+}
 function lease(key: string, owner: string, pid = process.pid): ManagedHandoffLease {
   return {
     key,
@@ -143,11 +203,35 @@ beforeEach(() => {
         : null,
     current,
     owns: current,
+    ownsDelegation: (parents, receivers) => parents.every(current) && receivers.every(current),
     isProcessIdentityCurrent: () => true,
+    inspectProcessIdentity: () => "live",
     acceptParentBoundExecutor: current,
   };
   boundaries.store.mockResolvedValue(store);
 });
+
+it.each(["parent", "childKey"])(
+  "rejects malformed delegated %s before opening a store",
+  async (field) => {
+    boundaries.store.mockClear();
+    const operation = vi.fn();
+    const input: Record<string, unknown> = {
+      runId: "run",
+      root,
+      databasePath: boundaries.databasePath,
+      parent: lease(root, "parent", process.ppid),
+      childKey: `${root}/.openclaw-update-child-00000000-0000-0000-0000-000000000000`,
+      [field]: null,
+    };
+
+    await expect(withDelegatedExecutor(input, "run", root, operation)).rejects.toBeInstanceOf(
+      UpdateCommandRecoveryPendingError,
+    );
+    expect(boundaries.store).not.toHaveBeenCalled();
+    expect(operation).not.toHaveBeenCalled();
+  },
+);
 
 function runWithExecutorFence<T>(
   kind: "direct" | "delegated",
@@ -155,7 +239,7 @@ function runWithExecutorFence<T>(
   activationTimeoutMs?: number,
 ): Promise<T> {
   if (kind === "direct") {
-    return withUpdateCommandExecutor("run", async (executor) =>
+    return withExecutor("run", async (executor) =>
       operation(await executor.enter(root, { activationTimeoutMs })),
     );
   }
@@ -163,7 +247,7 @@ function runWithExecutorFence<T>(
   const childKey = `${root}/.openclaw-update-child-00000000-0000-0000-0000-000000000000`;
   rows.set(root, parent);
   rows.set(childKey, { ...lease(childKey, "run"), helper: parent.executor });
-  return withDelegatedUpdateCommandExecutor(
+  return withDelegatedExecutor(
     { runId: "run", root, databasePath: boundaries.databasePath, parent, childKey },
     "run",
     root,
@@ -172,22 +256,16 @@ function runWithExecutorFence<T>(
   );
 }
 
-it.each([
-  { kind: "direct", rejects: false },
-  { kind: "direct", rejects: true },
-  { kind: "delegated", rejects: false },
-  { kind: "delegated", rejects: true },
-] as const)(
+it.each(kinds.flatMap((kind) => [false, true].map((rejects) => ({ kind, rejects }))))(
   "lets the admitted $kind child finish before stopping its operation scope (rejects: $rejects)",
   async ({ kind, rejects }) => {
-    const admitted = createDeferredCore();
-    const finish = createDeferredCore();
+    const state = settlement();
+    const { admitted, finish } = state;
     const original = new Error("operation failed after child admission");
     let signal: AbortSignal | undefined;
     let child: Promise<unknown> | undefined;
-    let ended = false;
-    const work = runWithExecutorFence(kind, async (fence) => {
-      child = withUpdateCommandExecutorChild(fence, root, async (_grant, bind) => {
+    const work = state.run(kind, async (fence) => {
+      child = withChild(fence, root, async (_grant, bind) => {
         bind(process.pid + 1);
         signal = resolveCommandProcessSignal();
         admitted.resolve();
@@ -201,52 +279,32 @@ it.each([
         throw original;
       }
       return "operation finished";
-    })
-      .then(
-        (value) => ({ value }),
-        (error: unknown) => {
-          admitted.reject(error);
-          return { error };
-        },
-      )
-      .finally(() => {
-        ended = true;
-      });
-    try {
-      await admitted.promise;
-      await setImmediate();
-      expect(ended).toBe(false);
-      expect(rows.has(root)).toBe(true);
-      expect(signal?.aborted).toBe(false);
-    } finally {
-      finish.resolve();
-      await Promise.allSettled([work, child]);
-    }
+    });
+    await state.check(
+      () => {
+        expect([state.ended, rows.has(root), signal?.aborted]).toEqual([false, true, false]);
+      },
+      () => child,
+    );
     await expect(child).resolves.toBe("child finished");
-    expect(await work).toEqual(rejects ? { error: original } : { value: "operation finished" });
+    expect(await work).toBe(rejects ? original : "operation finished");
     expect(rows.size).toBe(kind === "direct" ? 0 : 2);
   },
 );
 
-it.each([
-  { kind: "direct", cleanupResult: "forced" },
-  { kind: "direct", cleanupResult: "uncertain" },
-  { kind: "delegated", cleanupResult: "forced" },
-  { kind: "delegated", cleanupResult: "uncertain" },
-] as const)(
+it.each(cleanupCases)(
   "cancels the admitted $kind child at its activation deadline and joins $cleanupResult cleanup",
   async ({ kind, cleanupResult }) => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const admitted = createDeferredCore();
+    fakeTimers();
+    const state = settlement(cleanupResult);
+    const { admitted, cleanup } = state;
     const cancelled = createDeferredCore();
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
     let signal: AbortSignal | undefined;
     let child: Promise<unknown> | undefined;
-    let ended = false;
-    const work = runWithExecutorFence(
+    const work = state.run(
       kind,
       async (fence) => {
-        child = withUpdateCommandExecutorChild(fence, root, async (_grant, bind) => {
+        child = withChild(fence, root, async (_grant, bind) => {
           bind(process.pid + 1);
           signal = resolveCommandProcessSignal();
           retainCommandProcessCleanup(cleanup.promise);
@@ -260,38 +318,27 @@ it.each([
         return "operation finished";
       },
       1000,
-    )
-      .catch((error: unknown) => {
-        admitted.reject(error);
-        return error;
-      })
-      .finally(() => {
-        ended = true;
-      });
-    try {
-      await admitted.promise;
-      await setImmediate();
-      expect(signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(1000);
-      await cancelled.promise;
-      expect(signal?.reason).toBeInstanceOf(UpdateActivationTimeoutError);
-      expect(ended).toBe(false);
-      expect(rows.size).toBe(kind === "direct" ? 2 : 3);
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(ended).toBe(false);
-      expect(rows.size).toBe(kind === "direct" ? 2 : 3);
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await Promise.allSettled([work, child]);
-      await setImmediate();
-    }
+    );
+    await state.check(
+      async () => {
+        expect(signal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1000);
+        await cancelled.promise;
+        expect(signal?.reason).toBeInstanceOf(UpdateActivationTimeoutError);
+        expect([state.ended, rows.size]).toEqual([false, kind === "direct" ? 2 : 3]);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect([state.ended, rows.size]).toEqual([false, kind === "direct" ? 2 : 3]);
+      },
+      () => child,
+    );
+    await setImmediate();
     const error = await work;
     const timeout = collectNestedErrorCandidates(error).find(
       (candidate) => candidate instanceof UpdateActivationTimeoutError,
     );
     expect(timeout).toBe(signal!.reason);
     expect(timeout).toMatchObject({ root, timeoutMs: 1000, reason: "update-activation-timeout" });
-    expect(hasCommandProcessCleanupError(error)).toBe(cleanupResult === "uncertain");
+    expect(hasCleanupError(error)).toBe(cleanupResult === "uncertain");
     if (cleanupResult === "forced") {
       expect(error).toBe(signal!.reason);
     }
@@ -301,163 +348,85 @@ it.each([
   },
 );
 afterEach(() => {
-  try {
-    expect(readers.size).toBe(0);
-  } finally {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    readers.clear();
-  }
+  const retainedReaders = readers.size;
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  readers.clear();
+  expect(retainedReaders).toBe(0);
 });
 
-it.each(["direct", "delegated"] as const)(
-  "delivers a bounded %s timeout while its callback remains pending",
-  async (kind) => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const admitted = createDeferredCore();
-    const finish = createDeferredCore();
-    let signal: AbortSignal | undefined;
-    let ended = false;
-    const work = runWithExecutorFence(
-      kind,
-      async () => {
-        signal = resolveCommandProcessSignal();
-        admitted.resolve();
-        await finish.promise;
-        signal!.throwIfAborted();
-      },
-      1000,
-    )
-      .catch((error: unknown) => {
-        admitted.reject(error);
-        return error;
-      })
-      .finally(() => {
-        ended = true;
-      });
-    try {
-      await admitted.promise;
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(ended).toBe(true);
-      expect(await work).toBe(signal!.reason);
-      expect(await work).toBeInstanceOf(UpdateActivationTimeoutError);
-      expect(rows.size).toBe(kind === "direct" ? 1 : 2);
-    } finally {
-      finish.resolve();
-      await work;
-      await setImmediate();
-    }
-    expect(rows.size).toBe(kind === "direct" ? 0 : 2);
-  },
-);
-
-it.each([
-  { kind: "direct", cleanupResult: "forced" },
-  { kind: "direct", cleanupResult: "uncertain" },
-  { kind: "delegated", cleanupResult: "forced" },
-  { kind: "delegated", cleanupResult: "uncertain" },
-] as const)(
-  "retains $kind authority until command cleanup reports $cleanupResult",
-  async ({ kind, cleanupResult }) => {
-    const admitted = createDeferredCore();
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
-    const original = new Error("operation cancelled");
-    let saved: UpdateCommandExecutor | undefined;
-    let fence: UpdateRecoveryFence | undefined;
-    const operation = async (current: UpdateRecoveryFence) => {
-      fence = current;
-      retainCommandProcessCleanup(cleanup.promise);
+it.each(kinds)("delivers a bounded %s timeout while its callback remains pending", async (kind) => {
+  fakeTimers();
+  const state = settlement();
+  const { admitted, finish } = state;
+  let signal: AbortSignal | undefined;
+  const work = state.run(
+    kind,
+    async () => {
+      signal = resolveCommandProcessSignal();
       admitted.resolve();
-      if (kind === "direct") {
-        throw original;
-      }
-      return "complete";
-    };
-    const work = (
-      kind === "direct"
-        ? withUpdateCommandExecutor("run", async (executor) => {
-            saved = executor;
-            return operation(await executor.enter(root));
-          })
-        : runWithExecutorFence(kind, operation)
-    ).catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
-    });
-    try {
-      await admitted.promise;
-      await setImmediate();
-      expect(rows.has(root)).toBe(true);
-      expect(() => captureUpdateCommandExecutorAuthority(fence!)).not.toThrow();
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await work;
-    }
-    const error = await work;
-    expect(hasCommandProcessCleanupError(error)).toBe(cleanupResult === "uncertain");
-    if (cleanupResult === "forced") {
-      expect(error).toBe(kind === "direct" ? original : "complete");
-    }
-    if (kind === "direct") {
-      expect(rows.has(root)).toBe(cleanupResult === "uncertain");
-      expect(fence!.assertCurrent).toThrow("no longer current");
-      await expect(saved!.enter(root)).rejects.toThrow("closed or busy");
-    } else {
-      expect(fence!.assertCurrent).toThrow("no longer has permission");
-      expect(rows.size).toBe(2);
-    }
-  },
-);
+      await finish.promise;
+      signal!.throwIfAborted();
+    },
+    1000,
+  );
+  try {
+    await admitted.promise;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(state.ended).toBe(true);
+    expect(await work).toBe(signal!.reason);
+    expect(await work).toBeInstanceOf(UpdateActivationTimeoutError);
+    expect(rows.size).toBe(kind === "direct" ? 1 : 2);
+  } finally {
+    finish.resolve();
+    await work;
+    await setImmediate();
+  }
+  expect(rows.size).toBe(kind === "direct" ? 0 : 2);
+});
 
-it.each(["forced", "uncertain"] as const)(
+it.each(cleanupResults)(
   "retains child lineage before startup binding until cleanup reports %s",
   async (cleanupResult) => {
-    const admitted = createDeferredCore();
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const state = settlement(cleanupResult);
+    const { admitted, cleanup } = state;
     const original = new Error("startup cancelled");
     const candidateRoot = path.join(root, "candidate");
     let fence: UpdateRecoveryFence | undefined;
-    let childWork: Promise<unknown> | undefined;
-    const work = withUpdateCommandExecutor("run", async (executor) => {
+    let child: Promise<unknown> | undefined;
+    const work = state.direct(async (executor) => {
       fence = await executor.enter(root);
-      childWork = withUpdateCommandExecutorChild(fence, candidateRoot, async () => {
+      child = withChild(fence, candidateRoot, async () => {
         retainCommandProcessCleanup(cleanup.promise);
         admitted.resolve();
         throw original;
       });
-      await childWork;
-    }).catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
+      await child;
     });
-    try {
-      await admitted.promise;
-      await setImmediate();
-      expect(rows.size).toBe(4);
-      expect(fence!.assertCurrent).toThrow("still running");
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await Promise.allSettled([work, childWork]);
-    }
+    await state.check(
+      () => {
+        expect(rows.size).toBe(4);
+        expect(fence!.assertCurrent).toThrow("still running");
+      },
+      () => child,
+    );
     const error = await work;
-    expect(hasCommandProcessCleanupError(error)).toBe(cleanupResult === "uncertain");
+    expect(hasCleanupError(error)).toBe(cleanupResult === "uncertain");
     expect(rows.size).toBe(cleanupResult === "uncertain" ? 4 : 0);
     if (cleanupResult === "forced") {
       expect(error).toBe(original);
     }
-    await expect(
-      withUpdateCommandExecutorChild(fence!, candidateRoot, async () => {}),
-    ).rejects.toThrow("live executor");
+    await expect(withChild(fence!, candidateRoot, async () => {})).rejects.toThrow("live executor");
   },
 );
 
-it.each(["forced", "uncertain"] as const)(
+it.each(cleanupResults)(
   "settles a failed runtime probe before preflight handoff release (%s)",
   async (cleanupResult) => {
     const fallbackNodeRunner = path.join(root, "replacement-node");
     fs.writeFileSync(fallbackNodeRunner, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-    const admitted = createDeferredCore();
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const state = settlement(cleanupResult);
+    const { admitted, cleanup } = state;
     let handedOff = false;
     boundaries.runtime
       .mockImplementationOnce(async () => {
@@ -465,12 +434,12 @@ it.each(["forced", "uncertain"] as const)(
         admitted.resolve();
         return { status: "probe-failed", error: new Error("configured runtime probe timed out") };
       })
-      .mockResolvedValueOnce({ status: "supported", version: "24.16.0" });
-    const work = withUpdateCommandExecutor("run", async (executor) => {
+      .mockResolvedValueOnce({ status: "supported", version: "24.22.1" });
+    const work = state.direct(async (executor) => {
       const fence = await executor.enter(root, { preflight: true });
       const runtime = await resolvePackageRuntimePreflight({
         root,
-        target: { version: "2026.9.17", nodeEngine: ">=24.16.0" },
+        target: { version: "2026.9.17", nodeEngine: ">=24.22.1" },
         fallbackNodeRunner,
         alreadyCurrent: true,
         shouldRestart: true,
@@ -489,43 +458,32 @@ it.each(["forced", "uncertain"] as const)(
         },
       });
       expect(runtime.ok).toBe(true);
-      releaseUpdateCommandPreflightForHandoff(fence);
+      releasePreflight(fence);
       handedOff = true;
-    }).catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
     });
-    try {
-      await admitted.promise;
-      await setImmediate();
-      expect(handedOff).toBe(false);
-      expect(rows.has(root)).toBe(true);
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await work;
-    }
-    expect(hasCommandProcessCleanupError(await work)).toBe(cleanupResult === "uncertain");
+    await state.check(() => {
+      expect({ handedOff, leased: rows.has(root) }).toEqual({ handedOff: false, leased: true });
+    });
+    expect(hasCleanupError(await work)).toBe(cleanupResult === "uncertain");
     expect(handedOff).toBe(cleanupResult === "forced");
     expect(rows.has(root)).toBe(cleanupResult === "uncertain");
   },
 );
 
 it("preserves activation timeout provenance without a cause cycle after uncertain cleanup", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  fakeTimers();
   const deadline = createUpdateOperationDeadline();
-  const admitted = createDeferredCore();
+  const state = settlement();
+  const { admitted } = state;
   const cancelled = createDeferredCore();
-  const work = deadline
-    .run(async () => {
+  const work = state.track(
+    deadline.run(async () => {
       deadline.start(new UpdateActivationTimeoutError(root, 1000), 1000);
       admitted.resolve();
       await cancelled.promise;
-      throw new CommandProcessCleanupError({ cause: deadline.signal.reason });
-    })
-    .catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
-    });
+      throw new CleanupError({ cause: deadline.signal.reason });
+    }),
+  );
   try {
     await admitted.promise;
     await vi.advanceTimersByTimeAsync(1000);
@@ -538,12 +496,8 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
     (error) => error instanceof UpdateActivationTimeoutError,
   );
   expect(timeout).toBe(deadline.signal.reason);
-  expect(timeout).toMatchObject({ root, timeoutMs: 1000, reason: "update-activation-timeout" });
   expect(result).not.toBe(deadline.signal.reason);
-  expect(hasCommandProcessCleanupError(result)).toBe(true);
-  expect(collectNestedErrorCandidates(result)).toEqual(
-    expect.arrayContaining([deadline.signal.reason, expect.any(CommandProcessCleanupError)]),
-  );
+  expect(hasCleanupError(result)).toBe(true);
   const visit = (error: unknown, ancestors = new Set<unknown>()) => {
     if (!(error instanceof Error)) {
       return;
@@ -558,4 +512,87 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
     }
   };
   visit(result);
+});
+
+it.each(cleanupCases)(
+  "retains $kind authority through operation and terminal cleanup ($cleanupResult)",
+  async ({ kind, cleanupResult }) => {
+    const state = settlement(cleanupResult);
+    const { admitted: entered, cleanup } = state;
+    const operationJoined = createDeferredCore();
+    const original = new Error("original update failure");
+    const preparationFailure = new Error("report preparation failed");
+    let calls = 0;
+    let fence: UpdateRecoveryFence | undefined;
+    const work = state.run(kind, async (current) => {
+      fence = current;
+      // A cleanup admitted by the operation must join before preparation starts.
+      retainCommandProcessCleanup(operationJoined.promise);
+      registerUpdateCommandTerminalPreparation(current, "run", async (failure) => {
+        expect(failure).toBe(original);
+        calls++;
+        retainCommandProcessCleanup(cleanup.promise);
+        entered.resolve();
+        throw preparationFailure;
+      });
+      throw original;
+    });
+    try {
+      await setImmediate();
+      expect(calls).toBe(0);
+      expect(rows.has(root)).toBe(true);
+      expect(() => captureAuthority(fence!)).not.toThrow();
+      operationJoined.resolve();
+      await entered.promise;
+      await setImmediate();
+      expect(state.ended).toBe(false);
+      expect(rows.has(root)).toBe(true);
+      expect(() => captureAuthority(fence!)).not.toThrow();
+    } finally {
+      operationJoined.resolve();
+      cleanup.resolve(cleanupResult);
+      await work;
+    }
+    const error = await work;
+    expect(calls).toBe(1);
+    expect(collectNestedErrorCandidates(error)).toContain(original);
+    expect(collectNestedErrorCandidates(error)).toContain(preparationFailure);
+    expect(hasCleanupError(error)).toBe(cleanupResult === "uncertain");
+    expect(rows.size).toBe(kind === "delegated" ? 2 : cleanupResult === "uncertain" ? 1 : 0);
+    expect(fence!.assertCurrent).toThrow(
+      kind === "direct" ? "no longer current" : "no longer has permission",
+    );
+  },
+);
+
+it("keeps the operation budget monotonic and the relay admission deadline epoch-based", async () => {
+  fakeTimers();
+  const epoch = 1_790_000_000_000;
+  vi.setSystemTime(epoch);
+  const onExpired = vi.fn();
+  const deadline = createUpdateOperationDeadline<UpdateActivationTimeoutError>(onExpired);
+  const budget = 1000;
+  deadline.start(new UpdateActivationTimeoutError(root, budget), budget);
+  const finish = createDeferredCore();
+  let admissionDeadline: number | undefined;
+  const work = deadline
+    .run(async () => {
+      admissionDeadline = readSqliteDatabaseAdmissionDeadline();
+      await finish.promise;
+    })
+    .catch((error: unknown) => error);
+  await setImmediate();
+  // The relay subtracts Date.now(); a raw monotonic value would expire immediately.
+  expect(admissionDeadline!).toBeGreaterThan(epoch);
+  expect(admissionDeadline! - epoch).toBeLessThanOrEqual(budget);
+  expect(deadline.signal.aborted).toBe(false);
+  await vi.advanceTimersByTimeAsync(500);
+  // Rewinding wall time must not extend the operation's monotonic budget.
+  vi.setSystemTime(Date.now() - 90_000);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(deadline.signal.aborted).toBe(true);
+  expect(onExpired).toHaveBeenCalledTimes(1);
+  finish.resolve();
+  const result = await work;
+  expect(result).toBeInstanceOf(UpdateActivationTimeoutError);
 });

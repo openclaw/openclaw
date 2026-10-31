@@ -1,6 +1,6 @@
 import { isProxy } from "node:util/types";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import {
-  modelRequestBodyState,
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";
@@ -13,6 +13,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import { log } from "./logger.js";
 import {
   fingerprintMessage,
@@ -109,7 +110,8 @@ function providerPromptWorkerBytes(
     return undefined;
   }
   let bytes = 64;
-  for (const [index, key] of keys.entries()) {
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]!;
     if (array && key !== String(index)) {
       return undefined;
     }
@@ -302,7 +304,9 @@ export async function preparePromptCacheHistory(
 ): Promise<void> {
   signal?.throwIfAborted();
   const missing = messages.filter(
-    (message) => isOwnedTranscriptPayload(message) && !messageFingerprints.has(message),
+    (message) =>
+      !messageFingerprints.has(message) &&
+      (isOwnedTranscriptPayload(message) || isDeeplyFrozenPlainData(message)),
   );
   if (missing.length === 0) {
     return;

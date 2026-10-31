@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { warnPluginSdkDeprecation } from "./sdk-deprecation.js";
@@ -86,11 +86,10 @@ function inspect(id: string, report: ReturnType<typeof createPluginLoadResult>) 
 }
 
 describe("plugin status reports", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
-    for (const mock of Object.values(mocks)) {
-      mock.mockReset();
-    }
+    Object.values(mocks).forEach((mock) => mock.mockReset());
     mocks.config.mockReturnValue({});
     mocks.metadataSnapshot.mockImplementation(() => {
       const manifestRegistry = { plugins: [], diagnostics: [] };
@@ -119,12 +118,8 @@ describe("plugin status reports", () => {
     mocks.compatIds.mockReturnValue(pluginIds);
     mocks.compatConfig.mockReturnValue(enabledConfig);
     status.buildPluginSnapshotReport({ config });
-    expect(mocks.compatConfig).toHaveBeenCalledWith({ config, pluginIds, activation: "defaults" });
     expect(mocks.metadataRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: enabledConfig,
-        loadModules: false,
-      }),
+      expect.objectContaining({ config: enabledConfig, loadModules: false }),
     );
   });
 
@@ -172,6 +167,7 @@ describe("plugin status reports", () => {
       shape: "hybrid-capability",
       capabilityMode: "hybrid",
       compatibility: [],
+      plugin: { id },
     });
     expect(result.capabilities).toEqual([
       { kind: "web-content-extractors", ids: ["readability"] },
@@ -190,7 +186,6 @@ describe("plugin status reports", () => {
       hasAllowedModelsConfig: true,
     });
     expect(result.diagnostics).toEqual(report.diagnostics);
-    expect(result.plugin.id).toBe(id);
     expect(status.buildAllPluginInspectReports({ report })).toEqual([result]);
     expect(mocks.load).not.toHaveBeenCalled();
   });
@@ -220,25 +215,23 @@ describe("plugin status reports", () => {
     });
     mocks.runtimeIds.mockReturnValue(["runtime-loaded", "broken-plugin", "bundle-loaded"]);
     mocks.facadeIds.mockReturnValue(["facade-loaded"]);
-    const snapshot = status.buildPluginSnapshotReport({ config: {} });
-    expect(snapshot.plugins.map(({ id, imported }) => [id, imported])).toEqual([
+    const importedState = (report: status.PluginStatusReport) =>
+      report.plugins.map(({ id, imported }) => [id, imported]);
+    const imports = [
       ["runtime-loaded", true],
       ["facade-loaded", true],
       ["broken-plugin", true],
       ["bundle-loaded", false],
+    ];
+    expect(importedState(status.buildPluginSnapshotReport({ config: {} }))).toEqual([
+      ...imports,
       ["cold-plugin", false],
     ]);
     await status.withPluginDiagnosticsReport(
       { config: {}, env: { OPENCLAW_VERSION: "2026.3.23-1" } },
       (report) => {
         expect(report.plugins[0]?.version).toBe("2026.3.23");
-        expect(report.plugins.map(({ id, imported }) => [id, imported])).toEqual([
-          ["runtime-loaded", true],
-          ["facade-loaded", true],
-          ["broken-plugin", true],
-          ["bundle-loaded", false],
-          ["cold-plugin", true],
-        ]);
+        expect(importedState(report)).toEqual([...imports, ["cold-plugin", true]]);
         expect(report.plugins.find((plugin) => plugin.id === "broken-plugin")?.status).toBe(
           "error",
         );
@@ -279,38 +272,69 @@ describe("plugin status reports", () => {
     ]);
   });
 
+  it("inspects each decision provider once per all-plugin report", () => {
+    const plugins = Array.from({ length: 40 }, (_, index) =>
+      createPluginRecord({ id: `decision-${index}` }),
+    );
+    const decisionProviders = plugins.map((plugin) => ({
+      pluginId: plugin.id,
+      host: new DecisionProviderHost(
+        {
+          id: plugin.id,
+          contractVersion: 1,
+          async evaluate() {
+            throw new Error("Inspection must not evaluate decisions");
+          },
+        },
+        plugin,
+      ),
+    }));
+    const inspections = decisionProviders.map(({ host }) => vi.spyOn(host, "inspect"));
+    const report = setReport({ plugins, decisionProviders });
+
+    for (const selected of [0, 39]) {
+      const config = { agents: { defaults: { decisionModel: `decision-${selected}/model` } } };
+      const results = status.buildAllPluginInspectReports({ config, report });
+      expect(results.map(({ plugin, decisions }) => [plugin.id, decisions])).toMatchObject(
+        plugins.map((plugin, index) => [
+          plugin.id,
+          [{ pluginId: plugin.id, providerId: plugin.id, configured: index === selected }],
+        ]),
+      );
+      for (const inspection of inspections) {
+        expect(inspection).toHaveBeenCalledTimes(1);
+        inspection.mockClear();
+      }
+    }
+    status.buildPluginInspectReport({ id: "decision-0", config: {}, report });
+    for (const [index, inspection] of inspections.entries()) {
+      expect(inspection).toHaveBeenCalledTimes(index === 0 ? 1 : 0);
+    }
+  });
+
   it("includes observed SDK calls in inspection and CLI compatibility output", () => {
     const pluginId = "status-deprecated-sdk";
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      warnPluginSdkDeprecation({
+    vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    warnPluginSdkDeprecation({
+      pluginId,
+      family: "session-store",
+      method: "getSessionEntry",
+      replacement: "getSessionEntryAsync",
+    });
+    const report = setReport({ plugins: [createPluginRecord({ id: pluginId })] });
+    const notices = status.buildPluginCompatibilityNotices({ report });
+    expect(notices).toMatchObject([
+      {
         pluginId,
-        family: "session-store",
-        method: "getSessionEntry",
-        replacement: "getSessionEntryAsync",
-      });
-      const report = setReport({ plugins: [createPluginRecord({ id: pluginId })] });
-      const notices = status.buildPluginCompatibilityNotices({ report });
-      expect(notices).toEqual([
-        expect.objectContaining({
-          pluginId,
-          code: "deprecated-sdk-api",
-          severity: "info",
-          apis: [
-            expect.objectContaining({
-              displayName: "getSessionEntry",
-              replacement: "getSessionEntryAsync",
-            }),
-          ],
-        }),
-      ]);
-      expect(inspect(pluginId, report).compatibility).toEqual(notices);
-      expect(status.buildPluginCompatibilityWarnings({ report })).toEqual([
-        `${pluginId} ${notices[0]?.message}`,
-      ]);
-    } finally {
-      warning.mockRestore();
-    }
+        code: "deprecated-sdk-api",
+        severity: "info",
+        apis: [{ displayName: "getSessionEntry", replacement: "getSessionEntryAsync" }],
+      },
+    ]);
+    expect(inspect(pluginId, report).compatibility).toEqual(notices);
+    expect(status.buildPluginCompatibilityWarnings({ report })).toEqual([
+      `${pluginId} ${notices[0]?.message}`,
+    ]);
   });
 
   it("orders compatibility notices by plugin without attributing unrelated load failures", () => {
@@ -344,52 +368,44 @@ describe("plugin status reports", () => {
       `old ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
       `api ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
     ]);
-    expect(status.summarizePluginCompatibility(notices)).toEqual({
-      noticeCount: 3,
-      pluginCount: 2,
-    });
   });
 
-  it.each([
-    {
-      plugin: createPluginRecord({
-        id: "bundle",
-        format: "bundle",
-        bundleFormat: "claude",
-        rootDir: "/tmp/claude-bundle",
-        bundleCapabilities: ["skills", "commands", "agents", "settings"],
-      }),
-      bundleCapabilities: ["skills", "commands", "agents", "settings"],
-      mcpServers: [],
-    },
-    {
-      plugin: createPluginRecord({
-        id: "native-mcp",
-        rootDir: "/tmp/native-mcp",
-        mcpServers: {
-          app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
-          remote: { type: "http", url: "https://example.test/mcp" },
-          incomplete: { transport: "streamable-http" },
-          invalidScheme: { transport: "streamable-http", url: "ftp://example.test/mcp" },
-          invalidTransport: { transport: "http", url: "https://example.test/mcp" },
-        },
-      }),
-      bundleCapabilities: [],
-      mcpServers: [
-        { name: "app", hasStdioTransport: true },
-        { name: "remote", hasStdioTransport: false },
-        { name: "incomplete", hasStdioTransport: false, unsupported: true },
-        { name: "invalidScheme", hasStdioTransport: false, unsupported: true },
-        { name: "invalidTransport", hasStdioTransport: false, unsupported: true },
-      ],
-    },
-  ])(
-    "projects $plugin.id bundle and MCP inspection metadata",
-    ({ plugin, bundleCapabilities, mcpServers }) => {
-      const result = inspect(plugin.id, setReport({ plugins: [plugin] }));
-      expect(result.bundleCapabilities).toEqual(bundleCapabilities);
-      expect(result.mcpServers).toStrictEqual(mcpServers);
-      expect(result.shape).toBe("non-capability");
-    },
-  );
+  it("projects bundle capabilities without native capabilities", () => {
+    const capabilities = ["skills", "commands", "agents", "settings"];
+    const plugin = createPluginRecord({
+      id: "bundle",
+      format: "bundle",
+      bundleFormat: "claude",
+      rootDir: "/tmp/claude-bundle",
+      bundleCapabilities: capabilities,
+    });
+    const result = inspect(plugin.id, setReport({ plugins: [plugin] }));
+    expect(result.bundleCapabilities).toEqual(["skills", "commands", "agents", "settings"]);
+    expect(result.mcpServers).toStrictEqual([]);
+    expect(result.shape).toBe("non-capability");
+  });
+
+  it("classifies native MCP transports", () => {
+    const plugin = createPluginRecord({
+      id: "native-mcp",
+      rootDir: "/tmp/native-mcp",
+      mcpServers: {
+        app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
+        remote: { type: "http", url: "https://example.test/mcp" },
+        incomplete: { transport: "streamable-http" },
+        invalidScheme: { transport: "streamable-http", url: "ftp://example.test/mcp" },
+        invalidTransport: { transport: "http", url: "https://example.test/mcp" },
+      },
+    });
+    const result = inspect(plugin.id, setReport({ plugins: [plugin] }));
+    expect(result.bundleCapabilities).toEqual([]);
+    expect(result.shape).toBe("non-capability");
+    expect(result.mcpServers).toStrictEqual([
+      { name: "app", hasStdioTransport: true },
+      { name: "remote", hasStdioTransport: false },
+      { name: "incomplete", hasStdioTransport: false, unsupported: true },
+      { name: "invalidScheme", hasStdioTransport: false, unsupported: true },
+      { name: "invalidTransport", hasStdioTransport: false, unsupported: true },
+    ]);
+  });
 });

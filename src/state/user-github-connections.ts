@@ -3,6 +3,7 @@ import {
   observeSqliteWorkerCommittedFacts,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import {
   captureOpenClawStateReadWorkerContext,
@@ -17,7 +18,7 @@ import {
 import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectUserGitHubConnectionInDatabase,
-  parseUserGitHubConnection,
+  registerUserGitHubConnectionSecrets,
 } from "./user-github-connections.kernel.js";
 import {
   isUserGitHubConnectionCommit,
@@ -30,6 +31,7 @@ import type { UserGitHubConnectionWorkerOperations } from "./user-github-connect
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
 
 export { observeUserGitHubProfileRetirement } from "./user-github-connection-events.js";
+export { requirePendingUserGitHubConnection } from "./user-github-connections.types.js";
 export type {
   UserGitHubConnection,
   UserGitHubConnected,
@@ -78,12 +80,12 @@ export async function readUserGitHubConnectionAsync(
 }
 
 export async function readCanonicalUserGitHubConnectionAsync(profile: string) {
-  const context = captureOpenClawStateReadWorkerContext();
-  return await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "userGitHubConnections.readCanonical", input: { profile } }),
-    { existingOnly: true },
+  const result = await executeExistingOpenClawStateRead(
+    {},
+    { type: "userGitHubConnections.readCanonical", input: { profile } },
+    { current: true },
   );
+  return result?.canonical;
 }
 
 type PreparedUserGitHubConnection = {
@@ -142,13 +144,14 @@ export async function prepareUserGitHubConnection(
   connectionReads.set(key, entry);
   entry.prepared = (async () => {
     const authority = await captureUserProfileAuthorityRead(context.admission);
-    const connection = await runOpenClawStateWorkerOperation(
-      context,
-      (scope) => scope.execute({ type: "userGitHubConnections.read", input: { owner } }),
-      { existingOnly: true },
+    const result = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "userGitHubConnections.read", input: { owner } },
+      { current: true, context },
     );
+    const connection = result?.connection;
     const profileIsCurrent = authority.bind(owner);
-    const parsed = connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
+    const parsed = connection ? registerUserGitHubConnectionSecrets(connection) : undefined;
     const read = () => {
       context.admission.assertCurrent();
       if (!entry.valid || !profileIsCurrent?.()) {
@@ -170,16 +173,14 @@ export async function prepareUserGitHubConnection(
 }
 
 export async function listUserGitHubConnectionsAsync(): Promise<UserGitHubConnectionEntry[]> {
-  const context = captureOpenClawStateReadWorkerContext();
-  const connections = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "userGitHubConnections.list", input: undefined }),
-    { existingOnly: true },
+  const result = await executeExistingOpenClawStateRead(
+    {},
+    { type: "userGitHubConnections.list", input: undefined },
+    { current: true },
   );
-  context.admission.assertCurrent();
-  return (connections ?? []).map(({ owner, connection }) => ({
+  return (result?.connections ?? []).map(({ owner, connection }) => ({
     owner,
-    connection: parseUserGitHubConnection(JSON.stringify(connection)),
+    connection: registerUserGitHubConnectionSecrets(connection),
   }));
 }
 
@@ -238,7 +239,7 @@ export async function mutateUserGitHubConnection(
     { owner, mutation },
     assertCurrent,
   );
-  return connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
+  return connection ? registerUserGitHubConnectionSecrets(connection) : undefined;
 }
 
 /** An exact remote rotation follows profile transfer; its receipt grants no external authority. */

@@ -19,33 +19,46 @@ import {
 import { buildTestCtx } from "./test-ctx.js";
 
 export function registerOriginRoutingCases() {
-  it("routes when OriginatingChannel differs from Provider", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "telegram" });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      AccountId: "acc-1",
-      MessageThreadId: 123,
-      GroupChannel: "ops-room",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-    });
+  it.each([
+    ["text", undefined, "group"],
+    ["native", "agent:main:slack:channel:source", "group"],
+    ["native", "agent:main:slack:direct:target", undefined],
+    ["text", "agent:main:slack:direct:target", "group"],
+  ] as const)(
+    "routes origin replies with %s target %s and policy type %s",
+    async (source, target, policyType) => {
+      setNoAbort();
+      mocks.routeReply.mockClear();
+      installThreadingTestPlugin({ id: "telegram" });
+      const cfg = emptyConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "slack",
+        ChatType: "channel",
+        CommandSource: source,
+        SessionKey: "agent:main:slack:channel:source",
+        CommandTargetSessionKey: target,
+        AccountId: "acc-1",
+        MessageThreadId: 123,
+        GroupChannel: "ops-room",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+      const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall();
-    expect(routeCall?.channel).toBe("telegram");
-    expect(routeCall?.to).toBe("telegram:999");
-    expect(routeCall?.accountId).toBe("acc-1");
-    expect(routeCall?.threadId).toBe(123);
-    expect(routeCall?.isGroup).toBe(true);
-    expect(routeCall?.groupId).toBe("telegram:999");
-  });
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      const routeCall = firstRouteReplyCall();
+      expect(routeCall?.channel).toBe("telegram");
+      expect(routeCall?.to).toBe("telegram:999");
+      expect(routeCall?.accountId).toBe("acc-1");
+      expect(routeCall?.threadId).toBe(123);
+      expect(routeCall?.isGroup).toBe(true);
+      expect(routeCall?.groupId).toBe("telegram:999");
+      expect(routeCall?.policyConversationType).toBe(policyType);
+    },
+  );
 
   it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {
     setNoAbort();
@@ -87,6 +100,7 @@ export function registerOriginRoutingCases() {
         originatingTo: "telegram:999",
       }),
       expect.any(Object),
+      expect.any(Function),
     ]);
   });
 
@@ -151,6 +165,7 @@ export function registerOriginRoutingCases() {
         originatingChatType: "channel",
       }),
       expect.any(Object),
+      expect.any(Function),
     ]);
   });
 }

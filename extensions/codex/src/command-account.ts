@@ -21,10 +21,7 @@ import {
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
 import { isLikelyEmailAddress } from "./command-account-email.js";
-import type {
-  SafeCodexControlRequestFn as SafeCodexControlRequest,
-  SafeValue,
-} from "./command-rpc.js";
+import { safeCodexControlRequest, type SafeValue } from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 
@@ -43,7 +40,6 @@ export type CodexAccountAuthOverview = {
   currentLine?: string;
   subscriptionLabel?: string;
   subscriptionUsage?: string;
-  orderTitle: string;
   rows: CodexAccountAuthRow[];
 };
 
@@ -52,7 +48,6 @@ export async function readCodexAccountAuthOverview(params: {
   agentDir: string;
   authProfileId: string | null | undefined;
   pluginConfig: CodexPluginConfig | undefined;
-  safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
@@ -87,7 +82,7 @@ export async function readCodexAccountAuthOverview(params: {
       ? summarizeCodexAccountUsage(params.limits.value, now)
       : undefined;
   if (subscriptionProfileId && !activeIsSubscription) {
-    const limits = await params.safeCodexControlRequest(
+    const limits = await safeCodexControlRequest(
       params.pluginConfig,
       CODEX_CONTROL_METHODS.rateLimits,
       undefined,
@@ -121,7 +116,6 @@ export async function readCodexAccountAuthOverview(params: {
   const activeRow = rows.find((row) => row.active);
   if (!activeRow) {
     return {
-      orderTitle: "Auth order",
       rows,
     };
   }
@@ -135,7 +129,6 @@ export async function readCodexAccountAuthOverview(params: {
     ...(activeIsApiKey ? { currentLine: buildApiKeyActiveLine(activeRow, subscriptionUsage) } : {}),
     ...(subscriptionLabel ? { subscriptionLabel } : {}),
     ...(subscriptionUsageLine ? { subscriptionUsage: subscriptionUsageLine } : {}),
-    orderTitle: "Auth order",
     rows,
   };
 }

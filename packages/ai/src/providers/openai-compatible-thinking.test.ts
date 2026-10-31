@@ -3,13 +3,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-transport.js";
+import { completedResponse } from "../transports/openai-stream-cases.test-support.js";
 import type { Context, Model, ModelThinkingLevel } from "../types.js";
 import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
+import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
 import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 
-const context: Context = {
-  messages: [{ role: "user", content: "Reply briefly.", timestamp: 1 }],
-};
+const context: Context = { messages: [{ role: "user", content: "Reply briefly.", timestamp: 1 }] };
 
 type ReasoningCase = {
   name: string;
@@ -27,135 +27,122 @@ type ReasoningCase = {
 
 function mapped(
   name: string,
-  requested: ModelThinkingLevel,
+  requested: ModelThinkingLevel | "none",
   expected: string | undefined,
   overrides: Partial<Omit<ReasoningCase, "requested" | "raw">> = {},
 ): ReasoningCase {
-  return { name, requested, expected, ...overrides };
+  return requested === "none"
+    ? { name, requested, raw: true, expected, ...overrides }
+    : { name, requested, expected, ...overrides };
 }
 
 const nativeEfforts = ["low", "medium", "high", "xhigh", "max"];
 const offEfforts = ["none", "low", "high"];
 const providerEfforts = ["ProviderLow", "ProviderHigh"];
+const codexMini = { modelId: "gpt-5.1-codex-mini", provider: "openai" };
+const toolCall = {
+  index: 0,
+  id: "call_probe",
+  type: "function",
+  function: { name: "probe", arguments: "{}" },
+};
+const toolContext: Context = {
+  ...context,
+  tools: [
+    {
+      name: "probe",
+      description: "Verify tool invocation.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+    },
+  ],
+};
+
+function efforts(supportedReasoningEfforts: string[], reasoningEffortMap?: Record<string, string>) {
+  return { supportedReasoningEfforts, reasoningEffortMap };
+}
 
 const mappingCases: ReasoningCase[] = [
-  ...[
-    { name: "default", compat: undefined, expected: "medium" },
-    {
-      name: "declared capabilities",
-      compat: { supportedReasoningEfforts: ["low", "high"] },
-      expected: "low",
-    },
-    {
-      name: "explicit user mapping",
-      compat: { supportedReasoningEfforts: ["low", "high"], reasoningEffortMap: { LOW: "high" } },
-      expected: "high",
-    },
-  ].map(({ name, compat, expected }): ReasoningCase => ({
-    name: `codex-mini ${name}`,
-    modelId: "gpt-5.1-codex-mini",
-    provider: "openai",
-    requested: "low",
-    compat,
-    expected,
-  })),
+  mapped("codex-mini default", "low", "medium", codexMini),
+  mapped("codex-mini declared capabilities", "low", "low", {
+    ...codexMini,
+    compat: efforts(["low", "high"]),
+  }),
+  mapped("codex-mini explicit user mapping", "low", "high", {
+    ...codexMini,
+    compat: efforts(["low", "high"], { LOW: "high" }),
+  }),
   mapped("explicit compat max for a known model", "max", "max", {
     modelId: "gpt-5.6-sol",
-    compat: { supportedReasoningEfforts: nativeEfforts },
+    compat: efforts(nativeEfforts),
   }),
   mapped("declared native max", "max", "max", {
-    compat: { supportedReasoningEfforts: nativeEfforts },
+    compat: efforts(nativeEfforts),
     thinkingLevelMap: { off: null, minimal: null },
   }),
-  mapped("declared xhigh", "xhigh", "xhigh", {
-    compat: { supportedReasoningEfforts: nativeEfforts.slice(0, -1) },
-  }),
+  mapped("declared xhigh", "xhigh", "xhigh", { compat: efforts(nativeEfforts.slice(0, -1)) }),
   mapped("undeclared max", "max", "high"),
   mapped("plain minimal", "minimal", "minimal"),
   ...[
     { name: "model off mapping", thinkingLevelMap: { off: "low" } },
     { name: "compat off mapping", reasoningEffortMap: { off: "low" } },
-    {
-      name: "null off cap",
-      thinkingLevelMap: { off: null },
-      reasoningEffortMap: { off: "low" },
-    },
+    { name: "null off cap", thinkingLevelMap: { off: null }, reasoningEffortMap: { off: "low" } },
   ].flatMap<ReasoningCase>(({ name, thinkingLevelMap, reasoningEffortMap }) => {
-    const mapping = {
-      thinkingLevelMap,
-      compat: { supportedReasoningEfforts: offEfforts, reasoningEffortMap },
-    };
+    const mapping = { thinkingLevelMap, compat: efforts(offEfforts, reasoningEffortMap) };
     return [
       mapped(`logical off follows ${name}`, "off", "low", mapping),
-      {
-        ...mapping,
-        name: `native none bypasses ${name}`,
-        requested: "none",
-        raw: true,
-        expected: "none",
-      },
+      mapped(`native none bypasses ${name}`, "none", "none", mapping),
     ];
   }),
   mapped("mapped max alias", "max", "xhigh", {
     thinkingLevelMap: { xhigh: "xhigh", max: "xhigh" },
   }),
-  mapped("model-mapped low effort", "low", "medium", {
-    thinkingLevelMap: { low: "medium" },
+  mapped("model-mapped low effort", "low", "medium", { thinkingLevelMap: { low: "medium" } }),
+  mapped("provider-native mapping", "high", "ProviderHigh", {
+    compat: efforts(providerEfforts, { high: "ProviderHigh" }),
   }),
-  mapped("provider-native compatibility mapping", "high", "ProviderHigh", {
-    compat: {
-      supportedReasoningEfforts: providerEfforts,
-      reasoningEffortMap: { high: "ProviderHigh" },
-    },
-  }),
-  mapped("mapped xhigh below native max", "xhigh", "high", {
-    compat: {
-      supportedReasoningEfforts: ["none", "high", "max"],
-      reasoningEffortMap: { xhigh: "high" },
-    },
+  mapped("xhigh mapped below max", "xhigh", "high", {
+    compat: efforts(["none", "high", "max"], { xhigh: "high" }),
   }),
   mapped("null xhigh cap overrides a max mapping", "xhigh", "high", {
-    compat: {
-      supportedReasoningEfforts: ["none", "high", "max"],
-      reasoningEffortMap: { xhigh: "max" },
-    },
+    compat: efforts(["none", "high", "max"], { xhigh: "max" }),
     thinkingLevelMap: { xhigh: null },
   }),
-  mapped("sparse canonical efforts cap max at high", "max", "high", {
-    compat: { supportedReasoningEfforts: ["low", "high"] },
-  }),
+  mapped("sparse max cap", "max", "high", { compat: efforts(["low", "high"]) }),
 ];
 
 const adapterCases: ReasoningCase[] = [
+  mapped("compat off mapping without an effort list", "off", "none", {
+    compat: { reasoningEffortMap: { off: "none" } },
+  }),
+  mapped("model off mapping without an effort list", "off", "none", {
+    thinkingLevelMap: { off: "none" },
+  }),
+  mapped("advertised ladder rejects a mapped disable", "off", undefined, {
+    compat: efforts(["low", "high"], { off: "none" }),
+  }),
+  mapped("proxy model name cannot declare a disable control", "off", undefined, {
+    modelId: "gpt-5.4",
+  }),
+  mapped("unknown off contract omits scalar effort", "off", undefined),
+  mapped("unknown native none omits scalar effort", "none", undefined),
+  mapped("off without disable support", "off", undefined, {
+    compat: efforts(["low", "medium", "high"]),
+  }),
   mapped("known model API max default", "max", "xhigh", {
     modelId: "gpt-5.6-sol",
     expectedResponses: "max",
   }),
-  mapped("off map hole", "off", "minimal", {
-    thinkingLevelMap: { off: null },
+  mapped("off map hole", "off", "minimal", { thinkingLevelMap: { off: null } }),
+  mapped("advertised none default", "off", "none", { compat: efforts(offEfforts) }),
+  mapped("native none keeps its explicit compat mapping", "none", "low", {
+    compat: efforts(offEfforts, { none: "low", off: "high" }),
   }),
-  mapped("explicit off from advertised none without a map", "off", "none", {
-    compat: { supportedReasoningEfforts: offEfforts },
-  }),
-  {
-    name: "native none keeps its explicit compat mapping",
-    requested: "none",
-    raw: true,
-    compat: {
-      supportedReasoningEfforts: offEfforts,
-      reasoningEffortMap: { none: "low", off: "high" },
-    },
-    expected: "low",
-  },
   ...[undefined, null].flatMap((cap) =>
     [false, true].map((raw): ReasoningCase => ({
       name: `${raw ? "raw" : "simple"} mapped native max with explicit cap ${cap}`,
       requested: "max",
       raw,
-      compat: {
-        supportedReasoningEfforts: providerEfforts,
-        reasoningEffortMap: { high: "ProviderLow", MAX: "ProviderHigh" },
-      },
+      compat: efforts(providerEfforts, { high: "ProviderLow", MAX: "ProviderHigh" }),
       thinkingLevelMap: cap === null ? { max: null } : undefined,
       expected: cap === null ? (raw ? undefined : "ProviderLow") : "ProviderHigh",
     })),
@@ -166,7 +153,7 @@ const adapterCases: ReasoningCase[] = [
   }),
   mapped("empty effort metadata overrides known model defaults", "max", undefined, {
     modelId: "gpt-5.6-sol",
-    compat: { supportedReasoningEfforts: [] },
+    compat: efforts([]),
   }),
   ...[
     { modelId: "gpt-5.6-luna", expected: "none" },
@@ -205,25 +192,20 @@ describe.each([
   it.each(cases)("preserves $name", async (cell) => {
     const { requested, compat, thinkingLevelMap, expected } = cell;
     const modelId = cell.modelId ?? "custom-reasoner";
-    const expectedResponses = cell.expectedResponses ?? expected;
     // Managed Completions sends official OpenAI reasoning tool turns through Responses.
     const wireApi =
       transport === "managed-completions" && cell.toolRoute === "native" ? "openai-responses" : api;
-    const model = {
+    const model = makeOpenAIProviderModel(api, {
       id: modelId,
       name: "Custom Reasoner",
-      api,
       provider: cell.provider ?? (cell.toolRoute === "native" ? "openai" : "custom-provider"),
       baseUrl:
         cell.toolRoute === "native" ? "https://api.openai.com/v1" : "https://reasoning.example/v1",
-      reasoning: true,
-      input: ["text"],
       contextWindow: 32_000,
       maxTokens: 1024,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat,
       thinkingLevelMap,
-    } satisfies Model;
+    });
     const requests: {
       model: string;
       reasoning_effort?: string;
@@ -244,46 +226,21 @@ describe.each([
             ? {
                 id: "reply",
                 choices: [
-                  cell.toolRoute
-                    ? {
-                        index: 0,
-                        delta: {
-                          tool_calls: [
-                            {
-                              index: 0,
-                              id: "call_probe",
-                              type: "function",
-                              function: { name: "probe", arguments: "{}" },
-                            },
-                          ],
-                        },
-                        finish_reason: "tool_calls",
-                      }
-                    : { index: 0, delta: { content: "OK" }, finish_reason: "stop" },
+                  {
+                    index: 0,
+                    delta: cell.toolRoute ? { tool_calls: [toolCall] } : { content: "OK" },
+                    finish_reason: cell.toolRoute ? "tool_calls" : "stop",
+                  },
                 ],
               }
-            : {
-                type: "response.completed",
-                response: { id: "reply", status: "completed", output: [] },
-              };
+            : completedResponse("reply", []);
         return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
           headers: { "content-type": "text/event-stream" },
         });
       },
     });
 
-    const requestContext: Context = cell.toolRoute
-      ? {
-          ...context,
-          tools: [
-            {
-              name: "probe",
-              description: "Verify tool invocation.",
-              parameters: Type.Object({}, { additionalProperties: false }),
-            },
-          ],
-        }
-      : context;
+    const requestContext = cell.toolRoute ? toolContext : context;
     const commonOptions = {
       apiKey: "test-key",
       transport: "sse" as const,
@@ -320,6 +277,6 @@ describe.each([
       wireApi === "openai-completions"
         ? requests[0]?.reasoning_effort
         : requests[0]?.reasoning?.effort,
-    ).toBe(wireApi === "openai-responses" ? expectedResponses : expected);
+    ).toBe(wireApi === "openai-responses" ? (cell.expectedResponses ?? expected) : expected);
   });
 });

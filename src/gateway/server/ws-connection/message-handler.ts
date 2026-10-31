@@ -49,6 +49,7 @@ import {
 } from "../../ingress-attribution.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
@@ -110,17 +111,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     logWsControl,
   } = params;
 
-  const sendFrame = async (obj: unknown): Promise<number> =>
+  const sendFrame = async (obj: unknown, uncompressed = false): Promise<number> =>
     await new Promise<number>((resolve, reject) => {
       const encoded = JSON.stringify(obj);
       assertRemoteControlUiIngressCurrent(remoteIngress);
-      socket.send(encoded, (err) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(Buffer.byteLength(encoded));
-      });
+      const sent = (err?: Error) => (err ? reject(err) : resolve(Buffer.byteLength(encoded)));
+      if (uncompressed && socket.sendUncompressed) {
+        socket.sendUncompressed(encoded, sent);
+      } else {
+        socket.send(encoded, sent);
+      }
     });
 
   const configSnapshot = getRuntimeConfig();
@@ -237,16 +237,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       const context = buildRequestContext();
       const resolvedAt = Date.now();
       for (const superseded of result.created ? (result.superseded ?? []) : []) {
-        context.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            nodeId: superseded.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedNodePairing(context.broadcast, superseded, resolvedAt);
       }
       if (result.created) {
         context.broadcast("node.pair.requested", result.request, {
@@ -365,7 +356,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const sendStartedAt = performance.now();
           let bytes: number;
           try {
-            bytes = await sendFrame(response);
+            // Hello carries device tokens; compressed length must not leak them.
+            bytes = await sendFrame(response, true);
           } catch (error) {
             diagnostics?.response("unavailable");
             throw error;

@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { ErrorShapeSchema } from "./error-shape.js";
 import {
   ControlUiLinkReaderDescriptorSchema,
   ControlUiPluginTabSchema,
@@ -18,6 +19,7 @@ import { stringLiteralUnion } from "./string-literal-union.js";
 import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
+export { ErrorShapeSchema, type ErrorShape } from "./error-shape.js";
 
 export const TickEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
@@ -46,6 +48,8 @@ export const ConnectParamsSchema = closedObject({
     instanceId: Type.Optional(NonEmptyString),
   }),
   caps: Type.Optional(Type.Array(NonEmptyString, { default: [] })),
+  /** Initial roster-body preference; exact subscriptions always receive complete messages. */
+  includeSessionMessageBodies: Type.Optional(Type.Boolean()),
   commands: Type.Optional(Type.Array(NonEmptyString)),
   /** Additive Computer Use declaration; the owning core contract validates its bounded shape. */
   computerUse: Type.Optional(Type.Unknown()),
@@ -110,6 +114,8 @@ export const HelloOkSchema = closedObject({
   snapshot: SnapshotSchema,
   // Public Control UI origin and mount path, independent of local SSH tunnels.
   controlUiUrl: Type.Optional(NonEmptyString),
+  // Additive: Control UI mount path on this listener, for clients that reach it by host and port.
+  controlUiBasePath: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
   controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
   // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.
@@ -133,7 +139,9 @@ export const HelloOkSchema = closedObject({
     recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
-    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "none"])),
+    // Presentation only: device approval cannot exceed this authenticated role ceiling.
+    roleAllowsAdmin: Type.Optional(Type.Boolean()),
+    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "invited", "none"])),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     deviceTokens: Type.Optional(
       Type.Array(
@@ -164,15 +172,6 @@ export const HelloOkSchema = closedObject({
     allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
     hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
   }),
-});
-
-/** Standard structured error shape used in response frames and connect failures. */
-export const ErrorShapeSchema = closedObject({
-  code: NonEmptyString,
-  message: NonEmptyString,
-  details: Type.Optional(Type.Unknown()),
-  retryable: Type.Optional(Type.Boolean()),
-  retryAfterMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 /** Client request frame envelope; `method` selects the payload validator. */
@@ -215,7 +214,6 @@ export const GatewayFrameSchema = Type.Union(
 // Keeping them off the aggregate registry avoids retaining every RPC schema.
 export type ConnectParams = Static<typeof ConnectParamsSchema>;
 export type HelloOk = Static<typeof HelloOkSchema>;
-export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type RequestFrame = Static<typeof RequestFrameSchema>;
 export type ResponseFrame = Static<typeof ResponseFrameSchema>;
 export type EventFrame = Static<typeof EventFrameSchema>;

@@ -7,6 +7,7 @@ import { asOptionalObjectRecord as getToolParamsRecord } from "@openclaw/normali
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { preserveAtPrefixedRelativePath } from "./path-policy.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
+import { normalizeLocalWindowsDrivePath } from "./sessions/tools/path-utils.js";
 
 export { getToolParamsRecord };
 
@@ -113,7 +114,8 @@ export function normalizeFileToolPathParam(
     HALLUCINATED_OFFICE_PATH_EXTENSION_RE,
     (match, family: string) => OFFICE_EXTENSION_BY_FAMILY[family.toLowerCase()] ?? match,
   );
-  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(repaired, cwd, bridge)) : repaired;
+  const filePath = cwd && !bridge ? normalizeLocalWindowsDrivePath(repaired) : repaired;
+  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(filePath, cwd, bridge)) : repaired;
 }
 
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
@@ -160,7 +162,7 @@ export async function normalizeFileToolPathParamsFromKeys<T extends Record<strin
   return normalized ?? record;
 }
 
-export function missingRequiredParamLabels(
+function missingRequiredParamLabels(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
 ): string[] {
@@ -187,7 +189,7 @@ export function assertRequiredParams(
   groups: readonly RequiredParamGroup[],
   toolName: string,
 ): void {
-  if (!record || typeof record !== "object") {
+  if (!record) {
     throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
@@ -203,25 +205,18 @@ export function assertRequiredParams(
 
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
-  requiredParamGroups?: readonly RequiredParamGroup[],
+  requiredParamGroups: readonly RequiredParamGroup[],
   cwd?: string,
-  bridge?: SandboxFsBridge,
 ): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
-      const pathKeys = requiredParamGroups?.some((group) => group.keys.includes("path"))
-        ? ["path"]
-        : [];
-      const normalizedParams =
-        record && pathKeys.length > 0
-          ? await normalizeFileToolPathParamsFromKeys(record, pathKeys, cwd, bridge)
-          : params;
-      if (requiredParamGroups?.length) {
-        assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
-      }
-      return tool.execute(toolCallId, normalizedParams, signal, onUpdate);
+      const normalizedRecord = record
+        ? await normalizeFileToolPathParamsFromKeys(record, ["path"], cwd)
+        : record;
+      assertRequiredParams(normalizedRecord, requiredParamGroups, tool.name);
+      return tool.execute(toolCallId, normalizedRecord ?? params, signal, onUpdate);
     },
   };
 }

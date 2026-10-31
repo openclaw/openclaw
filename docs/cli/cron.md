@@ -28,6 +28,11 @@ authentication, calls to the configured local loopback Gateway do not open the
 shared state database for device authentication. Remote and explicit URL targets
 retain their device authentication and pairing requirements.
 
+Ctrl-C or SIGTERM cancels a pending `list` or `show` read without printing a late
+result or failure document. The CLI exits with status 130 or 143, respectively.
+An `add` or `edit` mutation already sent to the Gateway still waits for its
+receipt during cleanup and reports any failure; interrupting does not undo it.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
@@ -116,6 +121,34 @@ the default working directory. An explicitly empty or whitespace-only path is
 an error. When editing a stream job, `--stream-cwd ""` still clears its configured
 working directory.
 
+### Monitoring policies
+
+Use these flags with `automations add|create` or `automations edit` for ordinary
+monitoring jobs:
+
+- `--active-hours-start <HH:MM>` and `--active-hours-end <HH:MM>` define an
+  execution window. Start is inclusive; end is exclusive and also accepts
+  `24:00`. Overnight windows work; equal endpoints define an empty window.
+- `--active-hours-timezone <zone>` chooses an IANA timezone, `user` (the default,
+  using the configured user timezone), or `local` (Gateway host). This is
+  independent of the schedule's `--tz`.
+- `--idle-only` gives foreground work priority. `--no-idle-only` turns that
+  policy off.
+- `--skip-if-scratch-empty` skips an agent turn with explicitly empty scratch.
+  Missing scratch still runs. `--no-skip-if-scratch-empty` turns this off.
+- `--include-reasoning` includes reasoning returned by an agent alongside a meaningful result;
+  `--no-include-reasoning` keeps it out. This does not set the thinking level.
+
+A new window requires both endpoints. An edit can update just one field of an
+existing window. `automations edit --clear-active-hours` removes the window;
+`--clear-idle-only` removes the stored idle policy. Do not combine a clear flag
+with its corresponding set flag. The scratch and reasoning flags require an
+agent-turn payload (`--message` on creation).
+
+Manual force-runs bypass cadence but still respect the execution window and
+the job's authority and delivery policies. See
+[Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies).
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
@@ -136,6 +169,24 @@ An isolated agent-turn job created from a conversation also captures that conver
     Isolated runs reset ambient conversation context. Channel and group routing, send/queue policy, elevation, origin, and ACP runtime binding are reset for the new run. Safe preferences and explicit user-selected model or auth overrides can carry across runs.
   </Accordion>
 </AccordionGroup>
+
+### Binding older jobs to their conversation
+
+Jobs created before OpenClaw recorded the creating conversation's incarnation name
+their conversation only by session key. They keep their existing behavior, with
+the run session's board, memory, and workspace, until someone binds them. To bind
+one, ask the agent in that conversation to bind it (the automations tool's `bind`
+action) from an authenticated owner turn: a Control UI administrator or the
+configured channel owner. The binding records the
+conversation's current incarnation, and later runs use that conversation's
+resources as a linked child run. Bind refuses a job whose recorded conversation is
+another one, a job that is already bound or is not linked by key alone, and turns
+without owner authority. Run from a shell, `openclaw automations bind` has no
+conversation and is refused with that instruction.
+
+A bind from an authenticated Control UI turn also stores that turn's operator
+source, as creation from that turn would, so each occurrence rechecks the device
+and access grant. Other owner turns keep the job's recorded requester.
 
 When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. If the caller cannot be confirmed as the job's exact live run, self-removal fails without deleting the job or cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
@@ -172,6 +223,20 @@ Use `automations add|create --webhook <url>` or `automations edit <job-id> --web
 
 Reminders created from an active chat preserve the live chat delivery target for announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
 
+### Owner targets and direct-message policy
+
+`--delivery-target owner` resolves a positively identified owner DM dynamically
+instead of following the last group conversation. It cannot be combined with
+`--to`, `--thread-id`, or `--webhook`. On edit, it clears a previous explicit
+recipient and thread; setting an explicit recipient replaces owner targeting.
+Use `--clear-delivery-target` to remove it.
+
+`--direct-policy allow|block` controls direct/DM delivery for the job. The
+default is `allow`; `block` prohibits DMs. Use `--clear-direct-policy` to remove
+the stored policy. These policies support agent-turn jobs in any supported session,
+including `main`, and non-main command or script jobs with chat delivery.
+They cannot be set and cleared in the same command.
+
 ### Failure delivery
 
 Failure notifications resolve in this order:
@@ -184,8 +249,12 @@ Jobs with one of those routes default to an execution-failure alert after 2 cons
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
+After an in-place plugin replacement, the next script invocation refreshes its retained tool runtime before executing. It uses the current plugin hooks without restarting the Gateway or replaying a completed tool effect.
+
+For transient failures, a scheduler-authored repair may intentionally return `NO_REPLY` and finish silently without a WebChat error. Public messages do not gain that waiver by claiming cron provenance.
+
 <Note>
-Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
+Main-session system-event and script jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Agent-turn and isolated jobs accept it in all modes.
 </Note>
 
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable and exposes the instant as `runAtMs`.
@@ -250,6 +319,8 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 ```
 
 With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`. It does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`. `failed`, `unknown`, execution errors or skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
+
+Interrupting the CLI stops waiting for the result. The queued run continues in the Gateway.
 
 <Note>
 Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `trigger.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
@@ -330,6 +401,18 @@ Retention behavior:
 - Terminal run history is retained for 7 days, and `lost` rows for 24 hours. An additional ceiling keeps only the newest 2000 rows per job and history class.
 
 ## Migrating older jobs
+
+Run `openclaw doctor --fix` to convert supported July 2026 and later heartbeat
+configuration and monitor jobs to ordinary editable agent-turn automations.
+After migration, edit or disable the job itself. Config reloads, restarts, and
+later Doctor runs do not overwrite edits or recreate a deleted migrated job.
+Use `automations show`, `runs`, `enable`, and `disable` to manage the jobs.
+Legacy `system heartbeat` controls apply only to converted/default jobs. See [Heartbeat migration](/gateway/heartbeat).
+
+The `cron.*` Gateway methods remain compatible. The deprecated
+`--wake now|next-heartbeat` field remains accepted, but scheduled jobs execute
+their payload through ordinary session execution when the job is due. It does
+not add another wake or deferral step. Use the job's schedule to control timing.
 
 <Note>
 If you have automation jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy job fields: `jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, and payload `provider` delivery aliases. It also migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery. It removes that config key afterwards. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, Doctor removes the inert top-level `notify` marker for jobs with no migration target. The existing delivery is preserved unchanged. `doctor --fix` therefore stops re-warning about them.
@@ -424,16 +507,19 @@ openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 Run-history filters are applied by the Gateway before paging. Use `--status`
 with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
 `delivered`, `not-delivered`, `unknown`, or `not-requested`. `--query <text>`
-searches run summaries and errors. `--sort asc|desc` selects oldest-first or
-newest-first order, and `--offset <n>` advances through the result set using the
-page metadata returned by the previous command.
+searches run summaries and errors. Matching is case-insensitive and compares
+canonically equivalent Unicode forms as the same text without rewriting stored
+run history. `--sort asc|desc` selects oldest-first or newest-first order, and
+`--offset <n>` advances through the result set using the page metadata returned
+by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
 Use `--query <text>` to search job IDs, names, descriptions, declared agent IDs,
-and display names. Matching is case-insensitive and uses the Gateway's existing
-inventory filter before paging; the CLI reads every bounded matching page with
-the same query. It combines with `--all`, `--agent`, and either text or `--json`
+and display names. Matching is case-insensitive and compares canonically equivalent
+Unicode forms as the same text without rewriting stored metadata. The Gateway filters
+before paging; the CLI reads every bounded matching page with the same query. It
+combines with `--all`, `--agent`, and either text or `--json`
 output. Omitting the flag or passing only whitespace keeps the existing listing.
 This searches job metadata, not message or script payloads; use `automations runs
 <job-id> --query <text>` to search run summaries and errors instead.
@@ -465,7 +551,7 @@ Event schedules appear as `on-exit` or `stream` without their command text.
 
 `automations runs` entries include delivery diagnostics with the intended automation target, the resolved target, message-tool sends, fallback use, and delivered state.
 
-Private per-job scratch (heartbeat checklists and similar monitor context):
+Private per-job scratch for checklists and other run context:
 
 ```bash
 openclaw automations scratch <job-id>                  # print current scratch content
@@ -475,7 +561,12 @@ openclaw automations scratch <job-id> --file notes.md  # replace scratch from a 
 openclaw automations scratch <job-id> --unset          # remove the scratch row
 ```
 
-Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. See [Heartbeat](/gateway/heartbeat#monitor-scratch-optional) for how heartbeat monitors use scratch.
+Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. Present scratch becomes bounded model prompt context, so do not store secrets in it. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results) for self-scoped scratch and result actions.
+
+For a job with `--skip-if-scratch-empty`, blank text, comments, headings, fence
+markers, and empty checklist stubs skip the run. `--unset` removes scratch;
+missing scratch still runs. Use `automations disable <job-id>` to stop the job
+regardless of scratch content.
 
 Agent and session retargeting:
 
@@ -486,7 +577,7 @@ openclaw automations edit <job-id> --session current
 openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 
-`openclaw automations add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
+`openclaw automations add` warns when `--agent` is omitted on agent-turn or script jobs. Ownership resolves from an explicit `--agent`, then an agent-qualified `--session-key`, then the configured default agent. The default follows `agents.defaults.systemAgent.agentId` or the applicable legacy/sole-agent fallback; omitting `--agent` does not pin the job to `main`. Pass `--agent <id>` at create time to pin a specific agent. If no owner can be resolved, creation fails with an error asking you to select an agent or configure the system agent.
 
 Delivery tweaks:
 

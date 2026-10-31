@@ -17,7 +17,7 @@ const OnboardingRecommendationMatchSchema = z.object({
   }),
 });
 
-export const OnboardingRecommendationMatchesSchema = z.array(OnboardingRecommendationMatchSchema);
+const OnboardingRecommendationMatchesSchema = z.array(OnboardingRecommendationMatchSchema);
 
 export type OnboardingRecommendationMatch = z.infer<typeof OnboardingRecommendationMatchSchema>;
 
@@ -92,5 +92,5 @@ export function prepareOnboardingRecommendationPending(
 ) {
   const nowMs = params.nowMs ?? Date.now();
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
-  return { matches, expected: structuredClone(params.expected), nowMs };
+  return { matches, expected: params.expected, nowMs };
 }

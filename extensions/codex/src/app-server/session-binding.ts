@@ -1,5 +1,3 @@
-/** SQLite-backed Codex app-server thread bindings. */
-
 import {
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
@@ -11,17 +9,12 @@ import {
   resolvePreparedNativeSessionBinding,
   type PreparedNativeSessionBindingAuthority,
   type NativeSessionBindingLeaseOptions,
-  type NativeSessionBindingStateStoreV2,
   type NativeSessionGenerationAdoptionResult,
   type PreparedNativeSessionGenerationOperations,
   type RetainedNativeSessionGenerationAuthority,
   type NativeSessionGenerationReclaimPlan,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { CodexManagedThreadStore } from "./managed-thread-store.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
@@ -48,11 +41,14 @@ import {
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
   readCurrentCodexAppServerBinding,
+  prepareCurrentCodexAppServerBindingRead,
+  prepareCodexNativeSubagentBindingGuard,
   readCurrentCodexAppServerBindingAsync,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
   readStoredCodexAppServerBinding,
   validateBindingForWrite,
+  type CodexBindingStateStore,
   type CodexAppServerBindingIdentity,
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
@@ -66,6 +62,7 @@ export {
   readStoredCodexAppServerBinding,
   sessionBindingIdentity,
   validateBindingForWrite,
+  type CodexBindingStateStore,
   type CodexAppServerBindingIdentity,
   type CodexAppServerContextEngineBinding,
   type CodexAppServerContextEngineProjectionBinding,
@@ -148,17 +145,6 @@ export async function clearCodexBindingForClient(
   );
 }
 
-export type CodexBindingStateStore = Omit<
-  NativeSessionBindingStateStoreV2<StoredCodexAppServerBinding>,
-  "lookup" | "assertLeaseCurrent"
-> &
-  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
-    asyncReads: Pick<
-      PluginStateKeyedStore<StoredCodexAppServerBinding>,
-      "lookup" | "lookupMany" | "entries"
-    >;
-  };
-
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
   return new Error(`Lost Codex binding lease: ${key}`, cause === undefined ? undefined : { cause });
 }
@@ -171,6 +157,14 @@ export type CodexAppServerBindingStore = {
   readAsync(
     identity: CodexAppServerBindingIdentity,
   ): Promise<CodexAppServerThreadBinding | undefined>;
+  /** Retain current committed binding facts for a synchronous effect guard. */
+  prepareRead(
+    identity: CodexAppServerBindingIdentity,
+  ): ReturnType<typeof prepareCurrentCodexAppServerBindingRead>;
+  prepareNativeSubagentGuard(
+    identity: CodexAppServerBindingIdentity,
+    owner: CodexNativeSubagentHistoryOwner,
+  ): ReturnType<typeof prepareCodexNativeSubagentBindingGuard>;
   /** Fresh worker-backed acquisition with row-ordered binding validation. */
   readMany: (
     identities: readonly CodexAppServerBindingIdentity[],
@@ -227,10 +221,8 @@ export type CodexAppServerBindingStore = {
 type CodexSessionGenerationReclaimParams = {
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
-  storePath?: string;
   assertCurrent?: () => void;
   bindingStore: CodexAppServerBindingStore;
-  reclaimStale?: boolean;
 };
 
 /** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
@@ -423,6 +415,9 @@ export function createCodexAppServerBindingStore(
   return {
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
     readAsync: (identity) => readCurrentCodexAppServerBindingAsync(state.asyncReads, identity),
+    prepareRead: (identity) => prepareCurrentCodexAppServerBindingRead(state, identity),
+    prepareNativeSubagentGuard: (identity, owner) =>
+      prepareCodexNativeSubagentBindingGuard(state, identity, owner),
     readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
       readCurrentNativePendingAssignments(state.asyncReads, identity, owner),

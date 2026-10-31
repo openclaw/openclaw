@@ -54,6 +54,18 @@ const legacy = (list?: LegacyAgentListEntry[]): OpenClawConfigWithLegacyRoster =
 });
 
 describe("agent roster resolution", () => {
+  it("inherits workspace file policy and permits a private per-agent override", () => {
+    const cfg = fleet({
+      defaults: { workspaceFileMode: "0660" },
+      entries: { shared: {}, private: { workspaceFileMode: "0600" } },
+    });
+    expect(agentConfig(cfg, "SHARED")?.workspaceFileMode).toBe("0660");
+    expect(agentConfig(cfg, "private")?.workspaceFileMode).toBe("0600");
+    expect(
+      agentConfig(fleet({ entries: { main: {} } }), "main")?.workspaceFileMode,
+    ).toBeUndefined();
+  });
+
   it.each([undefined, "testprof"])("keeps configured-agent guidance runnable: %s", (profile) => {
     const cfg = twoAgents();
     vi.stubEnv("OPENCLAW_PROFILE", profile);
@@ -259,6 +271,41 @@ describe("agent roster resolution", () => {
     } finally {
       entries.mockRestore();
       ids.mockRestore();
+      if (previous) {
+        setRuntimeConfigSnapshot(previous);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    }
+  });
+
+  it("shares immutable agent ids per publication and capture without retaining removed agents", () => {
+    const previous = getRuntimeConfigSnapshot();
+    const config = twoAgents();
+    try {
+      setRuntimeConfigSnapshot(config);
+      const captured = captureRuntimeConfig(config);
+      const ids = listAgentIds(config);
+      const capturedIds = listAgentIds(captured);
+      expect(ids).toEqual(["main", "ops"]);
+      expect(listAgentIds(config)).toBe(ids);
+      expect(listAgentIds(captured)).toBe(capturedIds);
+      expect(Object.isFrozen(ids)).toBe(true);
+      expect(Object.isFrozen(capturedIds)).toBe(true);
+
+      delete config.agents!.entries!.ops;
+      setRuntimeConfigSnapshot(config);
+      expect(listAgentIds(config)).toEqual(["main"]);
+      expect(() => configuredAgent(config, "ops")).toThrow('Unknown agent id "ops"');
+      expect(listAgentIds(captured)).toBe(capturedIds);
+      expect(capturedIds).toEqual(["main", "ops"]);
+
+      clearRuntimeConfigSnapshot();
+      config.agents!.entries!.research = {};
+      expect(listAgentIds(config)).toEqual(["main", "research"]);
+      delete config.agents!.entries!.main;
+      expect(listAgentIds(config)).toEqual(["research"]);
+    } finally {
       if (previous) {
         setRuntimeConfigSnapshot(previous);
       } else {

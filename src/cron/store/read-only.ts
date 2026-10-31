@@ -14,16 +14,21 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStatePathAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
+import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { cronStoreKey } from "./key.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { restoreCronLoadError } from "./load-error.js";
+import { resolveCronStoreKeyAsync } from "./paths.js";
 import type {
+  CronOwnerInspectionRow,
   CronReadOnlyRequest,
   CronReadOnlyResult,
   CronRunHistoryCandidates,
@@ -32,6 +37,44 @@ import type {
 } from "./read-only.types.js";
 import type { CronRunRecord } from "./run-history.types.js";
 import type { LoadedCronStore } from "./types.js";
+
+type CronReadPool = WorkerTaskPool<CronReadOnlyRequest, Extract<CronReadOnlyResult, { ok: true }>>;
+const readPools = resolveGlobalMap<string, CronReadPool>(Symbol.for("openclaw.cronReadPools"));
+
+function createReadPool(): CronReadPool {
+  ensureSqliteLibrarySelected();
+  return new WorkerTaskPool<CronReadOnlyRequest, Extract<CronReadOnlyResult, { ok: true }>>({
+    workerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly"),
+    workerClass: "singleton",
+    sharedCompute: true,
+    // Reuse across minute-long polls; the pool extends a recreated worker to five minutes.
+    idleTimeoutMs: 120_000,
+    // Retire a failed reader before dispatching another request on its isolate.
+    validateResult(result: CronReadOnlyResult) {
+      if (!result.ok) {
+        throw restoreCronLoadError(result.error);
+      }
+    },
+  });
+}
+
+function retainedReadPool(
+  admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>,
+): CronReadPool {
+  const key = admission.coordinationKey;
+  let pool = readPools.get(key);
+  if (!pool) {
+    pool = createReadPool();
+    readPools.set(key, pool);
+    const retained = pool;
+    const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+      await retained.close();
+      readPools.delete(key);
+      unregister();
+    });
+  }
+  return pool;
+}
 
 function emptyLoadedCronStore(): LoadedCronStore {
   return {
@@ -43,15 +86,38 @@ function emptyLoadedCronStore(): LoadedCronStore {
   };
 }
 
-/** Loads cron jobs from existing SQLite state without creating or migrating it. */
+/** Loads cron jobs from existing state without creating or migrating it. */
 export async function loadCronJobsStoreWithConfigJobsReadOnly(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<LoadedCronStore> {
-  return (
-    (await readCronState({ storeKey: cronStoreKey(storePath), env })).loaded ??
-    emptyLoadedCronStore()
-  );
+  const context = captureOpenClawStateWorkerContext({ env });
+  const storeKey = await resolveCronStoreKeyAsync(storePath, env, context);
+  return loadCronJobsStoreWithConfigJobsReadOnlyByKey(storeKey, env);
+}
+
+/** Reads a captured opaque partition without applying public pathname selection again. */
+export async function loadCronJobsStoreWithConfigJobsReadOnlyByKey(
+  storeKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LoadedCronStore> {
+  return (await readCronState({ storeKey, env })).loaded ?? emptyLoadedCronStore();
+}
+
+/** PostgreSQL state is read in the cron worker, never on the Gateway thread. */
+export async function readCronJobOwnerRowsReadOnly(
+  storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<CronOwnerInspectionRow[]> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const storeKey = await resolveCronStoreKeyAsync(storePath, env, context);
+  return (await readCronState({ storeKey, env, inspect: "owners" })).owners ?? [];
+}
+
+export async function assertCronStateReadSchemaReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  await readCronState({ env, inspect: "schema" });
 }
 
 /** Doctor inventory includes raw definitions in every persisted partition. */
@@ -65,33 +131,28 @@ async function readCronState({
   storeKey,
   env,
   history,
+  inspect,
 }: {
   storeKey?: string;
   env: NodeJS.ProcessEnv;
   history?: CronReadOnlyRequest["history"];
+  inspect?: CronReadOnlyRequest["inspect"];
 }): Promise<Extract<CronReadOnlyResult, { ok: true }>> {
   const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
     return { ok: true };
   }
   // Doctor's all-partition inventory must not create WAL/SHM files beside the source.
-  const preserveArtifacts = storeKey === undefined || isArtifactPreservingStateRead();
+  const preserveArtifacts =
+    !isStatePostgres() && (storeKey === undefined || isArtifactPreservingStateRead());
   const admission = captureOpenClawStateDatabaseReadAdmission(statePath);
   const identity = admission.identity;
   const canonicalPath = identity.canonicalPath;
   const maintenance = getOpenClawDatabaseMaintenanceScope();
-  ensureSqliteLibrarySelected();
-  const environment = { ...process.env };
-  const environmentBytes = Object.entries(environment).reduce(
-    (bytes, [key, value]) => bytes + Buffer.byteLength(key) + Buffer.byteLength(value ?? ""),
-    0,
-  );
-  const pool = new WorkerTaskPool<CronReadOnlyRequest, CronReadOnlyResult>({
-    workerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly"),
-    workerOptions: { env: environment },
-    workerClass: "singleton",
-    sharedCompute: true,
-  });
+  // Snapshot files and maintenance custody need confirmed retirement before cleanup.
+  // Ordinary reads close their connection in the worker and reuse only its isolate.
+  const dedicated = preserveArtifacts || maintenance !== undefined;
+  const pool = dedicated ? createReadPool() : retainedReadPool(admission);
   const controller = new AbortController();
   const producerSettled = createDeferredCore();
   let stagingRoot: string | undefined;
@@ -106,7 +167,7 @@ async function readCronState({
     }
     return (cleanupPending ??= (async () => {
       // A failed retirement keeps this exact pool and its pins available for canonical retry.
-      if (!workerStopped) {
+      if (dedicated && !workerStopped) {
         await pool.close();
         workerStopped = true;
       }
@@ -174,6 +235,7 @@ async function readCronState({
           storeKey,
           history,
           stagingRoot,
+          inspect,
         },
         {
           signal: controller.signal,
@@ -187,12 +249,9 @@ async function readCronState({
             Buffer.byteLength(history?.transcript?.runId ?? "") +
             (history?.transcript?.runAtMs === undefined ? 0 : 8) +
             Buffer.byteLength(stagingRoot ?? "") +
-            environmentBytes,
+            Buffer.byteLength(inspect ?? ""),
         },
       );
-      if (!result.ok) {
-        throw restoreCronLoadError(result.error);
-      }
       loaded = result;
       readSucceeded = true;
     } catch (error) {
@@ -224,7 +283,7 @@ export async function readCronRunHistoryCandidates(
   return (
     (
       await readCronState({
-        storeKey: cronStoreKey(storeKey),
+        storeKey,
         env: process.env,
         history: { jobId, query, jobNameById },
       })
@@ -243,7 +302,7 @@ export async function readCronRunHistoryRecords(
   return (
     (
       await readCronState({
-        storeKey: cronStoreKey(storeKey),
+        storeKey,
         env: process.env,
         history: { taskIds, view },
       })
@@ -258,7 +317,7 @@ export async function readCronRunHistoryBinding(
 ): Promise<CronRunHistoryBinding | undefined> {
   return (
     await readCronState({
-      storeKey: cronStoreKey(storeKey),
+      storeKey,
       env: process.env,
       history: { jobId, transcript },
     })

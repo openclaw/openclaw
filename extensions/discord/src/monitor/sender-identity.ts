@@ -9,22 +9,11 @@ export type DiscordSenderIdentity = {
   tag?: string;
   label: string;
   isPluralKit: boolean;
-  pluralkit?: {
-    memberId: string;
-    memberName?: string;
-    systemId?: string;
-    systemName?: string;
-  };
 };
 
 type DiscordWebhookMessageLike = {
   webhookId?: string | null;
   webhook_id?: string | null;
-};
-
-type DiscordMemberLike = {
-  nickname?: string | null;
-  nick?: string | null;
 };
 
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
@@ -33,7 +22,10 @@ export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): str
 
 export function resolveDiscordSenderIdentity(params: {
   author: User;
-  member?: DiscordMemberLike | null;
+  member?: {
+    nickname?: string | null;
+    nick?: string | null;
+  } | null;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): DiscordSenderIdentity {
   const pkInfo = params.pluralkitInfo ?? null;
@@ -51,12 +43,6 @@ export function resolveDiscordSenderIdentity(params: {
       tag: normalizeOptionalString(pkMember?.name),
       label,
       isPluralKit: true,
-      pluralkit: {
-        memberId,
-        memberName,
-        systemId: normalizeOptionalString(pkSystem?.id),
-        systemName,
-      },
     };
   }
 

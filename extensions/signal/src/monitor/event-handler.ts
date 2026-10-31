@@ -75,7 +75,6 @@ import {
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
-  type SignalSender,
 } from "../identity.js";
 import { formatSignalMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
@@ -92,12 +91,7 @@ import {
   resolveSignalInboundDebounceKey,
   type SignalInboundEntry,
 } from "./event-handler.control-lane.js";
-import type {
-  SignalEnvelope,
-  SignalEventHandlerDeps,
-  SignalReactionMessage,
-  SignalReceivePayload,
-} from "./event-handler.types.js";
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 import {
@@ -366,6 +360,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       void statusReactionController.setQueued();
     }
 
+    const sendTyping = async (stop?: true) => {
+      if (ctxPayload.To) {
+        const { baseUrl, account, accountId } = deps;
+        await sendTypingSignal(ctxPayload.To, { cfg, baseUrl, account, accountId, stop });
+      }
+    };
     const { onModelSelected, typingCallbacks, ...replyPipeline } =
       createChannelMessageReplyPipeline({
         cfg,
@@ -373,17 +373,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         accountId: route.accountId,
         typing: {
-          start: async () => {
-            if (!ctxPayload.To) {
-              return;
-            }
-            await sendTypingSignal(ctxPayload.To, {
-              cfg,
-              baseUrl: deps.baseUrl,
-              account: deps.account,
-              accountId: deps.accountId,
-            });
-          },
+          start: () => sendTyping(),
+          // Without a stop, Signal keeps showing typing until its own timeout.
+          stop: () => sendTyping(true),
           onStartError: (err) => {
             logTypingFailure({
               log: logVerbose,
@@ -651,13 +643,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...(last.messageId ? { messageId: last.messageId } : {}),
       inboundEventKind: "user_request",
     };
-    return await Promise.all(
-      entries.flatMap((entry) =>
-        entry.resolveChannelIngress
-          ? [entry.resolveChannelIngress(contextBinding)]
-          : (entry.channelIngress ?? []).map(async (ingress) => ingress),
-      ),
-    );
+    return await Promise.all(entries.map((entry) => entry.resolveChannelIngress(contextBinding)));
   }
 
   const flushDebouncedSignalInboundEntries = (
@@ -728,102 +714,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       trackSignalInboundFlush(flushDebouncedSignalInboundEntries(entries, createFlush)),
     onError: reportSignalInboundFlushError,
   });
-
-  async function handleReactionOnlyInbound(params: {
-    cfg: SignalEventHandlerDeps["cfg"];
-    envelope: SignalEnvelope;
-    sender: SignalSender;
-    senderDisplay: string;
-    reaction: SignalReactionMessage;
-    hasBodyContent: boolean;
-    accessDecision: { decision: "allow" | "block" | "pairing"; reasonCode: string };
-  }): Promise<boolean> {
-    if (params.hasBodyContent) {
-      return false;
-    }
-    if (params.reaction.isRemove) {
-      return true; // Ignore reaction removals
-    }
-    const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
-    const senderName = params.envelope.sourceName ?? params.senderDisplay;
-    const groupId = params.reaction.groupInfo?.groupId ?? undefined;
-    const groupName = params.reaction.groupInfo?.groupName ?? undefined;
-    const isGroup = Boolean(groupId);
-    const messageId = params.reaction.targetSentTimestamp
-      ? String(params.reaction.targetSentTimestamp)
-      : "unknown";
-    const conversationKey = resolveSignalApprovalConversationKey(
-      groupId ? `group:${groupId}` : `signal:${resolveSignalRecipient(params.sender)}`,
-    );
-    if (
-      conversationKey &&
-      (await maybeResolveSignalApprovalReaction({
-        cfg: params.cfg,
-        accountId: deps.accountId,
-        conversationKey,
-        messageId,
-        reactionKey: emojiLabel,
-        actorId: formatSignalSenderId(params.sender),
-        targetAuthor: params.reaction.targetAuthor,
-        targetAuthorUuid: params.reaction.targetAuthorUuid,
-        logVerboseMessage: logVerbose,
-      }))
-    ) {
-      return true;
-    }
-    if (params.accessDecision.decision !== "allow") {
-      logVerbose(
-        `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
-      );
-      return true;
-    }
-    const targets = resolveSignalReactionTargets(params.reaction);
-    const shouldNotify = shouldEmitSignalReactionNotification({
-      mode: deps.reactionMode,
-      account: deps.account,
-      accountUuid: deps.accountUuid,
-      targets,
-      sender: params.sender,
-      allowlist: deps.reactionAllowlist,
-    });
-    if (!shouldNotify) {
-      return true;
-    }
-
-    const senderPeerId = resolveSignalPeerId(params.sender);
-    const route = resolveSignalInboundRoute({
-      cfg: params.cfg,
-      accountId: deps.accountId,
-      isGroup,
-      groupId,
-      senderPeerId,
-    });
-    const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-    const text = buildSignalReactionSystemEventText({
-      emojiLabel,
-      actorLabel: senderName,
-      messageId,
-      targetLabel: targets[0]?.display,
-      groupLabel,
-    });
-    const senderId = formatSignalSenderId(params.sender);
-    const contextKey = [
-      "signal",
-      "reaction",
-      "added",
-      messageId,
-      senderId,
-      emojiLabel,
-      groupId ?? "",
-    ]
-      .filter(Boolean)
-      .join(":");
-    enqueueSystemEvent(text, {
-      sessionKey: route.sessionKey,
-      contextKey,
-    });
-    return true;
-  }
 
   return async (
     event: SignalSseEvent,
@@ -923,18 +813,88 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Boolean(messageText || visibleQuoteText) ||
       Boolean(!reaction && dataMessage?.attachments?.length);
 
-    if (
-      reaction &&
-      (await handleReactionOnlyInbound({
-        cfg,
-        envelope,
+    if (reaction && !hasBodyContent) {
+      if (reaction.isRemove) {
+        return;
+      }
+      const emojiLabel = normalizeOptionalString(reaction.emoji) ?? "emoji";
+      const reactionSenderName = envelope.sourceName ?? senderDisplay;
+      const reactionGroupId = reaction.groupInfo?.groupId ?? undefined;
+      const reactionGroupName = reaction.groupInfo?.groupName ?? undefined;
+      const isReactionGroup = Boolean(reactionGroupId);
+      const reactionMessageId = reaction.targetSentTimestamp
+        ? String(reaction.targetSentTimestamp)
+        : "unknown";
+      const conversationKey = resolveSignalApprovalConversationKey(
+        reactionGroupId ? `group:${reactionGroupId}` : `signal:${resolveSignalRecipient(sender)}`,
+      );
+      if (
+        conversationKey &&
+        (await maybeResolveSignalApprovalReaction({
+          cfg,
+          accountId: deps.accountId,
+          conversationKey,
+          messageId: reactionMessageId,
+          reactionKey: emojiLabel,
+          actorId: formatSignalSenderId(sender),
+          targetAuthor: reaction.targetAuthor,
+          targetAuthorUuid: reaction.targetAuthorUuid,
+          logVerboseMessage: logVerbose,
+        }))
+      ) {
+        return;
+      }
+      if (senderAccess.decision !== "allow") {
+        logVerbose(`Blocked signal reaction sender ${senderDisplay} (${senderAccess.reasonCode})`);
+        return;
+      }
+      const targets = resolveSignalReactionTargets(reaction);
+      const shouldNotify = shouldEmitSignalReactionNotification({
+        mode: deps.reactionMode,
+        account: deps.account,
+        accountUuid: deps.accountUuid,
+        targets,
         sender,
-        senderDisplay,
-        reaction,
-        hasBodyContent,
-        accessDecision: senderAccess,
-      }))
-    ) {
+        allowlist: deps.reactionAllowlist,
+      });
+      if (!shouldNotify) {
+        return;
+      }
+
+      const reactionSenderPeerId = resolveSignalPeerId(sender);
+      const reactionRoute = resolveSignalInboundRoute({
+        cfg,
+        accountId: deps.accountId,
+        isGroup: isReactionGroup,
+        groupId: reactionGroupId,
+        senderPeerId: reactionSenderPeerId,
+      });
+      const groupLabel = isReactionGroup
+        ? `${reactionGroupName ?? "Signal Group"} id:${reactionGroupId}`
+        : undefined;
+      const text = buildSignalReactionSystemEventText({
+        emojiLabel,
+        actorLabel: reactionSenderName,
+        messageId: reactionMessageId,
+        targetLabel: targets[0]?.display,
+        groupLabel,
+      });
+      const senderId = formatSignalSenderId(sender);
+      const contextKey = [
+        "signal",
+        "reaction",
+        "added",
+        reactionMessageId,
+        senderId,
+        emojiLabel,
+        reactionGroupId ?? "",
+      ]
+        .filter(Boolean)
+        .join(":");
+      enqueueSystemEvent(text, {
+        sessionKey: reactionRoute.sessionKey,
+        contextKey,
+      });
       return;
     }
     if (!dataMessage) {
@@ -1224,7 +1184,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       media: mediaFacts,
       commandAuthorized,
       canDetectMention,
-      requireMention,
       wasMentioned: effectiveWasMentioned,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,

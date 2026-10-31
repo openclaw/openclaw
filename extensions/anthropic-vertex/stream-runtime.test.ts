@@ -3,46 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import {
-  createAssistantMessageEventStream,
-  stream as streamModel,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { stream as streamModel, type Model } from "openclaw/plugin-sdk/llm";
 import {
   notifyProviderStreamOpened,
   withProviderAcceptanceObserver,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
-
-function createStreamDeps() {
-  const streamAnthropicMock = vi.fn(
-    (..._args: Parameters<AnthropicVertexStreamDeps["streamAnthropic"]>) =>
-      createAssistantMessageEventStream(),
-  );
-  const anthropicVertexCtorMock = vi.fn();
-  const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
-    anthropicVertexCtorMock(options);
-  } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
-  const googleAuthCtorMock = vi.fn();
-  const googleAuthClient = {} as InstanceType<AnthropicVertexStreamDeps["GoogleAuth"]>;
-  const MockGoogleAuth = function MockGoogleAuth(options: unknown) {
-    googleAuthCtorMock(options);
-    return googleAuthClient;
-  } as unknown as AnthropicVertexStreamDeps["GoogleAuth"];
-
-  return {
-    deps: {
-      AnthropicVertex: MockAnthropicVertex,
-      GoogleAuth: MockGoogleAuth,
-      streamAnthropic: streamAnthropicMock,
-    },
-    streamAnthropicMock,
-    anthropicVertexCtorMock,
-    googleAuthCtorMock,
-    googleAuthClient,
-  };
-}
+import { createStreamDeps } from "./stream.test-support.js";
 
 let createAnthropicVertexStreamFn: typeof import("./stream-runtime.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./stream-runtime.js").createAnthropicVertexStreamFnForModel;

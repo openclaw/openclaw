@@ -1,7 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  runAsGatewaySubscription,
+} from "../../process/gateway-work-admission.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
@@ -10,17 +14,12 @@ const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
 const MAX_REMOTE_WATCHERS = 128;
 type RemoteSkillsWatch = {
   access: AgentWorkspaceAccess;
-  workspaceDir: string;
-  agentIds: Set<string>;
-  unowned: boolean;
   signature: string;
   controller: AbortController;
   unavailable: boolean;
   task?: Promise<void>;
 };
 const remoteWatchers = new Map<string, RemoteSkillsWatch>();
-// A watcher removed from the registry may still be settling after abort.
-const remoteWatchTasks = new Map<Promise<void>, RemoteSkillsWatch>();
 let registryUpdate = Promise.resolve();
 
 function updateRegistry(update: () => Promise<void>): Promise<void> {
@@ -39,7 +38,6 @@ async function retireWatcher(watcherKey: string): Promise<void> {
 export function ensureRemoteSkillsWatcher(params: {
   watcherKey: string;
   workspaceDir: string;
-  agentId?: string;
   executionWorkspaceDir?: string;
   access: AgentWorkspaceAccess;
   sourcePlan: WorkspaceSkillSourcePlan;
@@ -57,11 +55,6 @@ export function ensureRemoteSkillsWatcher(params: {
     const signature = JSON.stringify(request);
     const previous = remoteWatchers.get(watcherKey);
     if (previous?.access === access && previous.signature === signature) {
-      if (params.agentId) {
-        previous.agentIds.add(params.agentId);
-      } else {
-        previous.unowned = true;
-      }
       remoteWatchers.delete(watcherKey);
       remoteWatchers.set(watcherKey, previous);
       if (previous.unavailable) {
@@ -78,9 +71,6 @@ export function ensureRemoteSkillsWatcher(params: {
     }
     const state: RemoteSkillsWatch = {
       access,
-      workspaceDir,
-      agentIds: new Set(params.agentId ? [params.agentId] : []),
-      unowned: params.agentId === undefined,
       signature,
       controller: new AbortController(),
       unavailable: !access.watchSkills,
@@ -94,30 +84,33 @@ export function ensureRemoteSkillsWatcher(params: {
     }
     // The remote subscription owns a node invocation. Retire it when drain begins,
     // before shutdown waits for invocations to settle and eventually closes watchers.
+    // Until then its open invocation must not defer a restart or suspension.
     const signal = AbortSignal.any([state.controller.signal, drainSignal]);
     const isCurrent = () => remoteWatchers.get(watcherKey) === state && !signal.aborted;
     state.task = runInSkillsWatcherContext(async () => {
       try {
-        await watch(
-          request,
-          (event) => {
-            if (!isCurrent()) {
-              return;
-            }
-            if (event === "unavailable") {
-              state.unavailable = true;
-            } else if (event === "available") {
-              // Recovery has already reconciled outage edits through change events.
-              // Coverage alone restores reuse without inventing a content revision.
-              state.unavailable = false;
-              return;
-            }
-            bumpSkillsSnapshotVersion({
-              workspaceDir,
-              reason: "remote-node",
-            });
-          },
-          signal,
+        await runAsGatewaySubscription(() =>
+          watch(
+            request,
+            (event) => {
+              if (!isCurrent()) {
+                return;
+              }
+              if (event === "unavailable") {
+                state.unavailable = true;
+              } else if (event === "available") {
+                // Recovery has already reconciled outage edits through change events.
+                // Coverage alone restores reuse without inventing a content revision.
+                state.unavailable = false;
+                return;
+              }
+              bumpSkillsSnapshotVersion({
+                workspaceDir,
+                reason: "remote-node",
+              });
+            },
+            signal,
+          ),
         );
       } catch (error) {
         if (isCurrent()) {
@@ -132,11 +125,6 @@ export function ensureRemoteSkillsWatcher(params: {
         }
       }
     });
-    remoteWatchTasks.set(state.task, state);
-    void state.task.then(
-      () => remoteWatchTasks.delete(state.task!),
-      () => remoteWatchTasks.delete(state.task!),
-    );
   });
 }
 
@@ -144,37 +132,9 @@ export function disposeRemoteSkillsWatcher(watcherKey: string): Promise<void> {
   return updateRegistry(() => retireWatcher(watcherKey));
 }
 
-export function closeRemoteSkillsWatchersForAgent(params: { agentId: string }): Promise<void> {
-  return updateRegistry(async () => {
-    const keys = [...remoteWatchers]
-      .filter(([, state]) => {
-        if (!state.agentIds.delete(params.agentId)) {
-          return false;
-        }
-        return state.agentIds.size === 0 && !state.unowned;
-      })
-      .map(([key]) => key);
-    await Promise.all(keys.map(retireWatcher));
-    await Promise.all(
-      [...remoteWatchTasks]
-        .filter(([, owner]) => owner.agentIds.has(params.agentId))
-        .map(([task]) => task),
-    );
-  });
-}
-
 export function closeRemoteSkillsWatchers(): Promise<void> {
   return updateRegistry(async () => {
     const results = await Promise.allSettled([...remoteWatchers.keys()].map(retireWatcher));
-    const settledTasks = await Promise.allSettled(remoteWatchTasks.keys());
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    failures.push(
-      ...settledTasks.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Remote skills watcher shutdown failed");
-    }
+    throwSettledAggregate(results, "Remote skills watcher shutdown failed");
   });
 }

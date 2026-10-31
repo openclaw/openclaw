@@ -15,21 +15,31 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { getActiveRemoteModelCatalog } from "../../model-catalog/remote-overlay.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
+import {
+  readSessionRowChangeRevision,
+  readWithSessionStoreTopology,
+} from "../../sessions/session-row-changes.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
+import type { UsageOverviewUsage } from "./usage-overview-report.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
 import type { UsageSessionSelection, UsageGroupingMode } from "./usage-session-selection.js";
 
 const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
 export type SessionsUsageSnapshot = Pick<
   SessionsUsageResult,
-  "updatedAt" | "sessions" | "cacheStatus"
-> & { sources: UsageSessionSelection[]; accessRevision: number; sessionRevision: number };
+  "updatedAt" | "sessions" | "cacheStatus" | "partial"
+> & {
+  sources: UsageSessionSelection[];
+  /** Overview projections keep folded usage packed; rows reference it by agent and key. */
+  overviewUsage?: UsageOverviewUsage;
+  accessRevision: number;
+  sessionRevision: number;
+};
 const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot>>();
 
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
@@ -50,11 +60,13 @@ type SessionsUsageCacheKeyParams = {
   endMs: number;
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
-  limit: number;
   groupingMode: UsageGroupingMode;
   specificKey: string | null;
   includeContextWeight: boolean;
-  overviewKey?: string;
+  overview: boolean;
+  /** Overview rows fold quarter summaries; detail rows carry per-quarter arrays. */
+  projection: "overview" | "detail";
+  includeAllContext: boolean;
 };
 
 // Revisions replace the value for a stable query instead of retaining every rollup.
@@ -65,12 +77,13 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.endMs,
     params.includeUntimestamped === true,
     usageDayBucketCacheKey(params.dayBucket),
-    params.limit,
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
     params.creatorKey,
-    params.overviewKey,
+    params.overview,
+    params.projection,
+    params.includeAllContext,
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
@@ -87,7 +100,7 @@ export async function loadSessionsUsageSnapshotCached(
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
     revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef)?.revision ?? ""}`,
-    revisionOnly: params.overviewKey !== undefined,
+    revisionOnly: params.overview,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
@@ -112,7 +125,7 @@ export async function loadCostUsageSummaryCached(params: {
     cache: costUsageCache,
     cacheKey,
     configRef: params.config,
-    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}`,
+    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}:${readSessionRowChangeRevision()}`,
     load: () =>
       allAgents
         ? loadAllAgentCostUsageSummary(params)
@@ -130,47 +143,49 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  // Same agent universe as discoverAllSessionsForUsage: enumerating configured
-  // ids only would list system-agent sessions whose cost never reaches totals.
-  const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
-    normalizeAgentId(agent.id),
-  );
-  const summaries = await runUsageAgentTasks(
-    agentIds.map(
-      (agentId) => () =>
-        loadCostUsageSummaryFromCache({
-          ...params,
-          agentId,
-          requestRefresh: true,
-        }),
-    ),
-  );
-  const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
-  const totals = createEmptyCostUsageTotals();
-  let cacheStatus: UsageCacheStatus | undefined;
-  let updatedAt = 0;
-  let days = 0;
-  for (const summary of summaries) {
-    updatedAt = Math.max(updatedAt, summary.updatedAt);
-    days = Math.max(days, summary.days);
-    addCostUsageTotals(totals, summary.totals);
-    if (summary.cacheStatus) {
-      cacheStatus = mergeUsageCacheStatus(cacheStatus, summary.cacheStatus);
+  return readWithSessionStoreTopology(async () => {
+    // Same agent universe as discoverAllSessionsForUsage: enumerating configured
+    // ids only would list system-agent sessions whose cost never reaches totals.
+    const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
+      normalizeAgentId(agent.id),
+    );
+    const summaries = await runUsageAgentTasks(
+      agentIds.map(
+        (agentId) => () =>
+          loadCostUsageSummaryFromCache({
+            ...params,
+            agentId,
+            requestRefresh: true,
+          }),
+      ),
+    );
+    const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
+    const totals = createEmptyCostUsageTotals();
+    let cacheStatus: UsageCacheStatus | undefined;
+    let updatedAt = 0;
+    let days = 0;
+    for (const summary of summaries) {
+      updatedAt = Math.max(updatedAt, summary.updatedAt);
+      days = Math.max(days, summary.days);
+      addCostUsageTotals(totals, summary.totals);
+      if (summary.cacheStatus) {
+        cacheStatus = mergeUsageCacheStatus(cacheStatus, summary.cacheStatus);
+      }
+      for (const day of summary.daily) {
+        const entry = dailyByDate.get(day.date) ?? {
+          date: day.date,
+          ...createEmptyCostUsageTotals(),
+        };
+        addCostUsageTotals(entry, day);
+        dailyByDate.set(day.date, entry);
+      }
     }
-    for (const day of summary.daily) {
-      const entry = dailyByDate.get(day.date) ?? {
-        date: day.date,
-        ...createEmptyCostUsageTotals(),
-      };
-      addCostUsageTotals(entry, day);
-      dailyByDate.set(day.date, entry);
-    }
-  }
-  return {
-    updatedAt,
-    days,
-    daily: Array.from(dailyByDate.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
-    totals,
-    ...(cacheStatus ? { cacheStatus } : {}),
-  };
+    return {
+      updatedAt,
+      days,
+      daily: Array.from(dailyByDate.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+      totals,
+      ...(cacheStatus ? { cacheStatus } : {}),
+    };
+  });
 }

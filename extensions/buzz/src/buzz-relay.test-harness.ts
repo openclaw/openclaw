@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   compareEvents,
   finalizeEvent,
@@ -10,7 +13,77 @@ import {
   type Event,
   type Filter,
 } from "nostr-tools";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { afterEach, beforeEach, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
+import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
+
+export function useBuzzRelayTestHarness(
+  setup: (
+    fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>,
+  ) => Partial<Parameters<typeof startBuzzBus>[0]>,
+  cleanup: { beforeClose?: () => Promise<void>; afterClose?: () => Promise<void> } = {},
+) {
+  let fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>;
+  let stateDir: string;
+  let bus: BuzzBus | undefined;
+  let defaults: ReturnType<typeof setup>;
+  const messages: string[] = [];
+  const fatal: Error[] = [];
+  beforeEach(async () => {
+    // openclaw-temp-dir: allow extension tests cannot import root test helpers.
+    stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-socket-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    bus = undefined;
+    messages.length = fatal.length = 0;
+    fixture = await createBuzzRelayFixture();
+    defaults = setup(fixture);
+  });
+  afterEach(async () => {
+    try {
+      await cleanup.beforeClose?.();
+      await bus?.close();
+    } finally {
+      try {
+        await fixture.close();
+      } finally {
+        await cleanup.afterClose?.();
+        vi.useRealTimers();
+        resetPluginStateStoreForTests();
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    }
+  });
+  return {
+    messages,
+    fatal,
+    closeBus: async () => {
+      await bus?.close();
+    },
+    startBus: async (options: Partial<Parameters<typeof startBuzzBus>[0]> = {}) => {
+      bus = await startBuzzBus({
+        scheduler: createTestPluginServiceScheduler(),
+        accountId: randomUUID(),
+        relayUrl: fixture.relayUrl,
+        privateKey: fixture.botPrivateKey,
+        channelIds: [fixture.roomId],
+        onMessage: async (message) => {
+          messages.push(message.text);
+        },
+        onFatalError: (error) => {
+          fatal.push(error);
+        },
+        ...defaults,
+        ...options,
+      });
+      return bus;
+    },
+  };
+}
 
 /** Signed protocol fixture, not an implementation of the upstream Buzz service. */
 export async function createBuzzRelayFixture() {
@@ -115,11 +188,7 @@ export async function createBuzzRelayFixture() {
     send(socket, ["AUTH", session.challenge]);
     socket.on("close", () => sessions.delete(socket));
     socket.on("message", (data) => {
-      const text = Buffer.isBuffer(data)
-        ? data.toString("utf8")
-        : Array.isArray(data)
-          ? Buffer.concat(data).toString("utf8")
-          : Buffer.from(data).toString("utf8");
+      const text = rawDataToString(data, "utf8");
       const [type, value, ...filters] = JSON.parse(text) as [string, string | Event, ...Filter[]];
       if (type === "AUTH" && typeof value !== "string") {
         const valid =
@@ -301,9 +370,7 @@ export async function createBuzzRelayFixture() {
       await new Promise<void>((resolve, reject) => {
         sockets.close((error) => (error ? reject(error) : resolve()));
       });
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     },
   };
 }

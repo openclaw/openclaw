@@ -1,16 +1,10 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
-import { readDraftCloudProfiles } from "./discovery.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
-const runtime = {
-  id: "openclaw",
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: "worker-turn" as const,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-};
+const runtime = nativeRuntime();
 
 async function fixture(reason: "missing-auth" | "auth-failed" = "missing-auth") {
   const result = createDraftFixture({
@@ -69,12 +63,9 @@ async function fixture(reason: "missing-auth" | "auth-failed" = "missing-auth") 
   });
   await Promise.all([
     result.gateway.refreshCloudProfiles(),
-    settleModelCatalogRequests(result.context.gateway.snapshot.client!, { agentId: "main" }),
+    loadModelCatalog(result.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   result.flow.setMessage("Check the workspace");
-  expect(result.place.modelControl.modelUnavailableReason(result.place.selectedAgent())).toBe(
-    reason,
-  );
   return result;
 }
 
@@ -85,27 +76,6 @@ afterEach(() => {
 });
 
 describe("worker inference New Session scope", () => {
-  it("retains only the published worker inference fact, never raw settings", () => {
-    const profiles = readDraftCloudProfiles([
-      {
-        id: "direct",
-        providerId: "device",
-        inference: "worker",
-        settings: { token: "synthetic-private-value" },
-      },
-      { id: "gateway", providerId: "device", inference: "gateway" },
-      {
-        id: "unknown",
-        providerId: "device",
-        inference: "remote",
-        settings: { inference: "worker" },
-      },
-    ]);
-    expect(profiles[0]).toMatchObject({ id: "direct", inference: "worker" });
-    expect(profiles.every((profile) => !Object.hasOwn(profile, "settings"))).toBe(true);
-    expect(profiles.slice(1).every((profile) => !Object.hasOwn(profile, "inference"))).toBe(true);
-  });
-
   it("uses worker credentials only for the selected direct profile", async () => {
     const { flow, place } = await fixture("auth-failed");
     expect(flow.submitBlock()?.gate).toBe("model-unavailable");

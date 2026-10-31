@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import type { ConversationDeliveryStoreScope } from "../../config/sessions/conversation-delivery-store.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -246,42 +246,3 @@ export const RECOVERY_SUMMARY = {
   recovered: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
   recoveredWithDeferred: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 1 },
 } as const;
-
-export function installDeliveryCompletionHooks(registerMatrix = false) {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  let deliver: typeof import("./deliver.js").deliverOutboundPayloads;
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads: deliver } = await import("./deliver.js"));
-  });
-  beforeEach(async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-    if (registerMatrix) {
-      const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
-      const { createOutboundTestPlugin, createTestRegistry } =
-        await import("../../test-utils/channel-plugins.js");
-      const { matrixOutboundForQueueTest } =
-        await import("./deliver.queue-integration.test-support.js");
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "matrix",
-              outbound: matrixOutboundForQueueTest,
-            }),
-          },
-        ]),
-      );
-    }
-  });
-  afterEach(async () => {
-    const { resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-      await import("../../plugins/runtime.js");
-    const { createEmptyPluginRegistry } = await import("../../plugins/registry.js");
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    vi.unstubAllEnvs();
-  });
-  return { ...fixtures, deliver: (...args: Parameters<typeof deliver>) => deliver(...args) };
-}

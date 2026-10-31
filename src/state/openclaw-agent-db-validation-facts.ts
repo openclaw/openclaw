@@ -35,6 +35,7 @@ export type OpenClawAgentDatabaseValidation = {
 export const agentDatabaseValidationKey: SqliteDatabaseAdmissionKey<OpenClawAgentDatabaseValidation> =
   {
     name: "agent.completed-validation",
+    lifetime: "process",
     read(value) {
       // SAFETY: Only the admitted agent schema owner publishes this private fact key.
       return isRecord(value) ? (value as OpenClawAgentDatabaseValidation) : undefined;

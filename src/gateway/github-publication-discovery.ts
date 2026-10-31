@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { subscribeGitHubIdentityChanges } from "../agents/github-read-identity.js";
+import { githubIdentityChanges } from "../agents/github-read-identity.js";
 import { onManagedGitHubProfileChanged } from "../agents/github-tool-identity.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import {
@@ -11,7 +11,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import type { WorkerGitHubLaunchBinding } from "../worker/launch-descriptor.js";
-import type { PublicationSessionIdentity } from "./github-publication-availability.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import type { SelectionRow } from "./session-row-projection-record.js";
 import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 
@@ -34,8 +34,6 @@ export function readGitHubPublicationFact(session: PublicationSessionIdentity): 
 export function startGitHubPublicationDiscovery(params: {
   scheduler: GatewayScheduler;
   projection?: {
-    ensureMaterialized(): Promise<void>;
-    selectEntries(): WorkspaceRow[];
     onSelectionChange(
       listener: (change: { kind: "reset" } | { kind: "row"; row?: WorkspaceRow }) => void,
     ): void;
@@ -142,7 +140,7 @@ export function startGitHubPublicationDiscovery(params: {
     }
   };
   const stopProfile = onManagedGitHubProfileChanged(() => refreshAll(true));
-  const stopIdentity = subscribeGitHubIdentityChanges(() => refreshAll(true));
+  githubIdentityChanges.onChange = () => refreshAll(true);
   const stopConfig = sessionChanges.subscribe((change) => {
     if ("all" in change && change.scope === "config") {
       refreshAll(true);
@@ -154,6 +152,11 @@ export function startGitHubPublicationDiscovery(params: {
     }
     const session = { agentId: row.agentId, sessionKey: row.key, sessionId: row.entry.sessionId };
     const key = keyOf(session);
+    // Only demand creates discovery work; roster hydration must not warm the whole corpus.
+    const previous = sessions.peek(key);
+    if (!previous) {
+      return;
+    }
     if (!row.entry.repositoryWorkspaceId && !row.entry.worktree?.id) {
       // Resident absence retires pending facts; explicit demand can still prepare an unknown target.
       sessions.delete(key);
@@ -164,8 +167,7 @@ export function startGitHubPublicationDiscovery(params: {
       row.entry.worktree,
       row.entry.repositoryWorkspaceId,
     ]);
-    const previous = sessions.peek(key);
-    if (previous?.session.sessionId !== session.sessionId || previous.binding !== binding) {
+    if (previous.session.sessionId !== session.sessionId || previous.binding !== binding) {
       sessions.set(key, { session, binding, fact: unavailable, refreshAfterMs: 0 });
       refresh(key);
     }
@@ -175,20 +177,11 @@ export function startGitHubPublicationDiscovery(params: {
       observe(change.row);
     }
   });
-  scheduler.schedule({
-    id: "github-publication-startup",
-    delayMs: 0,
-    run: async () => {
-      await params.projection?.ensureMaterialized();
-      for (const row of params.projection?.selectEntries() ?? []) {
-        observe(row);
-      }
-    },
-  });
   return {
+    name: "github-publication-discovery",
     stop: async () => {
       scheduler.beginClose();
-      stopIdentity();
+      githubIdentityChanges.onChange = undefined;
       stopProfile();
       stopConfig();
       if (readPublished === read) {

@@ -5,12 +5,16 @@ import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import type { GatewayStatusProps } from "./gateway-status.ts";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
+import { MobileNavToggle } from "./solid/mobile-nav-toggle.tsx";
 import "./tooltip.ts";
 
 type Props = {
   navDrawerOpen: boolean;
+  gatewayStatus?: GatewayStatusProps | null;
   newSessionAction: (() => JSX.Element) | undefined;
   resourceBasePath: string;
   environment: ControlUiEnvironment | null;
@@ -23,24 +27,25 @@ defineSolidBridge<Props>(
   "openclaw-app-topbar",
   (props, host) => {
     host.style.display = "contents";
-    const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
     return (
       <header class="topbar">
         <div class="topnav-shell">
-          <openclaw-tooltip prop:content={drawerLabel()}>
-            <button
-              type="button"
-              class="topbar-icon-btn topbar-nav-toggle"
-              onClick={(event) => props.onToggleDrawer?.(event.currentTarget)}
-              aria-label={drawerLabel()}
-              aria-expanded={props.navDrawerOpen ? "true" : "false"}
-            >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true">
-                <Icon name="menu" />
-              </span>
-            </button>
+          <openclaw-tooltip
+            prop:content={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
+          >
+            <MobileNavToggle
+              class="topbar-nav-toggle"
+              open={props.navDrawerOpen}
+              status={props.gatewayStatus?.kind}
+              onToggle={(trigger) => props.onToggleDrawer?.(trigger)}
+            />
           </openclaw-tooltip>
           <div class="topnav-shell__content" onMouseDown={beginNativeWindowDrag}>
+            <Show when={props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"}>
+              <div class="mobile-connection-status">
+                <GatewayStatus {...props.gatewayStatus!} />
+              </div>
+            </Show>
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
                 class="topbar-brand__logo"
@@ -62,6 +67,7 @@ defineSolidBridge<Props>(
             <openclaw-tooltip prop:content={t("chat.commandPaletteTitle")}>
               <span slot="content">
                 <ShortcutText
+                  fallback={t("chat.openCommandPalette")}
                   text={t("chat.commandPaletteTitle").replace("⌘K", "{shortcut}")}
                   shortcut={() => <Kbd keys={["⌘", "K"]} inline />}
                 />
@@ -82,6 +88,7 @@ defineSolidBridge<Props>(
   {
     properties: {
       navDrawerOpen: { default: false, attribute: false },
+      gatewayStatus: { default: null, attribute: false },
       newSessionAction: { default: undefined, attribute: false },
       resourceBasePath: { default: "", attribute: false },
       environment: { default: null, attribute: false },

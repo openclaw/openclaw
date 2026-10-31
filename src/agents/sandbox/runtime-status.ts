@@ -9,10 +9,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
-import {
-  resolveSessionStorePathCore,
-  resolveSessionStorePathWithContext,
-} from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnlyResultInScope } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
@@ -22,7 +19,7 @@ import {
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { captureNativeSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 import {
-  sessionCreatorProfileId,
+  sessionIsolationProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { SessionEntryChangedDuringReadError } from "../../config/sessions/session-entry-read-errors.js";
@@ -55,9 +52,11 @@ import {
 } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { shellEscapeBackslash as shellEscapeSingleArg } from "../../shared/shell-quote.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveSandboxRuntimeSettings } from "./config.js";
 import {
   classifyToolAgainstSandboxToolPolicy,
   resolveSandboxToolPolicyForAgent,
@@ -185,14 +184,10 @@ export async function withSandboxRuntimeStatusInWorker<T>(
       source.readSource?.path ??
       (reader && !params.cfg?.session?.store?.trim()
         ? reader.database.path
-        : resolveSessionStorePathWithContext(
-            params.cfg?.session?.store,
-            {
-              agentId: classification.classificationAgentId,
-              env: source.env,
-            },
-            { cwd: source.cwd },
-          )),
+        : resolveSessionStorePathCore(params.cfg?.session?.store, {
+            agentId: classification.classificationAgentId,
+            env: source.env,
+          })),
     env: source.env,
   };
   const memory = captureSessionActorStorageOwner(scope, {
@@ -313,14 +308,10 @@ export function withSandboxRuntimeStatusesInWorker<T>(
     if (!classification.classificationSessionKey) {
       return () => project(undefined);
     }
-    const storePath = resolveSessionStorePathWithContext(
-      params.cfg?.session?.store,
-      {
-        agentId: classification.classificationAgentId,
-        env: source.env,
-      },
-      { cwd: source.cwd },
-    );
+    const storePath = resolveSessionStorePathCore(params.cfg?.session?.store, {
+      agentId: classification.classificationAgentId,
+      env: source.env,
+    });
     const target = {
       agentId: classification.classificationAgentId,
       sessionKey: resolveSqliteSessionKey(
@@ -482,7 +473,10 @@ function resolveSandboxClassification(params: SandboxRuntimeStatusParams) {
     fallbackAgentId: classificationSessionKey === sessionKey ? agentId : undefined,
   });
   const cfg = params.cfg;
-  const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
+  const sandboxCfg = resolveSandboxRuntimeSettings(
+    cfg?.agents?.defaults?.sandbox,
+    cfg ? resolveAgentConfig(cfg, classificationAgentId)?.sandbox : undefined,
+  );
   const mainSessionKey =
     cfg?.session?.scope === "global"
       ? "global"
@@ -570,7 +564,7 @@ function resolveSandboxRuntimeStatusForClassification(
           }
         : undefined;
   const sandboxRequired = session?.existing?.sandbox === "required";
-  const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
+  const profileId = sessionIsolationProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
     ? {
         sandboxRequired: true,
@@ -609,10 +603,6 @@ function redactSessionKey(value: string): string {
     return "(redacted)";
   }
   return `${escapeControlCharsVisible(truncateUtf16Safe(trimmed, 6))}…${escapeControlCharsVisible(sliceUtf16Safe(trimmed, -6))}`;
-}
-
-function shellEscapeSingleArg(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 export function formatSandboxToolPolicyBlockedMessage(params: {

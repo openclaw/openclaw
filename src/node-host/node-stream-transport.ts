@@ -45,207 +45,6 @@ type NodeStreamCloseTrigger =
 
 type NodeStreamDiagnostics = { trigger?: NodeStreamCloseTrigger };
 
-function attachWebSocketUrl(params: {
-  gatewayUrl: string;
-  attachPath: string;
-  expectedAttachPath: string;
-  streamName: string;
-}): string {
-  const gateway = new URL(params.gatewayUrl);
-  const url = new URL(params.attachPath, gateway);
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error(`${params.streamName} stream gateway URL must use WebSocket transport`);
-  }
-  if (url.origin !== gateway.origin || url.pathname !== params.expectedAttachPath) {
-    throw new Error(`${params.streamName} stream attachPath must stay on the connected gateway`);
-  }
-  // Auxiliary streams share the enrolled node's reverse-proxy mount point.
-  url.pathname = `${gateway.pathname.replace(/\/$/u, "")}${url.pathname}`;
-  return url.toString();
-}
-
-function websocketOptions(
-  tlsFingerprint?: string,
-  cloudflareAccess?: CloudflareAccessCredentials,
-): ClientOptions {
-  const options: ClientOptions = {
-    maxPayload: MAX_PAYLOAD_BYTES,
-    ...(cloudflareAccess ? { headers: buildCloudflareAccessHeaders(cloudflareAccess) } : {}),
-  };
-  if (tlsFingerprint?.trim()) {
-    applyGatewayWebSocketTlsPin(options, tlsFingerprint);
-  }
-  return options;
-}
-
-async function sendAttachMetadata(
-  ws: WebSocket,
-  metadata: Record<string, string | boolean>,
-): Promise<void> {
-  const buffer = Buffer.from(JSON.stringify(metadata), "utf8");
-  try {
-    await new Promise<void>((resolve, reject) => {
-      ws.send(buffer, { binary: true }, (error) => (error ? reject(error) : resolve()));
-    });
-  } finally {
-    buffer.fill(0);
-  }
-}
-
-function createNodeStreamSplice(params: {
-  socket: Duplex;
-  ws: WebSocket;
-  streamName: string;
-  diagnostics: NodeStreamDiagnostics;
-  closeAckMs?: number;
-  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
-}) {
-  let resumeTimer: ReturnType<typeof setInterval> | undefined;
-  let cancelCloseAck: (() => void) | undefined;
-  const scheduleCloseAck =
-    params.scheduleCloseAck ??
-    ((callback: () => void, delayMs: number) => {
-      const timer = setTimeout(callback, delayMs);
-      return () => clearTimeout(timer);
-    });
-  let settled = false;
-  let forwardedBytes = 0;
-  let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
-  const resumeWebSocket = () => params.ws.resume();
-  const onMessage = (data: RawData, isBinary: boolean) => {
-    if (params.socket.destroyed || params.socket.writableEnded) {
-      return;
-    }
-    if (!isBinary) {
-      finish(
-        "invalid-frame",
-        new Error(`gateway sent non-binary ${params.streamName} stream data`),
-      );
-      return;
-    }
-    const buffer = Buffer.isBuffer(data)
-      ? data
-      : Array.isArray(data)
-        ? Buffer.concat(data)
-        : Buffer.from(data);
-    if (!params.socket.write(buffer)) {
-      params.ws.pause();
-    }
-  };
-  const stopInbound = () => {
-    params.ws.off("message", onMessage);
-    params.socket.off("drain", resumeWebSocket);
-    // A closed target cannot emit drain, but WebSocket close frames still need reads.
-    params.ws.resume();
-  };
-  const done = new Promise<void>((resolve, reject) => {
-    finish = (trigger, error) => {
-      if (settled) {
-        return;
-      }
-      params.diagnostics.trigger ??= trigger;
-      settled = true;
-      clearInterval(resumeTimer);
-      cancelCloseAck?.();
-      cancelCloseAck = undefined;
-      stopInbound();
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    params.ws.on("message", onMessage);
-    params.socket.on("drain", resumeWebSocket);
-    params.socket.on("data", (chunk) => {
-      if (params.ws.readyState !== WEBSOCKET_OPEN) {
-        return;
-      }
-      forwardedBytes += chunk.length;
-      params.ws.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
-      if (params.ws.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
-        return;
-      }
-      params.socket.pause();
-      resumeTimer = setInterval(() => {
-        if (params.ws.bufferedAmount <= PAUSE_BUFFERED_BYTES) {
-          clearInterval(resumeTimer);
-          resumeTimer = undefined;
-          params.socket.resume();
-        }
-      }, RESUME_CHECK_MS);
-      resumeTimer.unref?.();
-    });
-    params.ws.once("close", () => finish("websocket-close"));
-    params.ws.once("error", (error) => finish("websocket-error", error));
-    params.socket.once("close", () => {
-      params.diagnostics.trigger ??= "target-close";
-      stopInbound();
-      if (params.socket.readableEnded && params.ws.readyState === WEBSOCKET_OPEN) {
-        const closeAckMs = params.closeAckMs ?? STREAM_CLOSE_ACK_MS;
-        const retireUnacknowledged = () => {
-          cancelCloseAck = undefined;
-          finish("websocket-close");
-          if (
-            params.ws.readyState === WEBSOCKET_OPEN ||
-            params.ws.readyState === WEBSOCKET_CLOSING
-          ) {
-            params.ws.terminate();
-          }
-        };
-        if (forwardedBytes === 0) {
-          params.ws.close();
-          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, closeAckMs);
-          return;
-        }
-        // bufferedAmount === 0 only means the kernel accepted the bytes.
-        // Finish on the gateway close, not on a timer, or the receive stream
-        // is destroyed while those bytes are still downstream.
-        let observedAmount = params.ws.bufferedAmount;
-        let progressAt = Date.now();
-        const closeAfterDrain = () => {
-          if (settled || params.ws.readyState !== WEBSOCKET_OPEN) {
-            return;
-          }
-          cancelCloseAck?.();
-          cancelCloseAck = undefined;
-          const amount = params.ws.bufferedAmount;
-          const now = Date.now();
-          if (amount < observedAmount) {
-            observedAmount = amount;
-            progressAt = now;
-          }
-          if (amount > 0) {
-            if (now - progressAt < STREAM_CLOSE_FLUSH_MS) {
-              cancelCloseAck = scheduleCloseAck(closeAfterDrain, RESUME_CHECK_MS);
-              return;
-            }
-            retireUnacknowledged();
-            return;
-          }
-          params.ws.close();
-        };
-        closeAfterDrain();
-      } else {
-        finish("target-close");
-      }
-    });
-    params.socket.once("error", (error) => finish("target-error", error));
-  });
-  void done.catch(() => undefined);
-  return {
-    done,
-    start() {
-      if (params.socket.destroyed || params.ws.readyState !== WEBSOCKET_OPEN) {
-        finish("splice-unavailable");
-        return;
-      }
-      params.socket.resume();
-      params.ws.resume();
-    },
-  };
-}
-
 /** Pairs an enrolled Gateway attach socket with a node-owned loopback connection. */
 export async function runNodeStreamTransport(params: {
   gatewayUrl: string;
@@ -258,8 +57,6 @@ export async function runNodeStreamTransport(params: {
   streamName: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
-  closeAckMs?: number;
-  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
 }): Promise<void> {
   const socket = "stream" in params.target ? params.target.stream : new net.Socket();
   // Loopback peers may send immediately; retain their first bytes until metadata is accepted.
@@ -286,10 +83,27 @@ export async function runNodeStreamTransport(params: {
     if (params.signal.aborted) {
       return;
     }
-    ws = new NpmWebSocket(
-      attachWebSocketUrl(params),
-      websocketOptions(params.gatewayTlsFingerprint, params.gatewayCloudflareAccess),
-    );
+    const gateway = new URL(params.gatewayUrl);
+    const url = new URL(params.attachPath, gateway);
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+      throw new Error(`${params.streamName} stream gateway URL must use WebSocket transport`);
+    }
+    if (url.origin !== gateway.origin || url.pathname !== params.expectedAttachPath) {
+      throw new Error(`${params.streamName} stream attachPath must stay on the connected gateway`);
+    }
+    // Auxiliary streams share the enrolled node's reverse-proxy mount point.
+    url.pathname = `${gateway.pathname.replace(/\/$/u, "")}${url.pathname}`;
+    const attachUrl = url.toString();
+    const tlsFingerprint = params.gatewayTlsFingerprint;
+    const cloudflareAccess = params.gatewayCloudflareAccess;
+    const options: ClientOptions = {
+      maxPayload: MAX_PAYLOAD_BYTES,
+      ...(cloudflareAccess ? { headers: buildCloudflareAccessHeaders(cloudflareAccess) } : {}),
+    };
+    if (tlsFingerprint?.trim()) {
+      applyGatewayWebSocketTlsPin(options, tlsFingerprint);
+    }
+    ws = new NpmWebSocket(attachUrl, options);
     ws.once("error", () => {
       diagnostics.trigger ??= "websocket-error";
     });
@@ -317,15 +131,155 @@ export async function runNodeStreamTransport(params: {
       throw socket.errored ?? new Error(`${params.streamName} stream target closed before attach`);
     }
     ws.pause();
-    const splice = createNodeStreamSplice({
-      socket,
-      ws,
-      streamName: params.streamName,
-      diagnostics,
-      closeAckMs: params.closeAckMs,
-      scheduleCloseAck: params.scheduleCloseAck,
+    const streamWs = ws;
+    const streamName = params.streamName;
+    let resumeTimer: ReturnType<typeof setInterval> | undefined;
+    let cancelCloseAck: (() => void) | undefined;
+    let settled = false;
+    let forwardedBytes = 0;
+    let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
+    const resumeWebSocket = () => streamWs.resume();
+    const onMessage = (data: RawData, isBinary: boolean) => {
+      if (socket.destroyed || socket.writableEnded) {
+        return;
+      }
+      if (!isBinary) {
+        finish("invalid-frame", new Error(`gateway sent non-binary ${streamName} stream data`));
+        return;
+      }
+      const buffer = Buffer.isBuffer(data)
+        ? data
+        : Array.isArray(data)
+          ? Buffer.concat(data)
+          : Buffer.from(data);
+      if (!socket.write(buffer)) {
+        streamWs.pause();
+      }
+    };
+    const stopInbound = () => {
+      streamWs.off("message", onMessage);
+      socket.off("drain", resumeWebSocket);
+      // A closed target cannot emit drain, but WebSocket close frames still need reads.
+      streamWs.resume();
+    };
+    const done = new Promise<void>((resolve, reject) => {
+      finish = (trigger, error) => {
+        if (settled) {
+          return;
+        }
+        diagnostics.trigger ??= trigger;
+        settled = true;
+        clearInterval(resumeTimer);
+        cancelCloseAck?.();
+        cancelCloseAck = undefined;
+        stopInbound();
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      streamWs.on("message", onMessage);
+      socket.on("drain", resumeWebSocket);
+      socket.on("data", (chunk) => {
+        if (streamWs.readyState !== WEBSOCKET_OPEN) {
+          return;
+        }
+        forwardedBytes += chunk.length;
+        streamWs.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
+        if (streamWs.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
+          return;
+        }
+        socket.pause();
+        resumeTimer = setInterval(() => {
+          if (streamWs.bufferedAmount <= PAUSE_BUFFERED_BYTES) {
+            clearInterval(resumeTimer);
+            resumeTimer = undefined;
+            socket.resume();
+          }
+        }, RESUME_CHECK_MS);
+        resumeTimer.unref?.();
+      });
+      streamWs.once("close", () => finish("websocket-close"));
+      streamWs.once("error", (error) => finish("websocket-error", error));
+      socket.once("close", () => {
+        diagnostics.trigger ??= "target-close";
+        stopInbound();
+        if (socket.readableEnded && streamWs.readyState === WEBSOCKET_OPEN) {
+          const retireUnacknowledged = () => {
+            cancelCloseAck = undefined;
+            finish("websocket-close");
+            if (
+              streamWs.readyState === WEBSOCKET_OPEN ||
+              streamWs.readyState === WEBSOCKET_CLOSING
+            ) {
+              streamWs.terminate();
+            }
+          };
+          if (forwardedBytes === 0) {
+            streamWs.close();
+            const timer = setTimeout(retireUnacknowledged, STREAM_CLOSE_ACK_MS);
+            cancelCloseAck = () => clearTimeout(timer);
+            return;
+          }
+          // bufferedAmount === 0 only means the kernel accepted the bytes.
+          // Finish on the gateway close, not on a timer, or the receive stream
+          // is destroyed while those bytes are still downstream.
+          let observedAmount = streamWs.bufferedAmount;
+          let progressAt = Date.now();
+          const closeAfterDrain = () => {
+            if (settled || streamWs.readyState !== WEBSOCKET_OPEN) {
+              return;
+            }
+            cancelCloseAck?.();
+            cancelCloseAck = undefined;
+            const amount = streamWs.bufferedAmount;
+            const now = Date.now();
+            if (amount < observedAmount) {
+              observedAmount = amount;
+              progressAt = now;
+            }
+            if (amount > 0) {
+              if (now - progressAt < STREAM_CLOSE_FLUSH_MS) {
+                const timer = setTimeout(closeAfterDrain, RESUME_CHECK_MS);
+                cancelCloseAck = () => clearTimeout(timer);
+                return;
+              }
+              retireUnacknowledged();
+              return;
+            }
+            streamWs.close();
+          };
+          closeAfterDrain();
+        } else {
+          finish("target-close");
+        }
+      });
+      socket.once("error", (error) => finish("target-error", error));
     });
-    await sendAttachMetadata(ws, params.metadata);
+    void done.catch(() => undefined);
+    const splice = {
+      done,
+      start() {
+        if (socket.destroyed || streamWs.readyState !== WEBSOCKET_OPEN) {
+          finish("splice-unavailable");
+          return;
+        }
+        socket.resume();
+        streamWs.resume();
+      },
+    };
+    const attachMetadata = params.metadata;
+    const attachMetadataBuffer = Buffer.from(JSON.stringify(attachMetadata), "utf8");
+    try {
+      await new Promise<void>((resolve, reject) => {
+        streamWs.send(attachMetadataBuffer, { binary: true }, (error) =>
+          error ? reject(error) : resolve(),
+        );
+      });
+    } finally {
+      attachMetadataBuffer.fill(0);
+    }
     void params.emitStatus?.(`${params.streamName} stream attached\n`).catch(() => undefined);
     splice.start();
     await splice.done;

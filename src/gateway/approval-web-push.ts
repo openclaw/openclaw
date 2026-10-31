@@ -38,6 +38,7 @@ import {
   type CurrentWebPushTarget,
   type WebPushAuthority,
 } from "./web-push-authority.js";
+import { currentWebPushAgentIcon, prepareWebPushAgentIcon } from "./web-push-avatar.js";
 
 const WEB_PUSH_APPROVAL_TIMEOUT_MS = 10_000;
 const WEB_PUSH_TERMINAL_TTL_SECONDS = 5 * 60;
@@ -55,11 +56,13 @@ function approvalNotificationCopy(params: {
   terminal: boolean;
   preferences: CurrentWebPushTarget["preferences"];
   agentLabel?: string;
+  icon?: string;
 }) {
   const label = params.preferences.label ? `${params.preferences.label} · ` : "";
   const agent = params.agentLabel ? ` for ${params.agentLabel}` : "";
   const privateCopy = params.preferences.detailLevel === "private";
   return {
+    ...(!privateCopy && params.icon ? { icon: params.icon } : {}),
     title: `${label}OpenClaw approval ${params.terminal ? "updated" : "requested"}`,
     body: params.terminal
       ? privateCopy
@@ -121,15 +124,14 @@ function sendApprovalNotificationGroups(params: {
 async function deliverBoundApprovalWebPush<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   getRuntimeConfig: () => OpenClawConfig;
-  stateDir?: string;
 }): Promise<ApprovalRequestWebPushDelivery | null> {
   if (params.record.resolvedAtMs !== undefined || params.record.expiresAtMs <= Date.now()) {
     return null;
   }
-  if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
+  if (!(await hasBoundWebPushSubscriptions())) {
     return null;
   }
-  const sendWebPushNotifications = await prepareWebPushNotificationSender(params.stateDir);
+  const sendWebPushNotifications = await prepareWebPushNotificationSender();
   const source = isRecord(params.record.request) ? params.record.request : undefined;
   const agentId = normalizeOptionalString(source?.agentId);
   const sessionKey = normalizeOptionalString(source?.sessionKey);
@@ -165,7 +167,6 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       approvalId: params.record.id,
       subscriptions,
       preparedAtMs: Date.now(),
-      stateDir: params.stateDir,
     }),
   );
   if (preparedIds.size === 0) {
@@ -176,6 +177,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       .filter((subscription) => preparedIds.has(subscription.subscriptionId))
       .map((subscription) => [subscription.subscriptionId, subscription]),
   );
+  const preparedIcon = await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
   const groupedResults = await withCurrentWebPushAuthority(preparation, (authority) => {
     const { cfg } = authority;
     const currentEligibleTargets = eligibleTargets({
@@ -202,7 +204,12 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
     const agentLabel = normalizeWebPushDisplayLabel(agentId);
     const requestGroups = new Map<string, ApprovalNotificationGroup>();
     for (const { subscription, preferences } of currentEligibleTargets) {
-      const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
+      const copy = approvalNotificationCopy({
+        terminal: false,
+        preferences,
+        agentLabel,
+        icon: currentWebPushAgentIcon(cfg, preparedIcon),
+      });
       const key = JSON.stringify(copy);
       const group = requestGroups.get(key) ?? { copy, subscriptions: [] };
       group.subscriptions.push(subscription);
@@ -229,7 +236,6 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
   await deleteWebPushApprovalDeliveryTargets({
     approvalId: params.record.id,
     subscriptionIds: definitelyRejectedSubscriptionIds,
-    stateDir: params.stateDir,
   });
   return results.some((result) => result.ok || result.statusCode === undefined)
     ? { record: params.record, sender: sendWebPushNotifications }
@@ -240,7 +246,6 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
 export function createApprovalWebPushDelivery(params: {
   getRuntimeConfig: () => OpenClawConfig;
   log?: { warn?: (message: string) => void };
-  stateDir?: string;
 }) {
   const deliveriesByApprovalId = new Map<string, Promise<ApprovalRequestWebPushDelivery | null>>();
   const terminalDeliveriesByApprovalId = new Map<string, Promise<void>>();
@@ -253,20 +258,15 @@ export function createApprovalWebPushDelivery(params: {
         const requestPush = deliveriesByApprovalId.get(approval.id);
         deliveriesByApprovalId.delete(approval.id);
         const requestDelivery = requestPush ? await requestPush : null;
-        const sender =
-          requestDelivery?.sender ?? (await prepareWebPushNotificationSender(params.stateDir));
+        const sender = requestDelivery?.sender ?? (await prepareWebPushNotificationSender());
         const durableLookup = requestDelivery
           ? null
           : await getOperatorApprovalDetailed({
               id: approval.id,
-              databaseOptions: params.stateDir
-                ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
-                : undefined,
             });
         const durableRecord = durableLookup?.outcome === "found" ? durableLookup.record : null;
         const subscriptions = await listWebPushApprovalDeliveryTargets({
           approvalId: approval.id,
-          stateDir: params.stateDir,
         });
         if (subscriptions.length === 0) {
           return;
@@ -277,11 +277,13 @@ export function createApprovalWebPushDelivery(params: {
             ? requestDelivery.record.request
             : durableRecord?.source;
         const sessionKey = normalizeOptionalString(source?.sessionKey);
+        const agentId = normalizeOptionalString(source?.agentId);
+        const preparedIcon = await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
         const groupedResults = await withCurrentWebPushAuthority(
           {
             ...params,
             sessionKeys: sessionKey ? [sessionKey] : [],
-            agentId: normalizeOptionalString(source?.agentId),
+            agentId,
           },
           (authority) => {
             const { cfg } = authority;
@@ -333,6 +335,7 @@ export function createApprovalWebPushDelivery(params: {
               const copy = approvalNotificationCopy({
                 terminal: true,
                 preferences: target.preferences,
+                icon: currentWebPushAgentIcon(cfg, preparedIcon),
               });
               const key = JSON.stringify(copy);
               const group = terminalGroups.get(key) ?? { copy, subscriptions: [] };
@@ -361,7 +364,6 @@ export function createApprovalWebPushDelivery(params: {
         await deleteWebPushApprovalDeliveryTargets({
           approvalId: approval.id,
           subscriptionIds: [...successfulSubscriptionIds, ...suppressedSubscriptionIds],
-          stateDir: params.stateDir,
         });
         const completedSubscriptionCount =
           successfulSubscriptionIds.length + suppressedSubscriptionIds.length;
@@ -380,7 +382,6 @@ export function createApprovalWebPushDelivery(params: {
       const requestPush = deliverBoundApprovalWebPush({
         record,
         getRuntimeConfig: params.getRuntimeConfig,
-        stateDir: params.stateDir,
       });
       deliveriesByApprovalId.set(record.id, requestPush);
       return requestPush.then(
@@ -406,7 +407,6 @@ export function createApprovalWebPushDelivery(params: {
       let throughApprovalId: string | undefined;
       do {
         const page = await listTerminalWebPushApprovalDeliveryIds({
-          stateDir: params.stateDir,
           ...(afterApprovalId ? { afterApprovalId } : {}),
           ...(throughApprovalId ? { throughApprovalId } : {}),
         });

@@ -45,7 +45,6 @@ openclaw-chat-question-panel {
 @supports (backdrop-filter: blur(1px)) {
   .chat-question-panel {
     backdrop-filter: blur(18px) saturate(1.35);
-    -webkit-backdrop-filter: blur(18px) saturate(1.35);
   }
 }
 
@@ -508,6 +507,15 @@ openclaw-chat-question-panel {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
+}
+
+/* The live region wraps the question lines, so it has to keep participating in the parent
+   grid: as a plain block it would collapse every question into a single grid item and drop
+   the row gap between them. */
+.chat-question-summary__announcement {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .chat-question-summary__item {

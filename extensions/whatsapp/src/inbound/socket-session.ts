@@ -241,9 +241,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
   const fetchReachoutTimeLock = async (
     currentSock: WASocket,
   ): Promise<ReachoutTimelockState | undefined> => {
-    if (typeof currentSock.fetchAccountReachoutTimelock !== "function") {
-      return undefined;
-    }
     if (!reachoutTimeLockFetch) {
       reachoutTimeLockFetch = currentSock
         .fetchAccountReachoutTimelock()

@@ -1,39 +1,35 @@
 import { expect, type Mock } from "vitest";
+import type * as SessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
+import type { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import type { QueuedSessionDelivery } from "../infra/session-delivery-queue.records.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
-import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
+import type { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
+import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
-type LoadedSessionEntryBase = Awaited<
-  ReturnType<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>
->;
+type LoadedSessionEntryBase = Awaited<ReturnType<typeof loadSessionEntryAsync>>;
 export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
   Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 
-export function createRestartSentinelSessionFixture(
+export const createRestartSentinelSessionFixture = (
   canonicalKey: string,
   entry: RestartSentinelSessionFixture["entry"],
   overrides: Partial<RestartSentinelSessionFixture> = {},
-): RestartSentinelSessionFixture {
-  return {
-    cfg: {},
-    entry,
-    store: {},
-    storePath: "/tmp/sessions.json",
-    canonicalKey,
-    storeKeys: [canonicalKey],
-    legacyKey: undefined,
-    ...overrides,
-  };
-}
+): RestartSentinelSessionFixture => ({
+  cfg: {},
+  entry,
+  store: {},
+  storePath: "/tmp/sessions.json",
+  canonicalKey,
+  storeKeys: [canonicalKey],
+  legacyKey: undefined,
+  ...overrides,
+});
 
 export async function appendRestartSentinelTranscriptReceipt(
-  params: Parameters<
-    typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
-  >[0],
-): ReturnType<
-  typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
-> {
+  params: Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
+): ReturnType<typeof appendAssistantMessageToSessionTranscript> {
   const { completeSessionTranscriptCommit } =
     await import("../config/sessions/session-transcript-commit-completion.js");
   await completeSessionTranscriptCommit(
@@ -62,31 +58,25 @@ export async function appendRestartSentinelTranscriptReceipt(
   };
 }
 
-type GeneratedMediaDeliveryEntry = Extract<
-  Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
-  { kind: "agentTurn" }
->;
+type MediaEntry = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
 
-export function createGeneratedMediaDeliveryEntry(
-  overrides: Partial<GeneratedMediaDeliveryEntry> &
-    Pick<GeneratedMediaDeliveryEntry, "id" | "messageId">,
-): GeneratedMediaDeliveryEntry {
-  return {
-    kind: "agentTurn",
-    sessionKey: "agent:main:main",
-    message: "generated image ready",
-    enqueuedAt: 1,
-    retryCount: 0,
-    route: { channel: "discord", to: "channel:123", chatType: "channel" },
-    inputProvenance: {
-      kind: "inter_session",
-      sourceChannel: "internal",
-      sourceTool: "image_generate",
-    },
-    sourceReplyDeliveryMode: "automatic",
-    ...overrides,
-  };
-}
+export const createGeneratedMediaDeliveryEntry = (
+  overrides: Partial<MediaEntry> & Pick<MediaEntry, "id" | "messageId">,
+): MediaEntry => ({
+  kind: "agentTurn",
+  sessionKey: "agent:main:main",
+  message: "generated image ready",
+  enqueuedAt: 1,
+  retryCount: 0,
+  route: { channel: "discord", to: "channel:123", chatType: "channel" },
+  inputProvenance: {
+    kind: "inter_session",
+    sourceChannel: "internal",
+    sourceTool: "image_generate",
+  },
+  sourceReplyDeliveryMode: "automatic",
+  ...overrides,
+});
 
 export function expectCapturedQueueContext(stateDir: string) {
   return expect.objectContaining({
@@ -98,61 +88,6 @@ export function expectCapturedQueueContext(stateDir: string) {
       }),
     }),
   });
-}
-
-export function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-export function mockCallArg(
-  mock: { mock: { calls: Array<Array<unknown>> } },
-  callIndex = 0,
-): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[0];
-}
-
-export function lastMockCallArg(mock: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const calls = mock.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("Expected last mock call");
-  }
-  return call[0];
-}
-
-export function expectMockCallFields(
-  mock: { mock: { calls: Array<Array<unknown>> } },
-  expected: Record<string, unknown>,
-  callIndex = 0,
-): Record<string, unknown> {
-  return expectRecordFields(mockCallArg(mock, callIndex), expected);
-}
-
-export function expectContinuationDispatchFields(
-  mock: { mock: { calls: Array<Array<unknown>> } },
-  expected: Record<string, unknown>,
-  expectedCtx?: Record<string, unknown>,
-  callIndex = 0,
-): Record<string, unknown> {
-  const params = expectMockCallFields(mock, expected, callIndex);
-  if (expectedCtx) {
-    expectRecordFields(params.ctxPayload, expectedCtx);
-  }
-  return params;
 }
 
 export function expectRestartSentinelTranscriptBroadcast(
@@ -169,25 +104,22 @@ export function expectRestartSentinelTranscriptBroadcast(
       }),
     }),
     params.subscribers,
-    { prepareSessionProjection: expect.any(Function) },
+    {
+      sessionEventSubscriptionKeys: [params.sessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
 }
-
-type SessionEventHandoff = typeof import("../auto-reply/reply/session-event-handoff.js");
-type ResolveSessionTarget =
-  typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
 
 export function configureRestartSessionEventMocks(
   mocks: {
     loadSessionEntryAsync: (
       key: string,
-      options?: Parameters<
-        typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync
-      >[1],
+      options?: Parameters<typeof loadSessionEntryAsync>[1],
     ) => Promise<RestartSentinelSessionFixture>;
-    resolveSessionTarget: Mock<ResolveSessionTarget>;
-    captureSessionEventTarget: Mock<SessionEventHandoff["captureSessionEventTargetForHost"]>;
-    enqueueSessionEvent: Mock<SessionEventHandoff["enqueueSessionEventForHost"]>;
+    resolveSessionTarget: Mock<typeof resolveGatewaySessionStoreTargetInWorker>;
+    captureSessionEventTarget: Mock<typeof SessionEventHandoff.captureSessionEventTargetForHost>;
+    enqueueSessionEvent: Mock<typeof SessionEventHandoff.enqueueSessionEventForHost>;
   },
   sessionId?: string,
 ) {
@@ -224,9 +156,3 @@ export function configureRestartSessionEventMocks(
 export function createRestartSentinelFixture(payload: RestartSentinelPayload, revision = 123) {
   return { version: 1 as const, revision, payload };
 }
-
-export type RestartSentinelInProcessDispatchMock = (
-  method: string,
-  params: Record<string, unknown>,
-  options?: Record<string, unknown>,
-) => Promise<Record<string, unknown>>;

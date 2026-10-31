@@ -1,7 +1,6 @@
-// Verifies transcript repair pairs tool calls/results and sanitizes tool inputs.
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   sanitizeToolCallInputs,
   makeMissingToolResult,
@@ -12,6 +11,35 @@ import {
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
+const toolCall = (id: string, name = "read", args: Record<string, unknown> = {}) => ({
+  type: "toolCall",
+  id,
+  name,
+  arguments: args,
+});
+const signedAssistant = (thinkingSignature: string, ...calls: unknown[]) =>
+  sparseAssistant([{ type: "thinking", thinking: "Recorded work", thinkingSignature }, ...calls]);
+const legacyRead = (id: string, path: string) => ({
+  type: "toolUse",
+  id,
+  name: "read",
+  input: { path },
+});
+const bareResult = (toolCallId: string, text: string) => ({
+  role: "toolResult",
+  toolCallId,
+  content: [{ type: "text", text }],
+});
+const partialCall = (id: string, partialJson: string, args: Record<string, unknown> = {}) => ({
+  ...toolCall(id, "Bash", args),
+  partialJson,
+});
+const signedRead = { allowedToolNames: ["read"], allowProviderOwnedThinkingReplay: true };
+const roles = (messages: AgentMessage[]) => messages.map(({ role }) => role);
+const user = (content: string) => ({ role: "user" as const, content });
+const textAssistant = (text: string) => sparseAssistant([{ type: "text", text }]);
+afterEach(() => vi.restoreAllMocks());
+
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "toolUse",
@@ -21,392 +49,280 @@ const TOOL_CALL_BLOCK_TYPES = new Set([
   "function_call",
 ]);
 
-function getAssistantToolCallBlocks(messages: AgentMessage[]) {
-  // Helper inspects all legacy/current tool-call block spellings in assistant content.
-  const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
-  if (!assistant || !Array.isArray(assistant.content)) {
-    return [] as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
+function getAssistantToolCallBlocks(
+  messages: AgentMessage[],
+): Array<{ type?: unknown; id?: unknown; name?: unknown }> {
+  const assistant = messages[0];
+  if (assistant?.role !== "assistant" || !Array.isArray(assistant.content)) {
+    return [];
   }
-  return assistant.content.filter((block) => {
-    const type = (block as { type?: unknown }).type;
-    return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
-  }) as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
+  return assistant.content.filter(({ type }) => TOOL_CALL_BLOCK_TYPES.has(type));
 }
 
 describe("sanitizeToolUseResultPairing", () => {
+  it("does not inspect lower-priority result aliases when the canonical id is present", () => {
+    const legacyId = vi.fn(() => "stale_call");
+    const result = textToolResult("call_1", "read", "ok", { isError: false });
+    Object.defineProperty(result, "toolUseId", { get: legacyId });
+    const input = castAgentMessages([sparseAssistant([toolCall("call_1")]), result]);
+
+    expect(repairToolUseResultPairing(input).messages).toBe(input);
+    expect(legacyId).not.toHaveBeenCalled();
+  });
+
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5_000);
     const input = castAgentMessages([
       sparseAssistant([
         { type: "text", text: "checking" },
-        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-        { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
-        { type: "toolCall", id: "call_3", name: "write", arguments: {} },
+        toolCall("call_1"),
+        toolCall("call_2", "exec"),
+        toolCall("call_3", "write"),
       ]),
-      { role: "user", content: "user message that should come after tool use" },
+      user("user message that should come after tool use"),
       textToolResult("call_2", "exec", "ok", { isError: false }),
     ]);
-
+    const expected = structuredClone(input);
     const result = repairToolUseResultPairing(input, {
       missingToolResultText: "aborted",
     });
 
-    expect(result.added.map((message) => message.toolCallId)).toEqual(["call_1", "call_3"]);
-    expect(result.messages.map((m) => m.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "toolResult",
-      "toolResult",
-      "user",
+    expect(result.added).toMatchObject([
+      { toolCallId: "call_1", timestamp: 5_000 },
+      { toolCallId: "call_3", timestamp: 5_000 },
     ]);
-    expect(
-      getAssistantToolCallBlocks(result.messages).map(({ id, name }) => ({ id, name })),
-    ).toEqual([
-      { id: "call_1", name: "read" },
-      { id: "call_2", name: "exec" },
-      { id: "call_3", name: "write" },
+    expect(result.messages).toEqual([
+      expected[0],
+      result.added[0],
+      expected[2],
+      result.added[1],
+      expected[1],
     ]);
-    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
-    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
-    expect((result.messages[3] as { toolCallId?: string }).toolCallId).toBe("call_3");
     expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
+  it("keeps sparse legacy replay stable while preserving recorded synthetic creation times", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const source = castAgentMessages([sparseAssistant([toolCall("legacy")])]);
+    const first = sanitizeToolUseResultPairing(source);
+    clock.mockReturnValue(2_000);
+    expect(sanitizeToolUseResultPairing(source)).toEqual(first);
+    expect(first[1]).toMatchObject({ toolCallId: "legacy", timestamp: 0 });
+
+    const recorded = makeMissingToolResult({ toolCallId: "legacy", toolName: "read" });
+    expect(recorded.timestamp).toBe(2_000);
+    clock.mockReturnValue(3_000);
+    expect(sanitizeToolUseResultPairing([...source, recorded])[1]).toBe(recorded);
   });
 
   it("keeps parallel tool results when code-mode display turns arrive first", () => {
     // Display-only assistant turns must not cause synthetic results before real results arrive.
     const input = castAgentMessages([
       sparseAssistant([
-        { type: "toolCall", id: "call_search", name: "lcm_expand_query", arguments: {} },
-        { type: "toolCall", id: "call_status", name: "session_status", arguments: {} },
+        toolCall("call_search", "lcm_expand_query"),
+        toolCall("call_status", "session_status"),
       ]),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Lcm Expand Query: missing tool result" }],
-        stopReason: "stop",
-      },
+      { ...textAssistant("Lcm Expand Query: missing tool result"), stopReason: "stop" },
       textToolResult("call_status", "session_status", "ok", { isError: false }),
       textToolResult("call_search", "lcm_expand_query", "expanded", { isError: false }),
-      { role: "user", content: "next turn" },
+      user("next turn"),
     ]);
-
+    const expected = structuredClone(input);
     const result = repairToolUseResultPairing(input);
 
     expect(result.added).toHaveLength(0);
-    expect(result.messages.map((message) => message.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "toolResult",
-      "assistant",
-      "user",
+    expect(result.messages).toEqual([
+      expected[0],
+      expected[3],
+      expected[2],
+      expected[1],
+      expected[4],
     ]);
-    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_search");
-    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_status");
-    expect(result.moved).toBe(true);
   });
 
   it("moves late real results ahead of newer assistant tool calls instead of synthesizing", () => {
     const input = castAgentMessages([
-      sparseAssistant([{ type: "toolCall", id: "call_read", name: "read", arguments: {} }]),
-      sparseAssistant([{ type: "toolCall", id: "call_exec", name: "exec", arguments: {} }]),
+      sparseAssistant([toolCall("call_read")]),
+      sparseAssistant([toolCall("call_exec", "exec")]),
       textToolResult("call_read", "read", "real read output", { isError: false }),
       textToolResult("call_exec", "exec", "real exec output", { isError: false }),
     ]);
-
+    const expected = structuredClone(input);
     const result = repairToolUseResultPairing(input);
 
     expect(result.added).toHaveLength(0);
-    expect(result.messages.map((message) => message.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "assistant",
-      "toolResult",
-    ]);
-    expect((result.messages[1] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe(
-      "call_read",
-    );
-    expect((result.messages[1] as { isError?: boolean }).isError).toBe(false);
-    expect((result.messages[3] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe(
-      "call_exec",
-    );
-    expect(JSON.stringify(result.messages)).not.toContain("missing tool result");
-    expect(result.moved).toBe(true);
+    expect(result.messages).toEqual([expected[0], expected[2], expected[1], expected[3]]);
   });
 
   it("drops orphan tool results that do not match any tool call", () => {
     const input = castAgentMessages([
-      { role: "user", content: "hello" },
+      user("hello"),
       textToolResult("call_orphan", "read", "orphan", { isError: false }),
-      sparseAssistant([{ type: "text", text: "ok" }]),
+      textAssistant("ok"),
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.some((m) => m.role === "toolResult")).toBe(false);
-    expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(roles(out)).toEqual(["user", "assistant"]);
   });
 
-  function createAbortedAssistantTranscript() {
-    return castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
-        stopReason: "aborted",
-      },
-      textToolResult("call_aborted", "exec", "partial result", { isError: false }),
-      { role: "user", content: "retrying" },
-    ]);
-  }
-
   it("retains matching tool results that follow an aborted assistant message", () => {
-    // Aborted assistant turns do not synthesize missing tool results, but real
-    // matching results in the same span remain part of the repaired transcript.
-    const input = createAbortedAssistantTranscript();
-
+    const input = castAgentMessages([
+      { ...sparseAssistant([toolCall("call_aborted", "exec")]), stopReason: "aborted" },
+      textToolResult("call_aborted", "exec", "partial result", { isError: false }),
+      user("retrying"),
+    ]);
+    const expected = structuredClone(input);
     const result = repairToolUseResultPairing(input);
 
-    expect(result.droppedOrphanCount).toBe(0);
-    expect(result.messages).toHaveLength(3);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("toolResult");
-    expect(result.messages[2]?.role).toBe("user");
+    expect(result.messages).toEqual(expected);
     expect(result.added).toHaveLength(0);
   });
 });
 
 describe("repairToolUseResultPairing repeated per-turn ids", () => {
-  function makeAssistant(id: string, stopReason: "toolUse" | "error" = "toolUse") {
-    return {
-      role: "assistant" as const,
-      content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
-      stopReason,
-    };
-  }
-
-  function makeResult(id: string, text: string, isError = false) {
-    return {
-      role: "toolResult" as const,
-      toolCallId: id,
-      toolName: "exec",
-      content: [{ type: "text", text }],
-      isError,
-    };
-  }
-
-  function resultTexts(messages: AgentMessage[]) {
-    return messages
-      .filter((message) => message.role === "toolResult")
-      .map((message) => message.content.find((block) => block.type === "text")?.text);
-  }
-
-  it("preserves valid repeated ids across assistant turns without allocating", () => {
-    const input = castAgentMessages([
-      makeAssistant("exec_0"),
-      makeResult("exec_0", "first"),
-      { role: "user", content: "next" },
-      makeAssistant("exec_0"),
-      makeResult("exec_0", "second"),
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.messages).toBe(input);
-    expect(result.added).toHaveLength(0);
-    expect(result.droppedDuplicateCount).toBe(0);
-    expect(resultTexts(result.messages)).toEqual(["first", "second"]);
+  const call = (id = "exec_0", stopReason = "toolUse") => ({
+    ...sparseAssistant([toolCall(id, "exec")]),
+    stopReason,
   });
+  const result = (text: string, id = "exec_0", isError = false) =>
+    textToolResult(id, "exec", text, { isError });
+  const missing = DEFAULT_MISSING_TOOL_RESULT_TEXT;
 
-  it("preserves every repeated-id occurrence within one assistant turn", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "exec_0", name: "exec", arguments: { cmd: "first" } },
-          { type: "toolCall", id: "exec_0", name: "exec", arguments: { cmd: "second" } },
-        ],
-        stopReason: "toolUse",
-      },
-      makeResult("exec_0", "first"),
-      makeResult("exec_0", "second"),
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.messages).toBe(input);
-    expect(result.added).toHaveLength(0);
-    expect(result.droppedDuplicateCount).toBe(0);
-    expect(resultTexts(result.messages)).toEqual(["first", "second"]);
-  });
-
-  it("synthesizes a later repeated-id occurrence without dropping the replacement", () => {
-    const input = castAgentMessages([
-      makeAssistant("exec_0"),
-      makeResult("exec_0", "first"),
-      { role: "user", content: "next" },
-      makeAssistant("exec_0"),
-    ]);
-
-    const first = repairToolUseResultPairing(input);
-    const second = repairToolUseResultPairing(first.messages);
-
-    expect(first.added).toHaveLength(1);
-    expect(first.messages.map((message) => message.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "user",
-      "assistant",
-      "toolResult",
-    ]);
-    expect(resultTexts(first.messages)).toEqual(["first", DEFAULT_MISSING_TOOL_RESULT_TEXT]);
-    expect(second.messages).toBe(first.messages);
-  });
-
-  it("keeps a later turn's adjacent repeated-id result local", () => {
-    const input = castAgentMessages([
-      makeAssistant("exec_0"),
-      makeAssistant("exec_0"),
-      makeResult("exec_0", "second"),
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.added).toHaveLength(1);
-    expect(resultTexts(result.messages)).toEqual([DEFAULT_MISSING_TOOL_RESULT_TEXT, "second"]);
-  });
-
-  it("does not guess between repeated ids when multiple delayed results are ambiguous", () => {
-    const input = castAgentMessages([
-      makeAssistant("exec_0"),
-      makeAssistant("exec_0"),
-      makeResult("exec_0", "locally first"),
-      makeResult("exec_0", "ambiguous extra"),
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.added).toHaveLength(1);
-    expect(result.droppedDuplicateCount).toBe(1);
-    expect(resultTexts(result.messages)).toEqual([
-      DEFAULT_MISSING_TOOL_RESULT_TEXT,
-      "locally first",
+  it.each([
+    {
+      name: "preserves valid repeated ids across assistant turns without allocating",
+      input: [call(), result("first"), user("next"), call(), result("second")],
+    },
+    {
+      name: "preserves every repeated-id occurrence within one assistant turn",
+      input: [
+        {
+          ...call(),
+          content: [
+            toolCall("exec_0", "exec", { cmd: "first" }),
+            toolCall("exec_0", "exec", { cmd: "second" }),
+          ],
+        },
+        result("first"),
+        result("second"),
+      ],
+    },
+  ])("$name", ({ input: raw }) => {
+    const input = castAgentMessages(raw);
+    const repaired = repairToolUseResultPairing(input);
+    expect(repaired.messages).toBe(input);
+    expect(repaired.added).toEqual([]);
+    expect(repaired.messages.filter((message) => message.role === "toolResult")).toEqual([
+      result("first"),
+      result("second"),
     ]);
   });
 
-  it("treats an unresolved failed occurrence as an ambiguity blocker", () => {
-    const input = castAgentMessages([
-      makeAssistant("exec_0"),
-      makeAssistant("exec_0", "error"),
-      makeAssistant("write_0"),
-      makeResult("exec_0", "ambiguous displaced output"),
-      makeResult("write_0", "write output"),
-    ]);
-
-    const result = repairToolUseResultPairing(input, {
-      erroredAssistantResultPolicy: "drop",
-    });
-
-    expect(result.droppedOrphanCount).toBe(1);
-    expect(result.messages.map((message) => message.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "assistant",
-      "toolResult",
-    ]);
-    expect(resultTexts(result.messages)).toEqual([
-      DEFAULT_MISSING_TOOL_RESULT_TEXT,
-      "write output",
-    ]);
-    expect(JSON.stringify(result.messages)).not.toContain("ambiguous displaced output");
-  });
-
-  it("drops a failed turn and its local repeated-id result without leaking it backward", () => {
-    const input = castAgentMessages([
-      makeAssistant("exec_0"),
-      makeAssistant("exec_0", "error"),
-      makeResult("exec_0", "failed turn output", true),
-      { role: "user", content: "retry" },
-    ]);
-
-    const result = repairToolUseResultPairing(input, {
-      erroredAssistantResultPolicy: "drop",
-    });
-
-    expect(result.added).toHaveLength(1);
-    expect(result.messages.map((message) => message.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "user",
-    ]);
-    expect(resultTexts(result.messages)).toEqual([DEFAULT_MISSING_TOOL_RESULT_TEXT]);
-    expect(JSON.stringify(result.messages)).not.toContain("failed turn output");
+  it.each([
+    {
+      name: "synthesizes a later repeated-id occurrence without dropping the replacement",
+      input: [call(), result("first"), user("next"), call()],
+      expectedRoles: ["assistant", "toolResult", "user", "assistant", "toolResult"],
+      texts: ["first", missing],
+      idempotent: true,
+    },
+    {
+      name: "keeps a later turn's adjacent repeated-id result local",
+      input: [call(), call(), result("second")],
+      texts: [missing, "second"],
+    },
+    {
+      name: "does not guess between repeated ids when multiple delayed results are ambiguous",
+      input: [call(), call(), result("locally first"), result("ambiguous extra")],
+      texts: [missing, "locally first"],
+    },
+    {
+      name: "treats an unresolved failed occurrence as an ambiguity blocker",
+      input: [
+        call(),
+        call("exec_0", "error"),
+        call("write_0"),
+        result("ambiguous displaced output"),
+        result("write output", "write_0"),
+      ],
+      drop: true,
+      texts: [missing, "write output"],
+      forbidden: "ambiguous displaced output",
+    },
+    {
+      name: "drops a failed turn and its local repeated-id result without leaking it backward",
+      input: [
+        call(),
+        call("exec_0", "error"),
+        result("failed turn output", "exec_0", true),
+        user("retry"),
+      ],
+      drop: true,
+      expectedRoles: ["assistant", "toolResult", "user"],
+      texts: [missing],
+      forbidden: "failed turn output",
+    },
+  ])("$name", ({ input, drop, expectedRoles, texts, forbidden, idempotent }) => {
+    const repaired = repairToolUseResultPairing(
+      castAgentMessages(input),
+      drop ? { erroredAssistantResultPolicy: "drop" } : undefined,
+    );
+    expect(repaired.added).toHaveLength(1);
+    expect(roles(repaired.messages)).toEqual(
+      expectedRoles ?? ["assistant", "toolResult", "assistant", "toolResult"],
+    );
+    expect(
+      repaired.messages
+        .filter((message) => message.role === "toolResult")
+        .map((message) => message.content.find((block) => block.type === "text")?.text),
+    ).toEqual(texts);
+    if (forbidden) {
+      expect(JSON.stringify(repaired.messages)).not.toContain(forbidden);
+    }
+    if (idempotent) {
+      expect(repairToolUseResultPairing(repaired.messages).messages).toBe(repaired.messages);
+    }
   });
 });
 
 describe("repairToolUseResultPairing prefers real result over synthetic error", () => {
   function makeSyntheticResult(toolCallId: string) {
     return {
-      role: "toolResult" as const,
-      toolCallId,
-      toolName: "read",
-      content: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
+      ...textToolResult(toolCallId, "read", DEFAULT_MISSING_TOOL_RESULT_TEXT, { isError: true }),
       details: { openclawSyntheticMissingToolResult: true },
-      isError: true,
     };
   }
 
-  function makeRealResult(toolCallId: string, text = "real output") {
-    return {
-      role: "toolResult" as const,
-      toolCallId,
-      toolName: "read",
-      content: [{ type: "text", text }],
-      isError: false,
-    };
-  }
-
-  function makeAssistant(toolCallId: string) {
-    return {
-      role: "assistant" as const,
-      content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: {} }],
-    };
-  }
-
-  it("returns discarded results in transcript order", () => {
+  it("keeps the real result while dropping its synthetic predecessor and an orphan", () => {
     const input = castAgentMessages([
-      makeAssistant("call_1"),
+      sparseAssistant([toolCall("call_1")]),
       makeSyntheticResult("call_1"),
-      makeRealResult("call_orphan", "orphan"),
-      makeRealResult("call_1"),
+      textToolResult("call_orphan", "read", "orphan", { isError: false }),
+      textToolResult("call_1", "read", "real output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
 
-    expect(result.discarded).toEqual([input[1], input[2]]);
+    expect(result.messages).toEqual([input[0], input[3]]);
   });
 
   it("late real result after another assistant turn replaces prior synthetic", () => {
     const input = castAgentMessages([
-      makeAssistant("call_1"),
+      sparseAssistant([toolCall("call_1")]),
       makeSyntheticResult("call_1"),
-      {
-        role: "assistant" as const,
-        content: [{ type: "toolCall", id: "call_2", name: "write", arguments: {} }],
-      },
-      makeRealResult("call_1"),
+      sparseAssistant([toolCall("call_2", "write")]),
+      textToolResult("call_1", "read", "real output", { isError: false }),
       textToolResult("call_2", "write", "second output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
 
-    const toolResults = result.messages.filter((m) => m.role === "toolResult") as Array<{
-      toolCallId?: string;
-      isError?: boolean;
-      content?: Array<{ text?: string }>;
-    }>;
-    expect(toolResults).toHaveLength(2);
-    expect(toolResults[0]?.toolCallId).toBe("call_1");
+    const toolResults = result.messages.filter((m) => m.role === "toolResult");
+    expect(toolResults).toMatchObject([
+      { toolCallId: "call_1", content: [{ text: "real output" }] },
+      { toolCallId: "call_2", content: [{ text: "second output" }] },
+    ]);
     expect(toolResults[0]?.isError).not.toBe(true);
-    expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
-    expect(toolResults[1]?.toolCallId).toBe("call_2");
-    expect(toolResults[1]?.content?.[0]?.text).toBe("second output");
-    expect(result.discarded).toEqual([input[1]]);
   });
 });
 
@@ -436,7 +352,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       ...(signed
         ? [{ type: "thinking", thinking: "Recorded work", thinkingSignature: "sig_old" }]
         : []),
-      { type: "toolCall", id: "old_call", name: "removed_plugin", arguments: { action: "done" } },
+      toolCall("old_call", "removed_plugin", { action: "done" }),
     ]);
     const input = castAgentMessages([
       assistant,
@@ -453,59 +369,37 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
         result,
       ]);
     }
-    const later = sparseAssistant([
-      { type: "toolCall", id: "old_call", name: "read", arguments: {} },
-    ]);
+    const later = sparseAssistant([toolCall("old_call")]);
     const laterResult = textToolResult("old_call", "read", "later result", { isError: false });
     expect(
       sanitizeToolCallInputs(castAgentMessages([assistant, later, laterResult]), options),
     ).toEqual([later, laterResult]);
   });
 
-  function sanitizeAssistantContent(
-    content: unknown[],
-    options?: Parameters<typeof sanitizeToolCallInputs>[1],
-  ) {
-    return sanitizeToolCallInputs(
-      castAgentMessages([
-        {
-          role: "assistant",
-          content,
-        },
-      ]),
-      options,
-    );
-  }
-
   function sanitizeAssistantToolCalls(
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],
   ) {
-    return getAssistantToolCallBlocks(sanitizeAssistantContent(content, options));
+    return getAssistantToolCallBlocks(
+      sanitizeToolCallInputs(castAgentMessages([sparseAssistant(content)]), options),
+    );
   }
 
   it.each([
     {
       name: "drops tool calls with missing or blank name/id",
       content: [
-        { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
-        { type: "toolCall", id: "call_empty_name", name: "", arguments: {} },
+        toolCall("call_ok"),
+        toolCall("call_empty_name", ""),
         { type: "toolUse", id: "call_blank_name", name: "   ", input: {} },
         { type: "functionCall", id: "", name: "exec", arguments: {} },
       ],
-      options: undefined,
-      expectedIds: ["call_ok"],
     },
     {
       name: "drops tool calls with malformed or overlong names",
       content: [
-        { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
-        {
-          type: "toolCall",
-          id: "call_bad_chars",
-          name: 'toolu_01abc <|tool_call_argument_begin|> {"command"',
-          arguments: {},
-        },
+        toolCall("call_ok"),
+        toolCall("call_bad_chars", 'toolu_01abc <|tool_call_argument_begin|> {"command"'),
         {
           type: "toolUse",
           id: "call_too_long",
@@ -513,16 +407,14 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
           input: {},
         },
       ],
-      options: undefined,
-      expectedIds: ["call_ok"],
     },
-  ])("$name", ({ content, options, expectedIds }) => {
-    const toolCalls = sanitizeAssistantToolCalls(content, options);
+  ])("$name", ({ content }) => {
+    const toolCalls = sanitizeAssistantToolCalls(content);
     const ids = toolCalls
-      .map((toolCall) => (toolCall as { id?: unknown }).id)
+      .map((block) => block.id)
       .filter((id): id is string => typeof id === "string");
 
-    expect(ids).toEqual(expectedIds);
+    expect(ids).toEqual(["call_ok"]);
   });
 
   it("keeps finalized OpenAI Responses calls and drops partialJson streaming artifacts", () => {
@@ -531,306 +423,129 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
         role: "assistant",
         stopReason: "toolUse",
         content: [
-          // complete tool call — kept as-is
-          { type: "toolCall", id: "call_ok", name: "read", arguments: { path: "/a" } },
-          // Legacy generic Responses transport persisted finalized toolUse
-          // turns with partialJson; repair strips the scratch field.
-          {
-            type: "toolCall",
-            id: "call_partial|fc_123",
-            name: "Bash",
-            arguments: { command: "ls" },
-            partialJson: '{"command": "ls"}',
-          },
-          {
-            type: "toolCall",
-            id: "call_empty|fc_789",
-            name: "session_status",
-            arguments: {},
-            partialJson: "",
-          },
-          // Anthropic can persist initialized tool calls with arguments: {}
-          // plus partialJson if the stream aborts before content_block_stop.
-          // Those incomplete artifacts must be dropped.
-          {
-            type: "toolCall",
-            id: "toolu_123",
-            name: "Bash",
-            arguments: {},
-            partialJson: '{"command":',
-          },
-          // An OpenAI-shaped id and parsed partial arguments do not prove that
-          // response.output_item.done arrived.
-          {
-            type: "toolCall",
-            id: "call_truncated|fc_456",
-            name: "Bash",
-            arguments: { command: "ls" },
-            partialJson: '{"command":"ls"',
-          },
+          toolCall("call_ok", "read", { path: "/a" }),
+          // Finalized legacy Responses calls lose only their scratch buffer.
+          partialCall("call_partial|fc_123", '{"command": "ls"}', { command: "ls" }),
+          { ...toolCall("call_empty|fc_789", "session_status"), partialJson: "" },
+          // Interrupted Anthropic and Responses calls remain incomplete, even with parsed args.
+          partialCall("toolu_123", '{"command":'),
+          partialCall("call_truncated|fc_456", '{"command":"ls"', { command: "ls" }),
           // Missing required input is also an interrupted artifact and should drop.
-          {
-            type: "toolUse",
-            id: "call_partial2",
-            name: "read",
-            input: null,
-            partialJson: '{"path":',
-          },
+          { ...legacyRead("call_partial2", ""), input: null, partialJson: '{"path":' },
         ],
       },
       { role: "user", content: "retry" },
     ]);
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-    const ids = toolCalls.map((t) => (t as { id?: unknown }).id);
+    const toolCalls = getAssistantToolCallBlocks(sanitizeToolCallInputs(input));
+    const ids = toolCalls.map((block) => block.id);
     expect(ids).toEqual(["call_ok", "call_partial|fc_123", "call_empty|fc_789"]);
     expect(toolCalls[1]).not.toHaveProperty("partialJson");
     expect(toolCalls[2]).not.toHaveProperty("partialJson");
   });
 
-  it.each(["stop"] as const)(
-    "drops OpenAI Responses partialJson blocks on %s assistant turns",
-    (stopReason) => {
-      const input = castAgentMessages([
-        {
-          role: "assistant",
-          stopReason,
-          content: [
-            {
-              type: "toolCall",
-              id: "call_partial|fc_123",
-              name: "Bash",
-              arguments: { command: "ls" },
-              partialJson: '{"command":"ls"}',
-            },
-          ],
-        },
-        { role: "user", content: "retry" },
-      ]);
-
-      const out = sanitizeToolCallInputs(input);
-      expect(getAssistantToolCallBlocks(out)).toHaveLength(0);
-    },
-  );
-
-  it("drops signed-thinking assistant turns when sibling tool calls are not replay-safe", () => {
-    const input = castAgentMessages([
-      sparseAssistant([
-        {
-          type: "thinking",
-          thinking: "Let me check the gateway config.",
-          thinkingSignature: "sig_gateway",
-        },
-        {
-          type: "toolCall",
-          id: "call_gateway",
-          name: "gateway",
-          arguments: {
-            action: "config.get",
-            path: "channels.telegram",
-          },
-        },
-      ]),
-    ]);
-
-    const out = sanitizeToolCallInputs(input, {
-      allowedToolNames: ["read"],
-      allowProviderOwnedThinkingReplay: true,
-    });
-
-    expect(out).toStrictEqual([]);
-  });
-
-  it("drops signed-thinking assistant turns with partialJson tool calls", () => {
+  it("drops OpenAI Responses partialJson blocks on stop assistant turns", () => {
     const input = castAgentMessages([
       {
-        role: "assistant",
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Let me run a command.",
-            thinkingSignature: "sig_partial",
-          },
-          {
-            type: "toolCall",
-            id: "call_partial|fc_123",
-            name: "exec",
-            arguments: {},
-            partialJson: '{"command":"ls"}',
-          },
-        ],
+        ...sparseAssistant([
+          partialCall("call_partial|fc_123", '{"command":"ls"}', { command: "ls" }),
+        ]),
+        stopReason: "stop",
       },
+      { role: "user", content: "retry" },
     ]);
-
-    const out = sanitizeToolCallInputs(input, {
-      allowedToolNames: ["exec"],
-      allowProviderOwnedThinkingReplay: true,
-    });
-
-    expect(out).toStrictEqual([]);
+    expect(getAssistantToolCallBlocks(sanitizeToolCallInputs(input))).toHaveLength(0);
   });
 
-  it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
-    const input = castAgentMessages([
-      sparseAssistant([
-        {
-          type: "thinking",
-          thinking: "Let me reuse the tool id.",
-          thinkingSignature: "sig_duplicate",
-        },
-        { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
-        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-      ]),
-    ]);
-
-    const out = sanitizeToolCallInputs(input, {
-      allowedToolNames: ["read"],
-      allowProviderOwnedThinkingReplay: true,
-    });
-
-    expect(out).toStrictEqual([]);
-  });
-
-  it("drops only later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
-    const firstAssistant = {
-      role: "assistant",
-      content: [
-        {
-          type: "thinking",
-          thinking: "First signed replay turn.",
-          thinkingSignature: "sig_first",
-        },
-        { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
-      ],
-    } as const;
-    const input = castAgentMessages([
-      firstAssistant,
-      sparseAssistant([
-        {
-          type: "thinking",
-          thinking: "Second signed replay turn.",
-          thinkingSignature: "sig_second",
-        },
-        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-      ]),
-    ]);
-
-    const out = sanitizeToolCallInputs(input, {
-      allowedToolNames: ["read"],
-      allowProviderOwnedThinkingReplay: true,
-    });
-
-    expect(out).toEqual([firstAssistant]);
-  });
-
-  it("preserves signed-thinking turns that reuse a mutable earlier tool id", () => {
-    const input = castAgentMessages([
-      sparseAssistant([
-        { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
-      ]),
-      {
-        role: "toolResult",
-        toolCallId: "call_shared",
-        content: [{ type: "text", text: "mutable result" }],
-      },
-      sparseAssistant([
-        {
-          type: "thinking",
-          thinking: "Signed replay can keep its provider-owned id.",
-          thinkingSignature: "sig_later",
-        },
-        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-      ]),
-      {
-        role: "toolResult",
-        toolCallId: "stale_call",
-        toolUseId: "call_shared",
-        content: [{ type: "text", text: "signed result" }],
-      },
-    ]);
-
-    const out = sanitizeToolCallInputs(input, {
-      allowedToolNames: ["read"],
-      allowProviderOwnedThinkingReplay: true,
-    });
-
-    expect(out).toBe(input);
-  });
-
-  it("drops signed-thinking reused ids when their real result is displaced", () => {
-    const firstAssistant = {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } }],
-    } as const;
-    const firstResult = {
-      role: "toolResult",
-      toolCallId: "call_shared",
-      content: [{ type: "text", text: "mutable result" }],
-    } as const;
-    const userMessage = {
-      role: "user",
-      content: [{ type: "text", text: "interstitial" }],
-    } as const;
-    const displacedResult = {
-      role: "toolResult",
-      toolCallId: "call_shared",
-      content: [{ type: "text", text: "signed result" }],
-    } as const;
-    const input = castAgentMessages([
-      firstAssistant,
-      firstResult,
-      sparseAssistant([
-        {
-          type: "thinking",
-          thinking: "Signed replay has a displaced result.",
-          thinkingSignature: "sig_later",
-        },
-        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-      ]),
-      userMessage,
-      displacedResult,
-    ]);
-
-    const out = sanitizeToolCallInputs(input, {
-      allowedToolNames: ["read"],
-      allowProviderOwnedThinkingReplay: true,
-    });
-
-    expect(out).toEqual([firstAssistant, firstResult, userMessage, displacedResult]);
-  });
-
+  const mutable = () => sparseAssistant([toolCall("call_shared", "read", { path: "a" })]);
+  const mutableResult = () => bareResult("call_shared", "mutable result");
+  const signed = (signature: string) => signedAssistant(signature, legacyRead("call_shared", "b"));
   it.each([
     {
-      name: "trims tool names and matches against allowlist",
-      content: [
-        { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
-        { type: "toolCall", id: "call_2", name: " write ", arguments: {} },
+      name: "drops signed-thinking assistant turns with partialJson tool calls",
+      input: [
+        {
+          ...signedAssistant("sig_partial", {
+            ...toolCall("call_partial|fc_123", "exec"),
+            partialJson: '{"command":"ls"}',
+          }),
+          stopReason: "toolUse",
+        },
       ],
-      options: { allowedToolNames: ["read"] },
-      expectedNames: ["read"],
+      allowedToolNames: ["exec"],
+      kept: [],
     },
-  ])("$name", ({ content, options, expectedNames }) => {
-    const toolCalls = sanitizeAssistantToolCalls(content, options);
+    {
+      name: "drops signed-thinking assistant turns when sibling tool calls reuse an id",
+      input: [
+        signedAssistant(
+          "sig_duplicate",
+          toolCall("call_shared", "read", { path: "a" }),
+          legacyRead("call_shared", "b"),
+        ),
+      ],
+      kept: [],
+    },
+    {
+      name: "drops only later signed-thinking assistant turns that reuse an earlier signed tool id",
+      input: [
+        signedAssistant("sig_first", toolCall("call_shared", "read", { path: "a" })),
+        signed("sig_second"),
+      ],
+      kept: [0],
+    },
+    {
+      name: "preserves signed-thinking turns that reuse a mutable earlier tool id",
+      input: [
+        mutable(),
+        mutableResult(),
+        signed("sig_later"),
+        { ...bareResult("stale_call", "signed result"), toolUseId: "call_shared" },
+      ],
+      unchanged: true,
+      kept: [0, 1, 2, 3],
+    },
+    {
+      name: "drops signed-thinking reused ids when their real result is displaced",
+      input: [
+        mutable(),
+        mutableResult(),
+        signed("sig_later"),
+        { role: "user", content: [{ type: "text", text: "interstitial" }] },
+        bareResult("call_shared", "signed result"),
+      ],
+      kept: [0, 1, 3, 4],
+    },
+  ])("$name", ({ input: raw, kept, unchanged, allowedToolNames }) => {
+    const input = castAgentMessages(raw);
+    const expected = structuredClone(kept.map((index) => input[index]));
+    const output = sanitizeToolCallInputs(input, {
+      ...signedRead,
+      ...(allowedToolNames ? { allowedToolNames } : {}),
+    });
+    expect(output).toStrictEqual(expected);
+    if (unchanged) {
+      expect(output).toBe(input);
+    }
+  });
+
+  it("trims tool names and matches against allowlist", () => {
+    const toolCalls = sanitizeAssistantToolCalls(
+      [toolCall("call_1", " read "), toolCall("call_2", " write ")],
+      { allowedToolNames: ["read"] },
+    );
     const names = toolCalls
-      .map((toolCall) => (toolCall as { name?: unknown }).name)
+      .map((block) => block.name)
       .filter((name): name is string => typeof name === "string");
-    expect(names).toEqual(expectedNames);
+    expect(names).toEqual(["read"]);
   });
 });
 
 describe("stripToolResultDetails", () => {
   it("strips opaque details and keeps synthetic projections stable", () => {
     const input = castAgentMessages([
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        details: { internal: true },
-      },
-      { role: "assistant", content: [{ type: "text", text: "keep me" }], details: { no: "touch" } },
-      { role: "user", content: "hello" },
+      { ...textToolResult("call_1", "read", "ok"), details: { internal: true } },
+      { ...textAssistant("keep me"), details: { no: "touch" } },
+      user("hello"),
       {
         ...makeMissingToolResult({ toolCallId: "missing", toolName: "read" }),
         details: { internal: true, openclawSyntheticMissingToolResult: true },
@@ -842,7 +557,6 @@ describe("stripToolResultDetails", () => {
     expect(Object.hasOwn(out[0] ?? {}, "details")).toBe(false);
     expect((out[0] ?? {}).role).toBe("toolResult");
 
-    // Non-toolResult messages are preserved as-is.
     expect(Object.hasOwn(out[1] ?? {}, "details")).toBe(true);
     expect((out[1] ?? {}).role).toBe("assistant");
     expect((out[2] ?? {}).role).toBe("user");

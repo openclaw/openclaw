@@ -18,11 +18,6 @@ import {
 } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -45,10 +40,6 @@ import {
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
-import {
-  claimHeartbeatOutcomeForRun,
-  persistHeartbeatOutcome,
-} from "../../infra/heartbeat-outcome-store.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -67,6 +58,11 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
@@ -101,6 +97,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
+import { resolveBootstrapContextForRun as loadBootstrapContext } from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -122,14 +119,16 @@ import {
   hashCliSessionText,
 } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
-import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
 import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
-import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
+import {
+  beginForegroundSessionMaintenance,
+  waitForSessionMaintenance,
+} from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   captureRoutingDecisionWork,
@@ -142,6 +141,8 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  createCliMcpTool,
+  createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
@@ -188,7 +189,8 @@ vi.mock("../../config/config.js", async () => ({
   resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
 }));
 
-vi.mock("../sandbox.js", () => ({
+vi.mock("../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
   ensureSandboxWorkspaceForSession: ensureSandboxWorkspaceForSessionMock,
 }));
 
@@ -243,15 +245,7 @@ function createBundledMessageToolConfig(): OpenClawConfig {
     getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
     resolveMcpLoopbackScopedTools: vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("message", "Message", "Send a message")],
     })),
   });
   return createCliBackendConfig({ bundleMcp: true });
@@ -315,13 +309,17 @@ function createArgBackendConfig(
   return { command, args, output, input: "arg", sessionMode: "existing" };
 }
 
-function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
+function createNativeArgMcpBackend(): CliBackendPlugin & { pluginId: string } {
   return {
-    command,
-    args: ["--print"],
-    output: "jsonl",
-    input: "stdin",
-    sessionMode: "existing",
+    id: "native-cli",
+    pluginId: "native-plugin",
+    bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
+    config: {
+      ...createArgBackendConfig("native-cli"),
+      systemPromptArg: "--system-prompt",
+      systemPromptWhen: "first",
+    },
   };
 }
 
@@ -698,140 +696,13 @@ describe("prepareCliRunContext", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it.each(["process", "plugin"] as const)(
-    "carries silent heartbeat outcome in late %s user input without rebinding",
-    async (targetKind) => {
-      const { sessionTarget } = fixture.session;
-      if (targetKind === "plugin") {
-        setRawCliBackendForPrepareTest({
-          ...defaultTestCliBackend,
-          prepareExecution: () => ({
-            async *execute() {
-              yield { type: "result" };
-            },
-          }),
-        });
-      }
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        "run-test",
-        "main",
-        "heartbeat-context-test",
-      );
-      const input = {
-        preparedRunAdmission: admission,
-        sessionKey: sessionTarget.sessionKey,
-        trigger: "user" as const,
-        prompt: "What happened?",
-        transcriptPrompt: "What happened?",
-        currentInboundContext: { text: "Quoted reply", resumableText: "Room delta" },
-      };
-      try {
-        const before = await fixture.prepare(input);
-        await persistHeartbeatOutcome({
-          ...sessionTarget,
-          runSessionKey: "agent:main:main:heartbeat",
-          occurredAt: 1,
-          response: { outcome: "done", notify: false, summary: "ISOLATED_CLI_OUTCOME_947" },
-        });
-        for (let retry = 0; retry < 2; retry++) {
-          const context = await fixture.prepare(input);
-          expect(context.executionTarget.kind).toBe(targetKind);
-          const visibleInput = [
-            context.params.prompt,
-            context.promptContext?.prependContext,
-            context.promptContext?.appendContext,
-          ]
-            .filter(Boolean)
-            .join("\n");
-          expect(visibleInput.match(/ISOLATED_CLI_OUTCOME_947/g)).toHaveLength(1);
-          expect(context.params.transcriptPrompt).toBe("What happened?");
-          expect(context.systemPrompt).toBe(before.systemPrompt);
-          expect(context.extraSystemPromptHash).toBe(before.extraSystemPromptHash);
-          expect(context.messageToolPolicyHash).toBe(before.messageToolPolicyHash);
-          expect(input.currentInboundContext).toEqual({
-            text: "Quoted reply",
-            resumableText: "Room delta",
-          });
-        }
-        const laterAdmission = prepareSystemAgentRunAdmission(
-          {},
-          "later-user-run",
-          "main",
-          "heartbeat-context-test",
-        );
-        try {
-          const later = await fixture.prepare({
-            ...input,
-            runId: "later-user-run",
-            preparedRunAdmission: laterAdmission,
-          });
-          expect(JSON.stringify([later.params.prompt, later.promptContext])).not.toContain(
-            "ISOLATED_CLI_OUTCOME_947",
-          );
-        } finally {
-          laterAdmission.close();
-        }
-      } finally {
-        admission.close();
-      }
-    },
-  );
-
-  it.each(["heartbeat", "in-memory", "aborted"] as const)(
-    "does not consume silent heartbeat context for %s CLI preparation",
-    async (kind) => {
-      const { sessionTarget, dir } = fixture.session;
-      await persistHeartbeatOutcome({
-        ...sessionTarget,
-        runSessionKey: "agent:main:main:heartbeat",
-        occurredAt: 1,
-        response: { outcome: "done", notify: false, summary: "Retained CLI outcome" },
-      });
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        "run-test",
-        "main",
-        "heartbeat-context-test",
-      );
-      const input = {
-        preparedRunAdmission: admission,
-        sessionKey: sessionTarget.sessionKey,
-        trigger: kind === "heartbeat" ? kind : ("user" as const),
-        ...(kind === "in-memory" ? { sessionManager: SessionManager.inMemory(dir) } : {}),
-        ...(kind === "aborted" ? { abortSignal: AbortSignal.abort() } : {}),
-      };
-      try {
-        if (kind === "aborted") {
-          await expect(fixture.prepare(input)).rejects.toThrow();
-        } else {
-          const context = await fixture.prepare(input);
-          expect(JSON.stringify([context.params.prompt, context.promptContext])).not.toContain(
-            "Retained CLI outcome",
-          );
-        }
-        expect(
-          (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
-        ).toBe("Retained CLI outcome");
-      } finally {
-        admission.close();
-      }
-    },
-  );
-
-  it("does not renew an explicitly revoked CLI owner to claim silent heartbeat context", async () => {
+  it("does not renew an explicitly revoked CLI owner during preparation", async () => {
     const { sessionTarget } = fixture.session;
-    await persistHeartbeatOutcome({
-      ...sessionTarget,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 1,
-      response: { outcome: "done", notify: false, summary: "Keep revoked-owner outcome" },
-    });
     const admission = prepareSystemAgentRunAdmission(
       {},
       "revoked-user",
       "main",
-      "heartbeat-context-test",
+      "revoked-context-test",
     );
     const admittedRunContext = await admission.admit("embedded");
     admission.close();
@@ -843,9 +714,6 @@ describe("prepareCliRunContext", () => {
         sessionKey: sessionTarget.sessionKey,
       }),
     ).rejects.toThrow("authority");
-    expect(
-      (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
-    ).toBe("Keep revoked-owner outcome");
   });
 
   it("honors an explicit auth agent directory independently of session identity", async () => {
@@ -1563,7 +1431,7 @@ describe("prepareCliRunContext", () => {
     expect(context.contextEngine).toBeUndefined();
     expect(context.contextEngineTurnPrompt).toBeUndefined();
     expect(context.hadSessionFile).toBe(false);
-    expect(context.claudeSkillsPluginArgs).toEqual([]);
+    expect(context.claudeSkillsPlugin.args).toEqual([]);
     expect(context.preparedBackend.backend.sessionMode).toBe("none");
     expect(context.preparedBackend.backend.liveSession).toBeUndefined();
     expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
@@ -1757,7 +1625,7 @@ describe("prepareCliRunContext", () => {
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.params.prompt).toMatch(
-        /^Current event:\nBob: yes\n\n\[OpenClaw room event\]\n\nFor the current source conversation,/,
+        /^Current event:\nBob: yes\n\n\[OpenClaw room event\]\n\nThis turn has no current conversation\./,
       );
       expect(context.params.prompt).toMatch(
         /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,
@@ -1837,7 +1705,7 @@ describe("prepareCliRunContext", () => {
       .finally(preparedRunAdmission.close);
 
     expect(context.params.prompt).toMatch(
-      /^authorized memory context\n\nlatest ask\n\nFor the current source conversation,/,
+      /^authorized memory context\n\nlatest ask\n\nThis turn has no current conversation\./,
     );
     expect(context.params.transcriptPrompt).toBe("latest ask");
     expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
@@ -1898,7 +1766,7 @@ describe("prepareCliRunContext", () => {
       try {
         const preparation = withPluginRuntimeRegistryScope(custody.registry, () =>
           fixture.prepare({
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
             assertCurrent: () => {
               if (!current) {
                 throw new Error("CLI owner retired after engine acquisition");
@@ -1990,7 +1858,7 @@ describe("prepareCliRunContext", () => {
             model: "test-model",
             runId: "cli-custody-history-failure",
             timeoutMs: 1_000,
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
           }),
         ),
       ).rejects.toBe(historyFailure);
@@ -2040,7 +1908,7 @@ describe("prepareCliRunContext", () => {
         "plugin:fixture",
       );
       try {
-        const config = { plugins: { slots: { contextEngine: engineId } } };
+        const config = { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } };
         const context = await work.run(() =>
           withPluginRuntimeRegistryScope(custody.registry, async () => {
             if (ownership === "borrowed") {
@@ -2071,7 +1939,7 @@ describe("prepareCliRunContext", () => {
         await maintenanceStarted.promise;
         expect(custody.read()).toBe(42);
         maintenanceGate.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         if (lease) {
           await custody.retirement;
         }
@@ -2081,7 +1949,7 @@ describe("prepareCliRunContext", () => {
       } finally {
         releaseForeground();
         maintenanceGate.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         await lease?.dispose();
         if (lease) {
           await custody.retirement;
@@ -2155,9 +2023,7 @@ describe("prepareCliRunContext", () => {
       if (scenario === "lookup-failed") {
         lookup.reject(new Error("optional media lookup failed"));
         expect(await outcome).toEqual({
-          prompt: expect.stringMatching(
-            /^latest ask\n\nNo source-conversation reply can be sent from this turn\./,
-          ),
+          prompt: expect.stringMatching(/^latest ask\n\nThis turn has no current conversation\./),
           transcriptPrompt: "latest ask",
         });
         expect(factory).toHaveBeenCalledOnce();
@@ -2197,8 +2063,8 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("reuses normal/heartbeat/normal CLI bindings for a subagent", async () => {
-    const trigger = "heartbeat";
+  it("reuses normal/event/normal CLI bindings for a subagent", async () => {
+    const trigger = "event";
     const sessionKey = "agent:main:subagent:child";
     const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
     const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });
@@ -2229,6 +2095,52 @@ describe("prepareCliRunContext", () => {
     expect(background.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
     expect(normal.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
+
+  it.each([false, true])(
+    "keeps agent bootstrap and layers only execution AGENTS (explicit root: %s)",
+    async (explicitRoot) => {
+      setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
+      const { dir } = fixture.session;
+      const executionDir = path.join(dir, "execution");
+      const bootstrapDir = explicitRoot ? path.join(dir, "bootstrap-override") : dir;
+      fs.mkdirSync(executionDir);
+      fs.mkdirSync(bootstrapDir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "AGENTS.md"), "UNSELECTED-WORKSPACE");
+      for (const [name, content] of Object.entries({
+        "AGENTS.md": "CANONICAL-AGENT-RULE",
+        "SOUL.md": "CANONICAL-SOUL-MARKER",
+        "USER.md": "CANONICAL-USER-MARKER",
+        "MEMORY.md": "CANONICAL-MEMORY-MARKER",
+      })) {
+        fs.writeFileSync(path.join(bootstrapDir, name), content);
+      }
+      fs.writeFileSync(path.join(executionDir, "AGENTS.md"), "EXECUTION-PROJECT-RULE");
+      fs.writeFileSync(path.join(executionDir, "USER.md"), "EXECUTION-USER-MUST-NOT-OVERRIDE");
+      fs.writeFileSync(path.join(executionDir, "MEMORY.md"), "EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+
+      const context = await fixture.prepare({
+        config: { agents: { defaults: { workspace: dir }, entries: { main: {} } } },
+        sessionKey: "agent:main:main",
+        workspaceDir: executionDir,
+        cwd: executionDir,
+        ...(explicitRoot ? { bootstrapWorkspaceDir: bootstrapDir } : {}),
+      });
+
+      expect(context.cwd).toBe(executionDir);
+      expect(context.systemPrompt).toContain("CANONICAL-AGENT-RULE");
+      expect(context.systemPrompt).toContain("CANONICAL-SOUL-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-USER-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-MEMORY-MARKER");
+      expect(context.systemPrompt).toContain("EXECUTION-PROJECT-RULE");
+      expect(context.systemPromptReport.injectedWorkspaceFiles.at(-1)).toMatchObject({
+        path: path.join(executionDir, "AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: executionDir },
+      });
+      expect(context.systemPrompt).not.toContain("EXECUTION-USER-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("UNSELECTED-WORKSPACE");
+    },
+  );
 
   it("uses canonical repository skills for a managed worktree", async () => {
     const { dir } = fixture.session;
@@ -2354,41 +2266,17 @@ describe("prepareCliRunContext", () => {
     const resolveMcpLoopbackScopedTools = vi.fn((scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
+        createCliMcpTool("message", "Message", "Send a message"),
         ...(scope.context.senderIsOwner === false
           ? []
-          : [
-              {
-                name: "gateway",
-                label: "Gateway",
-                description: "Manage the gateway",
-                parameters: { type: "object", properties: {} },
-                execute: vi.fn(),
-              },
-            ]),
+          : [createCliMcpTool("gateway", "Gateway", "Manage the gateway")]),
       ],
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const cliSessionBindingFacts = {
       extraSystemPromptStatic: "group:telegram:group:message_tool_only",
       sourceReplyDeliveryMode: "message_tool_only" as const,
@@ -2446,9 +2334,8 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
     expect(second.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2513,7 +2400,7 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.params.prompt).toBe("latest ask");
     expect(second.promptContext).toEqual({
-      appendContext: expect.stringMatching(/^For the current source conversation,/),
+      appendContext: expect.stringMatching(/^This turn has no current conversation\./),
     });
     expect(
       second.promptContext?.appendContext?.endsWith(`\n\n${labelRuntimeContextText(carrier)}`),
@@ -2558,13 +2445,7 @@ describe("prepareCliRunContext", () => {
     const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
-        {
-          name: "memory_search",
-          label: "Memory Search",
-          description: "Search memory",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
+        createCliMcpTool("memory_search", "Memory Search", "Search memory"),
         {
           name: "fake_web_tool",
           label: "Fake web tool",
@@ -2585,17 +2466,7 @@ describe("prepareCliRunContext", () => {
       revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const baselineContext = await fixture.prepare({
       sessionKey: "main",
       agentId: "worker",
@@ -2673,9 +2544,8 @@ describe("prepareCliRunContext", () => {
       hashCliSessionText(JSON.stringify(["fake_web_tool", "memory_search"])),
     );
     expect(context.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2692,15 +2562,7 @@ describe("prepareCliRunContext", () => {
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "memory_search",
-          label: "Memory Search",
-          description: "Search memory",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("memory_search", "Memory Search", "Search memory")],
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -2708,17 +2570,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     await expect(
       fixture.prepare({
         sessionKey: "agent:main:test",
@@ -2878,6 +2730,8 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       modelProvider: "policy-provider",
       model: "policy-model",
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       clientCaps: ["original-client"],
       toolsAllow: originalToolsAllow,
@@ -2889,6 +2743,8 @@ describe("prepareCliRunContext", () => {
     const questionAuthority = bindQuestionAuthority(() => {});
     originalToolsAllow.push("exec");
     const caller = {
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       disableTools: false,
       clientCaps: ["original-client"],
@@ -2993,7 +2849,8 @@ describe("prepareCliRunContext", () => {
       modelProvider: "question-policy",
       model: "creator-model",
       config,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       senderIsOwner: false,
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
@@ -3003,7 +2860,8 @@ describe("prepareCliRunContext", () => {
     const caller = {
       senderIsOwner: false,
       disableTools: false,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
       traceAuthorized: mode === "reply-owned",
@@ -3092,7 +2950,7 @@ describe("prepareCliRunContext", () => {
               }),
             );
             await answeringPlaceholder.bindToolAuthorityRouteAsync(nextRoute);
-            expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
+            expect(getSessionControllerOperation(original.sessionKey)).toBe(answeringPlaceholder);
           }
           const answer = () =>
             claimPendingAgentQuestionAnswerFromCaller({
@@ -3319,15 +3177,7 @@ describe("prepareCliRunContext", () => {
     };
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "skill_workshop",
-          label: "Skill Workshop",
-          description: "Manage skills",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("skill_workshop", "Skill Workshop", "Manage skills")],
     }));
     setCliRunnerPrepareTestDeps({ resolveMcpLoopbackScopedTools });
     const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
@@ -3407,6 +3257,10 @@ describe("prepareCliRunContext", () => {
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
         mintMcpLoopbackClientGrant,
+        resolveMcpLoopbackPolicyTools: vi.fn(() => ({
+          agentId: "main",
+          tools: projectedToolNames.map((name) => ({ name })),
+        })),
         resolveMcpLoopbackScopedTools: vi.fn(() => ({
           agentId: "main",
           tools: projectedToolNames.map((name) => ({ name })),
@@ -3444,7 +3298,7 @@ describe("prepareCliRunContext", () => {
       });
       expect(context.params.prompt).toContain("message-tool-available:false");
       expect(context.params.prompt).toContain(
-        "For the current source conversation, reply normally in your final assistant message",
+        "This turn has no current conversation. Reply normally in your final assistant message",
       );
       expect(context.params.prompt).not.toContain("message(action=send)");
       expect(context.params.prompt).not.toContain("target required this turn");
@@ -3960,7 +3814,7 @@ describe("prepareCliRunContext", () => {
         "Recovered history may be stale; verify current and time-sensitive facts before acting.",
       );
       expect(context.openClawHistoryPrompt).toMatch(
-        /<next_user_message>\nlatest ask\n\nFor the current source conversation,[\s\S]*\n<\/next_user_message>$/,
+        /<next_user_message>\nlatest ask\n\nThis turn has no current conversation\.[\s\S]*\n<\/next_user_message>$/,
       );
       expect(context.params.transcriptPrompt).toBe("latest ask");
     });
@@ -4041,7 +3895,7 @@ describe("prepareCliRunContext", () => {
     // backend's raw-transcript reseed semantics for fresh-retry paths.
     // A borrowed native handle cannot authorize unverified durable history.
     expect(context.openClawHistoryPrompt).toBeUndefined();
-    expect(context.claudeSkillsPluginArgs).toEqual([]);
+    expect(context.claudeSkillsPlugin.args).toEqual([]);
     expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
     expect(context.mcpDeliveryCapture).toBeUndefined();
     expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
@@ -4055,7 +3909,7 @@ describe("prepareCliRunContext", () => {
     expect(context.preparedBackend.secretInput?.fingerprint).toBe(
       "selected-node-token-fingerprint",
     );
-    expect(context.preparedBackend.backend.clearEnv).toEqual(
+    expect(context.preparedBackend.resetEnv).toEqual(
       expect.arrayContaining(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
     );
   });
@@ -4320,7 +4174,7 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       runId: "native-skill-turn-one",
     });
-    const pluginDir = context.claudeSkillsPluginArgs[1];
+    const pluginDir = context.claudeSkillsPlugin.args[1];
     if (!pluginDir) {
       throw new Error("Expected materialized skill plugin");
     }
@@ -4347,7 +4201,7 @@ describe("prepareCliRunContext", () => {
         sessionKey: "agent:main:main",
         runId: "native-skill-turn-two",
       });
-      const unusedPluginDir = nextTurn.claudeSkillsPluginArgs[1];
+      const unusedPluginDir = nextTurn.claudeSkillsPlugin.args[1];
       expect(unusedPluginDir).toEqual(expect.any(String));
       expect(unusedPluginDir).not.toBe(pluginDir);
       expect(fs.existsSync(unusedPluginDir ?? "")).toBe(true);
@@ -4468,13 +4322,12 @@ describe("prepareCliRunContext", () => {
         const runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentImpl);
         const runId = `memory-cli-${scenario}`;
         const maintenance = await import("../embedded-agent-runner/context-engine-maintenance.js");
+        const coordinator = await import("../session-maintenance/coordinator.js");
         const releaseMaintenance = createDeferred();
         const maintenanceStarted = createDeferred();
         const borrowedWait = createDeferred();
         let maintenanceJoined: Promise<void> | undefined;
-        let waitSpy:
-          | MockInstance<typeof maintenance.waitForDeferredTurnMaintenanceForSession>
-          | undefined;
+        let waitSpy: MockInstance<typeof coordinator.waitForSessionMaintenance> | undefined;
         if (scenario === "foreign-maintenance") {
           await maintenance.runContextEngineMaintenance({
             contextEngine: {
@@ -4503,13 +4356,11 @@ describe("prepareCliRunContext", () => {
             },
           });
           await maintenanceStarted.promise;
-          const wait = maintenance.waitForDeferredTurnMaintenanceForSession;
-          waitSpy = vi
-            .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
-            .mockImplementation((key) => {
-              borrowedWait.resolve();
-              return wait(key);
-            });
+          const wait = coordinator.waitForSessionMaintenance;
+          waitSpy = vi.spyOn(coordinator, "waitForSessionMaintenance").mockImplementation((key) => {
+            borrowedWait.resolve();
+            return wait(key);
+          });
         }
         let run: ReturnType<typeof runEmbeddedAgent> | undefined;
         try {

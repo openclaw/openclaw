@@ -3,7 +3,7 @@ import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
-import type { NewSessionDraft } from "./draft-controller.ts";
+import type { NewSessionDraft } from "./draft.ts";
 import { environmentCloudDisabledReason } from "./hosted-environments.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
@@ -21,16 +21,6 @@ export type SettingsOptions = {
   onAgentPickerOpen: (open: boolean) => void;
   onChange: () => void;
   onConnectMachine: () => void;
-};
-
-type MachineChoice = {
-  id: string;
-  label: string;
-  remote: boolean;
-  hosted?: boolean;
-  selected: boolean;
-  disabledReason?: string;
-  select: () => void;
 };
 
 export function resolvePaletteSessionSettings(options: SettingsOptions, search: string) {
@@ -60,7 +50,15 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
     projectQuery: "",
     freshWorkspace: place.freshWorkspace,
   });
-  const machines: MachineChoice[] = [
+  const machines: {
+    id: string;
+    label: string;
+    remote: boolean;
+    hosted?: boolean;
+    selected: boolean;
+    disabledReason?: string;
+    select: () => void;
+  }[] = [
     ...place.modelControl.hostedEnvironments().map((environment) => ({
       id: "runtime:" + environment.id,
       label: environment.label,

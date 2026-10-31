@@ -11,6 +11,7 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
 } from "../config/io.types.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { selectDatabaseEngine } from "./database-engine/registry.js";
 import { openLocalFileSafely } from "./fs-safe.js";
 
 type CapturedConfigFile = {
@@ -121,15 +122,6 @@ export async function resolveBackupConfigCapture(
       throw captureError(sourcePath, "file identity could not be pinned", error);
     }
   }
-  // Watch paths include both lexical and canonical names. Every one must belong
-  // to a successfully resolved, hash-pinned file, not a partially visited graph.
-  for (const includePath of snapshot.includedPaths ?? []) {
-    if (
-      !capture.some((file) => file.sourcePath === includePath || file.canonicalPath === includePath)
-    ) {
-      throw captureError(includePath, "include inventory is incomplete");
-    }
-  }
   return {
     files: capture,
     assertRootAlias,
@@ -143,8 +135,10 @@ export async function resolveBackupConfigCapture(
           observe: false,
         }).readConfigFileSnapshotForWrite();
       // Core-only revalidation pins config files without reading database state.
-      const current = await (snapshot.sourceConfig.database?.engine === "postgres" &&
-      options.pluginValidation === "core-only"
+      const current = await (selectDatabaseEngine(
+        { id: "state", postgres: true },
+        snapshot.sourceConfig,
+      ) === "postgres" && options.pluginValidation === "core-only"
         ? read()
         : withOpenClawStateDatabaseReadSnapshot(read, { env: options.env }));
       // A file can be reached repeatedly during discovery. Comparing the resolved
@@ -214,11 +208,6 @@ export async function stageBackupConfigCapture(
     await fs.writeFile(stagedPath, bytes, { flag: "wx", mode: 0o600 });
     remaps.set(stagedPath, file.canonicalPath);
   }
-  await capture?.revalidate();
-  // Seal only after every dependency has been copied. Matching all authored
-  // bytes also pins the include edges; no second resolver or mixed retry.
-  for (const file of capture?.files ?? []) {
-    await readBackupConfigCaptureFile(file);
-  }
+  await capture?.assertRootAlias?.();
   return remaps;
 }

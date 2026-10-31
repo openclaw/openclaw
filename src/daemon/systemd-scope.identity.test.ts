@@ -9,6 +9,13 @@ const findServices = vi.hoisted(() =>
 vi.mock("./inspect.js", () => ({ findSystemGatewayServices: () => findServices() }));
 const HOME = "/tmp/openclaw-test-home";
 const systemPath = (name: string) => `/etc/systemd/system/${name}.service`;
+const userPath = (name: string) => `${HOME}/.config/systemd/user/${name}.service`;
+const findScope = (profile?: string, override?: string) =>
+  findInstalledSystemdGatewayScope({
+    HOME,
+    OPENCLAW_PROFILE: profile,
+    OPENCLAW_SYSTEMD_UNIT: override,
+  });
 let files: string[];
 
 function marker(name: string) {
@@ -35,101 +42,80 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("selects marker-owned, legacy, and explicitly requested units (openclaw#119648)", async () => {
-  const cases = [
-    { profile: undefined, override: undefined, name: "openclaw", discovered: true },
-    { profile: "lisa", override: undefined, name: "openclaw-lisa", discovered: false },
-    { profile: "lisa", override: "openclaw-node", name: "openclaw-node", discovered: false },
-    {
-      profile: "lisa",
-      override: "openclaw-gateway-lisa",
-      name: "openclaw-gateway-lisa",
-      user: true,
-    },
-  ];
-  for (const { profile, override, name, discovered, user } of cases) {
-    const unitPath = user ? `${HOME}/.config/systemd/user/${name}.service` : systemPath(name);
-    files = discovered ? [] : [unitPath];
-    if (discovered) {
+it.each([
+  ["user", "EACCES"],
+  ["system", "EACCES"],
+])("reports %s unit inspection failure %s instead of absence", async (scope, code) => {
+  const unitPath = (scope === "user" ? userPath : systemPath)("openclaw-gateway");
+  const inspectionError = Object.assign(new Error("unit inspection failed"), { code });
+  vi.spyOn(fs, "access").mockImplementation(async (file) => {
+    throw String(file) === unitPath
+      ? inspectionError
+      : Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  });
+
+  await expect(findScope()).rejects.toBe(inspectionError);
+});
+
+type Source = "user" | "system" | "marker" | "aliases";
+type SelectionCase = [string | undefined, string | undefined, string, Source, boolean?, string?];
+const template = "openclaw@gateway.service";
+const nodeName = "openclaw-node-work";
+const aliases = ["openclaw-node", "openclaw-gateway", "openclaw-gateway-lisa"].map(userPath);
+const selectionCases: SelectionCase[] = [
+  [undefined, undefined, "openclaw", "marker"],
+  ["lisa", undefined, "openclaw-lisa", "system"],
+  ["lisa", "openclaw-node", "openclaw-node", "system"],
+  ["lisa", "openclaw-gateway-lisa", "openclaw-gateway-lisa", "user"],
+  [undefined, template, "openclaw@", "system"],
+  [undefined, template, "openclaw@", "marker"],
+  ["lisa", undefined, "openclaw-darlene", "marker", false],
+  ["Lisa", undefined, "openclaw-gateway-lisa", "marker", false],
+  [undefined, undefined, "my-custom-gateway", "marker", false],
+  [undefined, "my-gateway", "my-gateway@", "marker", false],
+  [undefined, "my-gateway", "my-gateway@gateway", "marker", false],
+  [undefined, template, "openclaw@other", "marker", false],
+  [undefined, "openclaw-node", "openclaw-darlene", "marker", false],
+  ["node", undefined, "", "aliases", false],
+  ["gateway", undefined, "", "aliases", false],
+  ["gateway-lisa", undefined, "", "aliases", false],
+  ...(["user", "system"] as const).flatMap((scope): SelectionCase[] => [
+    ["node-work", undefined, nodeName, scope, true, "gateway"],
+    ["node-work", undefined, nodeName, scope, false, "node"],
+    ["work", nodeName, nodeName, scope, true, "node"],
+  ]),
+];
+it.each(selectionCases)(
+  "selects only the owned identity: profile=%s override=%s name=%s source=%s found=%s kind=%s",
+  async (profile, override, name, source, found, kind) => {
+    if (name === "openclaw@") {
+      const account = { username: "other", uid: 1000, gid: 1000, homedir: HOME, shell: "/bin/sh" };
+      vi.spyOn(os, "userInfo").mockReturnValue(account);
+    }
+    const scope = source === "user" ? "user" : "system";
+    const unitPath = (scope === "user" ? userPath : systemPath)(name);
+    files = source === "aliases" ? aliases : source === "marker" ? [] : [unitPath];
+    if (source === "marker") {
       marker(name);
     }
-    await expect(
-      findInstalledSystemdGatewayScope({
-        HOME,
-        OPENCLAW_PROFILE: profile,
-        OPENCLAW_SYSTEMD_UNIT: override,
-      }),
-    ).resolves.toEqual({ scope: user ? "user" : "system", unitName: `${name}.service`, unitPath });
-  }
-});
-
-it("refuses marker units outside the selected profile or explicit identity", async () => {
-  const cases = [
-    ["lisa", undefined, "openclaw-darlene"],
-    ["Lisa", undefined, "openclaw-gateway-lisa"],
-    [undefined, undefined, "my-custom-gateway"],
-    [undefined, "my-gateway", "my-gateway@"],
-    [undefined, "my-gateway", "my-gateway@gateway"],
-    [undefined, "openclaw@gateway.service", "openclaw@other"],
-    [undefined, "openclaw-node", "openclaw-darlene"],
-  ] as const;
-  for (const [profile, override, name] of cases) {
-    marker(name);
-    await expect(
-      findInstalledSystemdGatewayScope({
-        HOME,
-        OPENCLAW_PROFILE: profile,
-        OPENCLAW_SYSTEMD_UNIT: override,
-      }),
-    ).resolves.toBeNull();
-  }
-});
-
-it("rejects legacy aliases that collide with Node or another canonical profile", async () => {
-  files = ["openclaw-node", "openclaw-gateway", "openclaw-gateway-lisa"].map(
-    (name) => `${HOME}/.config/systemd/user/${name}.service`,
-  );
-  for (const profile of ["node", "gateway", "gateway-lisa"]) {
-    await expect(
-      findInstalledSystemdGatewayScope({ HOME, OPENCLAW_PROFILE: profile }),
-    ).resolves.toBeNull();
-  }
-});
-
-it.each(["disk", "marker"])(
-  "preserves an explicit instance with only its template on %s",
-  async (source) => {
-    vi.spyOn(os, "userInfo").mockReturnValue({
-      username: "unrelated-login",
-      uid: 1000,
-      gid: 1000,
-      homedir: HOME,
-      shell: "/bin/sh",
-    });
-    if (source === "disk") {
-      files = [systemPath("openclaw@")];
-    } else {
-      marker("openclaw@");
+    if (kind) {
+      vi.spyOn(fs, "readFile").mockResolvedValue(
+        `[Service]\nEnvironment=OPENCLAW_SERVICE_KIND=${kind}\n`,
+      );
     }
-    await expect(
-      findInstalledSystemdGatewayScope({
-        HOME,
-        OPENCLAW_SYSTEMD_UNIT: "openclaw@gateway.service",
-      }),
-    ).resolves.toEqual({
-      scope: "system",
-      unitName: "openclaw@gateway.service",
-      unitPath: systemPath("openclaw@"),
-    });
+    const selected = {
+      scope,
+      unitName: name === "openclaw@" ? template : `${name}.service`,
+      unitPath,
+    };
+    await expect(findScope(profile, override)).resolves.toEqual(found !== false ? selected : null);
   },
 );
 
-it("classifies unavailable install probes without hiding infrastructure failures", () => {
-  for (const [message, expected] of [
-    ["Command failed: systemctl --user is-enabled openclaw-gateway.service", true],
-    ["systemctl is-enabled unavailable: Failed to connect to bus", true],
-    ["systemctl is-enabled unavailable: read-only file system", false],
-  ] as const) {
-    expect(isNonFatalSystemdInstallProbeError(new Error(message))).toBe(expected);
-  }
+it("accepts legacy command-failure install probes", () => {
+  expect(
+    isNonFatalSystemdInstallProbeError(
+      new Error("Command failed: systemctl --user is-enabled openclaw-gateway.service"),
+    ),
+  ).toBe(true);
 });

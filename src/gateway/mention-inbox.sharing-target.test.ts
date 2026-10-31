@@ -1,31 +1,28 @@
-import { statSync } from "node:fs";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronJob } from "../cron/types.js";
-import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
 import {
   SESSION_ID,
   SESSION_KEY,
+  expectMentionError,
   dismissMentionInbox,
   withMentionInbox,
-  readMentionInbox,
 } from "./mention-inbox.test-support.js";
 import {
   emitSessionsChanged,
   emitSessionTitleChanged,
 } from "./server-methods/session-change-event.js";
-import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import {
   invalidateSessionAutomationIndex,
@@ -36,68 +33,51 @@ import * as sessionSharing from "./session-sharing.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["runtime settlement", "agent runs", "automation"] as const)(
-  "serves the prepared mention Inbox without storage reads after %s",
-  async (publication) => {
-    await withMentionInbox(async (f) => {
-      await f.post();
-      const before = await f.call("mentions.list", {});
-      expect(before).toMatchObject({ ok: true, payload: { items: [expect.any(Object)] } });
-      const reads = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
-      if (publication === "runtime settlement") {
-        const context = requestContext({});
-        context.mentionInbox = f.inbox;
-        emitSessionsChanged(
-          context,
-          { sessionKey: SESSION_KEY, agentId: "main", reason: "agent.input.settled" },
-          { accessChanged: false, rowScope: "runtime" },
-        );
-      } else if (publication === "agent runs") {
-        sessionChanges.emit({ all: true, scope: "agent-runs" });
-      } else {
-        sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "automation" });
-      }
-      expect(await f.call("mentions.list", {})).toEqual(before);
-      expect(reads).not.toHaveBeenCalled();
-    });
-  },
-);
+type Fixture = Parameters<Parameters<typeof withMentionInbox>[0]>[0];
 
-it("recovers background views when a session is replaced during cold target preparation", async () => {
-  await withMentionInbox(async (f) => {
+function sessionContext(f: Fixture, cfg: OpenClawConfig = {}) {
+  return {
+    mentionInbox: f.inbox,
+    getRuntimeConfig: () => cfg,
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+    broadcastToConnIds: f.broadcast,
+  };
+}
+
+function emitSettlement(f: Fixture, cfg: OpenClawConfig = {}) {
+  emitSessionsChanged(
+    sessionContext(f, cfg),
+    { sessionKey: SESSION_KEY, agentId: "main", reason: "agent.input.settled" },
+    { accessChanged: false, rowScope: "runtime" },
+  );
+}
+
+it("recovers background views when a session is replaced during cold target preparation", () =>
+  withMentionInbox(async (f) => {
     await f.post();
-    await readMentionInbox(f.inbox, f.bobClient);
+    await f.items();
     const resolve = sessionSharing.resolveSessionSharingTargetAsync;
     vi.spyOn(sessionSharing, "resolveSessionSharingTargetAsync").mockImplementationOnce(
       async (...args) => {
         const display = await resolve(...args);
-        await f.setSession({ sessionId: "replacement-session" });
-        const file = statSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
-        emitSessionIdentityMutation({
-          agentId: "main",
-          databaseIdentity: `${file.dev}:${file.ino}`,
-          kind: "replace",
-          previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
-          current: { sessionId: "replacement-session", sessionKeys: [SESSION_KEY] },
-        });
+        await f.replaceSessionIdentity();
         return display;
       },
     );
     await f.inbox.invalidateAsync();
-    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
+    expect(await f.items()).toEqual([]);
     await f.setSession({ sessionId: SESSION_ID });
-    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toHaveLength(1);
-  });
-});
+    expect(await f.items()).toHaveLength(1);
+  }));
 
 it.each(["activity summary", "runtime settlement", "automation", "sharing revocation"] as const)(
   "keeps mention dismissal authority aligned with %s publication",
   async (publication) => {
     const cfg = {};
-    await withMentionInbox(async (fixture) => {
-      await fixture.post("presentation-publication");
-      const original = (await readMentionInbox(fixture.inbox, fixture.bobClient)).items[0]!;
-      const jobs: CronJob[] = [];
+    await withMentionInbox(async (f) => {
+      await f.post("presentation-publication");
+      const original = (await f.items())[0]!;
+      const jobs: ReturnType<typeof makeCronJob>[] = [];
       if (publication === "automation") {
         registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
         expect(sessionHasAutomation(SESSION_KEY, cfg, "main")).toBe(false);
@@ -105,23 +85,16 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
       const prepared = createDeferred();
       const release = createDeferred();
       const commit = mentionWorker.commitMentionChanges;
-      const guardErrors: unknown[] = [];
-      const held = vi
-        .spyOn(mentionWorker, "commitMentionChanges")
-        .mockImplementationOnce(async (context, input, assertCurrent) => {
+      const guard = vi.fn<() => void>();
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(
+        async (context, input, assertCurrent) => {
           prepared.resolve();
           await release.promise;
-          return commit(context, input, () => {
-            try {
-              assertCurrent();
-            } catch (error) {
-              guardErrors.push(error);
-              throw error;
-            }
-          });
-        });
+          return commit(context, input, guard.mockImplementation(assertCurrent));
+        },
+      );
       const changesAccess = publication === "sharing revocation";
-      const dismissal = dismissMentionInbox(fixture.inbox, fixture.bobClient, [original.id]);
+      const dismissal = dismissMentionInbox(f.inbox, f.bobClient, [original.id]);
       const owner = Symbol("mention-presentation");
       const target = { key: SESSION_KEY, agentId: "main" };
       try {
@@ -137,43 +110,34 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
             state: "updating",
           });
         } else if (publication === "runtime settlement") {
-          const context = requestContext(cfg);
-          context.mentionInbox = fixture.inbox;
-          emitSessionsChanged(
-            context,
-            { sessionKey: SESSION_KEY, agentId: "main", reason: "agent.input.settled" },
-            { accessChanged: false, rowScope: "runtime" },
-          );
+          emitSettlement(f, cfg);
         } else if (publication === "automation") {
-          jobs.push({
-            id: "mention-automation",
-            name: "Mention automation",
-            enabled: true,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            sessionTarget: `session:${SESSION_KEY}`,
-            wakeMode: "now",
-            schedule: { kind: "every", everyMs: 60_000 },
-            payload: { kind: "systemEvent", text: "Synthetic automation" },
-            state: {},
-          });
+          jobs.push(
+            makeCronJob({
+              sessionTarget: `session:${SESSION_KEY}`,
+              payload: { kind: "systemEvent", text: "Synthetic automation" },
+            }),
+          );
           invalidateSessionAutomationIndex();
           expect(sessionHasAutomation(SESSION_KEY, cfg, "main")).toBe(true);
         } else {
-          await fixture.setSession({ visibility: "draft" });
+          await f.setSession({ visibility: "draft" });
         }
         release.resolve();
         const result = await dismissal;
         if (changesAccess) {
-          expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-          expect(guardErrors).toContainEqual(new Error("Mention authority changed before commit"));
-          await fixture.setSession({ visibility: "shared" });
+          expectMentionError(result, "UNAVAILABLE");
+          expect(guard.mock.results).toContainEqual({
+            type: "throw",
+            value: new Error("Mention authority changed before commit"),
+          });
+          await f.setSession({ visibility: "shared" });
         } else {
-          expect(guardErrors).toEqual([]);
+          expect(guard.mock.results.every(({ type }) => type === "return")).toBe(true);
           expect(result).toMatchObject({ ok: true, value: { items: [] } });
         }
-        const reopened = fixture.openInbox("after-presentation-publication");
-        expect((await readMentionInbox(reopened, fixture.bobClient)).items).toEqual(
+        const reopened = f.openInbox("after-presentation-publication");
+        expect(await f.items(f.bobClient, reopened)).toEqual(
           changesAccess
             ? [expect.objectContaining({ id: original.id, messageId: original.messageId })]
             : [],
@@ -181,7 +145,6 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
       } finally {
         release.resolve();
         await dismissal;
-        held.mockRestore();
         setSessionActivitySummaryState(target, owner);
         if (publication === "automation") {
           registerSessionAutomationSource(null);
@@ -191,111 +154,102 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
   },
 );
 
-it("refreshes 50 connected mention views after session and viewer changes", async () => {
+it("refreshes 50 mention views without repeated warm preparation after viewer and session changes", async () => {
   const cfg: OpenClawConfig = {};
   await withMentionInbox(
     async (f) => {
+      const countCheckpoints = async (client: GatewayClient = f.bobClient) => {
+        let checkpoints = 0;
+        let active = true;
+        // Bun has no promise init hooks; a bounded pump lets unexpected I/O settle.
+        const tick = () => {
+          if (active && checkpoints < 256) {
+            checkpoints++;
+            queueMicrotask(tick);
+          }
+        };
+        queueMicrotask(tick);
+        await f.call("mentions.list", {}, client).finally(() => {
+          active = false;
+        });
+        expect(checkpoints).toBeGreaterThan(0);
+        expect(checkpoints).toBeLessThan(256);
+        return checkpoints;
+      };
       const alternateStorePath = path.join(resolveStateDir(), "mention-alternate.sqlite");
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: SESSION_KEY, storePath: alternateStorePath },
-        {
-          sessionId: SESSION_ID,
-          updatedAt: Date.now(),
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: f.alice.id },
-          displayName: "Alternate conversation",
-        },
+      await f.setSession(
+        { displayName: "Alternate conversation" },
+        SESSION_KEY,
+        alternateStorePath,
       );
-      f.clients.splice(
-        0,
-        f.clients.length,
-        ...Array.from({ length: 50 }, (_, index) => ({
-          ...f.bobClient,
-          connId: `viewer-${index}`,
-        })),
-      );
+      f.clients.length = 0;
+      for (let index = 0; index < 50; index++) {
+        f.clients.push({ ...f.bobClient, connId: `viewer-${index}` });
+      }
       await f.post();
       for (const client of f.clients) {
-        expect((await readMentionInbox(f.inbox, client)).items).toHaveLength(1);
+        expect(await f.items(client)).toHaveLength(1);
       }
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
-        "Design review",
-      );
+      const checkpoints = await countCheckpoints();
+      for (let index = 1; index < 32; index++) {
+        await f.post(`source-${index}`);
+      }
+      expect(await f.items()).toHaveLength(32);
+      expect(await countCheckpoints()).toBe(checkpoints);
+      expect((await f.items())[0]?.sessionTitle).toBe("Design review");
       f.broadcast.mockClear();
-      // This spy counts host SQL; invalidated targets are now prepared in the worker.
-      let exactRowReads = 0;
-      // oxlint-disable-next-line typescript/unbound-method -- apply preserves the intercepted statement receiver.
-      const originalGet = StatementSync.prototype.get;
-      vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
-        this: StatementSync,
-        ...values
-      ) {
-        if (/from "session_nodes"/i.test(this.sourceSQL)) {
-          exactRowReads++;
-        }
-        return originalGet.apply(this, values);
-      });
-      const context: Parameters<typeof emitSessionsChanged>[0] = {
-        mentionInbox: f.inbox,
-        getRuntimeConfig: () => cfg,
-        getSessionEventSubscriberConnIds: () => new Set(),
-        broadcastToConnIds: f.broadcast,
-        chatAbortControllers: new Map(),
-      };
+      const queries = observeSqliteReadSql(StatementSync.prototype).queries;
+      const workerReads = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
+      const context = sessionContext(f, cfg);
       const invalidation = vi.spyOn(f.inbox, "invalidateAsync");
       const emit = async (sessionKey = "agent:main:unrelated") => {
         emitSessionsChanged(context, { sessionKey, agentId: "main", reason: "patch" });
         await invalidation.mock.results.at(-1)?.value;
       };
-      const start = performance.now();
-      await emit();
-      const elapsed = performance.now() - start;
-      const reads = exactRowReads;
-      console.log(
-        JSON.stringify({ viewers: f.clients.length, exactRowReads: reads, elapsedMs: elapsed }),
-      );
-      expect(f.broadcast).not.toHaveBeenCalled();
-      expect(reads).toBe(0);
+      const expectPublication = async (count: number, publish = emit) => {
+        queries.length = 0;
+        await publish();
+        expect(queries.join("\n")).not.toMatch(/from "session_nodes"/i);
+        expect(f.broadcast).toHaveBeenCalledTimes(count);
+      };
+      await expectPublication(0);
+      const before = await f.call("mentions.list", {});
+      for (const publish of [
+        async () => emitSettlement(f, cfg),
+        async () => sessionChanges.emit({ all: true, scope: "agent-runs" }),
+        async () =>
+          sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "automation" }),
+      ]) {
+        await expectPublication(0, publish);
+        expect(await f.call("mentions.list", {})).toEqual(before);
+        expect(workerReads).not.toHaveBeenCalled();
+      }
 
-      // The owner publication must invalidate even if the next fan-out names another session.
       await f.setSession({ visibility: "draft" });
-      exactRowReads = 0;
-      await emit();
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(50);
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
+      await expectPublication(50);
+      expect(await f.items()).toEqual([]);
 
       await f.setSession({ displayName: "Renamed conversation" });
-      exactRowReads = 0;
       f.broadcast.mockClear();
-      emitSessionTitleChanged(context, { sessionKey: SESSION_KEY, agentId: "main" });
-      await invalidation.mock.results.at(-1)?.value;
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(50);
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
-        "Renamed conversation",
-      );
+      await expectPublication(50, async () => {
+        emitSessionTitleChanged(context, { sessionKey: SESSION_KEY, agentId: "main" });
+        await invalidation.mock.results.at(-1)?.value;
+      });
+      expect((await f.items())[0]?.sessionTitle).toBe("Renamed conversation");
 
-      // Target reuse never retains the viewer's identity or authorization decision.
       f.clients[0]!.authenticatedUserProfile = f.carolClient.authenticatedUserProfile;
-      exactRowReads = 0;
       f.broadcast.mockClear();
-      await emit();
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(1);
+      await expectPublication(1);
       expect([...f.broadcast.mock.calls[0]![2]]).toEqual(["viewer-0"]);
+      expect(await f.items(f.clients[0])).toEqual([]);
+      expect(await countCheckpoints(f.clients[0])).toBe(checkpoints);
+      expect(await countCheckpoints()).toBe(checkpoints);
 
-      // Keyless invalidation also covers in-place runtime configuration updates.
       cfg.session = { store: alternateStorePath };
       setRuntimeConfigSnapshot(cfg);
-      exactRowReads = 0;
       f.broadcast.mockClear();
-      await f.inbox.invalidateAsync();
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(49);
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
-        "Alternate conversation",
-      );
+      await expectPublication(49, () => f.inbox.invalidateAsync());
+      expect((await f.items())[0]?.sessionTitle).toBe("Alternate conversation");
     },
     cfg,
     { notifications: false },

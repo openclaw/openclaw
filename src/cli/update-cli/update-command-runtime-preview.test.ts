@@ -12,19 +12,56 @@ import { defaultRuntime } from "../../runtime.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
+import { runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import {
+  expectedRuntimeRecoverySteps,
+  stubNodeRuntime,
+} from "./update-command-runtime-recovery.test-support.js";
 import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
+const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+const lastJson = () => vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
+const matchingEntry = (shape: object) => expect.arrayContaining([expect.objectContaining(shape)]);
+function expectUnstaged() {
+  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+}
 beforeEach(() => {
-  // This synthetic installation has no plugins to include in its recovery baseline.
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
 });
+it.each([
+  ["24.16.0", true],
+  ["26.1.0", false],
+] as const)(
+  "warns without refusing an update preview under compatible service Node %s",
+  async (version, json) => {
+    stubNodeRuntime();
+    fixture.managedServiceNodeRunner = process.execPath;
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue(
+      runtimeFixture(version, "3.53.0"),
+    );
+    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+      ...targetMetadata,
+      nodeEngine: ">=24.16.0 <25 || >=26.1.0",
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+
+    const output = json ? JSON.stringify(lastJson()) : log.mock.calls.flat().join("\n");
+    expect(output).toContain("SECURITY WARNING");
+    expect(output).toContain(`Node.js ${version}`);
+    expect(output).not.toContain("Would refuse update");
+    expectUnstaged();
+  },
+);
+
 it.each([
   { name: "no restart", restart: false, debugCapture: true },
   { name: "replacement" },
@@ -64,35 +101,31 @@ it.each([
       .mockRejectedValue(new Error("A retained service runtime must not be provisioned"));
     vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
     vi.spyOn(gatewaySupervision, "assertGatewayServiceMutationAllowed").mockReturnValue();
-    const service = createMockGatewayService({
-      isLoaded: async () => true,
-      readRuntime: async () => ({
-        status: running ? "running" : "stopped",
-        systemd: { managerUid: 2001 },
+    vi.spyOn(daemonService, "resolveGatewayService").mockReturnValue(
+      createMockGatewayService({
+        isLoaded: async () => true,
+        readRuntime: async () => ({
+          status: running ? "running" : "stopped",
+          systemd: { managerUid: 2001 },
+        }),
+        readCommand: async () =>
+          owned
+            ? {
+                programArguments: [
+                  "/service/node",
+                  path.join(fixture.root, "dist/index.mjs"),
+                  "gateway",
+                ],
+              }
+            : null,
       }),
-    });
-    vi.spyOn(service, "readCommand").mockResolvedValue(
-      owned
-        ? {
-            programArguments: [
-              "/service/node",
-              path.join(fixture.root, "dist/index.mjs"),
-              "gateway",
-            ],
-          }
-        : null,
     );
-    vi.spyOn(daemonService, "resolveGatewayService").mockReturnValue(service);
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) => ({
-      status: "supported",
-      version: compatible || node === "/current/node" ? "26.1.0" : "24.16.0",
-      sqliteVersion: "3.53.0",
-      nodeSharedSqlite: false,
-      sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },
-    }));
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) =>
+      runtimeFixture(compatible || node === "/current/node" ? "26.12.1" : "24.22.1", "3.53.0"),
+    );
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
       ...targetMetadata,
-      nodeEngine: ">=26.1.0",
+      nodeEngine: ">=26.12.1",
     });
     if (current) {
       fs.writeFileSync(
@@ -134,35 +167,17 @@ it.each([
           message === "Warning: Debug HTTP capture is disabled during update dry runs.",
       );
     expect(captureNotices).toHaveLength(debugCapture ? 1 : 0);
-    const preview = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
+    const preview = lastJson();
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
-    const replacement = !compatible && restart && owned && (!current || (running && refresh));
+    const replacement = !compatible && restart && owned && current && running && refresh;
     if (!compatible && !replacement) {
-      const recoverySteps = [
-        {
-          kind: "preserve-context",
-          instruction:
-            "Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
-        },
-        {
-          kind: "select-runtime",
-          instruction:
-            "Install and select Node 26.1.0 using your system package manager or https://nodejs.org/en/download.",
-        },
-        ...(current && (!running || !refresh)
-          ? [
-              {
-                kind: "select-runtime",
-                instruction:
-                  "The Gateway service still selects /service/node. Before continuing, have its deployment owner select Node 26.1.0 in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.",
-              },
-            ]
-          : []),
-        {
-          kind: "continue-update",
-          command: `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
-        },
-      ];
+      const recoverySteps = expectedRuntimeRecoverySteps(
+        "26.12.1",
+        fixture.root,
+        "2026.9.2",
+        undefined,
+        current && (!running || !refresh) ? "/service/node" : undefined,
+      );
       const message = [
         "Recovery:",
         ...recoverySteps.map(
@@ -175,18 +190,16 @@ it.each([
           notes: [expect.stringContaining(message)],
           failures: [
             {
-              reason: "node-runtime-preflight",
+              reason: current ? "node-runtime-preflight" : "preflight-node-runtime-incompatible",
               message: expect.stringContaining(message),
               recoverySteps,
-              failureFacts: expect.arrayContaining([
-                expect.objectContaining({
-                  check: "node-runtime",
-                  code: "node-runtime-preflight",
-                  affectedKey: "engines.node",
-                  message:
-                    "Required: openclaw@2026.9.2 Node >=26.1.0; detected: Node 24.16.0 at [redacted-path]",
-                }),
-              ]),
+              failureFacts: matchingEntry({
+                check: "node-runtime",
+                code: "node-runtime-preflight",
+                affectedKey: "engines.node",
+                message:
+                  "Required: openclaw@2026.9.2 Node >=26.12.1; detected: Node 24.22.1 at [redacted-path]",
+              }),
             },
           ],
         });
@@ -198,43 +211,35 @@ it.each([
       expect(notes).toContain("/current/node");
       expect(notes).toContain("Would replace");
     } else {
-      expect(notes).not.toContain("Would refuse");
-      expect(notes).not.toContain("Would replace");
+      expect(notes).not.toMatch(/Would (?:refuse|replace)/);
     }
     if (json && (compatible || replacement)) {
       expect(preview).not.toHaveProperty("failures");
     }
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    expectUnstaged();
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
     if (!current) {
       await expect(
         updateCommand({ ...opts, json: true, admission: "installed" }),
       ).rejects.toBeInstanceOf(Error);
-      if (compatible || replacement) {
+      if (compatible) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
         );
       } else {
-        expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            reason: "node-runtime-preflight",
-            steps: expect.arrayContaining([
-              expect.objectContaining({
-                stderrTail: expect.stringContaining(
-                  `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
-                ),
-                failureFacts: expect.arrayContaining([
-                  expect.objectContaining({
-                    code: "node-runtime-preflight",
-                    message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.1.0"),
-                  }),
-                ]),
-              }),
-            ]),
+        expect(lastJson()).toMatchObject({
+          reason: "preflight-node-runtime-incompatible",
+          steps: matchingEntry({
+            stderrTail: expect.stringContaining(
+              `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
+            ),
+            failureFacts: matchingEntry({
+              code: "node-runtime-preflight",
+              message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.12.1"),
+            }),
           }),
-        );
+        });
         expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
       }
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
@@ -258,20 +263,17 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     fs.chmodSync(globalRoot, 0o555);
     try {
       await updateCommand({ dryRun: true, json: true, yes: true });
-      expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          dryRun: true,
-          failures: [
-            expect.objectContaining({
-              reason: "global-install-permission-denied",
-              message: expect.stringContaining(globalRoot),
-              failureFacts: [expect.objectContaining({ code: "global-install-permission-denied" })],
-            }),
-          ],
-        }),
-      );
-      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-      expect(fs.existsSync(fixture.databasePath)).toBe(false);
+      expect(lastJson()).toMatchObject({
+        dryRun: true,
+        failures: [
+          {
+            reason: "global-install-permission-denied",
+            message: expect.stringContaining(globalRoot),
+            failureFacts: [{ code: "global-install-permission-denied" }],
+          },
+        ],
+      });
+      expectUnstaged();
       expect(fs.readdirSync(globalRoot)).toEqual([]);
     } finally {
       fs.chmodSync(globalRoot, 0o755);

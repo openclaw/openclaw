@@ -1,19 +1,21 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onCleanup, onSettled, Show, For } from "solid-js";
+import { createMemo, createSignal, onSettled, Show, For, Errored, Loading } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import {
+  RetryAction,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
@@ -29,7 +31,7 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 
 registerEnglishCatalog(registerPluginConsentEnglish);
 
-export type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
+type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -44,10 +46,13 @@ export type PluginConsentState = {
   details?: CapabilityConsentErrorDetails;
 };
 
+export type PluginConsentInspectionRead = { result: Promise<string | null> };
+
 type PluginConsentDialogProps = {
   registerIcon?: (readId: () => string) => () => void;
   consent: PluginConsentState;
   inspection: PluginsInspectResult | null;
+  inspectionRead: PluginConsentInspectionRead | null;
   loading: boolean;
   error: string | null;
   iconUrl?: string;
@@ -73,8 +78,15 @@ type ArtTileProps = {
 };
 
 export function PluginArtTile(props: ArtTileProps): JSX.Element {
-  const slug = createMemo(() => props.slug);
-  onSettled(() => props.registerIcon?.(slug));
+  const slug = () => props.slug;
+  let disposed = false;
+  onSettled(() => {
+    const unregister = props.registerIcon?.(slug);
+    return () => {
+      disposed = true;
+      unregister?.();
+    };
+  });
   type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
   const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
     const source = props.iconUrl;
@@ -84,15 +96,11 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
     const source = props.authorIconUrl;
     return previous && previous.source === source ? previous : { source, status: "loading" };
   });
-  let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-  });
   const currentImage = () =>
     packageImage().source && packageImage().status !== "failed"
       ? { state: packageImage(), update: setPackageImage, package: true }
       : { state: authorImage(), update: setAuthorImage, package: false };
-  const gradient = createMemo(() => pluginFallbackGradient(slug()));
+  const gradient = () => pluginFallbackGradient(slug());
   const monogram = createMemo(() => pluginMonogram(props.name));
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
@@ -157,7 +165,7 @@ function renderPluginMetaRow(label: string, value: JSX.Element | string, warning
   return (
     <SettingsRow
       title={label}
-      control={<span class={warning ? "plugins-consent__row--warning" : ""}> {value}</span>}
+      control={<span class={{ "plugins-consent__row--warning": warning }}> {value}</span>}
       stackedOnNarrow
       carapace
     />
@@ -418,6 +426,7 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
 export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.Element {
   const consent = () => props.consent;
   const inspection = () => props.inspection;
+  const receipt = createMemo(() => props.inspectionRead);
   const details = () => consent().details;
   const plugin = () => inspection()?.plugin;
   const fallback = () => consent().fallback;
@@ -447,6 +456,31 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       {action()}
     </button>
   );
+  function InspectionBody() {
+    const readiness = createMemo(() =>
+      receipt()?.result.then((error) => {
+        if (error) {
+          throw new Error(error);
+        }
+        return null;
+      }),
+    );
+    return (
+      <>
+        {readiness()}
+        {inspection() ? (
+          <>
+            {renderProvenance(inspection()!.source)} {renderTrust(inspection()!.trust)}
+            {details() ? renderWidenedCapabilities(details()!) : undefined}
+            {renderPluginDeclaredCapabilities(inspection()!.declared)}
+            {renderPluginGrants(inspection()!.grants, plugin()?.origin)}
+          </>
+        ) : (
+          <p class="plugins-consent__description">{t("pluginConsent.fallback")}</p>
+        )}
+      </>
+    );
+  }
   return (
     <openclaw-modal-dialog
       label={name()}
@@ -470,31 +504,33 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
           </div>
         </header>
-        {props.loading ? (
-          <p class="plugins-consent__hint" role="status">
-            {t("pluginConsent.loading")}
-          </p>
-        ) : props.error ? (
-          <div class="plugins-consent__error" role="alert">
-            <span>{props.error}</span>
-            <button
-              type="button"
-              class="btn btn--sm oc-action oc-action-secondary"
-              onClick={props.onRetry}
-            >
-              {t("pluginsPage.tryAgain")}
-            </button>
-          </div>
-        ) : inspection() ? (
-          <>
-            {renderProvenance(inspection()!.source)} {renderTrust(inspection()!.trust)}
-            {details() ? renderWidenedCapabilities(details()!) : undefined}
-            {renderPluginDeclaredCapabilities(inspection()!.declared)}
-            {renderPluginGrants(inspection()!.grants, plugin()?.origin)}
-          </>
-        ) : (
-          <p class="plugins-consent__description">{t("pluginConsent.fallback")}</p>
-        )}
+        <Loading
+          on={receipt()}
+          fallback={
+            <p class="plugins-consent__hint" role="status">
+              {t("pluginConsent.loading")}
+            </p>
+          }
+        >
+          <Errored
+            fallback={(error, reset) => (
+              <div class="plugins-consent__error" role="alert">
+                <span>{formatUiError(error())}</span>
+                <RetryAction
+                  type="button"
+                  class="btn btn--sm oc-action oc-action-secondary"
+                  label={t("pluginsPage.tryAgain")}
+                  onRetry={() => {
+                    props.onRetry();
+                    reset();
+                  }}
+                />
+              </div>
+            )}
+          >
+            <InspectionBody />
+          </Errored>
+        </Loading>
         <openclaw-modal-actions class="plugins-consent__actions">
           <button
             type="button"

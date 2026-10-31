@@ -7,11 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { isRetryableGhJsonErrorMessage } from "./ci-run-timings.mjs";
-import {
-  isCiTimingRuntimeTrial,
-  refitTestTimings,
-  type CiTimingRun,
-} from "./lib/ci-test-timings-refit.mts";
+import { refitTestTimings, type CiTimingRun } from "./lib/ci-test-timings-refit.mts";
 import { ciTestTimingsSchema } from "./lib/ci-test-timings-schema.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
@@ -229,12 +225,6 @@ async function main() {
           `repos/${repo}/actions/jobs/${job.id}/logs`,
           ...logFlags,
         ]);
-        if (isCiTimingRuntimeTrial(text)) {
-          console.error(
-            `Skipped ${source} run ${run.id}: runtime trial is excluded from timing learning.`,
-          );
-          return undefined;
-        }
         attemptLogs.push({
           kind: job.kind,
           labels: job.labels,
@@ -252,11 +242,17 @@ async function main() {
       );
       logs.push(...attemptLogs);
     }
+    // Both rename endpoints changed; similarity detection would fetch historical
+    // blobs from the filtered checkout and omit the old path from exclusion.
     const changedUiFiles = logs.some((log) => log.kind === "uiE2e")
-      ? execFileSync("git", ["diff", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        })
+      ? execFileSync(
+          "git",
+          ["diff", "--no-renames", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        )
           .split("\0")
           .filter((file) => /\.e2e\.test\.[cm]?[jt]sx?$/u.test(file))
       : [];
@@ -336,9 +332,6 @@ async function main() {
           continue;
         }
         const timingRun = await readRun(run, source);
-        if (timingRun === undefined) {
-          continue;
-        }
         if (timingRun === null) {
           console.error(
             `Skipped ${source} run ${run.id}: jobs completed after frozen UTC cutoff ${upper}.`,

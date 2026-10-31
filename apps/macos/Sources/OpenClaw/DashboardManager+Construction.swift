@@ -96,6 +96,8 @@ extension DashboardManager {
         },
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = { _, _ in nil },
+        controlUiBasePathProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
+            -> String?)? = { _, _ in nil },
         legacyCredentialsProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
             -> DashboardNativeGatewayAuth.LegacyCredentials)? = { _, _ in
             .init(credentials: [:], isCurrent: { true }, waitForInvalidation: nil)
@@ -120,6 +122,7 @@ extension DashboardManager {
             authTokenProvider: authTokenProvider,
             connectionProvider: connectionProvider,
             browserIdentityURLProvider: browserIdentityURLProvider,
+            controlUiBasePathProvider: controlUiBasePathProvider,
             legacyCredentialsProvider: legacyCredentialsProvider,
             routeProbe: routeProbe,
             endpointStateProvider: endpointStateProvider,
@@ -249,8 +252,11 @@ extension DashboardManager {
         // Device grants remain challenge-only. Shared startup credentials retain
         // the released UI contract, but come only from the native accepted binding.
         let dashboardConfig: GatewayConnection.Config = (url: config.url, token: nil, password: nil)
+        let remoteBasePath = mode == .remote && identityURL == nil
+            ? try await controlUiBasePathProvider(target, config)
+            : nil
         let url = try identityURL ?? GatewayEndpointStore.dashboardURL(
-            for: dashboardConfig, mode: mode)
+            for: dashboardConfig, mode: mode, remoteBasePath: remoteBasePath)
         try browserSession?.validate(for: url)
         let legacyCredentials: DashboardNativeGatewayAuth.LegacyCredentials? = if identityURL == nil,
                                                                                   browserSession == nil

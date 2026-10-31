@@ -23,6 +23,7 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
+  reuseResidentSessionEntryStrings,
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import {
@@ -31,7 +32,8 @@ import {
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
-import { consumeSessionManagerReload, readSessionManagerReload } from "./session-manager-reload.js";
+import { consumeSessionManagerReload } from "./session-manager-reload.js";
+import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -61,6 +63,9 @@ export const sessionManagerReloadTranscriptCohort = Symbol.for(
 export const sessionManagerOpenTranscriptCohort = Symbol.for(
   "openclaw.session-manager.open-transcript-cohort",
 );
+
+/** @internal Compaction planning retains its transcript and metadata from one read snapshot. */
+export const sessionManagerOpenCompaction = Symbol.for("openclaw.session-manager.open-compaction");
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
@@ -111,7 +116,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. */
+  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -358,7 +363,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. */
+  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();
@@ -432,6 +437,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         );
       }
     }
+    reuseResidentSessionEntryStrings(candidate.fileEntries, this.byId);
     Object.assign(this, candidate.captureTranscriptView());
     this.persistenceTarget = candidate.persistenceTarget;
   }

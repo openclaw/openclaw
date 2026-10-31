@@ -20,70 +20,12 @@ import {
   sessionPlacementRetry,
   sessionPlacementTargetReason,
 } from "./session-placement-action.ts";
+import type {
+  SessionPlacementPresentation,
+  SessionPlacementSource,
+} from "./session-placement-move-dialog.tsx";
 
 registerNewSessionSetupEnglish();
-
-async function selectSessionPlacementTarget(params: {
-  client: GatewayBrowserClient;
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-  mode: "dispatch" | "move" | "restart";
-  row: GatewaySessionRow;
-  requiredProfile?: string;
-}): Promise<SessionMoveTarget | null> {
-  const { showSessionPlacementTargetDialog } = await import("./session-placement-move-dialog.tsx");
-  const runtime = params.row.agentRuntime;
-  const gatewayAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: params.mode === "restart" ? "sessions.reclaim" : "sessions.move",
-    requiredScope: "operator.write",
-  });
-  const workerAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: params.mode === "move" ? "sessions.move" : "sessions.dispatch",
-    requiredScope: "operator.write",
-  });
-  return showSessionPlacementTargetDialog({
-    mode: params.mode,
-    sessionLabel: params.row.label || params.row.key,
-    activeRun: params.row.hasActiveRun === true,
-    repositoryOnly: repositorySessionNeedsWorker(params.row),
-    allowMachineOverrides: !params.requiredProfile,
-    gatewayDisabledReason: params.requiredProfile
-      ? t("sessionsView.moveSessionRequiredProfile")
-      : gatewayAccess.allowed
-        ? undefined
-        : gatewayAccess.reason,
-    deviceDisabledReason: params.requiredProfile
-      ? t("sessionsView.moveSessionRequiredProfile")
-      : !workerAccess.allowed
-        ? workerAccess.reason
-        : runtime && !runtime.devicePlacement
-          ? t("newSession.deviceRuntimeUnsupported")
-          : undefined,
-    profileDisabledReason: (profile) => {
-      if (params.requiredProfile && profile.id !== params.requiredProfile) {
-        return t("sessionsView.moveSessionRequiredProfile");
-      }
-      if (!workerAccess.allowed) {
-        return workerAccess.reason;
-      }
-      if (runtime?.cloudPlacementSupported === false) {
-        return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
-      }
-      return runtime?.cloudPlacementExecutionMode &&
-        !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
-        ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
-        : undefined;
-    },
-    loadCatalog: async () => {
-      const catalog = await requestPlaceCatalog(params.client, runtime?.id);
-      return {
-        profiles: hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null)
-          ? catalog.profiles
-          : [],
-        devices: projectDevicePlacements(catalog.environments, runtime?.devicePlacement),
-      };
-    },
-  });
-}
 
 export async function changeSessionPlacement(params: {
   client: GatewayBrowserClient | null;
@@ -91,15 +33,17 @@ export async function changeSessionPlacement(params: {
   currentGatewaySnapshot: () => ApplicationGatewaySnapshot;
   requiredProfile: () => string | undefined;
   mode: "move" | "recover";
+  presentation?: SessionPlacementPresentation;
+  source?: SessionPlacementSource;
   pendingKey: string | null;
   row: GatewaySessionRow;
   fallbackAgentId: string;
   isCurrent: () => boolean;
   currentRow: () => GatewaySessionRow | undefined;
+  onAdmittedCommand?: (completion: Promise<void>) => void;
   onPendingChange: (key: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
-  requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
   const placement = params.row.placement;
@@ -160,25 +104,115 @@ export async function changeSessionPlacement(params: {
     ? retry.abandonSource === true
     : movingPlacement?.runner?.kind === "device" && movingPlacement.runner.status === "offline";
   let target: SessionMoveTarget | null;
-  if (abandonSource) {
-    const confirmed = await showConfirmDialog({
-      message: t("sessionsView.continueOnGatewayConfirm", {
-        session: params.row.label || params.row.key,
-      }),
-      confirmLabel: t("sessionsView.continueOnGatewayAction"),
-      danger: true,
-    });
-    target = confirmed ? (retry ? { ...retry.target } : { kind: "gateway" }) : null;
-  } else if (retry) {
-    target = { ...retry.target };
-  } else {
-    target = await selectSessionPlacementTarget({
-      client,
-      gatewaySnapshot: params.gatewaySnapshot,
-      mode: movingPlacement ? "move" : restartPlacement ? "restart" : "dispatch",
-      row: params.row,
-      requiredProfile: params.requiredProfile(),
-    });
+  try {
+    if (abandonSource) {
+      const confirmed = await showConfirmDialog({
+        message: t("sessionsView.continueOnGatewayConfirm", {
+          session: params.row.label || params.row.key,
+        }),
+        confirmLabel: t("sessionsView.continueOnGatewayAction"),
+        danger: true,
+      });
+      target = confirmed ? (retry ? { ...retry.target } : { kind: "gateway" }) : null;
+    } else if (retry) {
+      target = { ...retry.target };
+    } else {
+      const selectedGatewaySnapshot = params.gatewaySnapshot;
+      const selectionMode = movingPlacement ? "move" : restartPlacement ? "restart" : "dispatch";
+      const selectedRow = params.row;
+      const selectedRequiredProfile = params.requiredProfile();
+      const presentation = params.presentation;
+      const suppliedSource = params.source;
+      const { showSessionPlacementTargetDialog } =
+        await import("./session-placement-move-dialog.tsx");
+      const runtime = selectedRow.agentRuntime;
+      const targetPlacement = selectedRow.placement;
+      const source: SessionPlacementSource | undefined =
+        suppliedSource ??
+        (targetPlacement?.state === "active"
+          ? targetPlacement.runner?.deviceId
+            ? {
+                label: targetPlacement.runner.deviceId,
+                target: { kind: "device", deviceId: targetPlacement.runner.deviceId },
+              }
+            : targetPlacement.profileId
+              ? {
+                  label: targetPlacement.profileId,
+                  providerId: targetPlacement.providerId,
+                  target: {
+                    kind: "profile",
+                    profileId: targetPlacement.profileId,
+                    ...(targetPlacement.machine?.class
+                      ? { machineClass: targetPlacement.machine.class }
+                      : {}),
+                    ...(targetPlacement.machine?.os ? { os: targetPlacement.machine.os } : {}),
+                  },
+                }
+              : { label: targetPlacement.environmentId }
+          : targetPlacement?.state === "local"
+            ? { label: t("newSession.gateway"), target: { kind: "gateway" } }
+            : undefined);
+      const gatewayAccess = readSessionMethodAccess(selectedGatewaySnapshot, {
+        method: selectionMode === "restart" ? "sessions.reclaim" : "sessions.move",
+        requiredScope: "operator.write",
+      });
+      const workerAccess = readSessionMethodAccess(selectedGatewaySnapshot, {
+        method: selectionMode === "move" ? "sessions.move" : "sessions.dispatch",
+        requiredScope: "operator.write",
+      });
+      target = await showSessionPlacementTargetDialog({
+        mode: selectionMode,
+        presentation,
+        source,
+        sessionLabel: selectedRow.label || selectedRow.key,
+        activeRun: selectedRow.hasActiveRun === true,
+        repositoryOnly: repositorySessionNeedsWorker(selectedRow),
+        allowMachineOverrides: !selectedRequiredProfile,
+        gatewayDisabledReason: selectedRequiredProfile
+          ? t("sessionsView.moveSessionRequiredProfile")
+          : gatewayAccess.allowed
+            ? undefined
+            : gatewayAccess.reason,
+        deviceDisabledReason: selectedRequiredProfile
+          ? t("sessionsView.moveSessionRequiredProfile")
+          : !workerAccess.allowed
+            ? workerAccess.reason
+            : runtime && !runtime.devicePlacement
+              ? t("newSession.deviceRuntimeUnsupported")
+              : undefined,
+        profileDisabledReason: (profile) => {
+          if (selectedRequiredProfile && profile.id !== selectedRequiredProfile) {
+            return t("sessionsView.moveSessionRequiredProfile");
+          }
+          if (!workerAccess.allowed) {
+            return workerAccess.reason;
+          }
+          if (runtime?.cloudPlacementSupported === false) {
+            return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
+          }
+          return runtime?.cloudPlacementExecutionMode &&
+            !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
+            ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
+            : undefined;
+        },
+        loadCatalog: async () => {
+          const catalog = await requestPlaceCatalog(client, runtime?.id);
+          return {
+            profiles:
+              selectionMode !== "move" ||
+              hasOperatorAdminAccess(selectedGatewaySnapshot.hello?.auth ?? null)
+                ? catalog.profiles
+                : [],
+            devices: projectDevicePlacements(catalog.environments, runtime?.devicePlacement),
+          };
+        },
+      });
+    }
+  } catch (error) {
+    if (params.isCurrent()) {
+      params.publishError(error);
+    }
+    return;
   }
   if (!target) {
     return;
@@ -239,7 +273,8 @@ export async function changeSessionPlacement(params: {
   const currentAccess = readSessionMethodAccess(snapshot, {
     method,
     params: targetParams,
-    requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
+    requiredScope:
+      method === "sessions.move" && target.kind === "profile" ? "operator.admin" : "operator.write",
   });
   const requiredProfile = params.requiredProfile();
   const unavailableNow =
@@ -254,52 +289,55 @@ export async function changeSessionPlacement(params: {
     return;
   }
   const session = { key: params.row.key, ...(agentId ? { agentId } : {}) };
-  params.onPendingChange(params.row.key);
-  try {
-    if (expectedSource) {
-      await client.request("sessions.move", {
-        ...session,
-        expected: expectedSource,
-        target,
-        ...(abandonSource ? { abandonSource: true } : {}),
-      });
-    } else if (target.kind === "gateway") {
-      if (!restartPlacement) {
-        params.publishError(t("sessionsView.actionUnavailable"));
-        return;
+  const completion = (async () => {
+    params.onPendingChange(params.row.key);
+    try {
+      if (expectedSource) {
+        await client.request("sessions.move", {
+          ...session,
+          expected: expectedSource,
+          target,
+          ...(abandonSource ? { abandonSource: true } : {}),
+        });
+      } else if (target.kind === "gateway") {
+        if (!restartPlacement) {
+          params.publishError(t("sessionsView.actionUnavailable"));
+          return;
+        }
+        await client.request(
+          "sessions.reclaim",
+          { ...session, recoverToGateway: { expectedGeneration: restartPlacement.generation } },
+          { timeoutMs: null },
+        );
+      } else {
+        await client.request("sessions.dispatch", {
+          ...session,
+          ...(target.kind === "profile"
+            ? {
+                profileId: target.profileId,
+                ...(target.os ? { os: target.os } : {}),
+                ...(target.machineClass ? { machineClass: target.machineClass } : {}),
+              }
+            : { deviceId: target.deviceId }),
+        });
       }
-      await client.request(
-        "sessions.reclaim",
-        { ...session, recoverToGateway: { expectedGeneration: restartPlacement.generation } },
-        { timeoutMs: null },
-      );
-    } else {
-      await client.request("sessions.dispatch", {
-        ...session,
-        ...(target.kind === "profile"
-          ? {
-              profileId: target.profileId,
-              ...(target.os ? { os: target.os } : {}),
-              ...(target.machineClass ? { machineClass: target.machineClass } : {}),
-            }
-          : { deviceId: target.deviceId }),
-      });
-    }
-    if (params.isCurrent()) {
-      const outcome = await params.reconcileMutation(agentId);
-      if (outcome.status === "failed" && params.isCurrent()) {
-        params.publishError(outcome.error);
-      }
-    }
-  } catch (error) {
-    if (params.isCurrent()) {
-      await params.reconcileMutation(agentId).catch(() => undefined);
       if (params.isCurrent()) {
-        params.publishError(error);
+        const outcome = await params.reconcileMutation(agentId);
+        if (outcome.status === "failed" && params.isCurrent()) {
+          params.publishError(outcome.error);
+        }
       }
+    } catch (error) {
+      if (params.isCurrent()) {
+        await params.reconcileMutation(agentId).catch(() => undefined);
+        if (params.isCurrent()) {
+          params.publishError(error);
+        }
+      }
+    } finally {
+      params.onPendingChange(null);
     }
-  } finally {
-    params.onPendingChange(null);
-    params.requestUpdate();
-  }
+  })();
+  params.onAdmittedCommand?.(completion);
+  await completion;
 }

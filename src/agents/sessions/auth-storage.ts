@@ -10,6 +10,7 @@ import fs from "node:fs";
 import { dirname } from "node:path";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import type { OAuthLoginCallbacks, OAuthProviderId } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -41,8 +42,10 @@ import {
   createAuthProfileStoreReadScopeAsync,
   saveAuthProfileStoreWithPreparedOwner,
 } from "../auth-profiles/store-runtime.js";
-import { publishAuthProfileStoreUpdate } from "../auth-profiles/store-update-publication.js";
-import { runAuthProfileStoreUpdate } from "../auth-profiles/store-update.js";
+import {
+  createAuthProfileStoreUpdatePublisher,
+  runAuthProfileStoreUpdate,
+} from "../auth-profiles/store-update.js";
 import type {
   AuthProfileCredentialSource,
   AuthProfileStore,
@@ -127,10 +130,7 @@ type StorageBackend = Omit<AuthStorageBackend, "withLockAsync"> & {
 };
 
 function parseStorageData(content: string | undefined): AuthStorageData {
-  if (!content) {
-    return {};
-  }
-  return JSON.parse(content) as AuthStorageData;
+  return content ? (JSON.parse(content) as AuthStorageData) : {};
 }
 
 function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
@@ -314,17 +314,7 @@ class SqliteAuthStorageBackend implements StorageBackend {
               },
             };
       },
-      async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-        if (committed) {
-          await publishAuthProfileStoreUpdate(
-            owner,
-            committed,
-            assertCurrent,
-            nativeCommits,
-            committedIsCurrent,
-          );
-        }
-      },
+      publish: createAuthProfileStoreUpdatePublisher(),
     });
     this.captureCredentialSources(selected.store, selected.databasePath);
     return selected.result;
@@ -357,7 +347,11 @@ export class AuthStorage {
   private loadError: Error | null = null;
   private errors: Error[] = [];
   private storage: StorageBackend;
-  private constructor(storage: StorageBackend, data?: AuthStorageData) {
+  private constructor(
+    storage: StorageBackend,
+    data?: AuthStorageData,
+    private readonly config?: OpenClawConfig,
+  ) {
     this.storage = storage;
     if (data) {
       this.setData(data);
@@ -366,13 +360,13 @@ export class AuthStorage {
     }
   }
 
-  /** @deprecated Use forAgentAsync. Supported through 2026-12-31. */
+  /** @deprecated Use forAgentAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static forAgent(agentDir: string = getAgentDir(), config?: OpenClawConfig): AuthStorage {
     warnSynchronousAuthStorage("forAgent", "forAgentAsync");
     const scope = createAuthProfileStoreReadScope(agentDir, config);
     const preparedStore = materializeAuthStorageStore(scope.store, scope.getRuntimeSnapshots());
     assertAuthStorageSecretRefsMaterialized(preparedStore);
-    return new AuthStorage(new SqliteAuthStorageBackend(scope, preparedStore));
+    return new AuthStorage(new SqliteAuthStorageBackend(scope, preparedStore), undefined, config);
   }
 
   static async forAgentAsync(
@@ -384,7 +378,7 @@ export class AuthStorage {
     assertAuthStorageSecretRefsMaterialized(preparedStore);
     const backend = new SqliteAuthStorageBackend(scope, preparedStore, true);
     const data = projectAuthoritativeAuthStorageData(scope.store, scope.getRuntimeSnapshots());
-    return new AuthStorage(backend, data);
+    return new AuthStorage(backend, data, config);
   }
 
   /**
@@ -430,6 +424,7 @@ export class AuthStorage {
 
   private recordError(error: unknown): Error {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
+    materializeErrorStack(normalizedError);
     this.errors.push(normalizedError);
     return normalizedError;
   }
@@ -464,7 +459,7 @@ export class AuthStorage {
     );
   }
 
-  /** @deprecated Use reloadAsync. Supported through 2026-12-31. */
+  /** @deprecated Use reloadAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   reload(): void {
     warnSynchronousAuthStorage("reload", "reloadAsync");
     this.loadFromStorage();
@@ -569,7 +564,7 @@ export class AuthStorage {
     return isAuthStorageOAuthRefreshFence(provider, credential) ? undefined : credential;
   }
 
-  /** @deprecated Use setAsync. Supported through 2026-12-31. */
+  /** @deprecated Use setAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   set(provider: string, credential: AuthCredential): void {
     warnSynchronousAuthStorage("set", "setAsync");
     this.persistProviderChange(provider, credential);
@@ -579,7 +574,7 @@ export class AuthStorage {
     return this.persistProviderChangeAsync(provider, credential);
   }
 
-  /** @deprecated Use removeAsync. Supported through 2026-12-31. */
+  /** @deprecated Use removeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   remove(provider: string): void {
     warnSynchronousAuthStorage("remove", "removeAsync");
     this.persistProviderChange(provider, undefined);
@@ -654,11 +649,16 @@ export class AuthStorage {
   }
 
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const credentials = await loginAuthStorageOAuthProvider(this, providerId, callbacks);
+    const credentials = await loginAuthStorageOAuthProvider(
+      this,
+      providerId,
+      callbacks,
+      this.config,
+    );
     await this.setAsync(providerId, { type: "oauth", ...credentials });
   }
 
-  /** @deprecated Use logoutAsync. Supported through 2026-12-31. */
+  /** @deprecated Use logoutAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   logout(provider: string): void {
     warnSynchronousAuthStorage("logout", "logoutAsync");
     this.remove(provider);
@@ -679,6 +679,7 @@ export class AuthStorage {
     let source: AuthProfileCredentialSource | undefined;
     const result = await refreshAuthStorageOAuthCredential({
       authStorage: this,
+      config: this.config,
       storage: {
         withLock: (update) =>
           this.storage.updateAsync
@@ -750,7 +751,7 @@ export class AuthStorage {
     }
     const resolved = (apiKey: string | undefined) => ({ apiKey, source });
 
-    if (cred?.type === "api_key") {
+    if (cred?.type === "api_key" && !cred.nativeAuth) {
       return resolved(resolveConfigValue(cred.key));
     }
 
@@ -795,13 +796,19 @@ export class AuthStorage {
               return resolved(provider.getApiKey(updatedCred));
             }
             return resolved(
-              (await resolveAuthStoragePluginOAuthCredential(providerId, updatedCred, false))
-                ?.apiKey,
+              (
+                await resolveAuthStoragePluginOAuthCredential(
+                  providerId,
+                  updatedCred,
+                  false,
+                  this.config,
+                )
+              )?.apiKey,
             );
           }
 
           // Refresh truly failed - return undefined so model discovery skips this provider
-          // User can /login to re-authenticate (credentials preserved for retry)
+          // User can /login to replace a rejected or uncertain refresh grant.
           return resolved(undefined);
         }
       } else {
@@ -809,7 +816,8 @@ export class AuthStorage {
           return resolved(provider.getApiKey(cred));
         }
         return resolved(
-          (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false))?.apiKey,
+          (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false, this.config))
+            ?.apiKey,
         );
       }
     }

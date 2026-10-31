@@ -16,8 +16,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "agent-identity": () =>
     import("./agent-identity.js").then((module) => module.agentIdentityHandlers),
   agents: () => import("./agents.js").then((module) => module.agentsHandlers),
-  claws: () => import("./claws.js").then((module) => module.clawsHandlers),
-  "claws-add": () => import("./claws-add.js").then((module) => module.clawsAddHandlers),
+  templates: () => import("./templates.js").then((module) => module.templatesHandlers),
+  "templates-drafts": () =>
+    import("./templates-drafts.js").then((module) => module.templatesDraftsHandlers),
+  "templates-add": () => import("./templates-add.js").then((module) => module.templatesAddHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),
@@ -115,8 +117,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-create.js").then((module) => module.sessionCreateHandlers),
   "sessions-title": () =>
     import("./sessions-title.js").then((module) => module.sessionTitleHandlers),
-  "sessions-recover": () =>
-    import("./sessions-recover.js").then((module) => module.sessionRecoverHandlers),
   "sessions-delete": () =>
     import("./sessions-delete.js").then((module) => module.sessionDeleteHandlers),
   "sessions-dispatch": () =>
@@ -175,6 +175,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
+  "update-handoff-sentinel": () =>
+    import("./update-handoff-sentinel.js").then((module) => module.updateHandoffSentinelHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),
   "voicewake-routing": () =>
     import("./voicewake-routing.js").then((module) => module.voicewakeRoutingHandlers),

@@ -9,6 +9,9 @@ export function createMutableRuntimeSnapshotMock(params: {
     ...params,
     getRuntimeConfigSnapshotMetadata: () => null,
     getRuntimeConfigSourceSnapshot: () => null,
+    // Without published metadata the real key falls back to the value hash.
+    resolveRuntimeConfigCacheKey: (config: Parameters<typeof params.hashRuntimeConfigValue>[0]) =>
+      `config:${params.hashRuntimeConfigValue(config)}`,
     registerRuntimeConfigSnapshotPreparer: vi.fn(),
     setRuntimeConfigSnapshot: vi.fn(),
   };

@@ -1,19 +1,17 @@
+import { once } from "node:events";
 // Real Chromium, HTTP authentication, and sandbox isolation around mocked Gateway data.
-import { writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Route } from "playwright";
+import type { FrameLocator, Route } from "playwright";
 import { expect, it } from "vitest";
-import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.js";
-import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createDeferredCore } from "../../../src/shared/deferred.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
@@ -22,6 +20,9 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
+import { textMessage, timedText } from "./chat-flow-fixtures.test-support.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import {
   installWidgetPromptDiagnostics,
   retainWidgetPromptFailure,
@@ -42,19 +43,8 @@ const sourceAuthorization = "Bearer synthetic-widget-source-credential";
 function widgetDocument(): string {
   return buildWidgetDocument(
     "Community pulse",
-    `<style>
-      body{margin:0;padding:24px;background:var(--surface);color:var(--text);font:15px system-ui}
-      h1{margin:10px 0;font-size:26px}p{line-height:1.5;color:var(--text-muted)}
-      .eyebrow{font-size:11px;letter-spacing:.15em;color:var(--accent)}
-      label{display:block;margin-top:20px}input{box-sizing:border-box;width:100%;padding:10px;
-        margin:8px 0 16px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border);border-radius:6px}
-      button{padding:10px 12px;margin:0 6px 8px 0;border:1px solid var(--border);
-        background:var(--surface-raised);color:var(--text);border-radius:6px;cursor:pointer}
-      output{display:block;margin-top:12px}.details{height:540px;padding-top:20px}
-    </style>
-    <div class="eyebrow">SYNTHETIC COMMUNITY DASHBOARD</div>
+    `<style>.details{height:540px;padding-top:20px}</style>
     <h1>Community pulse</h1>
-    <p>The same interactive document is available in chat and in the dashboard.</p>
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
@@ -86,18 +76,13 @@ function widgetDocument(): string {
 }
 
 async function listen(server: Server): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("Widget proof server did not bind a TCP port"));
-      } else {
-        resolve(address.port);
-      }
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Widget proof server did not bind a TCP port");
+  }
+  return address.port;
 }
 
 async function close(server: Server): Promise<void> {
@@ -108,7 +93,7 @@ async function close(server: Server): Promise<void> {
 }
 
 async function startProtectedSource(html: string) {
-  const sourceRequests: Array<{ authorized: boolean; destination?: string }> = [];
+  const sourceDestinations: string[] = [];
   const boardRequests: string[] = [];
   const omittedHeaders = new Set([
     "connection",
@@ -118,40 +103,44 @@ async function startProtectedSource(html: string) {
   ]);
   const server = createServer((request, response) => {
     void (async () => {
+      const respond = (status: number, body: string, headers: Record<string, string> = {}) => {
+        response.writeHead(status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "text/html; charset=utf-8",
+          ...headers,
+        });
+        response.end(body);
+      };
       const url = new URL(request.url ?? "/", suite.server.baseUrl);
       if (url.pathname === documentPath) {
         const authorized = request.headers.authorization === sourceAuthorization;
         const destination = request.headers["sec-fetch-dest"];
-        sourceRequests.push({
-          authorized,
-          ...(typeof destination === "string" ? { destination } : {}),
-        });
-        response.writeHead(authorized ? 200 : 302, {
-          "Cache-Control": "no-store",
-          "Content-Type": "text/html; charset=utf-8",
-          ...(!authorized ? { Location: "/widget-login" } : {}),
-        });
-        response.end(authorized ? html : "Authentication required");
+        if (typeof destination === "string") {
+          sourceDestinations.push(destination);
+        }
+        respond(
+          authorized ? 200 : 302,
+          authorized ? html : "Authentication required",
+          authorized ? {} : { Location: "/widget-login" },
+        );
         return;
       }
       if (url.pathname === "/widget-login") {
-        response.writeHead(200, {
-          "Content-Type": "text/html; charset=utf-8",
-          "Content-Security-Policy": "frame-ancestors 'none'",
-          "X-Frame-Options": "DENY",
-        });
-        response.end("<!doctype html><title>Synthetic sign-in</title>Sign in to view this widget.");
+        respond(
+          200,
+          "<!doctype html><title>Synthetic sign-in</title>Sign in to view this widget.",
+          {
+            "Content-Security-Policy": "frame-ancestors 'none'",
+            "X-Frame-Options": "DENY",
+          },
+        );
         return;
       }
       if (url.pathname === boardPath) {
         const ticket = url.searchParams.get("bt") ?? "";
         boardRequests.push(ticket);
         const authorized = ticket === "ticket" || ticket === "renewed-ticket";
-        response.writeHead(authorized ? 200 : 401, {
-          "Cache-Control": "no-store",
-          "Content-Type": "text/html; charset=utf-8",
-        });
-        response.end(authorized ? html : "Invalid widget ticket");
+        respond(authorized ? 200 : 401, authorized ? html : "Invalid widget ticket");
         return;
       }
       const upstream = await fetch(url, { headers: { Accept: request.headers.accept ?? "*/*" } });
@@ -179,40 +168,29 @@ async function startProtectedSource(html: string) {
     });
   });
   const port = await listen(server);
-  return { server, baseUrl: `http://127.0.0.1:${port}/`, sourceRequests, boardRequests };
+  return { server, baseUrl: `http://127.0.0.1:${port}/`, sourceDestinations, boardRequests };
 }
 
 suite.define(() => {
+  const sandboxDocument = useCanvasSandboxFixture();
   it("loads protected widgets in chat and preserves isolated interactive frames", async () => {
     const html = widgetDocument();
-    const sandboxServer = createSandboxHostHttpServer();
-    const sandboxPort = await listen(sandboxServer);
+    const { sandboxUrl, sandboxPort } = sandboxDocument(html);
     const proxy = await startProtectedSource(html);
-    const sandboxUrl = buildSandboxHostPath({ blockDescendantFrames: true });
-    const snapshot = {
-      sessionKey,
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-      widgets: [
-        {
-          name: widgetName,
-          tabId: "main",
-          title: "Community pulse",
-          contentKind: "html",
-          sizeW: 12,
-          sizeH: 5,
-          position: 0,
-          grantState: "none",
-          revision: 1,
-          frameUrl: `${new URL(proxy.baseUrl).origin}${boardPath}?bt=ticket`,
-          viewTicket: "ticket",
-          viewTicketTtlMs: 1_200_000,
-          viewGeneration: "0123456789abcdef0123456789abcdef",
-          sandboxUrl,
-          sandboxPort,
-        },
-      ],
-    };
+    const snapshot = createBoardSnapshot(sessionKey, [
+      createBoardWidget({
+        name: widgetName,
+        title: "Community pulse",
+        sizeW: 12,
+        sizeH: 5,
+        frameUrl: `${new URL(proxy.baseUrl).origin}${boardPath}?bt=ticket`,
+        viewTicket: "ticket",
+        viewTicketTtlMs: 1_200_000,
+        viewGeneration: "0123456789abcdef0123456789abcdef",
+        sandboxUrl,
+        sandboxPort,
+      }),
+    ]);
     try {
       const unauthenticated = await fetch(new URL(documentPath, proxy.baseUrl), {
         redirect: "manual",
@@ -229,9 +207,10 @@ suite.define(() => {
           viewport: { width: 1600, height: 1000 },
           serviceWorkers: "block",
           permissions: ["local-network-access"],
-          recordVideo: { dir: suite.artifactDir, size: { width: 1600, height: 1000 } },
         },
         async ({ page, context }) => {
+          const click = (widget: FrameLocator, name: string) =>
+            clickBoardWidgetControl(page, widget.getByRole("button", { name }));
           await installWidgetPromptDiagnostics(context);
           const storageKey = controlUiBundledSettingsStorageKey(proxy.baseUrl);
           await page.addInitScript(
@@ -251,16 +230,10 @@ suite.define(() => {
               "canvas.document.view",
             ],
             historyMessages: [
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: `[embed ref="${documentId}" title="Community pulse" height="460" /]`,
-                  },
-                ],
-                timestamp: Date.now(),
-              },
+              timedText(
+                "assistant",
+                `[embed ref="${documentId}" title="Community pulse" height="460" /]`,
+              ),
             ],
             methodResponses: {
               "canvas.document.view": { html, sandboxUrl, sandboxPort },
@@ -269,12 +242,9 @@ suite.define(() => {
             },
           });
           const outer = page.locator(".chat-tool-card__preview-frame");
-          let releaseConfig!: () => void;
-          const configReady = new Promise<void>((resolve) => {
-            releaseConfig = resolve;
-          });
+          const configReady = createDeferredCore();
           const holdConfig = async (route: Route) => {
-            await configReady;
+            await configReady.promise;
             await route.fallback();
           };
           const configRoute = `**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
@@ -293,48 +263,57 @@ suite.define(() => {
             expect(await strict.locator("#extra").isVisible()).toBe(false);
             await strict.getByRole("button", { name: "Refresh via chat" }).click();
             expect(await gateway.getRequests("chat.send")).toEqual([]);
-            expect(
-              proxy.sourceRequests.filter(({ destination }) => destination !== undefined),
-            ).toEqual([]);
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "01-auth-gated-widget.png"),
-            });
+            expect(proxy.sourceDestinations).toEqual([]);
           } finally {
             await page.unroute(configRoute, holdConfig);
-            releaseConfig();
+            configReady.resolve();
           }
           const boardOuter = page.locator(".board-widget__frame");
           const board = boardOuter.contentFrame().frameLocator("iframe");
           await board.getByRole("heading", { name: "Community pulse" }).waitFor();
           const inline = outer.contentFrame().frameLocator("iframe");
           await inline.getByRole("heading", { name: "Community pulse" }).waitFor();
-          expect(
-            proxy.sourceRequests.filter(({ destination }) => destination !== undefined),
-          ).toEqual([]);
+          expect(proxy.sourceDestinations).toEqual([]);
           expect((await gateway.getRequests("canvas.document.view"))[0]?.params).toEqual({
             docId: documentId,
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
+          const confirmations: number[] = [];
+          for (let index = 0; index < 2; index++) {
+            confirmations.push(
+              await outer.evaluate(
+                (frame: HTMLIFrameElement) =>
+                  new Promise<number>((resolve) => {
+                    const receive = (event: MessageEvent<{ type?: string; height?: unknown }>) => {
+                      if (
+                        event.source !== frame.contentWindow ||
+                        event.data?.type !== "openclaw:widget-size" ||
+                        typeof event.data.height !== "number"
+                      ) {
+                        return;
+                      }
+                      window.removeEventListener("message", receive);
+                      resolve(event.data.height);
+                    };
+                    window.addEventListener("message", receive);
+                    frame.contentWindow!.postMessage(
+                      { type: "openclaw:widget-chat-host", measure: true },
+                      new URL(frame.src).origin,
+                    );
+                  }),
+              ),
+            );
+          }
+          expect(confirmations[0]).toBeGreaterThan(0);
+          expect(confirmations[1]).toBe(confirmations[0]);
           for (const widget of [inline, board]) {
-            await clickBoardWidgetControl(
-              page,
-              widget.getByRole("button", { name: "Toggle details" }),
-            );
+            await click(widget, "Toggle details");
             await widget.getByText("Additional community details").waitFor();
-            await clickBoardWidgetControl(
-              page,
-              widget.getByRole("button", { name: "Toggle details" }),
-            );
+            await click(widget, "Toggle details");
             await widget.getByText("Additional community details").waitFor({ state: "hidden" });
-            await clickBoardWidgetControl(
-              page,
-              widget.getByRole("button", { name: "Try native popup" }),
-            );
+            await click(widget, "Try native popup");
             await widget.getByText("Popup blocked", { exact: true }).waitFor();
           }
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "02-inline-and-sidebar.png"),
-          });
 
           const isolation = await inline.locator("body").evaluate(() => {
             const denied = (read: () => unknown) => {
@@ -366,6 +345,10 @@ suite.define(() => {
           const retainedBoardFrame = await boardOuter.elementHandle();
           const note = inline.getByRole("textbox", { name: "Local note" });
           const boardNote = board.getByRole("textbox", { name: "Local note" });
+          const expectRetainedNote = async () => {
+            expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
+            expect(await note.inputValue()).toBe("State survives rerenders");
+          };
           await note.fill("State survives rerenders");
           await boardNote.fill("Dashboard state survives swaps");
           for (const region of ["main", "side"]) {
@@ -373,30 +356,19 @@ suite.define(() => {
             await expect
               .poll(() => page.locator('[data-panel-slot="dashboard"]').getAttribute("data-region"))
               .toBe(region);
-            expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
+            await expectRetainedNote();
             expect(await retainedBoardFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
-            expect(await note.inputValue()).toBe("State survives rerenders");
             expect(await boardNote.inputValue()).toBe("Dashboard state survives swaps");
           }
           const originalHeight = (await outer.boundingBox())?.height ?? 0;
-          await clickBoardWidgetControl(
-            page,
-            inline.getByRole("button", { name: "Toggle details" }),
-          );
+          await click(inline, "Toggle details");
           await expect
             .poll(async () => (await outer.boundingBox())?.height ?? 0)
             .toBeGreaterThan(originalHeight + 400);
-          expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
-          expect(await note.inputValue()).toBe("State survives rerenders");
-          await clickBoardWidgetControl(
-            page,
-            inline.getByRole("button", { name: "Toggle details" }),
-          );
+          await expectRetainedNote();
+          await click(inline, "Toggle details");
 
-          await clickBoardWidgetControl(
-            page,
-            inline.getByRole("button", { name: "Refresh via chat" }),
-          );
+          await click(inline, "Refresh via chat");
           const sent = asRecord((await gateway.waitForRequest("chat.send")).params);
           expect(sent).toMatchObject({
             sessionKey,
@@ -404,84 +376,40 @@ suite.define(() => {
             idempotencyKey: expect.any(String),
           });
           const runId = String(sent.idempotencyKey);
+          const paragraph = (hasText: RegExp) => page.getByRole("paragraph").filter({ hasText });
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,
             seq: 1,
             state: "delta",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "Refreshing community signals…" }],
-            },
+            message: textMessage("assistant", "Refreshing community signals…"),
           });
-          await page
-            .getByRole("paragraph")
-            .filter({ hasText: /^Refreshing community signals…$/u })
-            .waitFor();
+          await paragraph(/^Refreshing community signals…$/u).waitFor();
           await gateway.emitChatFinal({
             sessionKey,
             runId,
             text: "Synthetic dashboard refreshed.",
           });
-          await page
-            .getByRole("paragraph")
-            .filter({ hasText: /^Synthetic dashboard refreshed\.$/u })
-            .waitFor();
-          expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
-          expect(await note.inputValue()).toBe("State survives rerenders");
+          await paragraph(/^Synthetic dashboard refreshed\.$/u).waitFor();
+          await expectRetainedNote();
           expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
-          await clickBoardWidgetControl(page, board.getByRole("button", { name: "Record state" }));
+          await click(board, "Record state");
           await board.getByText("State recorded", { exact: true }).waitFor();
           expect((await gateway.getRequests("board.event"))[0]?.params).toEqual({
             ticket: "ticket",
             payload: { clicked: true },
           });
           await page.emulateMedia({ colorScheme: "dark" });
-          await expect
-            .poll(() =>
-              inline.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
-            )
-            .toBe("dark");
           // A light proxy between dark documents paints an opaque UA canvas.
-          await expect
-            .poll(() =>
-              outer
-                .contentFrame()
-                .locator("html")
-                .evaluate((root) => getComputedStyle(root).colorScheme),
-            )
-            .toBe("dark");
-          await expect
-            .poll(() =>
-              board.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
-            )
-            .toBe("dark");
+          for (const frame of [inline, outer.contentFrame(), board]) {
+            await expect
+              .poll(() =>
+                frame.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
+              )
+              .toBe("dark");
+          }
           expect(await note.inputValue()).toBe("State survives rerenders");
-          await outer.scrollIntoViewIfNeeded();
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "03-interactive-state-retained.png"),
-          });
-          await writeFile(
-            path.join(suite.artifactDir, "evidence.json"),
-            JSON.stringify(
-              {
-                isolation,
-                sourceRequests: proxy.sourceRequests,
-                boardRequests: proxy.boardRequests,
-                canvasReads: (await gateway.getRequests("canvas.document.view")).length,
-                prompt: sent.message,
-                localNote: await note.inputValue(),
-                dashboardLocalNote: await boardNote.inputValue(),
-                retainedFrame: await retainedFrame?.evaluate((frame) => frame.isConnected),
-                retainedDashboardFrame: await retainedBoardFrame?.evaluate(
-                  (frame) => frame.isConnected,
-                ),
-              },
-              null,
-              2,
-            ),
-          );
           // Saved HTML has no generated wrapper; the sandbox runtime owns shortcuts.
           await page.route(`${new URL(boardPath, proxy.baseUrl).href}?*`, (route) =>
             route.fulfill({
@@ -548,7 +476,7 @@ suite.define(() => {
           });
           await board.getByRole("button", { name: "Attempt shortcut", exact: true }).click();
           await page.waitForFunction(() => Reflect.get(window, "shortcutForgerySettled") === true);
-          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          expect(await paletteInput.count()).toBe(0);
           await savedNote.focus();
           await savedNote.evaluate(() => {
             Reflect.set(
@@ -564,7 +492,7 @@ suite.define(() => {
           });
           await page.keyboard.press("j");
           expect(await savedNote.inputValue()).toBe("Saved draft!j");
-          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          expect(await paletteInput.count()).toBe(0);
           await savedNote.evaluate(() => {
             Object.defineProperties(
               KeyboardEvent.prototype,
@@ -580,10 +508,7 @@ suite.define(() => {
         },
       );
     } finally {
-      await runQaGatewayFixture(
-        () => close(proxy.server),
-        () => close(sandboxServer),
-      );
+      await close(proxy.server);
     }
   });
 });

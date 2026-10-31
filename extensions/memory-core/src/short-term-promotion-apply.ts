@@ -355,6 +355,9 @@ export async function applyShortTermPromotions(
           existingMemory,
           candidates: toAppend,
           ...(options.consolidation.model ? { model: options.consolidation.model } : {}),
+          ...(typeof options.consolidation.timeoutMs === "number"
+            ? { timeoutMs: options.consolidation.timeoutMs }
+            : {}),
           maxPriorEntryLossFraction,
           memoryFileMaxChars: budgetChars,
           ...(typeof options.maxPromotedSnippetTokens === "number"
@@ -465,6 +468,7 @@ export async function applyShortTermPromotions(
         try {
           await commitMemoryContent({
             workspaceDir,
+            workspaceFileMode: options.workspaceFileMode,
             filePath: memoryWritePath,
             tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
@@ -531,6 +535,7 @@ export async function applyShortTermPromotions(
             // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
             await commitMemoryContent({
               workspaceDir,
+              workspaceFileMode: options.workspaceFileMode,
               filePath: memoryWritePath,
               tempPrefix: `${path.basename(memoryPath)}.promotion`,
               expectedHash: hashMemoryContent(existingMemory),

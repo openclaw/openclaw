@@ -1,11 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -19,7 +18,7 @@ import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  readSessionTranscriptWatermark,
+  readSessionTranscriptWatermark as readWatermark,
   upsertSessionEntryCore,
   type TranscriptEvent,
 } from "./session-accessor.js";
@@ -27,11 +26,11 @@ import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import {
-  readTranscriptContextVersionInTransaction,
-  rotateTranscriptGenerationInTransaction,
+  readTranscriptContextVersionInTransaction as readContextVersion,
+  rotateTranscriptGenerationInTransaction as rotateGeneration,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
-import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readSessionTranscriptHotWatermark as readHot } from "./session-accessor.sqlite-transcript-watermark-read.js";
+import { readSessionTranscriptWatermarkInDatabase as readInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 
@@ -47,394 +46,298 @@ function transcriptMessages(count: number): TranscriptEvent[] {
 const isHotWatermarkQuery = (sql: string) =>
   sql.includes('from "transcript_events"') && sql.includes('from "transcript_rewrite_watermarks"');
 
-describe("SQLite transcript watermark queries", () => {
-  let state: OpenClawTestState;
-  const scope = (sessionId: string) => ({
-    agentId: "main",
-    env: state.env,
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
+function rawPage(target: Parameters<typeof readTranscriptRawDelta>[0]) {
+  const page = readTranscriptRawDelta(target);
+  if (page.kind !== "page") {
+    throw new Error("expected a raw page");
+  }
+  return page;
+}
+
+function trackQueries(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  matches: (sql: string) => boolean,
+) {
+  const queries = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["matched"],
+    (sql) => (matches(sql) ? "matched" : null),
+  );
+  cleanup.push(queries.restore);
+  return () => queries.counts.matched;
+}
+
+function compiledQueries(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  matches: (sql: string) => boolean,
+) {
+  const compile = vi.spyOn(getNodeSqliteKysely(database.db).getExecutor(), "compileQuery");
+  cleanup.push(() => compile.mockRestore());
+  return () =>
+    compile.mock.results.filter((result) => result.type === "return" && matches(result.value.sql));
+}
+
+function writeArchive(
+  connection: Parameters<typeof getNodeSqliteKysely>[0],
+  sessionId: string,
+  lastSeq: number,
+  generation = "archive-generation",
+) {
+  connection
+    .prepare(`INSERT INTO session_transcript_cold_archives
+    (session_id, generation, archive_name, archive_sha256, archive_blob,
+     event_count, raw_bytes, archive_bytes, last_seq, archived_at, storage)
+    VALUES (?, ?, 'synthetic-archive', ?, NULL, ?, 0, 0, ?, 1, 'file')`)
+    .run(sessionId, generation, "0".repeat(64), lastSeq + 1, lastSeq);
+}
+
+function writeGeneration(
+  connection: Parameters<typeof getNodeSqliteKysely>[0],
+  sessionId: string,
+  generation: string,
+) {
+  connection
+    .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+    .run(generation, sessionId);
+}
+
+let state: OpenClawTestState;
+const cleanup: Array<() => void> = [];
+const scope = (sessionId: string) => ({
+  agentId: "main",
+  env: state.env,
+  sessionId,
+  sessionKey: `agent:main:${sessionId}`,
+});
+
+beforeEach(async () => {
+  state = await createOpenClawTestState({ scenario: "minimal" });
+  await captureRuntimeConfigAsyncReader()();
+  for (const [sessionId, count] of [
+    ["first", 1],
+    ["second", 2],
+  ] as const) {
+    await upsertSessionEntryCore(scope(sessionId), { sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents(scope(sessionId), transcriptMessages(count));
+  }
+});
+
+afterEach(async () => {
+  for (const restore of cleanup.splice(0).toReversed()) {
+    restore();
+  }
+  await state.cleanup();
+});
+
+it("binds each session again after appends, rewrites, and missing-session reads", async () => {
+  const first = readWatermark(scope("first"));
+  const second = readWatermark(scope("second"));
+  await appendTranscriptMessage(scope("first"), {
+    eventId: "appended",
+    parentId: "message-0",
+    message: { role: "assistant", content: "Appended message" },
   });
+  expect(readWatermark(scope("first"))).toEqual({ ...first, maxSeq: 1 });
+  expect(readWatermark(scope("second"))).toEqual(second);
 
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ scenario: "minimal" });
-    await captureRuntimeConfigAsyncReader()();
-    for (const [sessionId, count] of [
-      ["first", 1],
-      ["second", 2],
-    ] as const) {
-      await upsertSessionEntryCore(scope(sessionId), { sessionId, updatedAt: 1 });
-      await replaceTranscriptEvents(scope(sessionId), transcriptMessages(count));
-    }
+  await replaceTranscriptEvents(scope("first"), transcriptMessages(3));
+  const rewritten = readWatermark(scope("first"));
+  expect(rewritten.maxSeq).toBe(2);
+  expect(rewritten.generation).not.toBe(first.generation);
+  expect(readWatermark(scope("missing"))).toEqual({
+    generation: null,
+    maxSeq: null,
   });
+  expect(readWatermark(scope("second"))).toEqual(second);
+  expect(readWatermark(scope("first"))).toEqual(rewritten);
+});
 
-  afterEach(async () => {
-    await state.cleanup();
-  });
-
-  it("binds each session again after appends, rewrites, and missing-session reads", async () => {
-    const first = readSessionTranscriptWatermark(scope("first"));
-    const second = readSessionTranscriptWatermark(scope("second"));
-    await appendTranscriptMessage(scope("first"), {
-      eventId: "appended",
-      parentId: "message-0",
-      message: { role: "assistant", content: "Appended message" },
-    });
-    expect(readSessionTranscriptWatermark(scope("first"))).toEqual({ ...first, maxSeq: 1 });
-    expect(readSessionTranscriptWatermark(scope("second"))).toEqual(second);
-
-    await replaceTranscriptEvents(scope("first"), transcriptMessages(3));
-    const rewritten = readSessionTranscriptWatermark(scope("first"));
-    expect(rewritten.maxSeq).toBe(2);
-    expect(rewritten.generation).not.toBe(first.generation);
-    expect(readSessionTranscriptWatermark(scope("missing"))).toEqual({
-      generation: null,
-      maxSeq: null,
-    });
-    expect(readSessionTranscriptWatermark(scope("second"))).toEqual(second);
-    expect(readSessionTranscriptWatermark(scope("first"))).toEqual(rewritten);
-  });
-
-  it("shares projection facts until a native write changes their snapshot", () => {
-    const target = scope("first");
-    const database = openOpenClawAgentDatabase(target);
-    const resolved = resolveSqliteTranscriptReadScope(target);
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["reads"],
-      (sql) => (sql.toLowerCase().startsWith("select") ? "reads" : null),
-    );
-    try {
-      runSqliteReadOperationSync(database.db, () =>
-        runSqliteDeferredTransactionSync(database.db, () => {
-          const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
-            const before = queries.counts.reads;
-            expect(readTranscriptContextVersionInTransaction(database, target.sessionId)).toEqual(
-              projection.version,
-            );
-            expect(readSessionTranscriptWatermarkInDatabase(database, target.sessionId)).toEqual({
-              generation: projection.version.generation,
-              maxSeq: projection.version.rawSeq,
-            });
-            expect(readSessionTranscriptHotWatermark(database, target.sessionId)).toEqual({
-              generation: projection.version.generation,
-              maxSeq: projection.version.rawSeq,
-            });
-            assertSessionTranscriptHot(database.db, target.sessionId);
-            expect(queries.counts.reads).toBe(before);
-            const db = getNodeSqliteKysely<DB>(database.db);
-            executeSqliteQuerySync(
-              database.db,
-              db
-                .updateTable("transcript_rewrite_watermarks")
-                .set({ generation: "rewritten" })
-                .where("session_id", "=", target.sessionId),
-            );
-            expect(
-              readSessionTranscriptWatermarkInDatabase(database, target.sessionId).generation,
-            ).toBe("rewritten");
-            executeSqliteQuerySync(
-              database.db,
-              db.insertInto("session_transcript_cold_archives").values({
-                session_id: target.sessionId,
-                generation: "rewritten",
-                archive_name: "synthetic",
-                archive_sha256: "0".repeat(64),
-                archive_blob: null,
-                event_count: 1,
-                raw_bytes: 0,
-                archive_bytes: 0,
-                last_seq: 0,
-                archived_at: 1,
-                storage: "file",
-              }),
-            );
-            expect(() => assertSessionTranscriptHot(database.db, target.sessionId)).toThrow(
-              "cold storage",
-            );
-          });
-          expect(result.kind).toBe("value");
-        }),
-      );
-    } finally {
-      queries.restore();
-    }
-  });
-
-  it("reads hot, archived, and missing frontiers with one statement each", () => {
-    const database = openOpenClawAgentDatabase(scope("first"));
-    const first = readSessionTranscriptWatermark(scope("first"));
-    const second = readSessionTranscriptWatermark(scope("second"));
-    const db = getNodeSqliteKysely<DB>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("session_transcript_cold_archives").values({
-        session_id: "second",
-        generation: "archive-generation",
-        archive_name: "synthetic-archive",
-        archive_sha256: "0".repeat(64),
-        archive_blob: null,
-        event_count: 42,
-        raw_bytes: 0,
-        archive_bytes: 0,
-        last_seq: 41,
-        archived_at: 1,
-        storage: "file",
-      }),
-    );
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["watermarks"],
-      (sql) =>
-        isHotWatermarkQuery(sql) || sql.includes('from "session_transcript_cold_archives"')
-          ? "watermarks"
-          : null,
-    );
-    try {
-      for (const [sessionId, expected] of [
-        ["first", first],
-        ["second", { ...second, maxSeq: 41 }],
-        ["missing", { generation: null, maxSeq: null }],
-      ] as const) {
-        expect(
-          runSqliteDeferredTransactionSync(database.db, () =>
-            readSessionTranscriptWatermarkInDatabase(database, sessionId),
-          ),
-        ).toEqual(expected);
-      }
-      expect(queries.counts.watermarks).toBe(3);
-    } finally {
-      queries.restore();
-    }
-  });
-
-  it("reads raw page watermarks once without recompiling tiny or empty reads", () => {
-    const targets = [scope("first"), scope("second")];
-    const pages = targets.map((target) => {
-      const page = readTranscriptRawDelta(target);
-      expect(page).toMatchObject({ kind: "page", hasMore: false });
-      if (page.kind !== "page") {
-        throw new Error("expected a populated raw page");
-      }
-      return page;
-    });
-    expect(pages.map((page) => page.events.length)).toEqual([1, 2]);
-    const database = openOpenClawAgentDatabase(scope("first"));
-    const isVersionQuery = (sql: string) =>
-      sql.includes('from "transcript_rewrite_watermarks"') ||
-      (sql.includes('from "transcript_events"') && !sql.includes("event_json"));
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["watermarks"],
-      (sql) => (isVersionQuery(sql) ? "watermarks" : null),
-    );
-    const compile = vi.spyOn(getNodeSqliteKysely(database.db).getExecutor(), "compileQuery");
-    try {
-      for (const [index, target] of targets.entries()) {
-        const page = pages[index]!;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          expect(readTranscriptRawDelta(target)).toEqual(page);
-          expect(readTranscriptRawDelta(target, { cursor: page.cursor })).toEqual({
-            kind: "page",
-            cursor: page.cursor,
-            events: [],
-            hasMore: false,
-            serializedBytes: 0,
-          });
-        }
-      }
-      expect(queries.counts.watermarks).toBe(12);
-      expect(
-        compile.mock.results.filter(
-          (result) => result.type === "return" && isVersionQuery(result.value.sql),
-        ),
-      ).toHaveLength(0);
-    } finally {
-      compile.mockRestore();
-      queries.restore();
-    }
-  });
-
-  it("keeps a raw empty frontier distinct from a missing transcript after replacement", async () => {
-    const target = scope("first");
-    expect(readTranscriptRawDelta(scope("missing"))).toEqual({ kind: "missing" });
-    const populated = readTranscriptRawDelta(target);
-    if (populated.kind !== "page") {
-      throw new Error("expected a populated raw page");
-    }
-    await replaceTranscriptEvents(target, []);
-    expect(readTranscriptRawDelta(target, { cursor: populated.cursor })).toMatchObject({
-      kind: "reset",
-      reason: "generation_mismatch",
-    });
-    const empty = readTranscriptRawDelta(target);
-    expect(empty).toMatchObject({
-      kind: "page",
-      events: [],
-      hasMore: false,
-      serializedBytes: 0,
-    });
-    if (empty.kind !== "page") {
-      throw new Error("expected an empty raw page");
-    }
-    const cursor = JSON.parse(Buffer.from(empty.cursor, "base64url").toString("utf8")) as object;
-    expect(cursor).toMatchObject({ lastSeq: -1 });
-    const beyondEmpty = Buffer.from(JSON.stringify({ ...cursor, lastSeq: 0 })).toString(
-      "base64url",
-    );
-    expect(readTranscriptRawDelta(target, { cursor: beyondEmpty })).toMatchObject({
-      kind: "reset",
-      reason: "invalid_cursor",
-    });
-    const appended = { type: "custom", id: "after-empty" };
-    await appendTranscriptEvent(target, appended);
-    expect(readTranscriptRawDelta(target, { cursor: empty.cursor })).toMatchObject({
-      kind: "page",
-      events: [{ event: appended, seq: 0 }],
-      hasMore: false,
-    });
-  });
-
-  it.each([false, true])("keeps public reads committed through writer rollback=%s", (rollback) => {
-    const target = scope("first");
-    const before = readSessionTranscriptWatermark(target);
-    const database = openOpenClawAgentDatabase(target);
-    const failure = new Error("rollback watermark generation");
-    let generation = before.generation;
-    const write = () =>
-      runOpenClawAgentWriteTransaction((writer) => {
-        generation = rotateTranscriptGenerationInTransaction(writer, target.sessionId);
-        expect(readSessionTranscriptHotWatermark(writer, target.sessionId)).toEqual({
-          ...before,
-          generation,
-        });
-        // Public reads use the committed companion even after its query is warm.
-        expect(readSessionTranscriptWatermark(target)).toEqual(before);
-        expect(readSessionTranscriptWatermark(target)).toEqual(before);
-        if (rollback) {
-          throw failure;
-        }
-      }, target);
-    if (rollback) {
-      expect(write).toThrow(failure);
-    } else {
-      write();
-    }
-    expect(generation).not.toBe(before.generation);
-    expect(database.db.isTransaction).toBe(false);
-    expect(readSessionTranscriptWatermark(target)).toEqual({
-      ...before,
-      generation: rollback ? before.generation : generation,
-    });
-  });
-
-  it("reads hot and cold watermarks once while preserving a WAL snapshot and foreign commits", () => {
-    const target = scope("second");
-    const database = openOpenClawAgentDatabase(target);
-    const before = readSessionTranscriptWatermark(target);
-    const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["watermarks"],
-      (sql) =>
-        /\b(?:transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives)\b/.test(
-          sql,
-        )
-          ? "watermarks"
-          : null,
-    );
-    const read = () => {
-      const executions = queries.counts.watermarks;
-      const watermark = readSessionTranscriptWatermarkInDatabase(database, target.sessionId);
-      expect(queries.counts.watermarks - executions).toBe(1);
-      return watermark;
-    };
-    try {
-      const exec = vi.spyOn(database.db, "exec");
-      try {
-        expect(read()).toEqual(before);
-        expect(
-          exec.mock.calls.filter(([sql]) =>
-            /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql),
-          ),
-        ).toEqual([]);
-      } finally {
-        exec.mockRestore();
-      }
-      expect(peer.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
-      const db = getNodeSqliteKysely<DB>(peer);
-      runSqliteDeferredTransactionSync(database.db, () => {
-        expect(read()).toEqual(before);
-        peer.exec("BEGIN IMMEDIATE");
-        executeSqliteQuerySync(
-          peer,
-          db
-            .updateTable("transcript_rewrite_watermarks")
-            .set({ generation: "peer-generation" })
-            .where("session_id", "=", target.sessionId),
+it("shares projection facts until a native write changes their snapshot", () => {
+  const target = scope("first");
+  const database = openOpenClawAgentDatabase(target);
+  const resolved = resolveSqliteTranscriptReadScope(target);
+  const reads = trackQueries(database, (sql) => sql.toLowerCase().startsWith("select"));
+  runSqliteReadOperationSync(database.db, () =>
+    runSqliteDeferredTransactionSync(database.db, () => {
+      const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
+        const before = reads();
+        expect(readContextVersion(database, target.sessionId)).toEqual(projection.version);
+        const expected = {
+          generation: projection.version.generation,
+          maxSeq: projection.version.rawSeq,
+        };
+        expect(readInDatabase(database, target.sessionId)).toEqual(expected);
+        expect(readHot(database, target.sessionId)).toEqual(expected);
+        assertSessionTranscriptHot(database.db, target.sessionId);
+        expect(reads()).toBe(before);
+        writeGeneration(database.db, target.sessionId, "rewritten");
+        expect(readInDatabase(database, target.sessionId).generation).toBe("rewritten");
+        writeArchive(database.db, target.sessionId, 0, "rewritten");
+        expect(() => assertSessionTranscriptHot(database.db, target.sessionId)).toThrow(
+          "cold storage",
         );
-        executeSqliteQuerySync(
-          peer,
-          db.insertInto("session_transcript_cold_archives").values({
-            session_id: target.sessionId,
-            generation: "archive-generation",
-            archive_name: "synthetic-archive",
-            archive_sha256: "0".repeat(64),
-            event_count: 1,
-            raw_bytes: 0,
-            archive_bytes: 0,
-            last_seq: 0,
-            archived_at: 1,
-            storage: "file",
-          }),
-        );
-        peer.exec("COMMIT");
-        expect(read()).toEqual(before);
       });
-      const archived = {
-        generation: "peer-generation",
-        maxSeq: 0,
-      };
-      expect(read()).toEqual(archived);
-      expect(readSessionTranscriptWatermark(target)).toEqual(archived);
-      expect(readSessionTranscriptHotWatermark(database, target.sessionId)).toEqual({
+      expect(result.kind).toBe("value");
+    }),
+  );
+});
+
+it("reads raw page watermarks once without recompiling tiny or empty reads", () => {
+  const targets = [scope("first"), scope("second")];
+  const pages = targets.map((target) => {
+    const page = rawPage(target);
+    expect(page).toMatchObject({ kind: "page", hasMore: false });
+    return page;
+  });
+  expect(pages.map((page) => page.events.length)).toEqual([1, 2]);
+  const database = openOpenClawAgentDatabase(scope("first"));
+  const isVersionQuery = (sql: string) =>
+    sql.includes('from "transcript_rewrite_watermarks"') ||
+    (sql.includes('from "transcript_events"') && !sql.includes("event_json"));
+  const reads = trackQueries(database, isVersionQuery);
+  const compiled = compiledQueries(database, isVersionQuery);
+  for (const [index, target] of targets.entries()) {
+    const page = pages[index]!;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(readTranscriptRawDelta(target)).toEqual(page);
+      expect(readTranscriptRawDelta(target, { cursor: page.cursor })).toEqual({
+        kind: "page",
+        cursor: page.cursor,
+        events: [],
+        hasMore: false,
+        serializedBytes: 0,
+      });
+    }
+  }
+  expect(reads()).toBe(12);
+  expect(compiled()).toHaveLength(0);
+});
+
+it("keeps a raw empty frontier distinct from a missing transcript after replacement", async () => {
+  const target = scope("first");
+  expect(readTranscriptRawDelta(scope("missing"))).toEqual({ kind: "missing" });
+  const populated = rawPage(target);
+  await replaceTranscriptEvents(target, []);
+  expect(readTranscriptRawDelta(target, { cursor: populated.cursor })).toMatchObject({
+    kind: "reset",
+    reason: "generation_mismatch",
+  });
+  const empty = rawPage(target);
+  expect(empty).toMatchObject({ kind: "page", events: [], hasMore: false, serializedBytes: 0 });
+  const cursor = JSON.parse(Buffer.from(empty.cursor, "base64url").toString("utf8")) as object;
+  expect(cursor).toMatchObject({ lastSeq: -1 });
+  const beyondEmpty = Buffer.from(JSON.stringify({ ...cursor, lastSeq: 0 })).toString("base64url");
+  expect(readTranscriptRawDelta(target, { cursor: beyondEmpty })).toMatchObject({
+    kind: "reset",
+    reason: "invalid_cursor",
+  });
+  const appended = { type: "custom", id: "after-empty" };
+  await appendTranscriptEvent(target, appended);
+  expect(readTranscriptRawDelta(target, { cursor: empty.cursor })).toMatchObject({
+    kind: "page",
+    events: [{ event: appended, seq: 0 }],
+    hasMore: false,
+  });
+});
+
+it.each([false, true])("keeps public reads committed through writer rollback=%s", (rollback) => {
+  const target = scope("first");
+  const before = readWatermark(target);
+  const database = openOpenClawAgentDatabase(target);
+  const failure = new Error("rollback watermark generation");
+  let generation = before.generation;
+  const write = () =>
+    runOpenClawAgentWriteTransaction((writer) => {
+      generation = rotateGeneration(writer, target.sessionId);
+      expect(readHot(writer, target.sessionId)).toEqual({
         ...before,
-        generation: "peer-generation",
+        generation,
       });
-      executeSqliteQuerySync(
-        peer,
-        db
-          .deleteFrom("session_transcript_cold_archives")
-          .where("session_id", "=", target.sessionId),
-      );
-      expect(read()).toEqual({ ...before, generation: "peer-generation" });
-      expect(database.db.isTransaction).toBe(false);
-    } finally {
-      queries.restore();
-      peer.close();
-    }
+      expect(readWatermark(target)).toEqual(before);
+      if (rollback) {
+        throw failure;
+      }
+    }, target);
+  if (rollback) {
+    expect(write).toThrow(failure);
+  } else {
+    write();
+  }
+  expect(generation).not.toBe(before.generation);
+  expect(database.db.isTransaction).toBe(false);
+  expect(readWatermark(target)).toEqual({
+    ...before,
+    generation: rollback ? before.generation : generation,
   });
+});
 
-  it("prepares for the reopened native handle and rejects the closed one", async () => {
-    const target = scope("first");
-    const database = openOpenClawAgentDatabase(target);
-    const before = readSessionTranscriptWatermark(target);
-    await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
-    expect(database.db.isOpen).toBe(false);
-    expect(() => readSessionTranscriptHotWatermark(database, target.sessionId)).toThrow();
-    const reopened = openOpenClawAgentDatabase(target);
-    expect(Object.is(reopened.db, database.db)).toBe(false);
-    const compile = vi.spyOn(getNodeSqliteKysely(reopened.db).getExecutor(), "compileQuery");
+it("reads hot and cold watermarks once while preserving a WAL snapshot and foreign commits", () => {
+  const target = scope("second");
+  const database = openOpenClawAgentDatabase(target);
+  const before = readWatermark(target);
+  const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
+  const reads = trackQueries(database, (sql) =>
+    /\b(?:transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives)\b/.test(
+      sql,
+    ),
+  );
+  const read = (sessionId = target.sessionId) => {
+    const executions = reads();
+    const watermark = readInDatabase(database, sessionId);
+    expect(reads() - executions).toBe(1);
+    return watermark;
+  };
+  try {
+    const exec = vi.spyOn(database.db, "exec");
     try {
-      expect(readSessionTranscriptWatermark(target)).toEqual(before);
-      expect(readSessionTranscriptWatermark(target)).toEqual(before);
+      expect(read()).toEqual(before);
       expect(
-        compile.mock.results.filter(
-          (result) => result.type === "return" && isHotWatermarkQuery(result.value.sql),
-        ).length,
-      ).toBe(1);
+        exec.mock.calls.filter(([sql]) =>
+          /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql),
+        ),
+      ).toEqual([]);
     } finally {
-      compile.mockRestore();
+      exec.mockRestore();
     }
-  });
+    expect(peer.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    runSqliteDeferredTransactionSync(database.db, () => {
+      expect(read()).toEqual(before);
+      expect(read("missing")).toEqual({ generation: null, maxSeq: null });
+      peer.exec("BEGIN IMMEDIATE");
+      writeGeneration(peer, target.sessionId, "peer-generation");
+      writeArchive(peer, target.sessionId, 0);
+      peer.exec("COMMIT");
+      expect(read()).toEqual(before);
+    });
+    const archived = { generation: "peer-generation", maxSeq: 0 };
+    expect(read()).toEqual(archived);
+    expect(readWatermark(target)).toEqual(archived);
+    expect(readHot(database, target.sessionId)).toEqual({
+      ...before,
+      generation: "peer-generation",
+    });
+    peer
+      .prepare("DELETE FROM session_transcript_cold_archives WHERE session_id = ?")
+      .run(target.sessionId);
+    expect(read()).toEqual({ ...before, generation: "peer-generation" });
+    expect(database.db.isTransaction).toBe(false);
+  } finally {
+    cleanup.pop()?.();
+    peer.close();
+  }
+});
+
+it("prepares for the reopened native handle and rejects the closed one", async () => {
+  const target = scope("first");
+  const database = openOpenClawAgentDatabase(target);
+  const before = readWatermark(target);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
+  expect(database.db.isOpen).toBe(false);
+  expect(() => readHot(database, target.sessionId)).toThrow();
+  const reopened = openOpenClawAgentDatabase(target);
+  expect(Object.is(reopened.db, database.db)).toBe(false);
+  const compiled = compiledQueries(reopened, isHotWatermarkQuery);
+  expect(readWatermark(target)).toEqual(before);
+  expect(readWatermark(target)).toEqual(before);
+  expect(compiled()).toHaveLength(1);
 });

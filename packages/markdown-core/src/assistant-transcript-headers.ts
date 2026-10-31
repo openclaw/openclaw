@@ -1,4 +1,4 @@
-export type AssistantTranscriptRole = "assistant" | "developer" | "system" | "user";
+export type AssistantTranscriptRole = (typeof TRANSCRIPT_ROLES)[number];
 
 export type AssistantTranscriptRoleHeaderKind =
   | "angle_role_header"
@@ -17,12 +17,7 @@ type TextRange = {
   end: number;
 };
 
-const TRANSCRIPT_ROLES: readonly AssistantTranscriptRole[] = [
-  "assistant",
-  "developer",
-  "system",
-  "user",
-];
+const TRANSCRIPT_ROLES = ["assistant", "developer", "system", "user"] as const;
 
 function isHorizontalWhitespace(char: string | undefined): boolean {
   return char === " " || char === "\t";

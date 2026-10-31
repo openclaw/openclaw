@@ -4,7 +4,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -24,6 +24,7 @@ import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-gu
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import type { ModelRequestHeaders } from "../llm/types.js";
 import { bufferToBlobPart } from "../plugin-sdk/blob-runtime.js";
 import {
   executeProviderOperationWithRetry,
@@ -31,6 +32,9 @@ import {
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
+import { truncateOptionalText } from "../shared/text-truncate.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type { AudioTranscriptionRequest } from "./types.js";
 export {
@@ -93,12 +97,23 @@ export function buildAudioTranscriptionFormData(params: {
   return form;
 }
 
-/** Shared absolute deadline state for long-running provider operations and polling loops. */
+/** Serializable epoch deadline; the owner anchors local enforcement to monotonic time. */
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
   label: string;
   timeoutMs?: number;
 };
+
+type ProviderOperationClock = { epochAtMs: number; monotonicAtMs: number };
+const providerOperationClocksKey = Symbol.for("openclaw.providerOperationDeadlineClocks");
+let providerOperationClocks: WeakMap<ProviderOperationDeadline, ProviderOperationClock> | undefined;
+
+function resolveProviderOperationClocks() {
+  return (providerOperationClocks ??= resolveGlobalSingleton(
+    providerOperationClocksKey,
+    () => new WeakMap<ProviderOperationDeadline, ProviderOperationClock>(),
+  ));
+}
 
 /** Static or per-call timeout resolver used by provider HTTP helpers. */
 export type ProviderOperationTimeoutMs = number | (() => number);
@@ -129,11 +144,16 @@ export function createProviderOperationDeadline(params: {
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const deadlineAtMs =
     resolveExpiresAtMsFromDurationMs(resolvedTimeoutMs) ?? resolveDateTimestampMs(Date.now());
-  return {
+  const deadline = {
     deadlineAtMs,
     label: params.label,
     timeoutMs: resolvedTimeoutMs,
   };
+  resolveProviderOperationClocks().set(deadline, {
+    epochAtMs: deadlineAtMs,
+    monotonicAtMs: monotonicDeadlineAfter(resolvedTimeoutMs),
+  });
+  return deadline;
 }
 
 /** Resolves a per-request timeout without exceeding the remaining operation deadline. */
@@ -146,11 +166,19 @@ export function resolveProviderOperationTimeoutMs(params: {
   if (typeof deadlineAtMs !== "number") {
     return defaultTimeoutMs;
   }
-  const remainingMs = deadlineAtMs - Date.now();
+  let clock = resolveProviderOperationClocks().get(params.deadline);
+  if (!clock || clock.epochAtMs !== deadlineAtMs) {
+    clock = {
+      epochAtMs: deadlineAtMs,
+      monotonicAtMs: monotonicDeadlineAfter(deadlineAtMs - Date.now()),
+    };
+    resolveProviderOperationClocks().set(params.deadline, clock);
+  }
+  const remainingMs = remainingMonotonicMs(clock.monotonicAtMs);
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
-  return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
+  return resolveTimerTimeoutMs(Math.min(defaultTimeoutMs, remainingMs), 1);
 }
 
 /** Builds the canonical error for an exhausted provider operation deadline. */
@@ -183,13 +211,12 @@ export async function waitProviderOperationPollInterval(params: {
   deadline: ProviderOperationDeadline;
   pollIntervalMs: number;
 }): Promise<void> {
-  const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 1);
-  const deadlineAtMs = params.deadline.deadlineAtMs;
-  const remainingMs = typeof deadlineAtMs === "number" ? deadlineAtMs - Date.now() : pollIntervalMs;
-  if (remainingMs <= 0) {
-    throw createProviderOperationTimeoutError(params.deadline);
-  }
-  await sleepWithAbort(Math.min(pollIntervalMs, remainingMs));
+  await sleepWithAbort(
+    resolveProviderOperationTimeoutMs({
+      deadline: params.deadline,
+      defaultTimeoutMs: resolveTimerTimeoutMs(params.pollIntervalMs, 1),
+    }),
+  );
 }
 
 /** Poll a provider-owned request without changing its transport or response contract. */
@@ -324,14 +351,10 @@ function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
 }
 
 function sanitizeAuditContext(auditContext: string | undefined): string | undefined {
-  const cleaned = auditContext
-    ?.replace(/\p{Cc}+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return undefined;
-  }
-  return truncateUtf16Safe(cleaned, MAX_AUDIT_CONTEXT_CHARS);
+  return truncateOptionalText(
+    auditContext?.replace(/\p{Cc}+/gu, " ").replace(/\s+/g, " "),
+    MAX_AUDIT_CONTEXT_CHARS,
+  );
 }
 
 type ResolvedProviderHttpRequestConfig = {
@@ -349,30 +372,40 @@ export function resolveProviderHttpRequestConfigWithOriginTrust(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
   allowPrivateNetwork?: boolean;
-  headers?: HeadersInit;
-  defaultHeaders?: Record<string, string>;
+  headers?: HeadersInit | ModelRequestHeaders;
+  defaultHeaders?: ModelRequestHeaders;
   request?: ModelProviderRequestTransportOverrides;
   provider?: string;
   api?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
 }): ResolvedProviderHttpRequestConfigWithOriginTrust {
+  const callerHeaders: ModelRequestHeaders | undefined = params.headers ? {} : undefined;
+  if (callerHeaders && params.headers) {
+    const entries =
+      params.headers instanceof Headers || Array.isArray(params.headers)
+        ? new Headers(params.headers).entries()
+        : Object.entries(params.headers);
+    for (const [name, value] of entries) {
+      if (value !== undefined) {
+        callerHeaders[name] = value;
+      }
+    }
+  }
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
     baseUrl: params.baseUrl,
     defaultBaseUrl: params.defaultBaseUrl,
     capability: params.capability ?? "other",
     transport: params.transport ?? "http",
-    callerHeaders: params.headers
-      ? Object.fromEntries(new Headers(params.headers).entries())
-      : undefined,
+    callerHeaders,
     providerHeaders: params.defaultHeaders,
     precedence: "caller-wins",
     allowPrivateNetwork: params.allowPrivateNetwork,
     api: params.api,
     request: params.request,
   });
-  const headers = new Headers(requestConfig.headers);
+  const headers = new Headers(omitNullRequestHeaders(requestConfig.headers));
   if (!requestConfig.baseUrl) {
     throw new Error("Missing baseUrl: provide baseUrl or defaultBaseUrl");
   }

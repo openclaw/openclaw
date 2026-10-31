@@ -1,4 +1,5 @@
 // Keep IndexedDB outside the startup graph; composers and session deletion load it on demand.
+import { listen } from "../reactive/listener.ts";
 import type {
   ChatGoalDraftMode,
   ChatReplyTarget,
@@ -102,8 +103,10 @@ function isActiveDraft(record: StoredDurableComposerDraft): boolean {
     record.goalMode ||
     record.replyTarget ||
     record.modelSelection ||
+    record.permissionMode ||
     record.attachments.length > 0 ||
-    record.questionDrafts?.length,
+    record.questionDrafts?.length ||
+    record.selectionAnnotations?.length,
   );
 }
 
@@ -117,10 +120,12 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     goalMode: undefined,
     replyTarget: undefined,
     modelSelection: undefined,
+    permissionMode: undefined,
     attachments: [],
     questionDrafts: undefined,
     updatedAt: now,
     writeId: `fence:${revision}`,
+    selectionAnnotations: undefined,
   };
 }
 
@@ -179,7 +184,8 @@ async function sweepExpiredRecords(database: IDBDatabase): Promise<void> {
   const now = Date.now();
   const request = store.openCursor();
   let changed = false;
-  request.addEventListener("success", () => {
+  // Cursor continuation reuses this request until the owning transaction finishes.
+  listen(request, "success", () => {
     try {
       const cursor = request.result;
       if (!cursor) {
@@ -238,6 +244,7 @@ function isLegacyChatDraft(record: StoredDurableComposerDraft): boolean {
   return (
     !record.scopeKey.startsWith(CHAT_SCOPE_PREFIX) &&
     !record.scopeKey.startsWith("questions:v1:") &&
+    !record.scopeKey.startsWith("comments:v1:") &&
     record.scopeKey.includes("\u0000agent:") &&
     isActiveDraft(record)
   );
@@ -320,8 +327,8 @@ export async function prepareDurableComposerRecovery(
           writeId: record.writeId,
           updatedAt: record.updatedAt,
           text: record.text,
-          ...(record.goalMode ? { goalMode: { ...record.goalMode } } : {}),
-          ...(record.replyTarget ? { replyTarget: { ...record.replyTarget } } : {}),
+          ...(record.goalMode ? { goalMode: record.goalMode } : {}),
+          ...(record.replyTarget ? { replyTarget: record.replyTarget } : {}),
           attachmentNames: record.attachments.map((a) => a.fileName ?? a.mimeType),
         });
       }
@@ -464,10 +471,14 @@ export async function readDurableComposerDraft(
         text: current.text,
         ...(current.mentions?.length ? { mentions: current.mentions } : {}),
         ...(current.goalMode ? { goalMode: current.goalMode } : {}),
-        ...(current.replyTarget ? { replyTarget: { ...current.replyTarget } } : {}),
+        ...(current.replyTarget ? { replyTarget: current.replyTarget } : {}),
         ...(current.modelSelection ? { modelSelection: current.modelSelection } : {}),
+        ...(current.permissionMode ? { permissionMode: current.permissionMode } : {}),
         attachments: current.attachments,
         ...(current.questionDrafts?.length ? { questionDrafts: current.questionDrafts } : {}),
+        ...(current.selectionAnnotations?.length
+          ? { selectionAnnotations: current.selectionAnnotations }
+          : {}),
       },
     };
   });
@@ -527,14 +538,16 @@ export async function writeDurableComposerDraft(
       scopeKey: scope.scopeKey,
       revision: draft.revision,
       text: draft.text,
-      ...(draft.mentions?.length
-        ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
-        : {}),
+      ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
-      ...(draft.replyTarget ? { replyTarget: { ...draft.replyTarget } } : {}),
-      ...(draft.modelSelection ? { modelSelection: { ...draft.modelSelection } } : {}),
+      ...(draft.replyTarget ? { replyTarget: draft.replyTarget } : {}),
+      ...(draft.modelSelection ? { modelSelection: draft.modelSelection } : {}),
+      ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
       attachments: draft.attachments,
       ...(draft.questionDrafts?.length ? { questionDrafts: draft.questionDrafts } : {}),
+      ...(draft.selectionAnnotations?.length
+        ? { selectionAnnotations: draft.selectionAnnotations }
+        : {}),
       updatedAt: now,
       writeId: options.writeId,
     };
@@ -582,6 +595,13 @@ async function retireDurableDraftInStore(
     await retireDurableDraftInStore(
       store,
       { ...scope, scopeKey: `questions:v1:${scope.scopeKey}` },
+      minimumRevision,
+      retireBeforeRevision,
+      now,
+    );
+    await retireDurableDraftInStore(
+      store,
+      { ...scope, scopeKey: `comments:v1:${scope.scopeKey}` },
       minimumRevision,
       retireBeforeRevision,
       now,

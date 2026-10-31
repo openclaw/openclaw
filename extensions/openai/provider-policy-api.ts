@@ -1,6 +1,8 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
-import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
-import { supportsOpenAIResponsesFastMode } from "openclaw/plugin-sdk/provider-model-metadata";
+import {
+  normalizeModelCatalog,
+  supportsOpenAIResponsesFastMode,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelApi,
   ModelProviderConfig,
@@ -13,9 +15,9 @@ import type {
   ProviderResolveModelRoutesContext,
 } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { OPENAI_PRE_GPT5_MODEL_ID_PATTERN } from "./account-models.js";
 import {
   classifyOpenAIBaseUrl,
-  isOpenAICodexBaseUrl,
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
@@ -27,6 +29,7 @@ import {
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
@@ -53,6 +56,9 @@ const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_COMPLETIONS_API = "openai-completions";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_MODEL_CATALOG = normalizeModelCatalog(manifest.modelCatalog, {
+  ownedProviders: new Set([OPENAI_PROVIDER_ID]),
+});
 const OPENAI_AGENT_RUNTIME_ID = "openclaw";
 const CODEX_AGENT_RUNTIME_ID = "codex";
 const OPENCLAW_RUNTIME_COMPATIBLE_IDS = [OPENAI_AGENT_RUNTIME_ID] as const;
@@ -113,31 +119,6 @@ export function resolveAuthoredOpenAIProviderConfig(params: {
       : candidate;
   }
   return providerConfig;
-}
-
-/**
- * Skips full runtime loading only when OpenAI normalization is provably a no-op.
- * Transport-sensitive routes and legacy model aliases still use the runtime hook.
- */
-export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelContext) {
-  if (ctx.provider.trim().toLowerCase() !== OPENAI_PROVIDER_ID) {
-    return undefined;
-  }
-  const configuredProvider = resolveAuthoredOpenAIProviderConfig(ctx);
-  const configuredApi = normalizeOptionalRouteApi(configuredProvider?.api);
-  const modelId = ctx.model.id;
-  const canonicalModelId = normalizeOpenAIModelRouteId(modelId);
-  const canonicalRouteId = normalizeOpenAIModelRouteId(ctx.modelId);
-  if (
-    (configuredApi !== undefined && configuredApi !== OPENAI_RESPONSES_API) ||
-    ctx.model.api !== OPENAI_RESPONSES_API ||
-    isOpenAICodexBaseUrl(ctx.model.baseUrl) ||
-    canonicalModelId !== modelId ||
-    canonicalRouteId !== ctx.modelId
-  ) {
-    return undefined;
-  }
-  return null;
 }
 
 export function projectRealtimeVoicePublicProjection(ctx: {
@@ -207,21 +188,34 @@ function codexCanReproduceRoute(candidate: ProviderModelRouteCandidate): boolean
   );
 }
 
-function withRuntimePolicy(candidate: ProviderModelRouteCandidate): ProviderModelRouteCandidate {
+function withRuntimePolicy(
+  candidate: ProviderModelRouteCandidate,
+  modelId?: string,
+): ProviderModelRouteCandidate {
+  const compatibleIds = codexCanReproduceRoute(candidate)
+    ? candidate.authRequirement === "api-key"
+      ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
+      : CODEX_RUNTIME_COMPATIBLE_IDS
+    : OPENCLAW_RUNTIME_COMPATIBLE_IDS;
+  // Codex's native Code Mode emits custom tools, which pre-GPT-5 models reject.
+  // model/list does not expose its tool_mode or freeform-tool capability.
+  const requiresFunctionTools = OPENAI_PRE_GPT5_MODEL_ID_PATTERN.test(
+    (modelId ?? "").toLowerCase().replace(/^openai\//, ""),
+  );
   return {
     ...candidate,
     runtimePolicy: {
-      compatibleIds: codexCanReproduceRoute(candidate)
-        ? candidate.authRequirement === "api-key"
-          ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
-          : CODEX_RUNTIME_COMPATIBLE_IDS
-        : OPENCLAW_RUNTIME_COMPATIBLE_IDS,
+      compatibleIds: requiresFunctionTools
+        ? compatibleIds.filter((id) => id !== CODEX_AGENT_RUNTIME_ID)
+        : compatibleIds,
     },
   };
 }
 
 function defaultRuntimeIdForRoute(candidate: ProviderModelRouteCandidate): string {
-  return codexCanReproduceRoute(candidate) ? CODEX_AGENT_RUNTIME_ID : OPENAI_AGENT_RUNTIME_ID;
+  return candidate.runtimePolicy?.compatibleIds.includes(CODEX_AGENT_RUNTIME_ID)
+    ? CODEX_AGENT_RUNTIME_ID
+    : OPENAI_AGENT_RUNTIME_ID;
 }
 
 function route(
@@ -308,11 +302,24 @@ function resolveSingleObservedModelRoute(
     };
   }
   const chatGPTApi = effectiveApi?.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API;
+  const modelId = normalizeOpenAIModelRouteId(context.modelId);
+  const knownRouteContract =
+    isOpenAIDualRouteModelId(modelId) ||
+    isOpenAIPlatformOnlyRouteModelId(modelId) ||
+    isOpenAISubscriptionOnlyRouteModelId(modelId);
 
   // A custom endpoint owns its protocol contract. Subscription egress always
   // requires authored ChatGPT intent; observed Platform adapters remain safe
-  // API-key fallbacks for otherwise unspecified custom routes.
-  if (endpointKind === "custom") {
+  // API-key fallbacks for otherwise unspecified custom routes. A known model
+  // with no authored route keeps the official contract: a stale catalog row
+  // is not a relay and must not take the turn down.
+  const staleCustomChatGPTCatalog =
+    endpointKind === "custom" &&
+    chatGPTApi &&
+    !authored?.chatGPTApi &&
+    !configuredRoute &&
+    knownRouteContract;
+  if (endpointKind === "custom" && !staleCustomChatGPTCatalog) {
     if (chatGPTApi && !authored?.chatGPTApi) {
       return {
         kind: "incompatible",
@@ -374,25 +381,30 @@ function resolveSingleObservedModelRoute(
     };
   }
 
-  const modelId = normalizeOpenAIModelRouteId(context.modelId);
   // Retain Completions for API-key callers; older configs also used this
   // adapter while Codex selected subscription credentials independently.
   const platformApi =
     configuredRoute && effectiveApi === OPENAI_COMPLETIONS_API
       ? OPENAI_COMPLETIONS_API
       : OPENAI_RESPONSES_API;
-  const platformRoute = withRuntimePolicy({
-    api: platformApi,
-    baseUrl: OPENAI_API_BASE_URL,
-    authRequirement: "api-key",
-    requestTransportOverrides,
-  });
-  const chatGPTRoute = withRuntimePolicy({
-    api: OPENAI_CHATGPT_RESPONSES_API,
-    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-    authRequirement: "subscription",
-    requestTransportOverrides,
-  });
+  const platformRoute = withRuntimePolicy(
+    {
+      api: platformApi,
+      baseUrl: OPENAI_API_BASE_URL,
+      authRequirement: "api-key",
+      requestTransportOverrides,
+    },
+    modelId,
+  );
+  const chatGPTRoute = withRuntimePolicy(
+    {
+      api: OPENAI_CHATGPT_RESPONSES_API,
+      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+      authRequirement: "subscription",
+      requestTransportOverrides,
+    },
+    modelId,
+  );
   const platformOnly = isOpenAIPlatformOnlyRouteModelId(modelId);
   const subscriptionOnly = isOpenAISubscriptionOnlyRouteModelId(modelId);
   const dualRoute = isOpenAIDualRouteModelId(modelId);
@@ -440,8 +452,7 @@ function resolveSingleObservedModelRoute(
   if (!configuredRoute && !hasObservedRoute) {
     return {
       kind: "indeterminate",
-      defaultRuntimeId:
-        requestTransportOverrides === "present" ? OPENAI_AGENT_RUNTIME_ID : CODEX_AGENT_RUNTIME_ID,
+      defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute),
     };
   }
   return route(platformRoute);
@@ -587,6 +598,47 @@ function resolveModelRouteCandidates(
 export function resolveModelRoutes(
   context: ProviderResolveModelRoutesContext,
 ): ProviderModelRouteResolution {
+  if (context.capability === "decision") {
+    // Decisions uses Platform auth even when the model's chat route prefers Codex.
+    // Authored destinations still win; never reinterpret a ChatGPT endpoint as Platform.
+    const baseUrl =
+      firstRouteBaseUrl(context.configuredModel?.baseUrl) ??
+      firstRouteBaseUrl(context.configuredProvider?.baseUrl) ??
+      firstRouteBaseUrl((context.env ?? process.env).OPENAI_BASE_URL) ??
+      OPENAI_API_BASE_URL;
+    const kind = classifyOpenAIBaseUrl(baseUrl);
+    const model = OPENAI_MODEL_CATALOG?.providers?.openai?.models.find(
+      (entry) => entry.id === context.modelId,
+    );
+    if (
+      context.provider !== OPENAI_PROVIDER_ID ||
+      kind === "chatgpt" ||
+      kind === "invalid" ||
+      !model?.inference?.decision
+    ) {
+      return {
+        kind: "incompatible",
+        code: "unsupported-openai-decision-route",
+        message:
+          "OpenAI Decisions requires a supported model and a Platform or custom API endpoint.",
+      };
+    }
+    return {
+      kind: "routes",
+      routes: [
+        {
+          api: OPENAI_RESPONSES_API,
+          baseUrl:
+            kind === "platform"
+              ? OPENAI_API_BASE_URL
+              : concreteBaseUrl(baseUrl, OPENAI_API_BASE_URL),
+          authRequirement: "api-key",
+          requestTransportOverrides: context.requestTransportOverrides ?? "none",
+          inference: model.inference,
+        },
+      ],
+    };
+  }
   const resolution = resolveModelRouteCandidates(context);
   if (resolution.kind !== "routes" || resolution.routes.length < 2) {
     return resolution;
@@ -622,10 +674,6 @@ export function resolveModelRoutes(
     ...resolution,
     preferredAuthRequirement,
   };
-}
-
-export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
-  return params.providerConfig;
 }
 
 export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyContext) {

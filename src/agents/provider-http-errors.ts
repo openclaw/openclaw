@@ -4,6 +4,7 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readTransportDiagnosticLabel } from "../../packages/ai/src/utils/provider-error.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   readResponseTextPrefix,
@@ -108,6 +109,8 @@ type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
   /** Credentials that must not appear in malformed-response diagnostics. */
   requestHeaders?: HeadersInit;
+  /** Caller-facing message for malformed JSON or a non-object JSON response. */
+  malformedResponseError?: string;
 };
 
 function readProviderResponseBytes(
@@ -158,14 +161,14 @@ export function summarizeProviderTransportError(error: unknown): string {
     return `type=${typeof error}`;
   }
   const cause = asOptionalObjectRecord(record.cause);
-  const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
-  return [
-    `name=${read(record.name)}`,
-    `code=${read(record.code)}`,
-    `causeName=${read(cause?.name)}`,
-    `causeCode=${read(cause?.code)}`,
-    `message=${error instanceof Error ? error.message : read(record.message)}`,
-  ].join(" ");
+  return Object.entries({
+    name: readTransportDiagnosticLabel(record.name),
+    code: readTransportDiagnosticLabel(record.code),
+    causeName: readTransportDiagnosticLabel(cause?.name),
+    causeCode: readTransportDiagnosticLabel(cause?.code),
+  })
+    .flatMap(([key, value]) => (value === undefined ? [] : [`${key}=${value}`]))
+    .join(" ");
 }
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
@@ -441,11 +444,13 @@ export async function readProviderJsonResponse<T>(
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
-    // oxlint-disable-next-line preserve-caught-error -- Parser causes can quote partial credentials; header-bearing failures must omit them.
-    throw new Error(
+    const error = new Error(
       `${label}: malformed JSON response`,
       opts?.requestHeaders ? undefined : { cause },
     );
+    throw opts?.malformedResponseError === undefined
+      ? error
+      : new Error(opts.malformedResponseError, { cause: error });
   }
 }
 
@@ -457,7 +462,7 @@ export async function readProviderJsonObjectResponse(
   const payload = await readProviderJsonResponse<unknown>(response, label, opts);
   const object = asOptionalRecord(payload);
   if (!object) {
-    throw new Error(`${label}: malformed JSON response`);
+    throw new Error(opts?.malformedResponseError ?? `${label}: malformed JSON response`);
   }
   return object;
 }

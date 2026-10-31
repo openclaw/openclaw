@@ -5,7 +5,7 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-Nextcloud Talk is a downloadable channel plugin (`@openclaw/nextcloud-talk`) that connects OpenClaw to a self-hosted Nextcloud instance through a Talk webhook bot. Direct messages, rooms, reactions, markdown messages, and inbound Talk file shares are supported; outbound media goes out as URLs.
+Nextcloud Talk is a downloadable channel plugin (`@openclaw/nextcloud-talk`) that connects OpenClaw to a self-hosted Nextcloud instance through a Talk webhook bot. Direct messages, rooms, reactions, markdown messages, and inbound and outbound Talk file shares are supported.
 
 ## Install
 
@@ -116,7 +116,7 @@ Minimal config:
 - The webhook URL must be reachable from the Nextcloud server. The Gateway serves `webhookPath` on its own HTTP port. Existing installations may retain an explicit `legacyWebhook` pin for the former port `8788`; new installations open no separate port. Set `webhookPublicUrl` to the bot's external callback URL when using a proxy. Webhook requests are HMAC-SHA256 signed with the bot secret; invalid signatures are rejected and rate limited.
 - Message webhooks return HTTP 200 only after the raw event is durably stored; storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable`, so reverse proxies can require the marker to distinguish OpenClaw acceptance from a generic `200`. Unsupported non-message events return HTTP 200 without the marker and are logged as ignored.
 - The webhook listener admits at most 64 concurrent unauthenticated body reads; overflow requests receive `HTTP/1.1 429` with `Connection: close`. Requests on one keep-alive connection are answered in order, so a queued delivery's `200` acknowledgement always flushes before any overflow rejection closes the socket. The 64-read budget is fixed and not configurable. Accounts sharing a Gateway pathname share its admission and failed-authentication budgets; each retained legacy host and port keeps independent budgets. Deployments that regularly saturate it should reduce or buffer upstream concurrency (for example, cap reverse-proxy fan-in toward the listener) and accept that deliveries refused during saturation may be lost.
-- Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
+- The bot API sends text and reactions. Native outbound attachments use the configured API account instead (see [Outbound attachments](#outbound-attachments)).
 - The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room. Inbound attachment retrieval also requires this API account.
 - Network fetches, including authenticated inbound attachment requests and outbound requests, go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
 - With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` checks the bot and warns when the `response` feature is missing.
@@ -195,7 +195,7 @@ the main Gateway port keeps its existing JSON check responses.
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
 - Public DMs: `channels.nextcloud-talk.dmPolicy="open"` plus `channels.nextcloud-talk.allowFrom=["*"]`.
-- `allowFrom` matches Nextcloud user IDs only (lowercased); display names are ignored.
+- Sender allowlists accept bare Nextcloud user IDs (`alice`) or typed Talk actor IDs (`users/alice`), case-insensitively; display names are ignored. This applies to `allowFrom`, `groupAllowFrom`, room `allowFrom`, `mediaAllowFrom`, and configured approvers. Other actor types such as `guests/alice` remain distinct from `alice`.
 
 ## Rooms (groups)
 
@@ -217,15 +217,71 @@ the main Gateway port keeps its existing JSON check responses.
 - Per-room keys: `requireMention` (default true), `enabled` (false disables the room), `allowFrom` (per-room sender allowlist), `tools` (allow/deny tool overrides), `skills` (limit loaded skills), `systemPrompt`.
 - To allow no rooms, keep the allowlist empty or set `channels.nextcloud-talk.groupPolicy="disabled"`.
 
+## Quoted replies
+
+On Talk 21 and later, text-reply webhooks can include the quoted message's text
+and author. OpenClaw includes that immediate parent as untrusted reply context,
+subject to the existing context-visibility policy. The quote does not change the
+current sender, command text, mention requirements, session or outgoing reply
+target. No additional API credentials or history request are needed.
+
+Quoted files contribute only their caption or filename, not a new download or
+transcription. Older webhooks and malformed optional quotes keep normal message
+handling. Talk's file/voice Activity webhooks may omit the parent; OpenClaw does
+not fetch or infer missing quote context.
+
 ## Inbound file shares
 
 - Share the file into the Talk conversation to notify the bot. Uploading it only to Nextcloud Files, or creating a Files share without posting it in Talk, does not emit a supported Talk file-share webhook.
 - `channels.nextcloud-talk.mediaAllowFrom` is an account-level allowlist of Nextcloud user IDs whose attachments may be downloaded and processed. It fails closed when omitted or empty at the channel root. Named accounts inherit the root setting when omitted; an explicit empty list denies that account’s media. Use `["*"]` only when every otherwise-authorized sender may send media.
 - This media gate never expands access. The ordinary DM/group, room, sender, and mention requirements must admit the message first. When only the media gate denies an attachment, the file is not downloaded, but an otherwise-admissible caption continues through the ordinary text path.
-- `channels.nextcloud-talk.mediaMaxMb` limits inbound staging and outbound media size. When unset, it falls back to `agents.defaults.mediaMaxMb` (default: 20 MB).
+- `channels.nextcloud-talk.mediaMaxMb` limits inbound staging and outbound media size. Positive fractional limits are rounded down to whole bytes. When unset, it falls back to `agents.defaults.mediaMaxMb` (default: 20 MB).
 - Talk's webhook link must be on the exact configured `baseUrl` origin (same scheme, hostname, and effective port). Because Talk room shares are participant-only, OpenClaw uses the configured `apiUser`/API password to reread the exact room message without changing its read, notification, or online state; verify its file metadata against the signed webhook; resolve the account's canonical Nextcloud user ID; and verify the WebDAV file ID before retrieving the file. The API account must be able to access the room share; no sender credentials are requested or used.
 - Authenticated attachment requests never follow redirects. Talk's `hide-download` restriction, the existing SSRF/private-network policy, and the configured byte limit remain enforced before or during staging.
 - After media authorization, a hidden, malformed, wrong-origin, unavailable, or oversize file is omitted from media context. Its caption continues with a generic attachment-unavailable marker for the agent, while the specific bounded reason is logged for operators.
+
+## Outbound attachments
+
+Bot-only accounts keep the existing URL-text delivery for HTTP(S) attachment
+links; OpenClaw does not fetch or upload those links. This is not a native file
+share. Local files and non-web locations require the API account below and are
+never posted as local path text. URLs containing embedded credentials are not
+eligible for bot-only delivery.
+
+Native attachments require `apiUser` and `apiPassword` (or `apiPasswordFile`) for
+that channel account. The bot shared secret alone cannot upload or share files.
+Use a dedicated Nextcloud user with an app password, writable Files storage and
+sufficient quota, and add it as a participant with permission to chat in every
+target room. OpenClaw does not add the user to rooms or create public-link shares.
+Partially configured or unavailable API credentials produce an error rather
+than silently falling back to URL delivery. Native upload/share failures also
+never trigger a second bot send.
+
+Files appear as messages from the **API user**, not the webhook bot. Text-only
+replies continue to use the bot. Captions and reply references are included in the
+native file share when supported by the server; ordinary audio is sent as a file,
+not relabeled as a voice note.
+
+Explicit voice replies (`message` with `asVoice: true`, or the existing TTS reply
+flow) use Talk's native voice-note presentation for MP3 and WAV audio. They require
+the same API account as native attachments; a bot-only URL link is not a voice
+note. Captions and reply references are preserved. Other formats remain ordinary
+attachments, even when voice delivery is requested; OpenClaw does not transcode
+them or relabel non-audio files as speech. Voice synthesis still uses your existing
+TTS configuration and does not enable automatic spoken replies by itself.
+
+OpenClaw loads attachments through its shared outbound media policy, including
+approved local-file roots and `mediaMaxMb`. It uploads a uniquely named file to
+`OpenClaw/` in the API user's Files, without overwriting existing files, and grants
+the target conversation read access. Successful files remain there so recipients
+can continue to download them; remove them manually when no longer needed.
+
+If sharing has started but chat delivery cannot be confirmed, OpenClaw reports
+uncertain delivery and retains the upload. Check the room before retrying: the
+Nextcloud share API is not idempotent, and retrying can post a duplicate. An
+unshared upload is cleaned up when preparation fails before sharing. Own file
+webhooks are recognized without ignoring the API user's other messages; delayed
+echo recognition depends on retaining the account's bot secret.
 
 ## Release qualification for attachment support
 
@@ -269,16 +325,27 @@ The package-version sync and install/discovery regression tests exercise the
 local enforcement path. Registry readback, actual stock-runtime tests, and release
 SDK acknowledgement remain release-time responsibilities.
 
+## Silent sends
+
+Use the message tool's `silent: true` option to post text or attachments without
+creating Talk chat notifications, including mention notifications. Messages remain
+visible in the conversation. Omitted or false keeps normal notification behavior;
+no channel configuration change is needed.
+
+Silent attachments require the server's `media-caption` capability (Talk 18+).
+OpenClaw checks this before reading or uploading the attachment and reports an
+error if support cannot be confirmed, rather than falling back to a notifying send.
+
 ## Capabilities
 
-| Feature         | Status                                 |
-| --------------- | -------------------------------------- |
-| Direct messages | Supported                              |
-| Rooms           | Supported                              |
-| Threads         | Not supported                          |
-| Media           | Inbound file shares; outbound URL-only |
-| Reactions       | Supported                              |
-| Native commands | Not supported                          |
+| Feature         | Status                           |
+| --------------- | -------------------------------- |
+| Direct messages | Supported                        |
+| Rooms           | Supported                        |
+| Threads         | Not supported                    |
+| Media           | Inbound and outbound file shares |
+| Reactions       | Supported                        |
+| Native commands | Not supported                    |
 
 ## Configuration reference (Nextcloud Talk)
 
@@ -290,8 +357,8 @@ Provider options:
 - `channels.nextcloud-talk.baseUrl`: Nextcloud instance URL.
 - `channels.nextcloud-talk.botSecret`: bot shared secret (string or secret reference).
 - `channels.nextcloud-talk.botSecretFile`: regular-file secret path. Symlinks are rejected.
-- `channels.nextcloud-talk.apiUser`: API login for room lookups (DM detection), the status check, and authorized inbound attachment retrieval. OpenClaw resolves the login to its canonical Nextcloud user ID for WebDAV paths.
-- `channels.nextcloud-talk.apiPassword`: API/app password for authenticated room lookups and inbound attachment retrieval.
+- `channels.nextcloud-talk.apiUser`: API login for room lookups (DM detection), the status check, and authorized inbound/outbound attachments. OpenClaw resolves the login to its canonical Nextcloud user ID for WebDAV paths.
+- `channels.nextcloud-talk.apiPassword`: API/app password for authenticated room lookups, inbound attachment retrieval, and outbound file uploads/shares.
 - `channels.nextcloud-talk.apiPasswordFile`: API password file path.
 - `channels.nextcloud-talk.legacyWebhook`: `false | { port, host? }`. An object opens a forwarding listener; `host` defaults to `0.0.0.0`. Omitted or `false` opens no listener. Named accounts inherit the root setting unless they override it.
 - `channels.nextcloud-talk.webhookPath`: webhook path (default: /nextcloud-talk-webhook).

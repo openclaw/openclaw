@@ -1,10 +1,7 @@
-import { createEffect, createMemo } from "solid-js";
+import { useContext } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
-import { createIdleImport } from "../lib/idle-import.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
-import type { SessionBackground } from "./session-background.ts";
-
-const renderer = createIdleImport(() => import("./session-background.ts"));
+import { createBackgroundActivation, SessionBackground } from "./session-background-host.tsx";
+import { SessionBackgroundLayoutContext } from "./session-background-layout-context.tsx";
 
 type Props = {
   context?: ApplicationContext;
@@ -14,33 +11,16 @@ type Props = {
 
 /** Unset/None startup needs no image renderer, styles, transport, or geometry work. */
 export function SessionBackgroundView(props: Props) {
-  const theme = createMemo(() => props.context?.theme);
-  const background = createMemo(() => {
-    const source = theme();
-    return source && projectOwner(source, (owner) => owner.settings.background);
-  });
-  const active = createMemo(() => {
-    const preference = background()?.read();
-    return Boolean(
-      props.presented !== false &&
-      preference &&
-      preference.source.kind !== "none" &&
-      preference.visibility > 0 &&
-      (props.surface === "new-session" ? preference.showOnNewSession : preference.showInSessions),
-    );
-  });
-  createEffect(active, (value) => {
-    if (value) {
-      void renderer.load().catch(() => undefined);
-    }
-  });
+  const layout = useContext(SessionBackgroundLayoutContext);
+  const active = createBackgroundActivation(props);
   return (
-    <openclaw-session-background
+    <SessionBackground
       aria-hidden="true"
       hidden={!active()}
-      prop:context={props.context}
-      prop:surface={props.surface}
-      prop:presented={props.presented !== false}
+      context={props.context}
+      surface={props.surface}
+      presented={props.presented !== false}
+      layoutTargets={layout?.targets()}
     />
   );
 }
@@ -52,6 +32,7 @@ declare module "@solidjs/web" {
         "prop:context"?: ApplicationContext;
         "prop:surface"?: SessionBackground["surface"];
         "prop:presented"?: boolean;
+        "prop:layoutTargets"?: SessionBackground["layoutTargets"];
       };
     }
   }

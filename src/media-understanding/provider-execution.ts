@@ -65,17 +65,12 @@ export function resolveProviderRequestContext(params: {
 }
 
 const loadModelAuth = createLazyRuntimeModule(async () => {
-  const {
-    hasAvailableAuthForProvider,
-    isProviderAuthError,
-    requireApiKey,
-    resolveApiKeyForProviderCore,
-  } = await import("../agents/model-auth.js");
+  const modelAuth = await import("../agents/model-auth.js");
   return {
-    hasAvailableAuthForProvider,
-    isProviderAuthError,
-    requireApiKey,
-    resolveApiKeyForProviderCore,
+    hasAvailableAuthForProvider: modelAuth.hasAvailableAuthForProvider,
+    isProviderAuthError: modelAuth.isProviderAuthError,
+    requireApiKey: modelAuth.requireApiKey,
+    resolveApiKeyForProviderCore: modelAuth.resolveApiKeyForProviderCore,
   };
 });
 

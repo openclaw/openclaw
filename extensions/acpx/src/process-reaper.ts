@@ -57,7 +57,6 @@ type AcpxProcessInfo = {
 };
 
 type AcpxProcessCleanupResult = {
-  inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?:
     | "missing-root"
@@ -69,7 +68,6 @@ type AcpxProcessCleanupResult = {
 };
 
 type AcpxStartupReapResult = {
-  inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "unsupported-platform" | "process-list-unavailable";
 };
@@ -211,16 +209,20 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   return processes;
 }
 
-async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
+async function listPlatformProcesses(): Promise<AcpxProcessInfo[] | undefined> {
   if (process.platform === "win32") {
     return [];
   }
-  const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
-    logOutput: false,
-    maxBuffer: 8 * 1024 * 1024,
-    timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
-  });
-  return parseProcessList(stdout);
+  try {
+    const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
+      maxBuffer: 8 * 1024 * 1024,
+      timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
+    });
+    return parseProcessList(stdout);
+  } catch {
+    return undefined;
+  }
 }
 
 function collectProcessTree(processes: AcpxProcessInfo[], rootPid: number): AcpxProcessInfo[] {
@@ -303,18 +305,15 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
 }): Promise<AcpxProcessCleanupResult> {
   const rootPid = params.rootPid;
   if (!rootPid || rootPid <= 0 || rootPid === process.pid) {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
+    return { terminatedPids: [], skippedReason: "missing-root" };
   }
   if (process.platform === "win32") {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
+    return { terminatedPids: [], skippedReason: "unsupported-platform" };
   }
 
-  let processes: AcpxProcessInfo[];
-  try {
-    processes = await listPlatformProcesses();
-  } catch {
+  const processes = await listPlatformProcesses();
+  if (!processes) {
     return {
-      inspectedPids: [],
       terminatedPids: [],
       skippedReason: "process-list-unavailable",
     };
@@ -325,7 +324,7 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   // that this PID still belongs to an OpenClaw-owned wrapper, fail closed to
   // avoid killing an unrelated process after PID reuse.
   if (listedTree.length === 0) {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "unverified-root" };
+    return { terminatedPids: [], skippedReason: "unverified-root" };
   }
   const rootCommand = listedTree[0]?.command ?? params.rootCommand;
   const liveCommandWasGeneratedWrapper = commandMentionsGeneratedWrapper(
@@ -349,7 +348,6 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
     })
   ) {
     return {
-      inspectedPids: listedTree.map((processInfo) => processInfo.pid),
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     };
@@ -357,7 +355,6 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
 
   const pids = uniquePids(listedTree.toReversed());
   return {
-    inspectedPids: uniquePids(listedTree),
     terminatedPids: await terminatePids(pids, params.assertCurrent),
   };
 }
@@ -371,18 +368,15 @@ export async function cleanupOpenClawOwnedAcpxPendingLease(params: {
   assertCurrent?: () => void;
 }): Promise<AcpxProcessCleanupResult> {
   if (process.platform === "win32") {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
+    return { terminatedPids: [], skippedReason: "unsupported-platform" };
   }
   if (!params.wrapperPath || !wrapperPathBelongsToRoot(params.wrapperPath, params.wrapperRoot)) {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "unverified-root" };
+    return { terminatedPids: [], skippedReason: "unverified-root" };
   }
 
-  let processes: AcpxProcessInfo[];
-  try {
-    processes = await listPlatformProcesses();
-  } catch {
+  const processes = await listPlatformProcesses();
+  if (!processes) {
     return {
-      inspectedPids: [],
       terminatedPids: [],
       skippedReason: "process-list-unavailable",
     };
@@ -398,11 +392,10 @@ export async function cleanupOpenClawOwnedAcpxPendingLease(params: {
       }),
   );
   if (matchingRoots.length === 0) {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
+    return { terminatedPids: [], skippedReason: "missing-root" };
   }
   if (matchingRoots.length > 1) {
     return {
-      inspectedPids: uniquePids(matchingRoots),
       terminatedPids: [],
       skippedReason: "ambiguous-root",
     };
@@ -411,7 +404,6 @@ export async function cleanupOpenClawOwnedAcpxPendingLease(params: {
   const listedTree = collectProcessTree(processes, matchingRoots[0]!.pid);
   const pids = uniquePids(listedTree.toReversed());
   return {
-    inspectedPids: uniquePids(listedTree),
     terminatedPids: await terminatePids(pids, params.assertCurrent),
   };
 }
@@ -422,14 +414,12 @@ export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   assertCurrent?: () => void;
 }): Promise<AcpxStartupReapResult> {
   if (process.platform === "win32") {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
+    return { terminatedPids: [], skippedReason: "unsupported-platform" };
   }
 
-  let processes: AcpxProcessInfo[];
-  try {
-    processes = await listPlatformProcesses();
-  } catch {
-    return { inspectedPids: [], terminatedPids: [], skippedReason: "process-list-unavailable" };
+  const processes = await listPlatformProcesses();
+  if (!processes) {
+    return { terminatedPids: [], skippedReason: "process-list-unavailable" };
   }
 
   const orphans = processes.filter(
@@ -448,10 +438,8 @@ export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   // each tree, so adapter grandchildren do not survive as fresh orphans after
   // the wrapper root exits.
   const orphanTrees = orphans.map((orphan) => collectProcessTree(processes, orphan.pid));
-  const inspectedPids = uniquePids(orphanTrees.flat());
   const pids = uniquePids(orphanTrees.flatMap((tree) => tree.toReversed()));
   return {
-    inspectedPids,
     terminatedPids: await terminatePids(pids, params.assertCurrent),
   };
 }

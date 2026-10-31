@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -243,9 +244,9 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         }
         release.resolve();
         await run;
-        const writtenFiles = (
-          await fs.readdir(mediaDir, { recursive: true, withFileTypes: true })
-        ).filter((entry) => entry.isFile());
+        const writtenFiles = (await listDirectoryTreeStrict(mediaDir))
+          .map((walkEntry) => walkEntry.dirent)
+          .filter((entry) => entry.isFile());
         if (revoke) {
           expect(mediaFetchMock).toHaveBeenCalledTimes(3);
           expect(refresh).not.toHaveBeenCalled();
@@ -349,9 +350,9 @@ describe("Slack native history sender policy through monitor dispatch", () => {
       expect(replyMock).not.toHaveBeenCalled();
       expect(sendMock).not.toHaveBeenCalled();
       expect(
-        (await fs.readdir(mediaDir, { recursive: true, withFileTypes: true })).filter((entry) =>
-          entry.isFile(),
-        ),
+        (await listDirectoryTreeStrict(mediaDir))
+          .map((walkEntry) => walkEntry.dirent)
+          .filter((entry) => entry.isFile()),
       ).toEqual([]);
     } finally {
       releaseDirect.resolve();
