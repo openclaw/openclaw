@@ -207,7 +207,9 @@ renders the richer footer described below.
 context window, and cost when those fields are available. No template file is
 required for the built-in footer.
 Context windows of one million tokens or more use `m` units, such as `1.0m` or
-`2.0m`; smaller windows keep `k` units, such as `200k`.
+`2.0m`. Smaller windows keep `k` units, such as `200k`, except that a window
+which rounds up to 1000 thousands (`999500` and above) also prints in `m`, so it
+reads `1.0m` rather than `1000k`.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in
@@ -359,6 +361,10 @@ Pipe a value through verbs left to right; a non-verb segment is the fallback.
 
 `fixed:N` accepts only a complete decimal integer from 0 through 100. Invalid
 precision arguments make that interpolation empty.
+
+`num` shares the compact token formatter's unit rollover: from `999500` up, a
+count that rounds to 1000 thousands prints as millions (`999950 -> 1.0m`), never
+`1000k`.
 
 `meter:W:SCALE` accepts only a complete decimal integer width from 1 through 100. Leave the width blank to use the default 5 (`meter::braille`); invalid
 widths make that interpolation empty.
