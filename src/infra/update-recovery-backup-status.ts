@@ -163,11 +163,17 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
   );
   // Completed captures cannot compete with a failed capture for recovery. Count
   // only after all outcomes are known; unreadable and manual evidence stays conservative.
-  const competing = classified.filter((entry) =>
-    entry.status === undefined
+  const competing = classified.filter((entry) => {
+    if (entry.status === "warning") {
+      const cleanup = captures.get(entry.directory)!;
+      // Released originals and unsealed evidence cannot compete for restoration;
+      // orphan warnings with an unknown outcome still require conservative inspection.
+      return cleanup.outcome !== "candidate" && cleanup.reason !== "superseded-unsealed-capture";
+    }
+    return entry.status === undefined
       ? !entry.terminalOutcome && !entry.unchanged
-      : entry.status !== "forward-resolved" && entry.status !== "incomplete",
-  );
+      : entry.status !== "forward-resolved" && entry.status !== "incomplete";
+  });
   const inspected = classified.map((entry) => {
     if (entry.status !== undefined) {
       return entry;
