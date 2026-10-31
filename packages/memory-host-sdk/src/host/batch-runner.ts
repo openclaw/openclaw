@@ -207,15 +207,19 @@ export async function runEmbeddingBatches<
               return false;
             }
 
-            const response = line.response;
-            const statusCode = response?.status_code ?? 0;
+            const batchResponse = line.response;
+            const statusCode = batchResponse?.status_code ?? 0;
             if (statusCode >= 400) {
-              errors.push(`${customId}: ${getBatchResponseError(response) || "unknown error"}`);
+              errors.push(
+                `${customId}: ${getBatchResponseError(batchResponse) || "unknown error"}`,
+              );
               return false;
             }
 
             const data =
-              response?.body && typeof response.body === "object" ? (response.body.data ?? []) : [];
+              batchResponse?.body && typeof batchResponse.body === "object"
+                ? (batchResponse.body.data ?? [])
+                : [];
             const embedding = data[0]?.embedding ?? [];
             if (
               !Array.isArray(embedding) ||
