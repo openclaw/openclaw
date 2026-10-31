@@ -39,7 +39,7 @@ main.content:where(.content--portals-page) .portals-empty {
   padding: 4px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--panel) 76%, transparent);
 }
 
@@ -100,7 +100,7 @@ main.content:where(.content--portals-page) .portals-empty {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
 }
 
@@ -342,7 +342,7 @@ openclaw-portals-page[embedded],
   width: calc(100% - 24px);
   margin: 0 12px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 @media (max-width: 768px) {

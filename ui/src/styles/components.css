@@ -3431,7 +3431,7 @@ td.data-table-key-col {
 .sidebar-child-session-toggle,
 .session-action,
 .sidebar-session-group-actions {
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   corner-shape: superellipse(1.5);
 }
 

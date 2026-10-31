@@ -466,7 +466,7 @@ a.activity-current-work__row:hover {
   overflow: hidden;
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .activity-feed__session {

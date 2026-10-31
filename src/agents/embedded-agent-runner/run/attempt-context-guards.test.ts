@@ -138,39 +138,51 @@ describe("installEmbeddedAttemptContextGuards", () => {
     }
   });
 
-  it("tracks mid-turn requests and restores attempt-local transforms", async () => {
-    const input = createInput();
-    const originalTransform = input.activeSession.agent.transformContext;
-    const guards = installEmbeddedAttemptContextGuards(input as never);
-    const request = {
-      context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
-    };
-    input.activeSession[agentSessionDeferThresholdCompaction] = true;
-    expect(() => guards.checkMidTurnPrecheck(request)).not.toThrow();
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
-    input.activeSession[agentSessionDeferThresholdCompaction] = false;
-    expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
-    expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
-      route: "compact_only",
-      promptBudgetBeforeReserve: 960,
-    });
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+  it.each([undefined, false, true])(
+    "tracks boundary requests with soft precheck=%s and restores transforms",
+    async (enabled) => {
+      const input = createInput({
+        attempt: {
+          ...createInput().attempt,
+          config: {
+            agents: { defaults: { compaction: { midTurnPrecheck: { enabled } } } },
+          },
+        },
+      });
+      const originalTransform = input.activeSession.agent.transformContext;
+      const guards = installEmbeddedAttemptContextGuards(input as never);
+      const request = {
+        context: {
+          messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }],
+        },
+      };
+      input.activeSession[agentSessionDeferThresholdCompaction] = true;
+      expect(() => guards.checkMidTurnPrecheck(request)).not.toThrow();
+      expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+      input.activeSession[agentSessionDeferThresholdCompaction] = false;
+      expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
+      expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
+        route: "compact_only",
+        promptBudgetBeforeReserve: 768,
+      });
+      expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
 
-    const messages: AgentMessage[] = [
-      { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
-    ];
-    await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
-    expect(hoisted.invalidateComputerFrameIfMissing).toHaveBeenCalledWith({
-      contextEpoch: input.computerContextEpoch,
-      imagesBlocked: false,
-      messages,
-    });
+      const messages: AgentMessage[] = [
+        { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
+      ];
+      await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
+      expect(hoisted.invalidateComputerFrameIfMissing).toHaveBeenCalledWith({
+        contextEpoch: input.computerContextEpoch,
+        imagesBlocked: false,
+        messages,
+      });
 
-    const removeToolResultGuard = hoisted.installToolResultContextGuard.mock.results[0]?.value;
-    guards.remove();
-    expect(input.activeSession.agent.transformContext).toBe(originalTransform);
-    expect(removeToolResultGuard).toHaveBeenCalledOnce();
-  });
+      const removeToolResultGuard = hoisted.installToolResultContextGuard.mock.results[0]?.value;
+      guards.remove();
+      expect(input.activeSession.agent.transformContext).toBe(originalTransform);
+      expect(removeToolResultGuard).toHaveBeenCalledOnce();
+    },
+  );
 
   it("hydrates current images and their failure notice before context transforms", async () => {
     const message: AgentMessage & { __openclaw: unknown } = {

@@ -2464,7 +2464,6 @@
 ["src/auto-reply/status.test.ts","../plugins/commands.js","50807a7cd91d5e788be3866e304757ccdc25542d0d15e13e7b301988be1e8adc",1]
 ["src/auto-reply/thinking.test.ts","../plugins/provider-thinking.js","5927786f78f0d1e10de9b55bffd115006ac23991754eaecb3cbe067d1afb0b08",1]
 ["src/auto-reply/usage-bar/template.test.ts","../../logging/subsystem.js","2c2c6dcaa715e1c1ebc3bb5f7021cbf077fde60e94afd5620b7f48b88f6c869c",1]
-["src/boards/sqlite-board-store.outcomes.test.ts","../state/openclaw-agent-worker-store.js","6da806deb7ad4837363cc216c3bf279f3cbf25c7c834309146231c6761f15139",1]
 ["src/browser-lifecycle-cleanup.test.ts","./plugin-sdk/browser-maintenance.js","14fa958d9bde1df2ae19f0d3d109a572cc62c83195a5e15ae07515a123490cf9",1]
 ["src/channels/bundled-channel-catalog-read.fail-soft.test.ts","../infra/openclaw-root.js","ac27bdb2af0d74fbc106813beb7a40e43a90a6b45c55dadf31f79e13be04957b",1]
 ["src/channels/bundled-channel-catalog-read.fail-soft.test.ts","../plugins/bundled-dir.js","ec16d177c43a6fc76b37d51ceaa4dbff93882bf898e99851fa939819b7b55915",1]

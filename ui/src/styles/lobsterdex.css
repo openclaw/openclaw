@@ -164,7 +164,7 @@
   height: 26px;
   padding: 5px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   place-items: center;
   color: var(--muted);
   background: color-mix(in srgb, var(--card) 82%, transparent);

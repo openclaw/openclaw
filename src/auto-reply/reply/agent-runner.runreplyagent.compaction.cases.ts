@@ -1,6 +1,6 @@
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import type { Model } from "@openclaw/llm-core";
-import { describe, expect, it, type Mock } from "vitest";
+import { describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
 import {
   createApiKeyCredential,
@@ -29,6 +29,7 @@ import { SettingsManager } from "../../agents/sessions/settings-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { defaultRuntime } from "../../runtime.js";
 import type { ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -344,50 +345,36 @@ export function registerReplyCompactionCases({
         }
       },
     );
-    it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
-      state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-        payloads: [],
-        meta: {
-          durationMs: 1,
-          error: {
-            kind: "context_overflow",
-            message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+    it.each([{ payloads: [] }, { payloads: [{ text: "   \n\t  ", isError: true }] }])(
+      "surfaces overflow fallback for unusable payloads %j without claiming compaction ran",
+      async ({ payloads }) => {
+        const errorLog = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+        onTestFinished(() => errorLog.mockRestore());
+        state.runEmbeddedAgentMock.mockResolvedValueOnce({
+          payloads,
+          meta: {
+            durationMs: 1,
+            replayInvalid: true,
+            livenessState: "blocked",
+            error: {
+              kind: "incomplete_turn",
+              message: "Context overflow: prompt too large mid-turn",
+            },
           },
-        },
-      }));
-
-      const { run } = createMinimalRun();
-      const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
-      if (!payload) {
-        throw new Error("expected payload");
-      }
-      expect(payload.text).toContain("Auto-compaction could not recover this turn");
-      expect(payload.text).toContain("fresh session or using a model with a larger context window");
-      expect(payload.text).toContain("/new");
-    });
-
-    it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
-      state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-        payloads: [{ text: "   \n\t  ", isError: true }],
-        meta: {
-          durationMs: 1,
-          error: {
-            kind: "context_overflow",
-            message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-          },
-        },
-      }));
-
-      const { run } = createMinimalRun();
-      const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
-      if (!payload) {
-        throw new Error("expected payload");
-      }
-      expect(payload.text).toContain("Auto-compaction could not recover this turn");
-      expect(payload.text).toContain("fresh session or using a model with a larger context window");
-      expect(payload.text).toContain("/new");
-    });
+        });
+        const { run } = createMinimalRun();
+        const res = await run();
+        const payload = Array.isArray(res) ? res[0] : res;
+        expect(payload?.text).toContain("context window was exceeded mid-turn");
+        expect(payload?.text).toContain(
+          "fresh session or using a model with a larger context window",
+        );
+        expect(payload?.text).toContain("/new");
+        expect(errorLog).toHaveBeenCalledWith(
+          expect.stringContaining("Context window was exceeded mid-turn"),
+        );
+        expect(state.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      },
+    );
   });
 }
