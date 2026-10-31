@@ -175,6 +175,7 @@ export async function searchMemoryWiki(
     query: string;
     maxResults?: number;
     mode?: WikiSearchMode;
+    refreshSources?: () => void;
   },
 ): Promise<WikiSearchResult[]> {
   input.signal?.throwIfAborted();
@@ -197,6 +198,9 @@ export async function searchMemoryWiki(
     effectiveConfig,
     params.signal ? { signal: params.signal } : undefined,
   );
+  // Activate the read owner first; cold searches must not queue behind their own compile.
+  params.signal?.throwIfAborted();
+  params.refreshSources?.();
   const maxResults = resolveIntegerOption(params.maxResults, 10, { min: 1 });
   const mode = params.mode ?? "auto";
 

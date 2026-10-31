@@ -9,7 +9,6 @@ import { compileMemoryWikiVault } from "./compile.js";
 import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
-  setMemoryWikiDashboardState,
 } from "./compiled-cache.js";
 import {
   WIKI_SEARCH_BACKENDS,
@@ -102,6 +101,7 @@ export function registerMemoryWikiGatewayMethods(params: {
   getAppConfig: () => OpenClawConfig | undefined;
   resolveConfig: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
   resolveSourceSyncSignal?: () => AbortSignal | undefined;
+  refreshSources: (config: ResolvedMemoryWikiConfig, appConfig?: OpenClawConfig) => void;
 }) {
   const { api } = params;
   const registerResultMethod = (
@@ -141,27 +141,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     );
   };
 
-  const syncImportedSourcesInBackground = (
-    config: ResolvedMemoryWikiConfig,
-    appConfig?: OpenClawConfig,
-  ) => {
-    const signal = params.resolveSourceSyncSignal?.();
-    if (params.resolveSourceSyncSignal && !signal) {
-      return;
-    }
-    void syncMemoryWikiImportedSources({
-      config,
-      appConfig,
-      ...(signal ? { signal } : {}),
-    }).catch((error: unknown) => {
-      if (signal?.aborted) {
-        return;
-      }
-      setMemoryWikiDashboardState(config, { state: "failed" });
-      api.logger.warn(`memory-wiki: background source sync failed: ${formatErrorMessage(error)}`);
-    });
-  };
-
   const resolveSourceSyncSignal = () => {
     const signal = params.resolveSourceSyncSignal?.();
     if (params.resolveSourceSyncSignal && !signal) {
@@ -195,13 +174,13 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.importInsights", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
-    syncImportedSourcesInBackground(config, appConfig);
+    params.refreshSources(config, appConfig);
     return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
   });
 
   registerResultMethod("wiki.overview", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
-    syncImportedSourcesInBackground(config, appConfig);
+    params.refreshSources(config, appConfig);
     return (await loadMemoryWikiCompiledDashboards(config)).overview;
   });
 
@@ -274,7 +253,9 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.search", READ_SCOPE, async (requestParams, memoryContext) => {
     const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    if (!signal) {
+      await syncMemoryWikiImportedSources({ config, appConfig });
+    }
     const query = readStringParam(requestParams, "query", { required: true });
     const maxResults = readPositiveIntegerParam(requestParams, "maxResults");
     const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
@@ -282,6 +263,16 @@ export function registerMemoryWikiGatewayMethods(params: {
     const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
     return await searchMemoryWiki({
       memoryContext,
+      ...(signal
+        ? {
+            signal: memoryContext.signal ? AbortSignal.any([signal, memoryContext.signal]) : signal,
+            refreshSources: () => {
+              if (!signal.aborted) {
+                params.refreshSources(config, appConfig);
+              }
+            },
+          }
+        : {}),
       config,
       appConfig,
       ...(agentId ? { agentId } : {}),
