@@ -82,19 +82,28 @@ export type SidebarProjectionHost = {
   visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
 };
 
-export function sidebarInventoryInputs(
+export function sidebarNavigationInputs(
   host: SidebarProjectionHost,
   result: SessionsListResult | null,
 ) {
   const data = host.sessionData;
   const context = host.sessionDataContext;
+  const pending = context?.chatSubmissions?.readCreate();
   return [
     context,
     result,
     Boolean(host.sidebarAgentsMode === "roster" && host.rosterSessionSource),
     data.sessionsAgentId,
     data.sessionResultsByAgent,
+    data.activeSessionLineageRoot,
+    data.activeSessionLineageSelectedRow,
+    data.childSessionRowsByParent,
     data.loadingChildSessionKeys,
+    host.getRouteSessionKey(),
+    pending?.creation,
+    pending?.creation.admitted,
+    context?.gateway.snapshot.sessionKey,
+    isSessionRouteId(host.activeRouteId),
     context?.agentSelection.state.selectedId,
     context?.gateway.snapshot.assistantAgentId,
     context?.agents.state.agentsList,
@@ -110,26 +119,6 @@ export function sidebarInventoryInputs(
     host.resolveSessionAttention,
     host.storedOutboxes,
     i18n.getLocale(),
-  ];
-}
-
-export function sidebarNavigationInputs(
-  host: SidebarProjectionHost,
-  result: SessionsListResult | null,
-) {
-  const data = host.sessionData;
-  const context = host.sessionDataContext;
-  const pending = context?.chatSubmissions?.readCreate();
-  return [
-    ...sidebarInventoryInputs(host, result),
-    data.activeSessionLineageRoot,
-    data.activeSessionLineageSelectedRow,
-    data.childSessionRowsByParent,
-    host.getRouteSessionKey(),
-    pending?.creation,
-    pending?.creation.admitted,
-    context?.gateway.snapshot.sessionKey,
-    isSessionRouteId(host.activeRouteId),
   ];
 }
 
@@ -289,10 +278,14 @@ export function memoizedSidebarCatalogs(
   );
 }
 
-export function sidebarRowsInputs(host: SidebarProjectionHost) {
+export function sidebarRowsInputs(
+  host: SidebarProjectionHost,
+  navigationState: SidebarSessionNavigationState,
+) {
   const data = host.sessionData;
-  // The caller keys navigation separately from effective inventory membership.
+  // List only inputs not already keyed by the upstream stage value.
   return [
+    navigationState,
     host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null,
     host.expandedAgentId(),
     data.sessionsResult,

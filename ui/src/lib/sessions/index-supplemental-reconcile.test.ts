@@ -2,10 +2,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import {
-  publishActiveSessionLineage,
-  publishObservedSessionLineage,
-} from "../../components/app-sidebar-child-session-data.ts";
+import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import {
@@ -370,63 +367,6 @@ describe("supplemental session reconciliation", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).not.toHaveBeenCalled();
     expect(sessions.state.result?.sessions[0]?.label).toBe(current.label);
-  });
-
-  it("retains unchanged child links while publishing new lineage facts", () => {
-    const { sessions } = setup(async () => sessionsResult([], 10));
-    const selected = { ...child, key: "global", agentId: "main" };
-    const parent = { ...child, key: "agent:main:parent", sessionId: "session-parent" };
-    const existingSibling = sibling(child, "Existing sibling");
-    const otherParent = "agent:main:other-parent";
-    const otherChildren = [{ ...child, key: "agent:main:other-child" }];
-    const initial = {
-      [parent.key]: [selected, existingSibling],
-      [otherParent]: otherChildren,
-    };
-    const owner: Parameters<typeof publishObservedSessionLineage>[0] = {
-      activeSessionLineageRoot: parent,
-      activeSessionLineageSelectedRow: selected,
-      childSessionRowsByParent: initial,
-      context: { sessions },
-      sessionsResult: null,
-    };
-    const publish = (rowsByParent: Record<string, GatewaySessionRow[]>, row = selected) =>
-      publishObservedSessionLineage(
-        owner,
-        { rowsByParent, topmostRow: parent, lookupFailed: false },
-        row,
-        sessions.inheritRow,
-      );
-
-    publish({});
-    expect(owner.childSessionRowsByParent).toBe(initial);
-    publish({ [parent.key]: [{ ...existingSibling, label: "Duplicate sibling" }] });
-    expect(owner.childSessionRowsByParent).toBe(initial);
-    expect(owner.activeSessionLineageSelectedRow).toBe(selected);
-    expect(owner.activeSessionLineageRoot).toBe(parent);
-
-    const added = { ...child, key: "agent:main:added", label: "First addition" };
-    const emptyParent = "agent:main:empty-parent";
-    publish({
-      [parent.key]: [added, { ...added, label: "Duplicate addition" }],
-      [emptyParent]: [],
-    });
-    const extended = owner.childSessionRowsByParent;
-    expect(extended).not.toBe(initial);
-    expect(extended[parent.key]).toEqual([selected, existingSibling, added]);
-    expect(extended[parent.key]?.[2]).toBe(added);
-    expect(extended[otherParent]).toBe(otherChildren);
-    expect(extended).toHaveProperty(emptyParent, []);
-    expect(initial[parent.key]).toEqual([selected, existingSibling]);
-    expect(initial).not.toHaveProperty(emptyParent);
-
-    publish({ [parent.key]: [added], [emptyParent]: [] });
-    expect(owner.childSessionRowsByParent).toBe(extended);
-    const refreshed = { ...selected, updatedAt: 20, label: "Updated global session" };
-    publish({}, refreshed);
-    expect(owner.activeSessionLineageSelectedRow).toBe(refreshed);
-    expect(owner.childSessionRowsByParent[parent.key]).toEqual([refreshed, existingSibling, added]);
-    expect(owner.childSessionRowsByParent[otherParent]).toBe(otherChildren);
   });
 
   it.each([false, true])(

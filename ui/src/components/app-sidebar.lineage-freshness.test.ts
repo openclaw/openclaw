@@ -12,11 +12,9 @@ import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import { createGatewayHarness, type SidebarLifecycleState } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   findRow,
-  childToggle,
   rowElement,
   waitForRequest,
   mountRoster,
@@ -525,118 +523,5 @@ it("resolves the routed child's former global ancestor over a foreign cached row
   } finally {
     disposeRoster({ provider, sessions });
     await sidebar.updateComplete;
-  }
-});
-
-it("keeps filtered and absent route supplements current across held-row selection", async () => {
-  const ordinary = mainRow("agent:main:ordinary", "ordinary", 10);
-  const cron = mainRow("agent:main:cron:filtered", "filtered-cron", 10);
-  const canonical = mainRow("agent:main:late-canonical", "late-canonical", 20, {
-    label: "Canonical conversation",
-  });
-  let rows = [ordinary, cron];
-  let listTimestamp = 10;
-  const request = lineageRequest(
-    () => sessionsResult(rows, listTimestamp),
-    ({ key }) => ({ session: rows.find((row) => row.key === key) ?? null }),
-  );
-  const { sidebar, provider, sessions, data } = await mountRoster(request, mainAgents);
-  try {
-    sidebar.sidebarAgentsMode = "chip";
-    sidebar.sessionsShowCron = false;
-    selectChat(sidebar, ordinary.key);
-    await waitForFast(() => expect(rowElement(sidebar, ordinary.key)).not.toBeNull());
-    expect(rowElement(sidebar, cron.key)).toBeNull();
-
-    selectChat(sidebar, cron.key);
-    await waitForFast(() =>
-      expect(rowElement(sidebar, cron.key)?.querySelector("a")?.getAttribute("aria-current")).toBe(
-        "page",
-      ),
-    );
-    expect(sidebar.findSidebarSessionByKey(cron.key)?.visuallyActive).toBe(true);
-    selectChat(sidebar, ordinary.key);
-    await waitForFast(() => expect(rowElement(sidebar, cron.key)).toBeNull());
-    expect(sidebar.findSidebarSessionByKey(ordinary.key)?.visuallyActive).toBe(true);
-
-    selectChat(sidebar, canonical.key);
-    await waitForFast(() => expect(rowElement(sidebar, canonical.key)).not.toBeNull());
-    expect(data.sessionsResult?.sessions.some((row) => row.key === canonical.key)).toBe(false);
-    rows = [...rows, canonical];
-    listTimestamp = 20;
-    await data.refreshSidebarSessions();
-    await waitForFast(() =>
-      expect(rowElement(sidebar, canonical.key)?.textContent).toContain(canonical.label),
-    );
-    expect(sidebar.querySelectorAll(`[data-session-key="${canonical.key}"]`)).toHaveLength(1);
-    expect(sidebar.findSidebarSessionByKey(canonical.key)).toMatchObject({
-      label: canonical.label,
-      sessionId: canonical.sessionId,
-      visuallyActive: true,
-    });
-  } finally {
-    disposeRoster({ provider, sessions });
-  }
-});
-
-it("updates selected ancestors and child discovery without reopening a collapsed parent", async () => {
-  const parent = mainRow("agent:main:parent-a", "parent-a", 10, {
-    childSessions: ["agent:main:child-a"],
-  });
-  const child = mainRow("agent:main:child-a", "child-a", 10, {
-    parentSessionKey: parent.key,
-  });
-  const next = mainRow("agent:main:parent-b", "parent-b", 10, {
-    childSessions: ["agent:main:child-b"],
-  });
-  const nextChild = mainRow("agent:main:child-b", "child-b", 10, {
-    parentSessionKey: next.key,
-  });
-  const stable = mainRow("agent:main:unrelated", "unrelated", 10);
-  const rows = [parent, child, next, nextChild, stable];
-  const request = lineageRequest(
-    ({ spawnedBy }) =>
-      sessionsResult(
-        spawnedBy ? rows.filter((row) => row.parentSessionKey === spawnedBy) : rows,
-        10,
-      ),
-    ({ key }) => ({ session: rows.find((row) => row.key === key) ?? null }),
-  );
-  const { sidebar, provider, sessions, data } = await mountRoster(request, mainAgents);
-  try {
-    sidebar.sidebarAgentsMode = "chip";
-    selectChat(sidebar, child.key);
-    await waitForFast(() =>
-      expect(sidebar.findSidebarMenuSessionByKey(parent.key)?.containsActiveDescendant).toBe(true),
-    );
-    for (const key of [parent.key, next.key]) {
-      await waitForFast(() => expect(childToggle(sidebar, key)).not.toBeNull());
-      if (childToggle(sidebar, key)?.ariaExpanded !== "true") {
-        childToggle(sidebar, key)!.click();
-      }
-      await waitForFast(() => expect(data.loadedChildSessionKeys.has(key)).toBe(true));
-      childToggle(sidebar, key)!.click();
-      await waitForFast(() => expect(childToggle(sidebar, key)?.ariaExpanded).toBe("false"));
-    }
-    await settleLitElement(sidebar);
-    const unchanged = sidebar.findSidebarMenuSessionByKey(stable.key);
-    expect(unchanged).toBeDefined();
-    expect(sidebar.findSidebarMenuSessionByKey(parent.key)?.containsActiveDescendant).toBe(true);
-
-    // Point-of-effect readers must see the new selection before its queued child read settles.
-    selectChat(sidebar, next.key);
-    expect(sidebar.findSidebarSessionByKey(child.key)?.visuallyActive).toBe(false);
-    expect(sidebar.findSidebarSessionByKey(next.key)?.visuallyActive).toBe(true);
-    expect(sidebar.findSidebarMenuSessionByKey(parent.key)?.containsActiveDescendant).toBe(false);
-    expect(sidebar.findSidebarMenuSessionByKey(next.key)?.visuallyActive).toBe(true);
-    expect(sidebar.findSidebarMenuSessionByKey(stable.key)).toBe(unchanged);
-    const discovery = sidebar.childSessionParents();
-    expect(discovery.has(parent.key)).toBe(false);
-    expect(discovery.has(next.key)).toBe(true);
-    await settleLitElement(sidebar);
-    expect(childToggle(sidebar, parent.key)?.ariaExpanded).toBe("false");
-    expect(childToggle(sidebar, next.key)?.ariaExpanded).toBe("false");
-  } finally {
-    disposeRoster({ provider, sessions });
   }
 });

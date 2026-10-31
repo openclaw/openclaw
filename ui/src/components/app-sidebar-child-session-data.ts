@@ -165,23 +165,20 @@ export async function fetchSessionLineage(params: {
 function mergeChildSessionRows(
   current: Readonly<Record<string, readonly GatewaySessionRow[]>>,
   additions: Readonly<Record<string, readonly GatewaySessionRow[]>>,
-): Readonly<Record<string, readonly GatewaySessionRow[]>> {
-  let merged: Record<string, readonly GatewaySessionRow[]> | undefined;
+): Record<string, GatewaySessionRow[]> {
+  const merged = Object.fromEntries(
+    Object.entries(current).map(([parentKey, rows]) => [parentKey, [...rows]]),
+  );
   for (const [parentKey, rows] of Object.entries(additions)) {
-    const previous = current[parentKey];
-    let children: GatewaySessionRow[] | undefined;
+    const children = merged[parentKey] ?? [];
     for (const row of rows) {
-      if (!(children ?? previous)?.some((candidate) => candidate.key === row.key)) {
-        children ??= [...(previous ?? [])];
+      if (!children.some((candidate) => candidate.key === row.key)) {
         children.push(row);
       }
     }
-    if (children || previous === undefined) {
-      merged ??= { ...current };
-      merged[parentKey] = children ?? [];
-    }
+    merged[parentKey] = children;
   }
-  return merged ?? current;
+  return merged;
 }
 
 /** Retain only the routed ancestry when a refreshed child list omits it (archived or filtered). */

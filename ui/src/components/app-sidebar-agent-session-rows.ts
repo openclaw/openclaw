@@ -35,7 +35,6 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
-import type { SidebarProjectionMemo } from "./sidebar-projection-cache.ts";
 
 type AgentSessionRowsHost = {
   readonly sessionDataContext:
@@ -58,8 +57,6 @@ export function projectSidebarAgentSessionRows({
   result,
   compareSessions,
   resolveAttention,
-  inventory,
-  inventoryInputs,
 }: {
   host: AgentSessionRowsHost;
   navigationState: SidebarSessionNavigationState;
@@ -68,8 +65,6 @@ export function projectSidebarAgentSessionRows({
   result?: SessionsListResult | null;
   compareSessions: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
-  inventory: SidebarProjectionMemo<SidebarRecentSession[]>;
-  inventoryInputs: readonly unknown[];
 }): SidebarRecentSession[] {
   const grouped = result !== undefined;
   const allAgents = grouped || host.sessionData.sessionsAgentId === null;
@@ -192,9 +187,6 @@ export function projectSidebarAgentSessionRows({
       visibleRowsByKey.set(row.key, row);
     }
   }
-  // Filtered link lists may allocate equivalent rows on each route change.
-  // Retain the underlying sources and compare the prepared links separately.
-  const sourceRowInputs = [...visibleRowsByKey].flatMap(([key, row]) => [key, row]);
   if (grouped || host.sessionInvolvingMeFilterActive) {
     for (const [key, row] of visibleRowsByKey) {
       const childSessions = row.childSessions?.filter(
@@ -262,128 +254,27 @@ export function projectSidebarAgentSessionRows({
   // `adopted` holds only catalog-bound keys (adoptedCatalogSessionKeys), not
   // fetched child rows: a catalog-adopted promoted child intentionally
   // renders as its live row inside the Coding catalog, never as a thread.
-  const roots = orderedRootRows.filter(
-    (row) => !adopted.has(row.key) && (!grouped || visibleRowsByKey.has(row.key)),
-  );
-  // Loaded child windows can change visibility without changing source rows or ancestry.
-  // Use each actual parent key: alias normalization only owns the adjacency lookup.
-  const childVisibilityInputs = [...roots, ...visibleRowsByKey.values()].flatMap((row) =>
-    (childKeysByParent.get(normalizeDefaultMainSessionAliasForUi(row.key)) ?? []).map((key) =>
-      isChildSessionVisible(row.key, key, visibleRowsByKey.get(key)),
+  const projected = projectSessionTree({
+    mainSessionKeys,
+    roots: orderedRootRows.filter(
+      (row) => !adopted.has(row.key) && (!grouped || visibleRowsByKey.has(row.key)),
     ),
-  );
-  const projected = inventory.read(
-    () => [
-      ...inventoryInputs,
-      mainSessionKeys.size,
-      ...mainSessionKeys,
-      roots.length,
-      ...roots,
-      sourceRowInputs.length,
-      ...sourceRowInputs,
-      childKeysByParent.size,
-      ...[...childKeysByParent].flatMap(([key, children]) =>
-        [key, children.length].concat(children),
-      ),
-      childVisibilityInputs.length,
-      ...childVisibilityInputs,
-    ],
-    () =>
-      projectUnpinnedSessionRows(
-        projectSessionTree({
-          mainSessionKeys,
-          roots,
-          rowsByKey: visibleRowsByKey,
-          loadingChildKeys: host.sessionData.loadingChildSessionKeys,
-          isChildSessionVisible,
-          compareSessions,
-          resolveAttention,
-          toSidebarSession: navigationState.toSidebarInventorySession,
-        }),
-      ),
-  );
-  let selectedRows = projected;
+    rowsByKey: visibleRowsByKey,
+    loadingChildKeys: host.sessionData.loadingChildSessionKeys,
+    isChildSessionVisible,
+    compareSessions,
+    resolveAttention,
+    toSidebarSession: navigationState.toSidebarSession,
+  });
   if (
     selectedFallback &&
     !isSubagentSessionKey(selectedFallback.key) &&
     (!grouped || visibleRowsByKey.has(selectedFallback.key)) &&
     !findSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
   ) {
-    selectedRows = [
-      { ...navigationState.toSidebarInventorySession(selectedFallback), pinned: false },
-      ...projected,
-    ];
+    projected.unshift(navigationState.toSidebarSession(selectedFallback));
   }
-  return selectSidebarSessionTree(selectedRows, navigationState);
-}
-
-function projectUnpinnedSessionRows(rows: readonly SidebarRecentSession[]): SidebarRecentSession[] {
-  return rows.map((row) => ({
-    ...row,
-    pinned: false,
-    children: projectUnpinnedSessionRows(row.children),
-  }));
-}
-
-/** Selection changes only row flags; folded activity and link topology retain their lifetime. */
-function selectSidebarSessionTree(
-  rows: SidebarRecentSession[],
-  navigation: SidebarSessionNavigationState,
-): SidebarRecentSession[] {
-  const selected = new WeakMap<SidebarRecentSession, SidebarRecentSession>();
-  function selectRows(source: SidebarRecentSession[]): SidebarRecentSession[];
-  function selectRows(source: readonly SidebarRecentSession[]): readonly SidebarRecentSession[];
-  function selectRows(source: readonly SidebarRecentSession[]): readonly SidebarRecentSession[] {
-    let next: SidebarRecentSession[] | undefined;
-    source.forEach((row, index) => {
-      const projected = selectRow(row);
-      if (projected !== row) {
-        next ??= [...source];
-        next[index] = projected;
-      }
-    });
-    return next ?? source;
-  }
-  const selectRow = (row: SidebarRecentSession): SidebarRecentSession => {
-    const cached = selected.get(row);
-    if (cached) {
-      return cached;
-    }
-    const children = selectRows(row.children);
-    const hidden = row.unreadHiddenRuns && selectRows(row.unreadHiddenRuns);
-    const summaryHidden =
-      row.subagentSummary?.unreadHiddenRuns && selectRows(row.subagentSummary.unreadHiddenRuns);
-    const active = row.key === navigation.activeRowKey;
-    const visuallyActive = row.key === navigation.visuallyActiveRowKey;
-    const containsActiveDescendant = children.some(
-      (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
-    );
-    const unchanged =
-      children === row.children &&
-      hidden === row.unreadHiddenRuns &&
-      summaryHidden === row.subagentSummary?.unreadHiddenRuns &&
-      active === row.active &&
-      visuallyActive === row.visuallyActive &&
-      containsActiveDescendant === row.containsActiveDescendant;
-    const subagentSummary =
-      row.subagentSummary && summaryHidden !== row.subagentSummary.unreadHiddenRuns
-        ? { ...row.subagentSummary, unreadHiddenRuns: summaryHidden }
-        : row.subagentSummary;
-    const projected = unchanged
-      ? row
-      : {
-          ...row,
-          active,
-          visuallyActive,
-          containsActiveDescendant,
-          children,
-          unreadHiddenRuns: hidden,
-          subagentSummary,
-        };
-    selected.set(row, projected);
-    return projected;
-  };
-  return selectRows(rows);
+  return projected;
 }
 
 export type SidebarHomeSession = SidebarRecentSession & {

@@ -37,6 +37,7 @@ import {
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
+  projectUnpinnedSessionRows,
   sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresenceScope } from "./app-sidebar-presence.ts";
@@ -102,7 +103,6 @@ import {
   memoizedSidebarHome,
   memoizedSidebarSections,
   projectSidebarNavigation,
-  sidebarInventoryInputs,
   sidebarNavigationInputs,
   sidebarRowsInputs,
   type SidebarProjectionHost,
@@ -171,7 +171,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   readonly sessionProjection = new SidebarSessionProjection();
   private readonly navigationMemo = new SidebarProjectionMemo<SidebarSessionNavigationState>();
   private readonly rowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
-  private readonly inventoryMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
   private readonly sectionsMemo = new SidebarProjectionMemo<SidebarVisibleSections>();
   private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarHomeSession>>();
@@ -680,7 +679,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       return this.readSnapshotNavigation(this.sidebarSnapshot).visibleRows;
     }
     return this.rowsMemo.read(
-      () => [navigationState, ...sidebarRowsInputs(this), this.sidebarEntries],
+      () => [...sidebarRowsInputs(this, navigationState), this.sidebarEntries],
       () => {
         const roster = this.rosterSessionSource;
         const selected = this.expandedAgentId();
@@ -695,15 +694,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
           result: roster?.result,
           compareSessions: createSidebarSessionRowsComparator(this.readSidebarSessionSortOptions),
           resolveAttention: this.resolveSessionAttention,
-          inventory: this.inventoryMemo,
-          inventoryInputs: [
-            ...sidebarInventoryInputs(this, roster?.result ?? this.sessionData.sessionsResult),
-            ...sidebarRowsInputs(this),
-            this.sidebarEntries,
-          ],
         });
         const rows = this.applySessionOwnerFilter(
-          projected,
+          projectUnpinnedSessionRows(projected),
           this.selectedAgentSessionResult()?.owners,
         );
         this.attention.scheduleSessionSnoozeWake(

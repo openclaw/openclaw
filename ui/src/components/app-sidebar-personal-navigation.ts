@@ -452,6 +452,16 @@ function sidebarRowPositions(rows: readonly SidebarRecentSession[]): ReadonlyMap
   return positions;
 }
 
+export function projectUnpinnedSessionRows(
+  rows: readonly SidebarRecentSession[],
+): SidebarRecentSession[] {
+  return rows.map((row) => ({
+    ...row,
+    pinned: false,
+    children: projectUnpinnedSessionRows(row.children),
+  }));
+}
+
 export function personalSidebarOwnerFilterId(
   host: PersonalNavigationHost & {
     readonly sidebarAgentsMode: "chip" | "roster";

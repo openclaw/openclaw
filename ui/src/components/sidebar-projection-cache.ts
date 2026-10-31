@@ -84,33 +84,10 @@ export function sameSidebarPresentation(a: unknown, b: unknown, omit?: string): 
 /** Formatting belongs to a row's lifetime, not the lifetime of a list publication. */
 export class SidebarSessionRowProjection {
   readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
-  private readonly selectedRows = new WeakMap<
-    SidebarRecentSession,
-    SidebarProjectionMemo<SidebarRecentSession>
-  >();
   private readonly rows = new WeakMap<
     GatewaySessionRow,
     [SidebarProjectionMemo<SidebarRecentSession>, SidebarProjectionMemo<SidebarRecentSession>]
   >();
-
-  select(
-    row: SidebarRecentSession,
-    active: boolean,
-    visuallyActive: boolean,
-  ): SidebarRecentSession {
-    if (!active && !visuallyActive) {
-      return row;
-    }
-    let memo = this.selectedRows.get(row);
-    if (!memo) {
-      memo = new SidebarProjectionMemo();
-      this.selectedRows.set(row, memo);
-    }
-    return memo.read(
-      () => [active, visuallyActive],
-      () => ({ ...row, active, visuallyActive }),
-    );
-  }
 
   read(
     row: GatewaySessionRow,
