@@ -29,7 +29,11 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
   const online = createMemo(() => resolveSidebarOnline(host));
   const counts = () => online().counts;
   const listUsers = () => online().listUsers;
-  const filtered = createMemo(() => host.people.statusFilter === "running");
+  const filtered = createMemo(
+    () =>
+      host.people.statusFilter === "running" ||
+      (!isMobileNavLayout() && host.people.presenceFilter === "all"),
+  );
   const routing = createMemo(() =>
     personActivityRouting(
       { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
@@ -43,24 +47,29 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
       data-session-section={sectionId}
     >
       <div class="sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
-        <Picker
-          id="sidebar-people-presence"
-          class="sidebar-session-owner-filter"
-          triggerIcon="chevronsUpDown"
-          label={t("presence.usersTitle")}
-          value={host.people.presenceFilter}
-          sheet={isMobileNavLayout()}
-          showOptionTooltips={false}
-          options={[
-            { value: "online", label: t("presence.rosterTitle") },
-            { value: "all", label: t("presence.allUsers") },
-          ]}
-          onChange={(value) => {
-            if (value === "online" || value === "all") {
-              host.people.set("presenceFilter", value);
-            }
-          }}
-        />
+        <Show
+          when={isMobileNavLayout()}
+          fallback={<span class="sidebar-online__title">{t("presence.usersTitle")}</span>}
+        >
+          <Picker
+            id="sidebar-people-presence"
+            class="sidebar-session-owner-filter"
+            triggerIcon="chevronsUpDown"
+            label={t("presence.usersTitle")}
+            value={host.people.presenceFilter}
+            sheet
+            showOptionTooltips={false}
+            options={[
+              { value: "online", label: t("presence.rosterTitle") },
+              { value: "all", label: t("presence.allUsers") },
+            ]}
+            onChange={(value) => {
+              if (value === "online" || value === "all") {
+                host.people.set("presenceFilter", value);
+              }
+            }}
+          />
+        </Show>
         <button
           type="button"
           class={[
@@ -203,7 +212,9 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                   <span class="sidebar-online__avatar" aria-hidden="true">
                     <ViewerAvatar user={user()} markAsViewer={false} variant="footer" />
                   </span>
-                  <span class="sidebar-online__person-name">{presenceViewerLabel(user())}</span>
+                  <span class="sidebar-online__person-name">
+                    <span class="sidebar-online__person-label">{presenceViewerLabel(user())}</span>
+                  </span>
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (
                     <span class="sidebar-online__counts" aria-hidden="true">
                       <For each={["running", "open"] as const}>

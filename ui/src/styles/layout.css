@@ -2428,6 +2428,152 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 }
 
+.sidebar-online__title {
+  color: var(--text-strong);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 550;
+  letter-spacing: -0.005em;
+  padding-inline-start: 4px;
+}
+
+.shell:not(.shell--mobile-nav) .sidebar-online {
+  .sidebar-session-toolbar__button.sidebar-online__filter-toggle {
+    width: 28px;
+    margin-inline-start: auto;
+    opacity: var(--sidebar-toolbar-action-opacity, 0.55);
+    pointer-events: auto;
+  }
+
+  .sidebar-session-toolbar__button.sidebar-online__filter-toggle:is(
+      :hover,
+      :focus-visible,
+      [aria-expanded="true"],
+      .sidebar-session-sort--filtered
+    ) {
+    opacity: 1;
+  }
+
+  .sidebar-session-toolbar__collapse {
+    margin-inline-start: 0;
+  }
+}
+
+/* Desktop rows read as a table: each count owns a track, and the hover action trails the name. */
+@media (hover: hover) and (pointer: fine) {
+  .shell:not(.shell--mobile-nav) .sidebar-online {
+    .sidebar-online__list {
+      /* Subgrid edges add row padding to the first track, so a fixed track eats the gap. */
+      grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+    }
+
+    .sidebar-online__row {
+      position: relative;
+      anchor-scope: --sidebar-online-name;
+    }
+
+    /* Avatar and name share the session rows' axes; counts end on the header's icon edge. */
+    .sidebar-online__person {
+      align-items: center;
+      min-height: var(--sidebar-session-row-min-height);
+      padding-block: 3px;
+      padding-inline: 12px 15px;
+    }
+
+    .sidebar-online__list > .sidebar-session-empty-hint {
+      margin-inline-start: 4px;
+    }
+
+    .sidebar-online__person-name {
+      --sidebar-online-fade-end: 0px;
+
+      mask-image: linear-gradient(
+        to right,
+        black calc(100% - var(--sidebar-online-fade-end) - 12px),
+        transparent calc(100% - var(--sidebar-online-fade-end))
+      );
+    }
+
+    .sidebar-online__person-name:dir(rtl) {
+      mask-image: linear-gradient(
+        to left,
+        black calc(100% - var(--sidebar-online-fade-end) - 12px),
+        transparent calc(100% - var(--sidebar-online-fade-end))
+      );
+    }
+
+    .sidebar-online__person-label {
+      display: block;
+      width: fit-content;
+      max-width: calc(100% - 26px);
+      anchor-name: --sidebar-online-name;
+    }
+
+    .sidebar-online__row:has(.sidebar-online__menu):is(
+        :hover,
+        :focus-within,
+        :has([aria-expanded="true"])
+      )
+      .sidebar-online__person-name {
+      --sidebar-online-fade-end: 26px;
+    }
+
+    .sidebar-online__person:not(:has(.sidebar-online__running)) .sidebar-online__person-name {
+      grid-column: 2 / 4;
+    }
+
+    .sidebar-online__person:not(:has(.sidebar-online__counts)) .sidebar-online__person-name {
+      grid-column: 2 / -1;
+    }
+
+    .sidebar-online__menu {
+      position: absolute;
+      grid-area: auto;
+      inset-block: 0;
+      inset-inline-start: anchor(--sidebar-online-name end);
+      display: grid;
+      align-items: center;
+      margin-inline-start: 2px;
+    }
+
+    .sidebar-online__menu-trigger svg {
+      display: block;
+    }
+
+    .sidebar-online__person .sidebar-online__counts {
+      display: grid;
+      grid-column: 3 / -1;
+      grid-template-columns: subgrid;
+      gap: 8px;
+      align-items: center;
+      padding: 0;
+      background: none;
+    }
+
+    .sidebar-online__person:not(:has(.sidebar-online__running)) .sidebar-online__counts {
+      grid-column: 4;
+    }
+
+    .sidebar-online__running {
+      grid-column: 1;
+    }
+
+    .sidebar-online__open {
+      grid-column: -2;
+    }
+
+    :is(.sidebar-online__running, .sidebar-online__open) {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+    }
+
+    :is(.sidebar-online__running .session-run-spinner, .sidebar-online__open-icon) {
+      margin-inline-end: 0;
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sidebar-recent-sessions__head,
   .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
