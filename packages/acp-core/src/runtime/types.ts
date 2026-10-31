@@ -16,7 +16,11 @@ export type AcpSessionUpdateTag =
   | "plan"
   | (string & {});
 
-export type AcpRuntimeControl = "session/set_mode" | "session/set_config_option" | "session/status";
+export type AcpRuntimeControl =
+  | "session/set_mode"
+  | "session/set_model"
+  | "session/set_config_option"
+  | "session/status";
 
 /** Stable handle returned by ensureSession and passed back into all ACP runtime operations. */
 export type AcpRuntimeHandle = {
@@ -256,6 +260,13 @@ export interface AcpRuntime {
   getStatus?(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
+
+  /**
+   * Model control for sessions that advertise `session/set_model` without a model config option.
+   * The adapter owns the wire method for the session; an advertised model config key takes
+   * precedence and stays on `setConfigOption`.
+   */
+  setModel?(input: { handle: AcpRuntimeHandle; model: string }): Promise<void>;
 
   /** Older third-party backends may omit the accepted snapshot. Empty options are authoritative. */
   setConfigOption?(input: {

@@ -133,6 +133,88 @@ describe("AcpSessionManager runtime config", () => {
     expect(f.setConfigOption).not.toHaveBeenCalled();
   });
 
+  describe("models-only sessions", () => {
+    const modelsOnly = {
+      controls: [
+        "session/set_mode",
+        "session/set_model",
+        "session/set_config_option",
+        "session/status",
+      ],
+    } satisfies Awaited<ReturnType<NonNullable<AcpRuntime["getCapabilities"]>>>;
+    const methodNotFound = () =>
+      new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        'Failed session/set_config_option for "model": ACP -32601 Method not found',
+      );
+    const modelsOnlyFixture = (runtimeOptions?: { model?: string; timeoutSeconds?: number }) => {
+      const f = fixture({ agent: "auggie", ...(runtimeOptions ? { runtimeOptions } : {}) });
+      f.getCapabilities.mockResolvedValue(modelsOnly);
+      f.setConfigOption.mockImplementation(async (input) => {
+        if (input.key === "model") {
+          throw methodNotFound();
+        }
+      });
+      return f;
+    };
+
+    it("routes /acp model through session/set_model", async () => {
+      const f = modelsOnlyFixture();
+      await expect(f.setOption("model", "legacy-model-a")).resolves.toEqual({
+        model: "legacy-model-a",
+      });
+      expectCalledWith(f.setModel, { model: "legacy-model-a" });
+      expect(f.setConfigOption).not.toHaveBeenCalled();
+      expect(f.persisted.currentMeta.runtimeOptions).toEqual({ model: "legacy-model-a" });
+    });
+
+    it("replays a retained model through session/set_model and leaves other controls on config options", async () => {
+      const f = modelsOnlyFixture({ model: "legacy-model-a", timeoutSeconds: 120 });
+      await f.run();
+      expectCalledWith(f.setModel, { model: "legacy-model-a" });
+      expect(f.setConfigOption.mock.calls.map(([input]) => [input.key, input.value])).toEqual([
+        ["timeout", "120"],
+      ]);
+      expect(f.setModel.mock.invocationCallOrder[0]).toBeLessThan(
+        expectDefined(f.runTurn.mock.invocationCallOrder[0], "runtime prompt call"),
+      );
+    });
+
+    it("keeps an advertised model config option ahead of session/set_model", async () => {
+      const f = fixture({ runtimeOptions: { model: "openai/gpt-5.4" } });
+      f.getCapabilities.mockResolvedValue({ ...modelsOnly, configOptionKeys: ["model"] });
+      await f.setOption("model", "openai/gpt-5.5");
+      await f.run();
+      expect(f.setModel).not.toHaveBeenCalled();
+      expect(f.setConfigOption.mock.calls.map(([input]) => [input.key, input.value])).toEqual([
+        ["model", "openai/gpt-5.5"],
+        ["model", "openai/gpt-5.5"],
+      ]);
+    });
+
+    it("does not retry a rejected set_model write through set_config_option", async () => {
+      const rejected = () =>
+        new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          'Failed session/set_model for model "unknown": ACP -32602 Invalid params',
+        );
+      const command = modelsOnlyFixture();
+      command.setModel.mockRejectedValue(rejected());
+      await expect(command.setOption("model", "unknown")).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+      });
+      expect(command.persisted.currentMeta.runtimeOptions).toBeUndefined();
+
+      const replay = modelsOnlyFixture({ model: "unknown" });
+      replay.setModel.mockRejectedValue(rejected());
+      await expect(replay.run()).rejects.toThrow(/session\/set_model/);
+      for (const f of [command, replay]) {
+        expect(f.setConfigOption).not.toHaveBeenCalled();
+      }
+      expect(replay.runTurn).not.toHaveBeenCalled();
+    });
+  });
+
   it("maps thinking through status config options when capabilities omit keys", async () => {
     const f = fixture({ agent: "claude" });
     f.getStatus.mockResolvedValue({ details: { configOptions: [{ id: "effort" }] } });

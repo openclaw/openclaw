@@ -2,7 +2,7 @@ import {
   isRequestedModelUnsupportedError,
   type AcpxRuntime as BaseAcpxRuntime,
 } from "acpx/runtime";
-import type { AcpRuntime } from "../runtime-api.js";
+import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime-api.js";
 
 type DelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type EnsureInput = Parameters<AcpRuntime["ensureSession"]>[0] &
@@ -13,6 +13,19 @@ export function withAcpxSessionOptions(input: EnsureInput): DelegateEnsureInput 
   const sessionOptions = model ? { ...input.sessionOptions, model } : input.sessionOptions;
   const { modelExplicit: _modelExplicit, thinkingExplicit: _thinkingExplicit, ...rest } = input;
   return { ...rest, ...(sessionOptions ? { sessionOptions } : {}) };
+}
+
+/** ACPX lists set_model for every session; offer it only where the session announced models. */
+export function withAnnouncedModelControl(
+  capabilities: AcpRuntimeCapabilities,
+  status: { models?: unknown } | undefined,
+): AcpRuntimeCapabilities {
+  return {
+    ...capabilities,
+    controls: capabilities.controls.filter(
+      (control) => control !== "session/set_model" || status?.models !== undefined,
+    ),
+  };
 }
 
 // Try the exact harness id first. ACPX owns live catalog validation and vendor aliases;

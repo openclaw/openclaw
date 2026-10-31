@@ -195,6 +195,7 @@ export function createRuntime() {
       details: { status: "alive" },
     })),
     setMode: vi.fn<NonNullable<AcpRuntime["setMode"]>>(async () => {}),
+    setModel: vi.fn<NonNullable<AcpRuntime["setModel"]>>(async () => {}),
     setConfigOption: vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>(async () => {}),
   };
   const runtime: AcpRuntime = { ...mocks };

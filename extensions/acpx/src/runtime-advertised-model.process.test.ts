@@ -38,6 +38,7 @@ async function withRuntime(
     restart: () => AcpxRuntime,
   ) => Promise<void>,
   cursor = true,
+  agentArgs: string[] = [],
 ) {
   const spawned: Array<AcpProcessStarted & { exited: Promise<void> }> = [];
   const exits = new Map<string, () => void>();
@@ -53,7 +54,9 @@ async function withRuntime(
         executable = await copyNodeExecutable(state.root, "cursor-agent");
       }
       return {
-        agentRegistry: createAgentRegistry({ overrides: { catalog: [executable, script] } }),
+        agentRegistry: createAgentRegistry({
+          overrides: { catalog: [executable, script, ...agentArgs] },
+        }),
         permissionMode: "deny-all",
         timeoutMs: 10_000,
         processLifecycle: {
@@ -160,4 +163,38 @@ it("keeps non-Cursor harness ids opaque", async () => {
     });
     await expectModel(runtime, handle, "exact", "composer-2.5[fast=true]");
   }, false);
+});
+
+it("routes model controls through session/set_model for models-only sessions", async () => {
+  await withRuntime(
+    async (runtime, _spawned, restart) => {
+      const input = modelRequest("legacy-models");
+      const handle = await runtime.ensureSession(input);
+      const capabilities = await runtime.getCapabilities({ handle });
+      expect(capabilities.controls).toContain("session/set_model");
+      expect(capabilities.configOptionKeys).toBeUndefined();
+      await expect(select(runtime, handle, "grok-4.5[effort=high,fast=true]")).rejects.toThrow(
+        /-32601|method not found/i,
+      );
+
+      await runtime.setModel({ handle, model: "provider/grok-4.5[effort=high,fast=true]" });
+      await expectModel(runtime, handle, "selected", "grok-4.5[effort=high,fast=true]");
+      await expect(runtime.setModel({ handle, model: "unadvertised" })).rejects.toMatchObject({
+        reason: "unadvertised-model",
+      });
+      await expectModel(runtime, handle, "unchanged", "grok-4.5[effort=high,fast=true]");
+
+      await runtime.shutdown();
+      const resumed = restart();
+      const reconnected = await resumed.ensureSession(input);
+      expect(reconnected.backendSessionId).toBe(handle.backendSessionId);
+      expect((await resumed.getCapabilities({ handle: reconnected })).controls).toContain(
+        "session/set_model",
+      );
+      await resumed.setModel({ handle: reconnected, model: "composer-2.5[fast=true]" });
+      await expectModel(resumed, reconnected, "replayed", "composer-2.5[fast=true]");
+    },
+    false,
+    ["--legacy-models"],
+  );
 });
