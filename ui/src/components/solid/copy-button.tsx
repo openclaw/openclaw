@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { handleCopyButton } from "../copy-button-state.ts";
@@ -12,6 +12,8 @@ export function CopyButton(props: {
   ref?: (element: HTMLButtonElement) => void;
   idleLabel?: string;
   bare?: boolean;
+  /** Icon-only surfaces show failure as an icon and report outcomes in the tooltip. */
+  iconFeedback?: boolean;
   buttonAttributes?: SolidJSX.ButtonHTMLAttributes<HTMLButtonElement> & {
     [name: `data-${string}`]: string | number | boolean | undefined;
   };
@@ -21,8 +23,9 @@ export function CopyButton(props: {
     <For each={[props.text]}>
       {(text) => {
         let feedback!: HTMLSpanElement;
+        const [outcome, setOutcome] = createSignal<string>();
         return (
-          <openclaw-tooltip prop:content={label()}>
+          <openclaw-tooltip prop:content={(props.iconFeedback && outcome()) || label()}>
             <button
               {...props.buttonAttributes}
               class={props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
@@ -32,7 +35,11 @@ export function CopyButton(props: {
                 (element) => props.ref?.(element),
                 nativeListener(
                   "click",
-                  (event) => void handleCopyButton(event, text, label(), { feedback }),
+                  (event) =>
+                    void handleCopyButton(event, text, label(), {
+                      feedback,
+                      onFeedback: setOutcome,
+                    }),
                 ),
               ]}
             >
@@ -43,6 +50,11 @@ export function CopyButton(props: {
                 <span class="chat-copy-btn__icon-check">
                   <Icon name="check" />
                 </span>
+                <Show when={props.iconFeedback}>
+                  <span class="chat-copy-btn__icon-failed">
+                    <Icon name="x" />
+                  </span>
+                </Show>
               </span>
             </button>
             <span ref={(element) => (feedback = element)} data-copy-feedback role="status" hidden />

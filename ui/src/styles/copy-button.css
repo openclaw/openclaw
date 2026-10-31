@@ -12,7 +12,8 @@
 }
 
 .chat-copy-btn__icon-copy,
-.chat-copy-btn__icon-check {
+.chat-copy-btn__icon-check,
+.chat-copy-btn__icon-failed {
   position: absolute;
   top: 0;
   left: 0;
@@ -21,11 +22,14 @@
 }
 
 .chat-copy-btn__icon-check,
-.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
+.chat-copy-btn__icon-failed,
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy,
+.chat-copy-btn[data-copy-state="error"]:has(.chat-copy-btn__icon-failed) .chat-copy-btn__icon-copy {
   opacity: 0;
 }
 
-.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check,
+.chat-copy-btn[data-copy-state="error"] .chat-copy-btn__icon-failed {
   opacity: 1;
 }
 
@@ -46,9 +50,10 @@
   color: var(--ok);
 }
 
-/* The check icon is the visible success outcome. Keep the live status for
- * assistive technology while leaving copy failures readable beside the button. */
-.chat-copy-btn[data-copy-state="copied"] + [data-copy-feedback] {
+/* The icon is the visible outcome. Keep the live status for assistive technology
+ * while leaving copy failures without a failure icon readable beside the button. */
+.chat-copy-btn[data-copy-state="copied"] + [data-copy-feedback],
+.chat-copy-btn[data-copy-state="error"]:has(.chat-copy-btn__icon-failed) + [data-copy-feedback] {
   position: absolute;
   width: 1px;
   height: 1px;

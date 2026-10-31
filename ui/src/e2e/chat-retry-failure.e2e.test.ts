@@ -246,30 +246,42 @@ suite.define(() => {
       expect(await page.locator(".chat-error").count()).toBe(0);
       expect(await notice.textContent()).not.toContain("⚠");
       await paragraph(page, partial).waitFor();
+      const toggle = notice.getByRole("button", { name: "Unable to finish this reply" });
       const copy = notice.getByRole("button", { name: "Copy error", exact: true });
+      const panel = notice.getByRole("dialog", { name: "Unable to finish this reply" });
       const retryButton = notice.getByRole("button", { name: "Try again", exact: true });
-      const copyOpacity = () => copy.evaluate((node) => getComputedStyle(node).opacity);
+      const conversation = () =>
+        page.evaluate(() => {
+          const thread = document.querySelector(".chat-thread")!;
+          const line = document.querySelector(".chat-run-failure")!.getBoundingClientRect();
+          return { top: line.top, scrollHeight: thread.scrollHeight, scrollTop: thread.scrollTop };
+        });
       await page.mouse.move(0, 0);
-      await expect.poll(copyOpacity).toBe("0");
+      expect(await copy.isVisible()).toBe(false);
       const titleBox = await notice.locator(".chat-run-failure__title").boundingBox();
       const retryBox = await retryButton.boundingBox();
-      const contentBox = await notice.locator(".chat-run-failure__content").boundingBox();
-      assert(titleBox && retryBox && contentBox);
-      expect(Math.abs(retryBox.x + retryBox.width - contentBox.x - contentBox.width)).toBeLessThan(
-        1,
-      );
+      assert(titleBox && retryBox);
       expect(
         Math.abs(titleBox.y + titleBox.height / 2 - retryBox.y - retryBox.height / 2),
       ).toBeLessThan(1);
-      await notice.hover();
-      await expect.poll(copyOpacity).toBe("1");
+      expect(retryBox.height).toBe(26);
+      const closed = await conversation();
+      await toggle.click();
+      await panel.waitFor();
+      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(await conversation()).toEqual(closed);
+      await expect.poll(() => panel.getAttribute("data-phase")).toBe("open");
       const copyIcon = copy.locator(".chat-copy-btn__icon-copy svg");
       expect(await copyIcon.boundingBox()).toMatchObject({ width: 14, height: 14 });
-      await page.mouse.move(0, 0);
-      await copy.focus();
-      await expect.poll(copyOpacity).toBe("1");
-      await copy.evaluate((node) => node.blur());
-      await expect.poll(copyOpacity).toBe("0");
+      await page.keyboard.press("Escape");
+      await panel.waitFor({ state: "hidden" });
+      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(await toggle.evaluate((node) => node === document.activeElement)).toBe(true);
+      await toggle.click();
+      await panel.waitFor();
+      await page.mouse.click(5, 5);
+      await panel.waitFor({ state: "hidden" });
+      expect(await conversation()).toEqual(closed);
       expect(await notice.locator("details").count()).toBe(0);
       expect(await notice.getByRole("button", { name: "Change model", exact: true }).count()).toBe(
         0,
@@ -288,7 +300,8 @@ suite.define(() => {
           await touchPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const touchNotice = touchPage.locator(".chat-run-failure");
           const touchCopy = touchNotice.getByRole("button", { name: "Copy error", exact: true });
-          await touchCopy.waitFor();
+          await touchNotice.getByRole("button", { name: "Unable to finish this reply" }).tap();
+          await touchNotice.locator('[role="dialog"][data-phase="open"]').waitFor();
           expect(await touchPage.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true);
           expect(await touchCopy.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
           expect(await touchCopy.evaluate((node) => node.getBoundingClientRect().width)).toBe(32);
