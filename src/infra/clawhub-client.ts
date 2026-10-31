@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { sleepWithAbort } from "./backoff.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
@@ -213,6 +214,9 @@ async function requestClawHub(params: ClawHubRequestParams) {
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
+  if (token) {
+    registerSecretValueForRedaction(token);
+  }
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const headers = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
