@@ -308,6 +308,7 @@ it("measures newly committed rows before observer registration using fractional 
   virtualizer.getVirtualItems();
   const rowRefs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: () => true,
+    beforeMeasure: () => {},
     onMount: () => {},
   });
   try {
@@ -509,7 +510,6 @@ it("updates rail geometry for size changes without measuring streamed content or
 });
 
 it("remeasures panes from a plain owner geometry commit while preserving hidden rows", async () => {
-  const flushFrames = stubAnimationFrames();
   const geometryEventTarget = transcriptContainer();
   const viewportChanged = vi.fn();
   const makePane = (pane: string, onViewportResize?: () => void) => {
@@ -560,13 +560,11 @@ it("remeasures panes from a plain owner geometry commit while preserving hidden 
   }
   expect(viewportChanged).not.toHaveBeenCalled();
   emitTranscriptResize(mainScroller, 800, 600);
-  flushFrames();
   mainScroller.scrollTop = 40;
   mainScroller.dispatchEvent(new Event("scroll"));
   transcriptDomState.measuredRowHeight = 180;
   emitTranscriptResize(mainScroller, 640, 600);
   renderTranscripts();
-  flushFrames();
   await flushDeferredRowPrune();
   expect(viewportChanged).toHaveBeenCalledOnce();
   expect(transcriptSize(mainPanel)).toBe(720);

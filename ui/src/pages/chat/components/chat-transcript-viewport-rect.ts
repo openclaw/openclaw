@@ -53,8 +53,6 @@ export class TranscriptViewportRect {
     callback: (rect: Rect) => void,
   ): (() => void) => {
     let delivered = false;
-    let frame: number | undefined;
-    let pendingRect: Rect | undefined;
     const deliverRect = (rect: Rect) => {
       // Hidden tabs and detached faces retain their last measurable geometry.
       if (instance.scrollElement !== this.owner.getScrollElement() || !rect.width || !rect.height) {
@@ -107,10 +105,6 @@ export class TranscriptViewportRect {
       }
     };
     const syncRect = () => {
-      if (frame !== undefined) {
-        instance.targetWindow?.cancelAnimationFrame(frame);
-        frame = undefined;
-      }
       const element = instance.scrollElement;
       if (element?.getClientRects().length) {
         const rect = unscaledBorderBox(element);
@@ -121,26 +115,16 @@ export class TranscriptViewportRect {
     this.syncRect = syncRect;
     syncRect();
     const element = instance.scrollElement;
-    const view = instance.targetWindow;
-    // Anchor immediately, but publish geometry outside native resize delivery:
-    // the resulting Solid commit can resize the retained transcript again.
+    const ResizeObserver = instance.targetWindow?.ResizeObserver;
+    // Composer compensation must see the viewport before deferred row measurements.
     const observer =
-      element && view?.ResizeObserver
-        ? new view.ResizeObserver(([entry]) => {
-            this.owner.commitComposerResize();
+      element && ResizeObserver
+        ? new ResizeObserver(([entry]) => {
             const box = entry?.borderBoxSize?.[0];
-            pendingRect = box
-              ? { width: Math.round(box.inlineSize), height: Math.round(box.blockSize) }
-              : undefined;
-            if (frame === undefined) {
-              frame = view.requestAnimationFrame(() => {
-                frame = undefined;
-                if (pendingRect) {
-                  deliverRect(pendingRect);
-                } else {
-                  syncRect();
-                }
-              });
+            if (box) {
+              deliverRect({ width: Math.round(box.inlineSize), height: Math.round(box.blockSize) });
+            } else {
+              syncRect();
             }
           })
         : null;
@@ -149,9 +133,6 @@ export class TranscriptViewportRect {
     }
     return () => {
       observer?.disconnect();
-      if (frame !== undefined) {
-        instance.targetWindow?.cancelAnimationFrame(frame);
-      }
       if (this.syncRect === syncRect) {
         this.syncRect = null;
       }
