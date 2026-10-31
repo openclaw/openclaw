@@ -693,9 +693,19 @@ export function createGoogleInteractionsTransportStreamFn(): StreamFn {
         }
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider);
         const openStream = async (requestApiKey: string | undefined) => {
+          // OAuth JSON credentials authenticate with a bearer token, never as an API
+          // key; same translation as GenerateContent (parseGeminiAuth). Caller headers win.
+          const bearer = requestApiKey
+            ? parseGeminiAuth(requestApiKey).headers.Authorization
+            : undefined;
           const source = provider.streamSimple(model, context, {
             ...options,
             apiKey: requestApiKey,
+            ...(bearer
+              ? {
+                  headers: { Authorization: bearer, "x-goog-api-key": null, ...options?.headers },
+                }
+              : {}),
           });
           const iterator = source[Symbol.asyncIterator]();
           // The adapter emits start only after the guarded HTTP request succeeds.

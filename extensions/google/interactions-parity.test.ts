@@ -60,13 +60,20 @@ describe("Google Interactions provider parity", () => {
     expect(fetch.mock.calls[0]?.[1]).toHaveProperty("redirect", "manual");
   });
 
-  it("selects the provider-owned stream for local services", () => {
-    expect(
-      select({
-        ...model,
-        [Symbol.for("openclaw.modelProviderRequestTransport")]: { localService: {} },
-      }),
-    ).toBeTypeOf("function");
+  it("sends OAuth JSON credentials as a bearer token, not an API key", async () => {
+    const fetch = vi.fn().mockResolvedValue(success());
+    vi.stubGlobal("fetch", fetch);
+    const streamFn = select(model);
+    assert(streamFn);
+    const result = await (
+      await streamFn(model, context, {
+        apiKey: JSON.stringify({ token: "oauth-token", projectId: "demo" }),
+      })
+    ).result();
+    expect(result.stopReason).toBe("stop");
+    const headers = new Headers(fetch.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("authorization")).toBe("Bearer oauth-token");
+    expect(headers.has("x-goog-api-key")).toBe(false);
   });
 
   it("rotates a pre-stream HTTP 429 to the next Gemini key", async () => {
