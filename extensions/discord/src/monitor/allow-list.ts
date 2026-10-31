@@ -85,8 +85,10 @@ export function normalizeDiscordSlug(value: string) {
 }
 
 export function normalizeDiscordDisplaySlug(value: string) {
+  // Emoji presentation selectors and the keycap mark are marks, but not part of the name.
   return normalizeLowercaseStringOrEmpty(value)
     .normalize("NFC")
+    .replace(/[\uFE0E\uFE0F\u20E3]/g, "")
     .replace(/^#/, "")
     .replace(/[\s_]+/g, "-")
     .replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-")

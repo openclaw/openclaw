@@ -99,12 +99,18 @@ describe("discord directory live lookups", () => {
         { id: "c1", name: "general" },
         { id: "c2", name: "random" },
       ],
-      "/guilds/g2/channels": [{ id: "c3", name: "announcements" }],
+      "/guilds/g2/channels": [
+        { id: "c3", name: "announcements" },
+        { id: "c4", name: "雑談" },
+      ],
     });
 
     const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "an", limit: 2 }));
 
     expect(rows).toEqual([groupRow("c2", "random"), groupRow("c3", "announcements")]);
+    await expect(listDiscordDirectoryGroupsLive(makeParams({ query: "雑談" }))).resolves.toEqual([
+      groupRow("c4", "雑談"),
+    ]);
   });
 
   it("returns ranked peer results and caps member search by limit", async () => {
