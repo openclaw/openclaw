@@ -4,7 +4,13 @@ import {
   skipHorizontalWhitespace,
 } from "../../../packages/tool-call-repair/src/grammar.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
-import { trimTextPreservingCode, type TextFilter } from "./text-projection.js";
+import {
+  createTextProjector,
+  trimTextFilter,
+  type TextProjector,
+  trimTextPreservingCode,
+  type TextFilter,
+} from "./text-projection.js";
 
 function consumeJsonish(input: string, start: number): number | null {
   let index = start;
@@ -50,10 +56,20 @@ function consumeJsonish(input: string, start: number): number | null {
   return null;
 }
 
-function stripDowngradedToolCalls(input: string): string {
-  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+type DowngradedToolCallScan = {
+  text: string;
+  /** A candidate reaches the end of the input and can still change on append. */
+  pending: boolean;
+};
+
+function scanDowngradedToolCalls(
+  input: string,
+  protectedRegions?: ReturnType<typeof findCodeRegions>,
+): DowngradedToolCallScan {
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined = protectedRegions;
   let result = "";
   let cursor = 0;
+  let pending = input.lastIndexOf("[") > input.lastIndexOf("]");
   for (const match of input.matchAll(/\[Tool Call:[^\]]*\]/gi)) {
     const start = match.index;
     if (start < cursor || isInsideCode(start, (codeRegions ??= findCodeRegions(input)))) {
@@ -70,14 +86,24 @@ function stripDowngradedToolCalls(input: string): string {
       if (input[index] === " ") {
         index += 1;
       }
-      index = consumeJsonish(input, index) ?? index;
+      const payloadEnd = consumeJsonish(input, index);
+      if (payloadEnd === null) {
+        // Later text can complete the argument object and hide the payload.
+        pending = true;
+      }
+      index = payloadEnd ?? index;
     }
     if (!result || result.endsWith("\n") || result.endsWith("\r")) {
       index = consumeLineBreak(input, index) ?? index;
     }
     cursor = index;
+    if (cursor === input.length || !input.includes("\n", cursor)) {
+      // The next line is still streaming: appends can extend the payload test
+      // (for example a partial `Arguments` keyword) or stay inside the block.
+      pending = true;
+    }
   }
-  return result + input.slice(cursor);
+  return { text: result + input.slice(cursor), pending };
 }
 
 /**
@@ -91,26 +117,90 @@ export function stripDowngradedToolCallText(
   if (!text || (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text))) {
     return text;
   }
-  let cleaned = stripDowngradedToolCalls(text);
-  for (const pattern of [
-    /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
-    /\[Historical context:[^\]]*\]\n?/gi,
-  ]) {
-    const input = cleaned;
-    // An earlier removal can change Markdown ownership for the next marker family.
-    let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
-    cleaned = input.replace(pattern, (match, offset: number) =>
-      isInsideCode(offset, (codeRegions ??= findCodeRegions(input))) ? match : "",
-    );
+  let cleaned = text;
+  for (const scan of downgradedScanners) {
+    cleaned = scan(cleaned).text;
   }
   return trimTextPreservingCode(cleaned, options?.preserveTrailingWhitespace ? "start" : "both");
 }
 
+function scanDowngradedPattern(
+  input: string,
+  pattern: RegExp,
+  ownsTail: boolean,
+  protectedRegions?: ReturnType<typeof findCodeRegions>,
+): DowngradedToolCallScan {
+  let codeRegions = protectedRegions;
+  let pending = input.lastIndexOf("[") > input.lastIndexOf("]");
+  const text = input.replace(pattern, (match, offset: number) => {
+    if (isInsideCode(offset, (codeRegions ??= findCodeRegions(input)))) {
+      return match;
+    }
+    // A result without a later tool marker still owns the streaming tail.
+    pending ||=
+      offset + match.length === input.length ||
+      (ownsTail && !input.slice(offset + match.length).includes("[Tool "));
+    return "";
+  });
+  return { text, pending };
+}
+
+const downgradedScanners: Array<
+  (text: string, regions?: ReturnType<typeof findCodeRegions>) => DowngradedToolCallScan
+> = [
+  scanDowngradedToolCalls,
+  (text, regions) =>
+    scanDowngradedPattern(
+      text,
+      /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
+      true,
+      regions,
+    ),
+  (text, regions) =>
+    scanDowngradedPattern(text, /\[Historical context:[^\]]*\]\n?/gi, false, regions),
+];
+
 export function downgradedToolCallTextFilter(options?: {
   preserveTrailingWhitespace?: boolean;
 }): TextFilter {
+  const activationTokens = ["[Tool Call", "[Tool Result", "[Historical context"] as const;
   return {
     transform: (text) => stripDowngradedToolCallText(text, options),
-    activationTokens: ["[Tool Call", "[Tool Result", "[Historical context"],
+    create() {
+      let tail = "";
+      let project: TextProjector | undefined;
+      return (input) => {
+        if (!project) {
+          const probe = tail + (input.delta ?? input.text);
+          tail = probe.slice(-20);
+          if (!/\[Tool (?:Call|Result)|\[Historical context/i.test(probe)) {
+            return input;
+          }
+          project = createTextProjector([
+            ...downgradedScanners.map((scan): TextFilter => ({
+              activationTokens,
+              transform: (text) => scan(text).text,
+              checkpoint(text, boundary, context) {
+                const regions = context.codeRegions();
+                const result = scan(text, regions);
+                const prefix = scan(text.slice(0, boundary), regions);
+                const retainStart = result.pending || prefix.pending ? 0 : boundary;
+                return {
+                  text: result.text,
+                  retainStart,
+                  retainedOutputStart: retainStart ? prefix.text.length : 0,
+                };
+              },
+            })),
+            trimTextFilter(options?.preserveTrailingWhitespace ? "start" : "both", {
+              preserveCodeIndentation: true,
+            }),
+          ]);
+          // Activate from the complete source; earlier input has not passed through trim.
+          return project({ ...input, delta: null });
+        }
+        return project(input);
+      };
+    },
   };
 }

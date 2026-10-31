@@ -1,11 +1,5 @@
-import { expect, it, vi } from "vitest";
-import { findCodeRegions } from "./code-regions.js";
+import { expect, it } from "vitest";
 import * as text from "./text-projection.js";
-
-vi.mock("./code-regions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./code-regions.js")>();
-  return { ...actual, findCodeRegions: vi.fn(actual.findCodeRegions) };
-});
 
 const project = (...filters: text.TextFilter[]) => text.createTextProjection(filters);
 const expectUpdate = (actual: text.TextProjection, value: string, delta: string | null = value) =>
@@ -175,21 +169,3 @@ it.each([
     expectUpdate(projection.append("word"), "New\n\nLast word", " word");
   },
 );
-
-it("keeps code-bearing continuation appends on the incremental suffix path", () => {
-  const parser = vi.mocked(findCodeRegions);
-  parser.mockClear();
-  const code = "```text\ninside\n\ninside\n```";
-  const source = `${code}\n\nrepeat\n\nrepeat\n\ntail`;
-  const projection = project(text.duplicateParagraphTextFilter);
-  expect(projection.append(source).text).toBe(`${code}\n\nrepeat\n\ntail`);
-  const initialParses = parser.mock.calls.length;
-  expect(initialParses).toBeGreaterThan(0);
-
-  for (let index = 0; index < 256; index++) {
-    const delta = `-${index}`;
-    expect(projection.append(delta).delta).toBe(delta);
-  }
-  expect(parser).toHaveBeenCalledTimes(initialParses);
-  expect(projection.text).toBe(text.duplicateParagraphTextFilter.transform(projection.source));
-});

@@ -31,13 +31,6 @@ function expectChunkedProjection(source: string, size: number, expected: string)
   expect(projection.text).toBe(expected);
 }
 
-it("keeps an invisible stream pending until visible text arrives and honors replacements", () => {
-  const stream = createTextProjection(assistantVisibleTextFilters("delivery"));
-  expect(stream.append("\u200b")).toEqual({ text: "", delta: "" });
-  expect(stream.append("👩‍💻")).toEqual({ text: "\u200b👩‍💻", delta: "\u200b👩‍💻" });
-  expect(stream.replace("\u2060")).toEqual({ text: "", delta: null });
-});
-
 it("keeps plain-tool code protection independent across interleaved streams and replacements", () => {
   const literal = createTextProjection([plainToolCallTextFilter]);
   const hidden = createTextProjection([plainToolCallTextFilter]);

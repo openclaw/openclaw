@@ -42,17 +42,16 @@ it("keeps a split tool header across an unbounded whitespace gap", () => {
 
 const markdownOwnershipWork = vi.hoisted(() => ({ scannedCharacters: 0 }));
 
-vi.mock("./code-regions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./code-regions.js")>();
+vi.mock("../../../packages/markdown-core/src/reasoning-tag-parser.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../packages/markdown-core/src/reasoning-tag-parser.js")
+    >();
   return {
     ...actual,
-    findCodeRegions(text: string) {
-      markdownOwnershipWork.scannedCharacters += text.length;
-      return actual.findCodeRegions(text);
-    },
-    findCodeOwnership(...args: Parameters<typeof actual.findCodeOwnership>) {
+    parseMarkdownOwnership(...args: Parameters<typeof actual.parseMarkdownOwnership>) {
       markdownOwnershipWork.scannedCharacters += args[0].length;
-      return actual.findCodeOwnership(...args);
+      return actual.parseMarkdownOwnership(...args);
     },
   };
 });
@@ -146,19 +145,24 @@ it.each(["mixed", "leading", "repeated literal", "repeated hidden"])(
   },
 );
 
-it("bounds Markdown scan work after an early duplicate paragraph", () => {
-  const paragraphs = Array.from(
-    { length: 128 },
-    (_, index) => `Paragraph ${index}: an ordinary explanatory sentence without code.`,
-  );
-  const source = ["Ready.", "Ready.", ...paragraphs].join("\n\n");
-  const stream = createAssistantVisibleStreamText("final_answer");
-  markdownOwnershipWork.scannedCharacters = 0;
-  const result = streamChunks(source, 4, stream);
-  expect(result.text).toBe(["Ready.", ...paragraphs].join("\n\n"));
-  expect(result.delivered).toBe(result.text);
-  expect(markdownOwnershipWork.scannedCharacters).toBeLessThan(source.length * 16);
-});
+it.each(["", "```text\ninside\n\ninside\n```\n\n"])(
+  "bounds Markdown scan work after an early duplicate paragraph %j",
+  (prefix) => {
+    const paragraphs = prefix
+      ? ["tail".repeat(256)]
+      : Array.from(
+          { length: 128 },
+          (_, index) => `Paragraph ${index}: an ordinary explanatory sentence without code.`,
+        );
+    const source = prefix + ["Ready.", "Ready.", ...paragraphs].join("\n\n");
+    const stream = createAssistantVisibleStreamText("final_answer");
+    markdownOwnershipWork.scannedCharacters = 0;
+    const result = streamChunks(source, 4, stream);
+    expect(result.text).toBe(prefix + ["Ready.", ...paragraphs].join("\n\n"));
+    expect(result.delivered).toBe(result.text);
+    expect(markdownOwnershipWork.scannedCharacters).toBeLessThan(source.length * 16);
+  },
+);
 
 it("restores provisional reasoning text and resets its state on replacement", () => {
   const stream = createAssistantVisibleStreamText("final_answer");
@@ -376,10 +380,15 @@ it("refreshes image-alt ownership when a long reference destination closes", () 
   }
 });
 
-it("does not extend a list fence across an unindented continuation", () => {
-  const chunks = ["- ```text\n  [tool:read] {}\n  ~~~\n  example {}", "\n[tool:write] {}\nDone."];
+it.each([
+  ["- ```text\n  [tool:read] {}\n  ~~~\n  example {}", "\n[tool:write] {}\nDone."],
+  ["> ```text\n> [Historical context: example]", "\n\n[Historical context: hidden]\nDone."],
+  ["- ```text\n  [Historical context: example]", "\n\n[Historical context: hidden]\nDone."],
+])("does not extend a container fence across its exit: %j", (...chunks) => {
   const text = projectFinal(chunks);
-  expect(text).toContain("[tool:read] {}");
+  expect(text).toContain(chunks[0]);
+  expect(text).toContain("Done.");
+  expect(text).not.toContain("[Historical context: hidden]");
   expect(text).not.toContain("[tool:write] {}");
 });
 
@@ -388,6 +397,14 @@ const batch = (source: string) =>
   sanitizeAssistantVisibleStreamText(source, "final_answer").trimEnd();
 
 it.each([
+  'Use `[TOOL_CALL]` and `[Tool Call: read]` literally.\n\n```\nhello [TOOL_CALL] tool => "read", args => {}\n[/TOOL_CALL]\n```\n\nLater `see [Tool Call: read (ID: 2)] here` continues.',
+  "![alt `[Tool Call: read]`](url)",
+  "[x](<url `[Tool Call: read (ID: 1)]`xxxx>)\n[x]( <url `[Tool Call: read (ID: 1)]`xxxx>)\n\n> [x](\n> <url `[Tool Call: read (ID: 1)]`xxxx>)\n\nDone.",
+  "[Tool Call: read]```text\n\nordinary paragraph\n\n[Historical context: literal]\n",
+  "[Tool Call: read]> ```text\n> [Historical context: literal]\n\nDone.",
+  '[link](url "see `[Tool Call: read]` here")',
+  '[TOOL_CALL] tool => "read", args => {\n"x": 1}[/TOOL_CALL]\nDone.',
+  "[Tool Call: read]\nArguments: {\n}\n[Historical context: hidden]\nDone.",
   "$ build\n(no output)\n\nDone",
   "$ build\n   (no output)   \n\nDone",
   "Step\n[tool calls omitted]\n\nDone",
@@ -423,29 +440,43 @@ it.each([
   expectPrefixParity(source, create, batch);
 });
 
-it.each(["fenced", "indented", "lazy", "prefixed", "inline", "paragraph"])(
+it.each(["fenced", "indented", "lazy", "prefixed", "inline", "paragraph", "legacy", "downgraded"])(
   "bounds %s transcript work",
   (shape) => {
     const prefix = shape === "indented" ? "    " : shape === "prefixed" ? "> " : "";
     const opening = shape === "fenced" ? "```text\n" : shape === "lazy" ? "> $ build\n" : "";
-    const newline = shape === "paragraph" ? "" : "\n";
+    const newline =
+      shape === "paragraph" ? "" : ["legacy", "downgraded"].includes(shape) ? "\n\n" : "\n";
     const line =
       shape === "inline" || shape === "paragraph"
         ? `The command produced (no output).${newline}${newline}`
         : `${prefix}(no output)\n`;
-    const tail = `${prefix}Unique log record.${newline}`.repeat(256);
-    const source = (opening + line + tail).slice(0, 4096);
-    for (const size of [1, 4]) {
+    const transcript =
+      shape === "legacy"
+        ? '```text\n[TOOL_CALL] tool => "read", args => {}[/TOOL_CALL]\n```\n'
+        : shape === "downgraded"
+          ? "`[Tool Call: read]` and `[Historical context: example]`\n"
+          : "";
+    const tail = Array.from(
+      { length: 256 },
+      (_, index) => `${prefix}Log record ${index}${transcript && " `code`"}.${newline}`,
+    ).join("");
+    const source = (transcript + opening + line + tail).slice(0, 4096);
+    for (const size of transcript ? [4] : [1, 4]) {
       let previous = Infinity;
       for (const text of [source.slice(0, 2048), source]) {
         const stream = create();
         let delivered = "";
+        const before = markdownOwnershipWork.scannedCharacters;
         const scanned = regexWork(() => {
           delivered = streamChunks(text, size, stream).delivered;
         });
         expect([stream.text, delivered]).toEqual([batch(text), batch(text)]);
-        // This counts whole-path regexp work, not only placeholder-stage characters.
-        expect(scanned).toBeLessThan(text.length * 192);
+        // Tool transcripts exercise every canonical pass with inline code in the tail.
+        const budget = transcript ? 384 : 192;
+        expect(scanned).toBeLessThan(text.length * budget);
+        const parsed = markdownOwnershipWork.scannedCharacters - before;
+        expect(parsed).toBeLessThan(text.length * (transcript ? 64 : 32));
         expect(scanned).toBeLessThanOrEqual(previous * 2.25);
         previous = scanned;
       }

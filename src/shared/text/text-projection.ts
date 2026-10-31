@@ -1,9 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { escapeRegExp } from "../regexp.js";
 import {
   canReuseMarkdownOwnership,
-  findCodeOwnership,
+  createCodeOwnershipResolver,
   findCodeRegions,
   findTextCheckpoint,
 } from "./code-regions.js";
@@ -100,45 +99,7 @@ function createCheckpointTransform(project: CheckpointTransform) {
   const definitions = new Set<string>();
   let previousVisible: string | undefined;
   let previousReset = false;
-  let ownershipSource = "";
-  let openBlock = false;
-  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
-  const resolveOwnership = (text: string) => {
-    const last = ownership?.regions.at(-1);
-    // A new line can advance settlement even when code ranges stay unchanged.
-    if (
-      ownership &&
-      !text.includes("\n", ownershipSource.length) &&
-      !text.includes("\r", ownershipSource.length) &&
-      (!last?.block || last.end !== ownershipSource.length || openBlock) &&
-      canReuseMarkdownOwnership(ownershipSource, text, ownership)
-    ) {
-      if (openBlock && last) {
-        ownership = {
-          ...ownership,
-          regions: [...ownership.regions.slice(0, -1), { ...last, end: text.length }],
-        };
-      }
-      ownershipSource = text;
-      return ownership;
-    }
-    ownership = findCodeOwnership(text);
-    ownershipSource = text;
-    const tail = ownership.regions.at(-1);
-    const lineStart = tail
-      ? Math.max(text.lastIndexOf("\n", tail.start - 1), text.lastIndexOf("\r", tail.start - 1)) + 1
-      : 0;
-    const topLevel = tail && /^ {0,3}$/u.test(text.slice(lineStart, tail.start));
-    openBlock = Boolean(
-      tail?.block &&
-      tail.end === text.length &&
-      ((topLevel && scanFenceSpans(text.slice(tail.start)).state.open) ||
-        /^(?: {4}|\t)/u.test(
-          text.slice(Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1),
-        )),
-    );
-    return ownership;
-  };
+  const resolveOwnership = createCodeOwnershipResolver();
   const projector = (
     source: string,
     inputDelta: string | null,
