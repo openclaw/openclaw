@@ -1549,7 +1549,7 @@ puts JSON.generate(results)
       ["watch-staging-rejected", "runtime staging rejected"],
       ["watch-staging-unverified", "did not restore a mounted runtime"],
       ["watch-staging-ambiguous", "expected one runtime DMG, found 2"],
-    ]) {
+    ] satisfies [string, string][]) {
       expect(row(scenario), scenario).toMatchObject({ pngs: 8, watchCreates: 0 });
       expect(row(scenario).error).toContain(error);
     }
