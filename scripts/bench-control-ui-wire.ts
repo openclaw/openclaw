@@ -313,6 +313,7 @@ async function startProxy(upstreamPort: number, listenPort: number) {
           source,
           target,
           (chunk, deliveredAtMs, receivedAtMs) => {
+            inspect(chunk, deliveredAtMs, receivedAtMs);
             const packet = {
               direction,
               connection: id,
@@ -329,7 +330,6 @@ async function startProxy(upstreamPort: number, listenPort: number) {
             offset += chunk.length;
             packets.push(packet);
             pendingPackets.set(chunk, packet);
-            inspect(chunk, deliveredAtMs, receivedAtMs);
           },
           (chunk, atMs) => {
             const packet = pendingPackets.get(chunk);

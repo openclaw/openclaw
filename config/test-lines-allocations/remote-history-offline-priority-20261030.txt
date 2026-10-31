@@ -1,2 +1,2 @@
-# Offline installation and deferred downloads yield to history across windows and resume after closure.
-103
+# Offline cache foreground priority regressions, net of the retired idle-menu warmup proof.
+74

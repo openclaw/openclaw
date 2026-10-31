@@ -537,6 +537,10 @@ load, including during the service worker's first installation. Downloads run in
 bounded batches at low priority. Interrupted downloads retain completed assets
 and resume after foreground imports and Gateway requests settle.
 
+Menu bodies load when opened instead of downloading speculatively while the page
+is idle. First open can briefly show a loading row; later opens reuse the loaded
+body. Declared next-route preloads still run after the current page is ready.
+
 When reconnecting to the same Gateway and account, the existing conversation
 history requests changes since its last cursor. The sidebar refresh runs alongside
 that history recovery instead of waiting for it. Its retained labels stay visible

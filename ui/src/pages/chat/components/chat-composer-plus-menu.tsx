@@ -18,7 +18,6 @@ import {
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { countSessionToolOverrides } from "../../../lib/sessions/tool-overrides.ts";
@@ -34,9 +33,6 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuProps }) {
   const Content = lazy(() => import("./chat-composer-plus-menu-content.tsx"), {
     export: "ChatComposerPlusMenuContent",
   });
-  // Each surface owns its lazy component; warming only the module still commits
-  // one loading row on that surface's first open.
-  warmWhenIdle(Content.preload);
   const controls = createMenuControls();
   let handle!: MenuHandle;
   let host!: HTMLDivElement;

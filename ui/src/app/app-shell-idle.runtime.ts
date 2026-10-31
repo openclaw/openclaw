@@ -1,5 +1,4 @@
 import { routeIdFromPath, isSessionRouteId, type RouteId } from "../app-route-paths.ts";
-import { hasIdleWarmups, takeIdleWarmups } from "../lib/idle-warmup.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
@@ -99,7 +98,7 @@ export function connectShellIdle(
   };
   const schedule = () => {
     cancel();
-    if (!available() || running || (manifest && !nextPending() && !hasIdleWarmups())) {
+    if (!available() || running || (manifest && !nextPending())) {
       return;
     }
     // Readiness can precede first paint. Leave a quiet window, then ask for idle
@@ -147,11 +146,6 @@ export function connectShellIdle(
       const key = nextPending();
       intent = undefined;
       if (!key) {
-        // A menu import can discover more imports. Start one per quiet window so
-        // speculative bodies cannot occupy every connection ahead of navigation.
-        for (const load of takeIdleWarmups(1)) {
-          await load().catch(() => undefined);
-        }
         return;
       }
       pending.delete(key);
