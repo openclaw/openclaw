@@ -32,7 +32,7 @@ keeps the current campaign state instead of repeating historical checkpoints.
 
 - [189578](https://github.com/openclaw/openclaw/pull/189578): Unused Workboard open/manifest helpers and exclusive arguments/bookkeeping; all20 cases/seven suites remain. Baseline/candidate/final head pass; proof-enabled6 cases/two suites retain26 PNGs before/after. −47 support/test LOC; no declarations/assertions removed. Existing TTS findings match, fresh review clear, 49 CI checks pass. Shared-browser baseline/candidate have no local WebM; untouched recording path retained, separate follow-up.
 
-- [189612](https://github.com/openclaw/openclaw/pull/189612): Eight redundant Knowledge YAML inputs and four orphaned Mattermost traces; unchanged sole-fixture rejection keeper and all24 cases/three suites remain. Baseline/candidate/final head pass, scanner-diagnostic fault caught, all removal phases clean, fresh review clear,48 CI checks pass. −118 fixture LOC; no declarations/assertions/production changed.
+- [189612](https://github.com/openclaw/openclaw/pull/189612): Eight redundant Knowledge YAML inputs and four orphaned Mattermost traces; unchanged sole-fixture rejection keeper and all 24 cases/three suites remain. Baseline/candidate/final head pass, scanner-diagnostic fault caught, all removal phases clean, fresh review clear,48 CI checks pass. −118 fixture LOC; no declarations/assertions/production changed.
 
 All landed batches completed focused checks, independent review and every removal
 scan phase. Existing Knip findings were attributed, never suppressed; unused-file
@@ -43,11 +43,15 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `2f597cce80f`: consolidating five repeated pure BackgroundView
-cases into the dedicated view suite. Carry the unique disabled-placement Faded
-selection assertion before retiring the duplicate declarations and their private
-fixture. All state-owner cases remain. Browser baseline, targeted fault controls,
-candidate scans, fresh review and published-head proof are pending.
+Pinned main `2f597cce80f`: [189651](https://github.com/openclaw/openclaw/pull/189651)
+consolidates five repeated pure BackgroundView declarations into the dedicated
+view suite. The unique disabled-placement Faded selection assertion is carried
+before retirement. All 12 state-owner declarations and their bodies remain.
+Chromium passes 31→26 cases/two suites. Under a default-selection fault, both
+original view keepers pass; after the carry, the disabled-placement keeper fails
+while the ordinary default keeper passes. The temporary owner fault is restored.
+All removal phases are clean before/after; focused types, lint, format and MDX
+checks pass. Fresh committed review, final published-head proof and CI are pending. No production behavior changes.
 
 ## Completed source review
 
