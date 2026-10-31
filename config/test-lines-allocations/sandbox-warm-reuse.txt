@@ -1,2 +1,2 @@
-119
-# Warm reuse, dirty/deleted files, failed probe authority/acceptance, and pending-conflict restart.
+141
+# Warm reuse, dirty/deleted files, failed probe cancellation/authority/acceptance, and pending-conflict restart.

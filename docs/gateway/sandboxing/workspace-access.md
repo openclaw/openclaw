@@ -82,6 +82,19 @@ not admit host files, including newly provisioned files. Existing admitted sourc
 edits and guest-created files continue to reconcile, including guest-created
 ignored files. Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
+
+A newly created filename containing a literal backslash cannot pass workspace
+checkpoint validation. Its bytes and the pending checkpoint remain preserved.
+The same authorized session can continue using its retained sandbox workspace
+to inspect and explicitly correct that filename with its ordinary permitted
+tools. This workspace can still contain an older view of canonical files; newer
+canonical edits are not imported over the pending changes. File delivery and
+command finalization continue to report the checkpoint failure until correction
+allows normal reconciliation. Existing conflict checks protect concurrent
+canonical edits, and subsequent preparation imports those accepted changes.
+This continuation does not bypass staged conflicts, journal recovery, or the
+session's current permissions, and OpenClaw does not rename or omit the file.
+
 Host recovery snapshots retain host data under their existing rules, but
 restoration does not admit that data to the guest. Use the
 session's managed GitHub publication action to publish accepted changes; host credentials are not

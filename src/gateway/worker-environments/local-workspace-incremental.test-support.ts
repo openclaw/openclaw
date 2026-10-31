@@ -255,6 +255,7 @@ export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceO
 export async function prepareSandboxCheckpointFixture(
   owner: LocalWorkspaceOwner & Partial<Disposable>,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ) {
   const projectionOwner = await import("./local-workspace-projection.js");
   const { prepareLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
@@ -270,6 +271,7 @@ export async function prepareSandboxCheckpointFixture(
     workspaceDir: owner.worktree.path,
     sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
     assertCurrent,
+    signal,
   });
   assert(projection, "Expected managed projection");
   return projection;

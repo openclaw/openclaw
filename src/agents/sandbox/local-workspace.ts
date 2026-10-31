@@ -92,21 +92,25 @@ export async function prepareLocalSandboxWorkspace(params: {
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
     phases.mark("attempt.setup.sandbox.workspace_selection.reuse.acquire");
-    const existing = await reuseLocalWorkspaceProjection(executionOwner);
+    const existing = await reuseLocalWorkspaceProjection(executionOwner, params.signal);
     let workspaceDir: string;
     if (existing) {
       setWorktreePreparationTemplate("reused");
       workspaceDir = existing;
     } else if (params.cfg.worktreeAcceleration === false) {
       phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
-      workspaceDir = await withLocalWorkspaceProjection(executionOwner, async (state) => {
-        phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
-        try {
-          return await state.prepare();
-        } finally {
-          phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
-        }
-      });
+      workspaceDir = await withLocalWorkspaceProjection(
+        executionOwner,
+        async (state) => {
+          phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
+          try {
+            return await state.prepare();
+          } finally {
+            phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
+          }
+        },
+        { signal: params.signal },
+      );
     } else {
       phases.mark("attempt.setup.sandbox.workspace_selection.allocation");
       const allocated = startWorktreePreparationPhase("allocate");
@@ -135,6 +139,7 @@ export async function prepareLocalSandboxWorkspace(params: {
                   phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
                 }
               },
+              { signal: params.signal },
             );
           },
         );

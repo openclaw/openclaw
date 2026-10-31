@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
@@ -48,7 +50,7 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
 
 export async function proveWarmWorkspaceReuseFailure(
   owner: LocalWorkspaceOwner,
-  failure: "read" | "authority" | "observation",
+  failure: "read" | "authority" | "observation" | "cancel",
   revoke: () => void,
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
@@ -56,6 +58,7 @@ export async function proveWarmWorkspaceReuseFailure(
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
   const withStore = stores.withLocalWorkspaceStore;
+  const cancellation = new AbortController();
   let failed = false;
   vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((params, run) =>
     withStore(params, (store) =>
@@ -66,6 +69,9 @@ export async function proveWarmWorkspaceReuseFailure(
             failed = true;
             if (failure === "authority") {
               revoke();
+            }
+            if (failure === "cancel") {
+              cancellation.abort(new Error("reuse cancelled"));
             }
             throw new Error("probe read failed");
           }
@@ -85,6 +91,11 @@ export async function proveWarmWorkspaceReuseFailure(
     using recovered = await prepareSandboxCheckpointFixture(owner);
     expect(recovered.workspaceDir).toBe(first.workspaceDir);
     expect(quiesce).toHaveBeenCalledOnce();
+  } else if (failure === "cancel") {
+    await expect(
+      prepareSandboxCheckpointFixture(owner, undefined, cancellation.signal),
+    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+    expect(quiesce).not.toHaveBeenCalled();
   } else {
     await expect(prepareSandboxCheckpointFixture(owner)).rejects.toThrow(
       failure === "authority" ? "revoked" : "observation acceptance failed",
@@ -94,4 +105,30 @@ export async function proveWarmWorkspaceReuseFailure(
   expect(failed).toBe(true);
   await expectText(owner.worktree.path, "source.txt", "original\n");
   await expectText(first.workspaceDir, "source.txt", "original\n");
+}
+
+export async function proveWarmWorkspaceConflictRecovery(owner: LocalWorkspaceOwner) {
+  const canonical = owner.worktree.path;
+  using first = await prepareSandboxCheckpointFixture(owner);
+  const projection = first.workspaceDir;
+  await writeText(projection, "source.txt", "guest conflict\n");
+  await writeText(canonical, "source.txt", "human conflict\n");
+  await expect(
+    withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical")),
+  ).rejects.toThrow("conflict");
+  await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
+    "conflict",
+  );
+  expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeTruthy();
+  await expectText(projection, "source.txt", "guest conflict\n");
+  await expectText(canonical, "source.txt", "human conflict\n");
+  await closeOpenClawStateDatabaseAsync();
+  await expect(prepareSandboxCheckpointFixture(owner)).rejects.toThrow("conflict");
+  await expectText(projection, "source.txt", "guest conflict\n");
+  await expectText(canonical, "source.txt", "human conflict\n");
+  await writeText(canonical, "source.txt", "original\n");
+  using recovered = await prepareSandboxCheckpointFixture(owner);
+  expect(recovered.workspaceDir).toBe(projection);
+  await expectText(canonical, "source.txt", "guest conflict\n");
+  expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeNull();
 }

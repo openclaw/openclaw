@@ -283,8 +283,8 @@ export async function withSettledLocalWorkspacePath<T>(
 }
 
 /** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
-export function reuseLocalWorkspaceProjection(owner: LocalWorkspaceOwner) {
-  return withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
+export function reuseLocalWorkspaceProjection(owner: LocalWorkspaceOwner, signal?: AbortSignal) {
+  return withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id, signal }, async (store) => {
     using phases = observeDiagnosticsTimelinePhases(
       "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
     );

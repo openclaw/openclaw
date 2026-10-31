@@ -601,6 +601,19 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it.each(["//#region", "//"])(
+    "does not treat source-owned implementations as runtime wrappers (%s)",
+    async (label) => {
+      const f = await runtimeFixture({
+        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label} src/infra/owner.ts\nexport const current = value;\n`,
+        "owner.runtime-Other456.mjs": "export const value = true;\n",
+        "owner.runtime.js": 'export * from "./owner.runtime-Stale.js";\n',
+      });
+      f.aliases();
+      await expectPathMissing(f.file("owner.runtime.js"));
+    },
+  );
+
   it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {
     const f = await runtimeFixture({
       "runtime-plugins.runtime-NewHash.mjs": "export const ready = true;\n",
