@@ -33,8 +33,10 @@ vi.mock("../../agents/bash-process-registry.js", async (importOriginal) => ({
   getFinishedSession: getFinishedSessionMock,
 }));
 
-vi.mock("../../agents/bash-tools.js", () => ({
+// mock-isolation: Keep status, stop, and session routing real; isolate the exec shell.
+vi.mock("../../agents/bash-tools.exec-run.js", () => ({
   createExecTool: createExecToolMock,
+  createExecToolForReply: createExecToolMock,
 }));
 
 const { handleBashChatCommand } = await import("./bash-command.js");
@@ -122,6 +124,7 @@ describe("handleBashChatCommand", () => {
     expect(execute).toHaveBeenCalledWith(
       "chat-bash",
       expect.objectContaining({ command: "echo PRIVATE_COMMAND_123" }),
+      undefined,
     );
     expect(result.text).toContain("session private-job");
     expect(log).toHaveBeenCalledWith("Started bash session private-job");
@@ -259,9 +262,10 @@ describe("handleBashChatCommand", () => {
     });
 
     expect(result.text).toContain("Exit: code 0");
-    expect(createExecToolMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "target", sessionKey: "global" }),
-    );
+    expect(createExecToolMock).toHaveBeenCalledWith({
+      defaults: expect.objectContaining({ agentId: "target", sessionKey: "global" }),
+      operatorAuthority: undefined,
+    });
   });
 
   it.each([

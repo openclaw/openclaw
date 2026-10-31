@@ -8,7 +8,7 @@ import {
   getSession,
 } from "../../agents/bash-process-registry.js";
 import { renderExecExitLabel } from "../../agents/bash-tools.exec-output.js";
-import { createExecTool } from "../../agents/bash-tools.js";
+import { createExecToolForReply } from "../../agents/bash-tools.exec-run.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { isCommandFlagEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +20,7 @@ import type { ReplyPayload } from "../types.js";
 import { isBangCommandInput } from "./bash-command-input.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -107,6 +108,8 @@ export async function handleBashChatCommand(params: {
   sessionKey: string;
   isGroup: boolean;
   elevated: ReturnType<typeof resolveElevatedPermissions>;
+  /** Dispatcher options retaining the admitted caller authority and turn cancellation. */
+  opts?: Pick<InternalGetReplyOptions, "operatorAuthority" | "abortSignal">;
 }): Promise<ReplyPayload> {
   if (!isCommandFlagEnabled(params.cfg, "bash")) {
     return buildDisabledCommandReply({
@@ -252,31 +255,39 @@ export async function handleBashChatCommand(params: {
     const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
     const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
-    const execTool = createExecTool({
-      scopeKey: CHAT_BASH_SCOPE_KEY,
-      agentId,
-      allowBackground: true,
-      timeoutSec,
-      sessionKey: params.sessionKey,
-      eventRouting: {
-        mainKey: params.cfg.session?.mainKey,
-        sessionScope: params.cfg.session?.scope,
+    // The command's admitted caller owns this shell effect; exec rechecks it before spawn.
+    const execTool = createExecToolForReply({
+      defaults: {
+        scopeKey: CHAT_BASH_SCOPE_KEY,
+        agentId,
+        allowBackground: true,
+        timeoutSec,
+        sessionKey: params.sessionKey,
+        eventRouting: {
+          mainKey: params.cfg.session?.mainKey,
+          sessionScope: params.cfg.session?.scope,
+        },
+        notifyOnExit,
+        notifyOnExitEmptySuccess,
+        elevated: {
+          enabled: params.elevated.enabled,
+          allowed: params.elevated.allowed,
+          defaultLevel: "on",
+        },
       },
-      notifyOnExit,
-      notifyOnExitEmptySuccess,
-      elevated: {
-        enabled: params.elevated.enabled,
-        allowed: params.elevated.allowed,
-        defaultLevel: "on",
+      operatorAuthority: params.opts?.operatorAuthority,
+    });
+    const result = await execTool.execute(
+      "chat-bash",
+      {
+        command: commandText,
+        background: shouldBackgroundImmediately,
+        yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
+        timeoutSeconds: timeoutSec,
+        elevated: true,
       },
-    });
-    const result = await execTool.execute("chat-bash", {
-      command: commandText,
-      background: shouldBackgroundImmediately,
-      yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
-      timeoutSeconds: timeoutSec,
-      elevated: true,
-    });
+      params.opts?.abortSignal,
+    );
 
     if (result.details?.status === "running") {
       const sessionId = result.details.sessionId;

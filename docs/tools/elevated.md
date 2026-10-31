@@ -91,13 +91,19 @@ Send `/elevated` with no argument to see the current level.
 
 Allowlist entry formats:
 
-| Prefix                  | Matches                         |
-| ----------------------- | ------------------------------- |
-| (none)                  | Sender ID, E.164, or From field |
-| `name:`                 | Sender display name             |
-| `username:`             | Sender username                 |
-| `tag:`                  | Sender tag                      |
-| `id:`, `from:`, `e164:` | Explicit identity targeting     |
+| Prefix                  | Matches                                              |
+| ----------------------- | ---------------------------------------------------- |
+| (none)                  | Sender ID, E.164, From field, or verified profile ID |
+| `name:`                 | Sender display name                                  |
+| `username:`             | Sender username                                      |
+| `tag:`                  | Sender tag                                           |
+| `id:`, `from:`, `e164:` | Explicit identity targeting                          |
+
+For a verified Gateway login, the profile ID is also a sender identity in WebChat and
+Talk. Use the profile ID from **Settings → Profile** as a plain entry or with `id:`. A
+shared gateway-owner profile used only for attribution and synthetic callers never match
+a profile entry; a configured `*` remains a blanket allow. Non-UI Gateway clients retain
+their application-ID matches in addition to the verified profile ID.
 
 ## What elevated does not control
 

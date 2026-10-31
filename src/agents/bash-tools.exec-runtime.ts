@@ -39,6 +39,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -228,6 +229,8 @@ export async function runExecProcess({
   notifyOnExit: boolean;
   /** Start-time subagent identity resolved from the persisted spawn envelope. */
   subagentSession?: boolean;
+  /** Explicit host-issued caller authority; an explicit value never falls through to ambient. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   notifyOnExitEmptySuccess?: boolean;
   requestOwners?: readonly ExecRequestOwner[];
   scopeKey?: string;
@@ -258,7 +261,10 @@ export async function runExecProcess({
       : (requestSignal ?? initialStartupSignal);
   let assertSourceActive: SessionSourceAssertion | undefined =
     captureAgentToolSourceExecutionGuard(startupSignal);
-  let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
+  // The caller's explicit authority owns this effect even when it is already revoked;
+  // only an omitted value keeps the ordinary per-agent ambient behavior.
+  let operatorAuthority =
+    opts.operatorAuthority ?? getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();

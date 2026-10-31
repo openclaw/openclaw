@@ -22,6 +22,7 @@ import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -29,10 +30,7 @@ import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
-import {
-  buildExecRuntimeErrorOutcome,
-  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
-} from "./bash-tools.exec-output.js";
+import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   assertDurableExecAvailable,
@@ -57,6 +55,7 @@ import {
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
+  buildUnavailableWorkdirResult,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
 import { resolveExecElevatedMode, resolveExecHost } from "./bash-tools.exec-target.js";
@@ -65,7 +64,7 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
-import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
+import { resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
@@ -84,6 +83,21 @@ const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. Automatic completion wake, when enabled, occurs only after exit. New output while this command is running does not automatically start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
 
 export function createExecTool(defaults?: ExecToolDefaults) {
+  return createExecToolImpl(defaults, undefined);
+}
+
+/** Core-only: bind the admitted reply caller without widening the public tool defaults. */
+export function createExecToolForReply(params: {
+  defaults?: ExecToolDefaults;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+}) {
+  return createExecToolImpl(params.defaults, params.operatorAuthority);
+}
+
+function createExecToolImpl(
+  defaults: ExecToolDefaults | undefined,
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+) {
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
   const requestOwners =
@@ -169,20 +183,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
-  const buildUnavailableWorkdirResult = (params: {
-    cwd: string;
-    startedAt?: number;
-    warningText?: string;
-  }) =>
-    buildExecForegroundResult({
-      outcome: buildExecRuntimeErrorOutcome({
-        error: formatUnavailableWorkdirFailure(params.cwd),
-        aggregated: "",
-        durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
-      }),
-      cwd: params.cwd,
-      warningText: params.warningText,
-    });
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -403,7 +403,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       let run: ExecProcessHandle;
       let settled = false;
-      const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
           logInfo("exec: elevated command");
@@ -582,9 +581,10 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,
+          operatorAuthority,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          timeoutSec: effectiveTimeout,
+          timeoutSec: params.timeoutSeconds ?? defaultTimeoutSec,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,

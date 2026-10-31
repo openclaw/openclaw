@@ -1,12 +1,17 @@
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
+import {
+  buildExecRuntimeErrorOutcome,
+  EXEC_RETENTION_CAP_NOTE,
+  renderExecOutputText,
+} from "./bash-tools.exec-output.js";
 import type { ExecProcessOutcome } from "./bash-tools.exec-output.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { formatUnavailableWorkdirFailure } from "./bash-tools.exec-workdir.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
 
@@ -60,6 +65,23 @@ export function buildExecForegroundResult(params: {
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
   return textResult(outputText, details);
+}
+
+/** Foreground result for an unusable selected cwd before any exec effect starts. */
+export function buildUnavailableWorkdirResult(params: {
+  cwd: string;
+  startedAt?: number;
+  warningText?: string;
+}) {
+  return buildExecForegroundResult({
+    outcome: buildExecRuntimeErrorOutcome({
+      error: formatUnavailableWorkdirFailure(params.cwd),
+      aggregated: "",
+      durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
+    }),
+    cwd: params.cwd,
+    warningText: params.warningText,
+  });
 }
 
 export function resolveExecReviewerDefaults(params: {

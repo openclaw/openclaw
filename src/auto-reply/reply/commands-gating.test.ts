@@ -37,10 +37,6 @@ vi.mock("../../agents/bash-process-registry.js", () => ({
   getSession: vi.fn(() => undefined),
 }));
 
-vi.mock("../../agents/bash-tools.js", () => ({
-  createExecTool: vi.fn(),
-}));
-
 // mock-isolation: Exercise command authorization without sandbox backends or session storage.
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
