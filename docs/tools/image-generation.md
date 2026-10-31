@@ -92,7 +92,9 @@ is checked, and downloads obey the operation deadline and image size cap from
 `agents.defaults.mediaMaxMb`.
 The image server must return an image `Content-Type`. Provider HTTP credentials are
 not forwarded to image URLs; provider TLS credentials stay on the provider's
-origin, including across redirects. GPT Image models return base64 directly; OpenClaw
+origin, including across redirects. Download failures report the HTTP status, not
+the storage server's response body, which can contain sensitive details.
+GPT Image models return base64 directly; OpenClaw
 does not force the legacy `response_format` parameter on custom endpoints.
 
 ## Common routes

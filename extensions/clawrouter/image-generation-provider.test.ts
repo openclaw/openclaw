@@ -82,6 +82,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
   let status: number;
   let catalogStatus: number;
   let resultType: string;
+  let resultStatus: number;
   let resultLength: number | undefined;
   let holdPath: string | undefined;
   let onHeld: (response: ServerResponse) => void = () => {};
@@ -117,7 +118,16 @@ describe("registered ClawRouter image generation over HTTP", () => {
         response.statusCode = status;
         response.end(JSON.stringify(payload));
       } else if (request.url === "/result.png") {
+        response.statusCode = resultStatus;
         response.setHeader("Content-Type", resultType);
+        if (resultStatus !== 200) {
+          response.end(
+            JSON.stringify({
+              error: { message: "Storage denied " + authStore.profiles["clawrouter:locked"].key },
+            }),
+          );
+          return;
+        }
         if (resultLength) {
           response.setHeader("Content-Length", resultLength);
         }
@@ -169,6 +179,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
     status = 200;
     catalogStatus = 200;
     resultType = "image/png";
+    resultStatus = 200;
     resultLength = undefined;
     holdPath = undefined;
     onHeld = () => {};
@@ -251,6 +262,25 @@ describe("registered ClawRouter image generation over HTTP", () => {
     payload = { data: [{ url: baseUrl + "/result.png" }] };
     const result = await generate();
     expect(result.images[0]).toMatchObject({ buffer: PNG, mimeType: "image/png" });
+    expect(calls[2]?.headers.authorization).toBeUndefined();
+  });
+
+  it("omits reflected router credentials from result-download failures without retrying generation", async () => {
+    resultStatus = 403;
+    resultType = "application/json";
+    payload = { data: [{ url: baseUrl + "/result.png" }] };
+    const failure = await generate().catch((error: unknown) => error);
+    expect(failure).toMatchObject({ name: "ProviderHttpError", status: 403, statusCode: 403 });
+    const message = String(failure);
+    expect(message).toContain("403");
+    expect(message).toContain("image download failed");
+    expect(message).not.toContain(authStore.profiles["clawrouter:locked"].key);
+    expect(JSON.stringify(failure)).not.toContain(authStore.profiles["clawrouter:locked"].key);
+    expect(calls.map((call) => call.url)).toEqual([
+      "/v1/catalog",
+      "/v1/images/generations",
+      "/result.png",
+    ]);
     expect(calls[2]?.headers.authorization).toBeUndefined();
   });
 
