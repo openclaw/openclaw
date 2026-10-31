@@ -13,6 +13,7 @@ import {
   messageWeight,
   sourceGroups,
   intrinsicGroup,
+  prepareChatHistoryPinCost,
 } from "./chat-history-cost.ts";
 import type {
   ChatHistoryCursor,
@@ -374,22 +375,30 @@ export function selectChatHistoryResidency(
   if (!pagination.segments?.length && !localOutputs.length) {
     return { messages, pagination, withinBudget: true };
   }
-  const segments = [
-    ...(pagination.segments?.length
-      ? pagination.segments
-      : [prepareChatHistorySegment(messages, pagination, pagination.newerCursor)]),
-  ];
-  const ordered = admission ? segments.flatMap((segment) => segment.sources) : [];
+  const pages = pagination.segments?.length
+    ? pagination.segments
+    : [prepareChatHistorySegment(messages, pagination, pagination.newerCursor)];
+  const ordered = admission ? pages.flatMap((segment) => segment.sources) : [];
   const visible = new Set(admission?.visibleSources);
   const firstVisible = ordered.findIndex((source) => visible.has(source));
   const lastVisible = ordered.findLastIndex((source) => visible.has(source));
   const protectedSources = new Set(
     firstVisible < 0 ? [] : ordered.slice(firstVisible, lastVisible + 1),
   );
-  const protectsReader = (segment: ChatHistorySegment) =>
-    segment.sources.some((source) => source === readerSource || protectedSources.has(source));
-  const mayCut = (sources: readonly string[]) =>
-    sources.every((source) => source !== readerSource && !protectedSources.has(source));
+  const protectedSource = (source: string) =>
+    source === readerSource || protectedSources.has(source);
+  const ranges = pages.map((segment) => ({
+    segment,
+    start: 0,
+    end: segment.sources.length,
+    firstProtected: segment.sources.findIndex(protectedSource),
+    lastProtected: segment.sources.findLastIndex(protectedSource),
+    leftBlocked: false,
+    rightBlocked: false,
+  }));
+  let firstRange = 0;
+  let lastRange = ranges.length - 1;
+  const protectsReader = (range: (typeof ranges)[number]) => range.firstProtected >= 0;
   const groups = sourceGroups(messages);
   const newestOutput = localOutputs.at(-1);
   const localCount = localOutputs.length ? 1 : 0;
@@ -408,8 +417,8 @@ export function selectChatHistoryResidency(
   const intrinsicSource = intrinsicGroup(groups.get(pagination.intrinsicSource ?? ""))
     ? pagination.intrinsicSource
     : undefined;
-  let readerPacket = segments.find(
-    (segment) =>
+  const readerPacket = ranges.find(
+    ({ segment }) =>
       readerSource != null &&
       segment.sources.includes(readerSource) &&
       segment.boundedPacket &&
@@ -417,7 +426,7 @@ export function selectChatHistoryResidency(
   );
   // Ordinary packets remain charged. Only the unavoidable over-budget packet
   // containing an unkeyed reader may retain its original opaque boundaries.
-  const packetCost = readerPacket?.sources.reduce(
+  const packetCost = readerPacket?.segment.sources.reduce(
     (cost, source) => {
       const group = groups.get(source);
       if (source !== intrinsicSource && !(source === readerSource && readerException)) {
@@ -432,146 +441,139 @@ export function selectChatHistoryResidency(
     packetCost &&
     (packetCost.count + localCount > CHAT_RESIDENT_ENTRY_TARGET ||
       packetCost.weight + localWeight > CHAT_RESIDENT_WEIGHT_TARGET)
-      ? new Set(readerPacket!.sources)
+      ? new Set(readerPacket!.segment.sources)
       : null;
-  const sources = () => new Set(segments.flatMap((segment) => segment.sources));
-  const pinCounts = new Map<unknown, number>();
-  const messageCounts = new Map<unknown, number>();
-  for (const message of admission?.pins ?? []) {
-    pinCounts.set(message, (pinCounts.get(message) ?? 0) + 1);
-  }
-  if (pinCounts.size) {
-    for (const message of messages) {
-      messageCounts.set(message, (messageCounts.get(message) ?? 0) + 1);
+  const memberships = new Map<string, number>();
+  for (const page of pages) {
+    for (const source of page.sources) {
+      memberships.set(source, (memberships.get(source) ?? 0) + 1);
     }
   }
-  const pinGroups = admission?.pins.length ? sourceGroups(admission.pins) : undefined;
+  const pinCost = prepareChatHistoryPinCost(messages, admission?.pins ?? []);
+  const cost = { count: localCount + pinCost.count, weight: 1 + localWeight + pinCost.weight };
   let localOutputSource: string | undefined;
-  const cost = () => {
-    let count = localCount;
-    let weight = 1 + localWeight;
-    const retained = sources();
-    for (const [message, occurrences] of pinCounts) {
-      const source = nativeHistoryMessageSourceIdentity(message);
-      // Canonical lifecycle pins keep their own indivisibility exception,
-      // never an exemption for the visible interval or neighboring sources.
-      if (
-        source
-          ? intrinsicGroup(pinGroups?.get(source))
-          : messageWeight(message) + 1 > CHAT_RESIDENT_WEIGHT_TARGET
-      ) {
-        continue;
-      }
-      const covered =
-        source !== null && retained.has(source) ? (messageCounts.get(message) ?? 0) : 0;
-      const extra = Math.max(0, occurrences - covered);
-      count += extra;
-      weight += extra * messageWeight(message);
-    }
-    for (const source of retained) {
-      const group = groups.get(source);
-      if (
-        source === intrinsicSource ||
-        source === localOutputSource ||
-        (source === readerSource && readerException) ||
-        (segments.includes(readerPacket!) && packetException?.has(source))
-      ) {
-        continue;
-      }
-      count += group?.count ?? 0;
-      weight += group?.weight ?? 0;
-    }
-    return { count, weight };
+  const chargedGroup = (source: string) =>
+    source === intrinsicSource ||
+    source === localOutputSource ||
+    (source === readerSource && readerException) ||
+    packetException?.has(source)
+      ? undefined
+      : groups.get(source);
+  const changeMembershipCost = (source: string, multiplier: number) => {
+    const group = chargedGroup(source);
+    const credit = pinCost.covered.get(source);
+    cost.count += multiplier * ((group?.count ?? 0) - (credit?.count ?? 0));
+    cost.weight += multiplier * ((group?.weight ?? 0) - (credit?.weight ?? 0));
   };
-  const withinBudget = () => {
-    const { count, weight } = cost();
-    return (
-      segments.length <= MAX_RESIDENT_SEGMENTS &&
-      count <= CHAT_RESIDENT_ENTRY_TARGET &&
-      weight <= CHAT_RESIDENT_WEIGHT_TARGET
-    );
+  for (const source of memberships.keys()) {
+    changeMembershipCost(source, 1);
+  }
+  const release = (range: (typeof ranges)[number], start: number, end: number) => {
+    for (let index = start; index < end; index++) {
+      const source = range.segment.sources[index]!;
+      const remaining = memberships.get(source)! - 1;
+      if (remaining) {
+        memberships.set(source, remaining);
+      } else {
+        memberships.delete(source);
+        // Last coverage loss uncovers its pins; this can increase total cost.
+        changeMembershipCost(source, -1);
+      }
+    }
   };
+  const withinBudget = () =>
+    lastRange - firstRange + 1 <= MAX_RESIDENT_SEGMENTS &&
+    cost.count <= CHAT_RESIDENT_ENTRY_TARGET &&
+    cost.weight <= CHAT_RESIDENT_WEIGHT_TARGET;
   let trimmed = false;
   const trimEnd = (fromRight: boolean) => {
-    const index = fromRight ? segments.length - 1 : 0;
-    const segment = segments[index]!;
-    if (segments.length > 1 && !protectsReader(segment)) {
-      // Changing only an adjacent boundary preserves the actual reader packet.
-      // Membership cuts below still revoke its original-packet custody.
-      if (fromRight) {
-        segments.pop();
-        const neighbor = segments.at(-1)!;
-        segments[segments.length - 1] = { ...neighbor, hasNewer: true };
-        if (neighbor === readerPacket) {
-          readerPacket = segments.at(-1);
-        }
-      } else {
-        segments.shift();
-        const neighbor = segments[0]!;
-        segments[0] = { ...neighbor, hasOlder: true };
-        if (neighbor === readerPacket) {
-          readerPacket = segments[0];
-        }
-      }
+    const range = ranges[fromRight ? lastRange : firstRange]!;
+    const segment = range.segment;
+    if (lastRange > firstRange && !protectsReader(range)) {
+      release(range, range.start, range.end);
+      const neighbor = ranges[fromRight ? --lastRange : ++firstRange]!;
+      // Boundary-only changes preserve the stable reader-packet range and array.
+      neighbor.segment = {
+        ...neighbor.segment,
+        ...(fromRight ? { hasNewer: true } : { hasOlder: true }),
+      };
       return true;
     }
-    if (segment === readerPacket) {
+    if (range === readerPacket || (fromRight ? range.rightBlocked : range.leftBlocked)) {
       return false;
     }
-    // Every new interior edge must be reopenable by its actual source ID.
-    const cut = fromRight
-      ? segment.sources.findLastIndex(
-          (source, sourceIndex) =>
-            sourceIndex < segment.sources.length - 1 &&
-            groups.get(source)?.reopenable &&
-            mayCut(segment.sources.slice(sourceIndex + 1)),
-        )
-      : segment.sources.findIndex(
-          (source, sourceIndex) =>
-            sourceIndex > 0 &&
-            groups.get(source)?.reopenable &&
-            mayCut(segment.sources.slice(0, sourceIndex)),
-        );
-    if (cut < 0) {
-      return false;
-    }
-    segments[index] = fromRight
-      ? {
+    // Ranges only shrink and protected sources cannot leave. A failed end stays
+    // blocked; successful scans and releases visit each source a bounded number of times.
+    let cut = fromRight ? range.end - 2 : range.start + 1;
+    for (; fromRight ? cut >= range.start : cut < range.end; cut += fromRight ? -1 : 1) {
+      if (
+        fromRight
+          ? cut < range.lastProtected
+          : range.firstProtected >= 0 && cut > range.firstProtected
+      ) {
+        break;
+      }
+      if (!groups.get(segment.sources[cut]!)?.reopenable) {
+        continue;
+      }
+      if (fromRight) {
+        release(range, cut + 1, range.end);
+        range.end = cut + 1;
+        range.segment = {
           ...segment,
           boundedPacket: undefined,
-          sources: segment.sources.slice(0, cut + 1),
           hasNewer: true,
           newerCursor: undefined,
-        }
-      : {
+        };
+      } else {
+        release(range, range.start, cut);
+        range.start = cut;
+        range.segment = {
           ...segment,
           boundedPacket: undefined,
-          sources: segment.sources.slice(cut),
           hasOlder: true,
           olderCursor: undefined,
         };
-    return true;
+      }
+      return true;
+    }
+    if (fromRight) {
+      range.rightBlocked = true;
+    } else {
+      range.leftBlocked = true;
+    }
+    return false;
   };
   while (!withinBudget()) {
     const fromRight =
-      direction === "older" || (direction === "tail" && protectsReader(segments[0]!));
+      direction === "older" || (direction === "tail" && protectsReader(ranges[firstRange]!));
     if (!trimEnd(fromRight) && !trimEnd(!fromRight)) {
-      const remaining = sources();
-      // The final indivisible source and newest charged local outcome must
-      // both remain observable. This grants no packet or neighboring source exemption.
-      if (localCount && !localOutputSource && remaining.size === 1) {
-        localOutputSource = remaining.values().next().value;
+      // Only group charge is exempted for the final local pair. Its covered-pin
+      // credit still applies, including when that contribution is negative.
+      if (localCount && !localOutputSource && memberships.size === 1) {
+        const source = memberships.keys().next().value!;
+        const group = chargedGroup(source);
+        cost.count -= group?.count ?? 0;
+        cost.weight -= group?.weight ?? 0;
+        localOutputSource = source;
         continue;
       }
       break;
     }
     trimmed = true;
   }
+  const segments = ranges
+    .slice(firstRange, lastRange + 1)
+    .map(({ segment, start, end }) =>
+      start === 0 && end === segment.sources.length
+        ? segment
+        : Object.assign({}, segment, { sources: segment.sources.slice(start, end) }),
+    );
   const first = segments[0]!;
   const last = segments[segments.length - 1]!;
-  const retained = sources();
+  const retained = memberships;
   const admittedOutputs = new Set(localOutputs.length ? [newestOutput] : []);
-  const outputCost = cost();
+  const outputCost = { ...cost };
   const localPair = Boolean(
     localOutputSource ||
     (readerException && !intrinsicGroup(readerGroup)) ||
