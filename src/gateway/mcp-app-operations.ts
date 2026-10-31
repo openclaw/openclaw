@@ -360,6 +360,7 @@ export async function prepareModelCreatedAppToolCall(
       current: live,
       readPreparedSessionEntry: (source) => projection.sharingTarget(source)?.entry,
       toolName: projected.name,
+      toolMeta: getPluginToolMeta(projected),
       assertNativeRuntimeCurrent: runtime.assertOwnerCurrent,
     });
     // Native plugin inventory supplies identity, not an implicit allow grant.
