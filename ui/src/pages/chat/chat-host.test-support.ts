@@ -23,7 +23,6 @@ type RequestHandlers = Record<string, unknown>;
 export const historyBudget = {
   limit: 80,
   maxBytes: 256 * 1024,
-  maxChars: 500_000,
   toolResultMaxChars: 2_000,
 };
 

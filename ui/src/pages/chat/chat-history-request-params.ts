@@ -28,8 +28,6 @@ export function chatHistoryRequestParams(
       : {};
   return {
     sessionKey,
-    // Match automatic full-message recovery so cached rows keep their displayed text.
-    maxChars: 500_000,
     toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
     knownState,
     ...(requestAgentId ? { agentId: requestAgentId } : {}),
