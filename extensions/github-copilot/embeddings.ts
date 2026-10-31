@@ -1,3 +1,4 @@
+import type { EmbeddingProviderCallOptions } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
   extractEmbeddingUsage,
@@ -5,7 +6,6 @@ import {
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
-  type MemoryEmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   readProviderJsonResponse,
@@ -219,7 +219,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
     const providerHeaders = { ...headers, Authorization: `Bearer ${runtimeAuth.apiKey}` };
     const embedMany = async (
       input: string[],
-      callOptions?: MemoryEmbeddingProviderCallOptions,
+      callOptions?: EmbeddingProviderCallOptions,
     ): Promise<number[][]> => {
       if (input.length === 0) {
         return [];
