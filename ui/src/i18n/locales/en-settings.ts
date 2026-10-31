@@ -31,6 +31,7 @@ const enSettings = {
     ru: "Русский (Russian)",
     sv: "Svenska (Swedish)",
     ca: "Català (Catalan)",
+    cs: "Čeština (Czech)",
   },
   chat: {
     sendShortcut: "Send shortcut",

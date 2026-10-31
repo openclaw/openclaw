@@ -3,7 +3,7 @@ import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import {
@@ -87,6 +87,18 @@ describe("config appearance preferences", () => {
     expect(pickerOption(select, "system")?.textContent).toContain(
       "System (Português (Brazilian Portuguese))",
     );
+  });
+
+  it("offers Czech as an explicit language choice", async () => {
+    const { container, props } = renderAppearance({ systemLocale: "en" });
+    await updatePickers(container);
+    const select = container.querySelector<SelectPicker>(
+      "#settings-language openclaw-select-picker",
+    )!;
+    await openPicker(select);
+    expect(pickerOption(select, "cs")?.textContent).toContain("Čeština (Czech)");
+    await choosePickerValue(select, "cs");
+    expect(props.onLocaleChange).toHaveBeenCalledWith("cs");
   });
 
   it("identifies profile-owned typography", async () => {

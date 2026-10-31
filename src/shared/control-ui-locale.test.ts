@@ -19,6 +19,8 @@ describe("resolveNavigatorLocale", () => {
     ["ca-ES", "ca"],
     ["sv-SE", "sv"],
     ["sv-FI", "sv"],
+    ["cs-CZ", "cs"],
+    ["CS", "cs"],
     ["nb-NO", "en"],
     ["", "en"],
   ] as const)("maps browser language %s to %s", (browserLanguage, expectedLocale) => {
