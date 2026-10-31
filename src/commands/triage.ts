@@ -9,6 +9,7 @@ import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFinding, HealthFindingSeverity } from "../flows/health-checks.js";
@@ -116,8 +117,10 @@ async function collectTriageBundle(
           defaultTimeoutMs: 3000,
           sharedStateMode: "read-only",
         }),
-      readStatusSnapshot: async () =>
-        await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false }),
+      // Custom state/config selectors do not select the account's native service.
+      readStatusSnapshot: isDefaultInstallIdentity(redaction.env)
+        ? async () => await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false })
+        : undefined,
     });
     return { kind: "available", path: result.path };
   } catch (error) {
