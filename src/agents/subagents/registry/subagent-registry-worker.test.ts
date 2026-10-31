@@ -425,7 +425,11 @@ it("releases unrelated registration rows while following new owners and deletion
   vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
   const child = "agent:main:subagent:retained-registration";
   async function capture() {
-    seed(entry("selected", { childSessionKey: child }), entry("unrelated"));
+    // A completed row is compacted away from the worker reply's object lifetime.
+    seed(
+      entry("selected", { childSessionKey: child }),
+      entry("unrelated", { execution: { status: "terminal", endedAt: 2 }, cleanupCompletedAt: 3 }),
+    );
     const preparedRows = await prepareSubagentRegistrationRows(
       child,
       ["selected"],
