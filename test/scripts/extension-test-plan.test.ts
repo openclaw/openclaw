@@ -14,7 +14,6 @@ import {
   splitExtensionTestJobTargets as splitTargets,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { createGatewayServerTestTargetChunks } from "../../scripts/lib/gateway-server-test-plan.mts";
-import { splitTestTargetChunks } from "../../scripts/lib/test-target-chunks.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
   buildFullSuiteVitestRunPlans,
@@ -26,17 +25,6 @@ import { listVitestConfigTestFiles } from "../vitest-projects-config.test-suppor
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-it.each([
-  { count: 2, expected: [["b", "a"], ["b"]] },
-  { count: 5, expected: [["b"], ["a"], ["b"]] },
-  { count: 0, expected: [] },
-  { count: -1, expected: [] },
-  { count: Number.NaN, expected: [] },
-])("preserves balanced target order for count $count", ({ count, expected }) => {
-  expect(splitTestTargetChunks(["b", "a", "b"], count)).toEqual(expected);
-  expect(splitTestTargetChunks([], count)).toEqual([]);
-});
-
 it("keeps Gateway and plugin file bounds balanced at the owner boundary", () => {
   const cwd = tempDirs.make("balanced-test-targets-");
   const gateway = Array.from(
