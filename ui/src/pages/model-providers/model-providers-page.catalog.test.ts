@@ -488,7 +488,11 @@ describe("Models page catalog publication", () => {
       pendingProviders: ["openai"],
     });
 
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true },
+    });
     await waitForSolid(() =>
       expect(
         page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
