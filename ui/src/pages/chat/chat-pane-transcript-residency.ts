@@ -3,6 +3,7 @@ import {
   nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
+import type { ChatTranscriptReaderSnapshot } from "./chat-history-pagination.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
@@ -30,26 +31,39 @@ export function retireChatTranscriptSources(
   }
 }
 
-/** A reader pins its contiguous source segment, never a detached body island. */
-export function readChatTranscriptAnchorSource(
+/** One scan owns the reader identity and the visible interval needed to restore it. */
+export function readChatTranscriptReaderSnapshot(
   state: ChatState | null | undefined,
   transcript: ChatTranscript,
-): string | null {
+): ChatTranscriptReaderSnapshot | null {
   const viewport = transcript.scrollElement;
   const elements = transcript.messageElements?.elements;
   if (!state || !viewport || !elements) {
     return null;
   }
   const rect = viewport.getBoundingClientRect();
-  const held = buildMessageItems(state.chatMessages).find((item) => {
+  let anchor: string | null = null;
+  let found = false;
+  const visibleSources: string[] = [];
+  for (const item of buildMessageItems(state.chatMessages)) {
     const element = elements.get(item.key);
     if (!element || !viewport.contains(element)) {
-      return false;
+      continue;
     }
     const bubble = element.getBoundingClientRect();
-    return bubble.bottom > rect.top && bubble.top < rect.bottom;
-  });
-  return nativeHistoryMessageSourceIdentity(held?.message);
+    if (bubble.bottom <= rect.top || bubble.top >= rect.bottom) {
+      continue;
+    }
+    const source = nativeHistoryMessageSourceIdentity(item.message);
+    if (!found) {
+      anchor = source;
+      found = true;
+    }
+    if (source && !visibleSources.includes(source)) {
+      visibleSources.push(source);
+    }
+  }
+  return found ? { anchor, visibleSources } : null;
 }
 
 export function saveChatTranscriptReadingPosition(

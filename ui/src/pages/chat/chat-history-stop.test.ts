@@ -137,6 +137,37 @@ describe("full tail after a long live turn", () => {
     expect(segments).toHaveLength(2);
   });
 
+  it("refills a fresh tail while the prior mounted reader still names the old prefix", async () => {
+    const tail = tailFrom(4);
+    const older = vi.fn(async (cursor: string) =>
+      cursor === "older:tail"
+        ? {
+            messages: transcript.slice(2, 4),
+            hasMore: true,
+            olderCursor: "older:head",
+            totalMessages: 7,
+            sessionInfo,
+          }
+        : { messages: transcript.slice(0, 2), totalMessages: 7, sessionInfo },
+    );
+    const { state } = await loadAfterLiveTurn(
+      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
+      older,
+      {
+        previousLeaf: "running-leaf",
+        beforeRefresh: (refreshState) => {
+          refreshState.readTranscriptReaderSnapshot = () => ({
+            anchor: "id:prompt",
+            visibleSources: ["id:prompt", "id:call-2"],
+          });
+        },
+      },
+    );
+    expect(older.mock.calls).toEqual([["older:tail"], ["older:head"]]);
+    expect(state.chatMessages).toEqual(transcript);
+    expect(state.chatDisplayedLeafEntryId).toBe("stopped-leaf");
+  });
+
   it("keeps the retryable boundary when the gap read fails", async () => {
     const { state } = await loadAfterLiveTurn(tailFrom(2), async () => {
       throw new Error("offline");
@@ -345,8 +376,8 @@ describe("full tail after a long live turn", () => {
     });
     const held = state.chatMessages;
     const coverage = state.chatHistoryPagination;
-    const reader = vi.fn(() => "id:prompt");
-    state.readTranscriptAnchorSource = reader;
+    const reader = vi.fn(() => ({ anchor: "id:prompt", visibleSources: ["id:prompt"] }));
+    state.readTranscriptReaderSnapshot = reader;
     request
       .mockResolvedValueOnce({ kind: "reset" })
       .mockResolvedValueOnce(tailFrom(4))
@@ -359,8 +390,8 @@ describe("full tail after a long live turn", () => {
     expect(state.chatMessages).toEqual(held);
     expect(state.chatMessages[0]).toBe(held[0]);
     expect(state.chatHistoryPagination).toStrictEqual(coverage);
-    expect(state.readTranscriptAnchorSource).toBe(reader);
-    expect(state.readTranscriptAnchorSource()).toBe("id:prompt");
+    expect(state.readTranscriptReaderSnapshot).toBe(reader);
+    expect(state.readTranscriptReaderSnapshot()?.anchor).toBe("id:prompt");
   });
 
   describe("detached Stop continuity", () => {
@@ -385,7 +416,10 @@ describe("full tail after a long live turn", () => {
       });
       await loadChatHistory(state);
       expect(state.chatHistoryPagination.hasNewer).toBe(true);
-      state.readTranscriptAnchorSource = () => "id:prompt";
+      state.readTranscriptReaderSnapshot = () => ({
+        anchor: "id:prompt",
+        visibleSources: ["id:prompt"],
+      });
       return { state, request };
     }
     const tail = () => ({
@@ -395,6 +429,35 @@ describe("full tail after a long live turn", () => {
         { runId: "first-tail-only", state: "consumed" as const, consumedByEventId: "call-7" },
       ],
       sessionInfo: { ...sessionInfo, activeLeafEntryId: "stopped-leaf" },
+    });
+
+    it("fits the stopped-leaf packet without charging retired running-leaf native pins", async () => {
+      const { state, request } = await detached();
+      const pin = message("assistant", "p".repeat(CHAT_RESIDENT_WEIGHT_TARGET - 128 * 1024), {
+        id: "old-pin",
+        seq: 100,
+        runId: "old-run",
+      });
+      reduceChatSessionProjection(state, { type: "runDelta", runId: "old-run", message: pin });
+      reduceChatSessionProjection(state, { type: "messagePersisted", message: pin });
+      expect(state.chatMessages).toContain(pin);
+      const selectedCall = {
+        ...call(2),
+        content: [{ type: "text", text: "s".repeat(200 * 1024) }],
+      };
+      const page = { ...selected(), messages: [prompt, selectedCall] };
+      expect(new TextEncoder().encode(JSON.stringify(page.messages)).length).toBeLessThan(
+        256 * 1024,
+      );
+      request
+        .mockResolvedValueOnce({ kind: "reset" })
+        .mockResolvedValueOnce(tail())
+        .mockResolvedValueOnce(page);
+      await loadChatHistory(state);
+      expect(getChatHistoryLoadState(state).phase).toBe("committed");
+      expect(state.chatMessages).toEqual([prompt, selectedCall]);
+      expect(state.chatMessages).not.toContain(pin);
+      expect(getChatSessionProjection(state).scope.activeLeafEntryId).toBe("stopped-leaf");
     });
 
     it("replaces only the selected packet and keeps a real command arriving during continuity validation", async () => {
@@ -513,7 +576,7 @@ describe("full tail after a long live turn", () => {
         expect(state.chatHistoryPagination).toStrictEqual(beforeCoverage);
         expect(getChatSessionProjection(state).scope).toEqual(scope);
         expect(state.chatDisplayedLeafEntryId).toBe("running-leaf");
-        expect(state.readTranscriptAnchorSource?.()).toBe("id:prompt");
+        expect(state.readTranscriptReaderSnapshot?.()?.anchor).toBe("id:prompt");
         expect(request).toHaveBeenCalledTimes(4);
         if (outcome !== "capacity") {
           expect(state.chatMessages).toBe(held);
@@ -568,7 +631,10 @@ describe("full tail after a long live turn", () => {
         await entered.promise;
         const held = state.chatMessages;
         if (change === "reader") {
-          state.readTranscriptAnchorSource = () => "id:call-2";
+          state.readTranscriptReaderSnapshot = () => ({
+            anchor: "id:call-2",
+            visibleSources: ["id:call-2"],
+          });
         } else if (change === "manual") {
           beginChatScrollIntent(state);
           onTestFinished(() => cancelChatScroll(state));

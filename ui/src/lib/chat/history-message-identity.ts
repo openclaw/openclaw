@@ -89,8 +89,8 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
 
 /** Preserve projected siblings while removing only overlapping page occurrences. */
 export function prependUniqueNativeMessages(
-  messages: unknown[],
-  current: unknown[],
+  messages: readonly unknown[],
+  current: readonly unknown[],
   localEntries: readonly SessionProjectionEntry[] = [],
 ) {
   const incomingSources = new Set<string>();

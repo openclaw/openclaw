@@ -24,17 +24,23 @@ import {
   nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
 import { chatOutboxDeliveryKey, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
-import { removePairingQrContent, retainPairingQrEntries } from "../../lib/chat/pairing-qr.ts";
+import { retainPairingQrEntries } from "../../lib/chat/pairing-qr.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
+import { prepareChatHistoryRequestBudget } from "./chat-history-cost.ts";
 import {
   type ChatHistoryResidencyOwner,
   invalidateChatHistoryPacketSources,
   projectResidentChatHistory,
-  prepareChatHistoryRequestBudget,
   publishResidentChatMessages,
 } from "./chat-history-window.ts";
 import { chatLocalOutputEntries } from "./chat-local-outputs.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
+import {
+  projectionMessageEntries,
+  retainsPairingQrScope,
+  prepareChatProjectionMessages,
+  retireChatProjectionPairingQr,
+} from "./chat-projection-messages.ts";
 import {
   CHAT_PROJECTION_SCOPE_KEYS,
   chatProjectionScopeChanged,
@@ -253,7 +259,7 @@ export function readChatLocalOutputs(owner: object): readonly unknown[] {
 /** Tentative capacity reads never initialize or publish a projection. */
 export function readChatHistoryRequestBudget(
   owner: ChatSessionProjectionOwner,
-  prepared: { messages: readonly unknown[]; requiredSources: ReadonlySet<string> },
+  prepared: { messages: readonly unknown[]; requiredSources: ReadonlySet<string>; fits?: boolean },
 ) {
   const projection = chatSessionProjections.get(owner)?.projection;
   // Pending-input hydration binds the selected agent even when the wire request omits it.
@@ -261,7 +267,8 @@ export function readChatHistoryRequestBudget(
   const scope = readChatSessionProjectionScope(owner, {
     agentId: resolveUiSelectedSessionAgentId(owner),
   });
-  return projection &&
+  return prepared.fits !== false &&
+    projection &&
     CHAT_PROJECTION_SCOPE_KEYS.every((key) => projection.scope[key] === scope[key])
     ? prepareChatHistoryRequestBudget(
         projection,
@@ -288,6 +295,40 @@ export function setChatRunOwner(
     ...current,
     runId,
   });
+}
+
+function hasProjectionSessionKey(
+  owner: Partial<ChatSessionProjectionOwner>,
+): owner is Partial<ChatSessionProjectionOwner> & { sessionKey: string } {
+  return typeof owner.sessionKey === "string";
+}
+
+/** Apply publication transforms before fitting, without initializing tentative custody. */
+export function prepareChatHistoryProjectionMessages(
+  owner: Partial<ChatSessionProjectionOwner>,
+  messages: readonly unknown[],
+  prospectiveScope?: SessionProjectionScope,
+) {
+  const current = chatSessionProjections.get(owner)?.projection;
+  if (!current || !hasProjectionSessionKey(owner)) {
+    return { messages, pins: [], changedSources: new Set<string>() };
+  }
+  const scope = prospectiveScope ?? readChatSessionProjectionScope(owner);
+  const { messages: prepared, changedSources } = prepareChatProjectionMessages(
+    current,
+    messages,
+    scope,
+  );
+  const pins = chatProjectionScopeChanged(current.scope, scope)
+    ? []
+    : reduceSessionProjection(current, {
+        type: "residencyChanged",
+        messages: [],
+        pinnedRunIds: owner.lastLocalTerminalReconcile?.runId
+          ? [owner.lastLocalTerminalReconcile.runId]
+          : [],
+      }).messages;
+  return { messages: prepared, pins, changedSources };
 }
 
 /** The only mutation boundary for the reducer and its rendered message array. */
@@ -317,12 +358,7 @@ export function publishChatSessionProjection(
     options.retainPairingQr !== false &&
     previous &&
     previous.messages !== projection.messages &&
-    !chatProjectionScopeChanged(previous.scope, projection.scope, [
-      "sessionKey",
-      "sessionId",
-      "agentId",
-      "lifecycleRevision",
-    ])
+    retainsPairingQrScope(previous.scope, projection.scope)
   ) {
     // A leaf advance can still contain the same reply; never retain media across sessions.
     const entries = retainPairingQrEntries(previous.entries, projection.entries);
@@ -348,7 +384,7 @@ export function publishChatSessionProjection(
   }
   const readerSource =
     previous && !chatProjectionScopeChanged(previous.scope, projection.scope)
-      ? owner.readTranscriptAnchorSource?.()
+      ? owner.readTranscriptReaderSnapshot?.()?.anchor
       : null;
   if (
     (owner.chatHistoryPagination?.segments ||
@@ -406,32 +442,9 @@ export function publishChatSessionProjection(
 
 /** A retired connection cannot lend pairing credentials to its replacement's history. */
 export function retireChatPairingQr(owner: ChatSessionProjectionOwner): void {
-  const projection = getChatSessionProjection(owner);
-  const retireEntry = (entry: SessionProjectionEntry): SessionProjectionEntry => {
-    const message = removePairingQrContent(entry.message);
-    return message === entry.message ? entry : { ...entry, message };
-  };
-  const entries = projection.entries.map(retireEntry);
-  const runs = Object.fromEntries(
-    Object.entries(projection.runs).map(([runId, run]) => {
-      const message = removePairingQrContent(run.message);
-      const terminal = run.inferredSnapshotTerminal;
-      const entry = terminal ? retireEntry(terminal.entry) : undefined;
-      return [
-        runId,
-        message === run.message && entry === terminal?.entry
-          ? run
-          : {
-              ...run,
-              message,
-              ...(terminal && entry ? { inferredSnapshotTerminal: { ...terminal, entry } } : {}),
-            },
-      ];
-    }),
-  );
   publishChatSessionProjection(
     owner,
-    { ...projection, entries, messages: entries.map((entry) => entry.message), runs },
+    retireChatProjectionPairingQr(getChatSessionProjection(owner)),
     { retainPairingQr: false },
   );
 }
@@ -474,18 +487,7 @@ export function publishChatSessionProjectionMessages(
   }
   // Classify raw predecessor relationships once, then restore each existing
   // occurrence's live/pending provenance without changing presentation order.
-  const occurrences = new Map<unknown, SessionProjectionEntry[]>();
-  for (const entry of current.entries.toReversed()) {
-    const queue = occurrences.get(entry.message);
-    if (queue) {
-      queue.push(entry);
-    } else {
-      occurrences.set(entry.message, [entry]);
-    }
-  }
-  const entries = createSessionProjection(scope, acceptedMessages).entries.map(
-    (entry) => occurrences.get(entry.message)?.pop() ?? entry,
-  );
+  const entries = projectionMessageEntries(current, acceptedMessages);
   const projection: SessionProjectionState = {
     ...current,
     scope: { ...current.scope, ...scope },

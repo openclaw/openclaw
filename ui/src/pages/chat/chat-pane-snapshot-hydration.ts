@@ -1,11 +1,12 @@
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
+import type { ChatTranscriptReaderSnapshot } from "./chat-history-pagination.ts";
 import { chatHistoryRequests, type InitialChatSnapshotHydration } from "./chat-history-state.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
   retireChatTranscriptSources,
-  readChatTranscriptAnchorSource,
+  readChatTranscriptReaderSnapshot,
 } from "./chat-pane-transcript-residency.ts";
 import {
   applyChatCacheSnapshot,
@@ -21,9 +22,9 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
     this.retireReplyMessages();
     retireChatTranscriptSources(this.paneId, this.transcript, this.state, messages);
   }
-  protected readTranscriptAnchorSource(): string | null {
+  protected readTranscriptReaderSnapshot(): ChatTranscriptReaderSnapshot | null {
     return this.visuallyPresented
-      ? readChatTranscriptAnchorSource(this.state, this.transcript)
+      ? readChatTranscriptReaderSnapshot(this.state, this.transcript)
       : null;
   }
 

@@ -1,5 +1,11 @@
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 
+/** Mounted geometry custody contains source names only, never transcript bodies. */
+export type ChatTranscriptReaderSnapshot = {
+  anchor: string | null;
+  visibleSources: readonly string[];
+};
+
 export type ChatHistorySegment = {
   sources: readonly string[];
   olderCursor?: string;

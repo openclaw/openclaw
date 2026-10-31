@@ -122,7 +122,10 @@ describe("rewind composer ownership", () => {
           __openclaw: { idempotencyKey: "pending-send" },
         },
       });
-      state.readTranscriptAnchorSource = () => "id:before";
+      state.readTranscriptReaderSnapshot = () => ({
+        anchor: "id:before",
+        visibleSources: ["id:before"],
+      });
       expect(state.chatMessages).toEqual([prefix, output, selected, removed, expect.anything()]);
       expect(state.chatMessages[2]).toBe(selected);
       expect(

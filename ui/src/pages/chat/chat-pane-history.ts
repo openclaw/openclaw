@@ -60,7 +60,7 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
     pageState.chatCancelScroll = () => this.transcript.cancelScroll();
     pageState.transcriptMessagesRetired = (messages) =>
       this.retireTranscriptMessageSources(messages);
-    pageState.readTranscriptAnchorSource = () => this.readTranscriptAnchorSource();
+    pageState.readTranscriptReaderSnapshot = () => this.readTranscriptReaderSnapshot();
     pageState.beforeHistoryTailRestore = () => this.retireTranscriptReads();
   }
 

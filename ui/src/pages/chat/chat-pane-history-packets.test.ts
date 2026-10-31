@@ -411,7 +411,10 @@ it.each([
       "older",
     );
     let anchor = reader ? `${keyed ? "id:source-" : "seq:"}42` : null;
-    state.readTranscriptAnchorSource = () => anchor;
+    state.readTranscriptReaderSnapshot = () => ({
+      anchor,
+      visibleSources: anchor ? [anchor] : [],
+    });
     await expect(pane.loadOlderMessages()).resolves.toBe(true);
     expect(state.chatMessages.filter((value) => nativeHistorySeq(value) === 2)).toEqual(fragments);
     expect(state.chatHistoryPagination.hasNewer).toBe(true);
@@ -475,7 +478,10 @@ it.each(["older", "newer"] as const)(
       ],
       "around",
     );
-    state.readTranscriptAnchorSource = () => `seq:${initial}`;
+    state.readTranscriptReaderSnapshot = () => ({
+      anchor: `seq:${initial}`,
+      visibleSources: [`seq:${initial}`],
+    });
     const published = vi.spyOn(state, "chatMessages", "set");
     await expect(
       direction === "older" ? pane.loadOlderMessages() : pane.loadNewerMessages(),
@@ -521,7 +527,10 @@ it("refines multiple intrinsic sources without granting their whole packet an ex
     "around",
   );
   let reader = "seq:3";
-  state.readTranscriptAnchorSource = () => reader;
+  state.readTranscriptReaderSnapshot = () => ({
+    anchor: reader,
+    visibleSources: reader ? [reader] : [],
+  });
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
   expect(state.chatMessages).toEqual([...a, nativeHistoryMessage(3)]);
   expect(request.mock.calls.slice(0, 2).map(([, params]) => [params.cursor, params.limit])).toEqual(
@@ -561,7 +570,10 @@ it.each([
     );
     const { pane, state } = createStagedPrefetchPane(request);
     let reader = `seq:${direction === "older" ? 3 : 1}`;
-    state.readTranscriptAnchorSource = () => reader;
+    state.readTranscriptReaderSnapshot = () => ({
+      anchor: reader,
+      visibleSources: reader ? [reader] : [],
+    });
     admitChatHistoryPages(state, [page(a, direction === "older" ? 3 : 1)], "around");
     admitChatHistoryPages(state, [page(b, 2)], direction);
     const before = state.chatMessages;
@@ -629,7 +641,7 @@ it.each(["fit", "raw"] as const)(
       [{ messages: [nativeHistoryMessage(7)], hasMore: true, olderCursor: "older-6" }],
       "around",
     );
-    state.readTranscriptAnchorSource = () => "seq:7";
+    state.readTranscriptReaderSnapshot = () => ({ anchor: "seq:7", visibleSources: ["seq:7"] });
     const loading = pane.loadOlderMessages();
     await requested.promise;
     try {
@@ -695,8 +707,14 @@ it.each([true, false])(
     );
     const { pane, state } = createStagedPrefetchPane(request);
     state.currentSessionId = "current";
+    expect(getChatSessionProjection(state).scope.agentId).toBeUndefined();
+    readChatInputRunIds(state);
+    expect(getChatSessionProjection(state).scope.agentId).toBe("main");
     let reader = `${keyed ? "id:source-" : "seq:"}1`;
-    state.readTranscriptAnchorSource = () => reader;
+    state.readTranscriptReaderSnapshot = () => ({
+      anchor: reader,
+      visibleSources: reader ? [reader] : [],
+    });
     admitChatHistoryPages(
       state,
       [

@@ -165,7 +165,10 @@ export function packetHistoryPane(total = 480) {
   });
   admitChatHistoryPages(state, [packet(total - 79, total)], "around");
   let reader = `seq:${total - 40}`;
-  state.readTranscriptAnchorSource = () => reader;
+  state.readTranscriptReaderSnapshot = () => ({
+    anchor: reader,
+    visibleSources: reader ? [reader] : [],
+  });
   return {
     pane,
     state,

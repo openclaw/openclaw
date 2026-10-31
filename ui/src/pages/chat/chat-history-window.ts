@@ -7,23 +7,25 @@ import {
   nativeHistoryMessageSourceId,
 } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
+import {
+  CHAT_RESIDENT_ENTRY_TARGET,
+  CHAT_RESIDENT_WEIGHT_TARGET,
+  messageWeight,
+  sourceGroups,
+  intrinsicGroup,
+} from "./chat-history-cost.ts";
 import type {
   ChatHistoryCursor,
   ChatHistoryPagination,
   ChatHistorySegment,
+  ChatTranscriptReaderSnapshot,
 } from "./chat-history-pagination.ts";
 import {
   CHAT_HISTORY_REQUEST_LIMIT,
   CHAT_HISTORY_REQUEST_MAX_BYTES,
-  type ChatHistoryRequestBudget,
 } from "./chat-history-request-params.ts";
 
-// Counts admitted message entries, before renderer grouping. Source groups and
-// lifecycle-owned pins are indivisible exceptions, not a whole-pane heap bound.
-const CHAT_RESIDENT_ENTRY_TARGET = 400;
-const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
 export const MAX_RESIDENT_SEGMENTS = 8;
-const messageWeights = new WeakMap<object, number>();
 
 /** Body mutations revoke wire provenance without changing coverage or opaque edges. */
 export function invalidateChatHistoryPacketSources(
@@ -150,19 +152,6 @@ function admitResidentLiveSources(
   };
 }
 
-function messageWeight(message: unknown): number {
-  if (message && typeof message === "object") {
-    const cached = messageWeights.get(message);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const weight = JSON.stringify([message]).length - 1;
-    messageWeights.set(message, weight);
-    return weight;
-  }
-  return JSON.stringify([message]).length - 1;
-}
-
 /** Local text can be clipped; it must never borrow the intrinsic native-source exemption. */
 export function boundChatLocalOutput<T extends { content: string }>(message: T): T {
   if (messageWeight(message) + 1 <= CHAT_RESIDENT_WEIGHT_TARGET) {
@@ -180,86 +169,6 @@ export function boundChatLocalOutput<T extends { content: string }>(message: T):
     }
   }
   return { ...message, content: clampText(message.content, low) };
-}
-
-function sourceGroups(messages: readonly unknown[]) {
-  const groups = new Map<string, { count: number; weight: number; reopenable: boolean }>();
-  for (const message of messages) {
-    const source = nativeHistoryMessageSourceIdentity(message);
-    if (source) {
-      const previous = groups.get(source);
-      groups.set(source, {
-        count: (previous?.count ?? 0) + 1,
-        weight: (previous?.weight ?? 0) + messageWeight(message),
-        reopenable: Boolean(nativeHistoryMessageSourceId(message)),
-      });
-    }
-  }
-  return groups;
-}
-
-/** Estimate only the next wire read; exact admission still owns every exception. */
-export function prepareChatHistoryRequestBudget(
-  projection: SessionProjectionState,
-  messages: readonly unknown[],
-  requiredSources: ReadonlySet<string>,
-  pinnedRunId?: string | null,
-): ChatHistoryRequestBudget | undefined {
-  const pins = reduceSessionProjection(projection, {
-    type: "residencyChanged",
-    messages: [],
-    pinnedRunIds: pinnedRunId ? [pinnedRunId] : [],
-  }).messages;
-  const mandatory = new Set(requiredSources);
-  for (const message of pins) {
-    const source = nativeHistoryMessageSourceIdentity(message);
-    if (source) {
-      mandatory.add(source);
-    }
-  }
-  const groups = sourceGroups(messages);
-  if ([...requiredSources].some((source) => !groups.has(source))) {
-    return undefined;
-  }
-  let count = 0;
-  let weight = 1;
-  const reserved = new Map<unknown, number>();
-  const reserve = (values: readonly unknown[]) => {
-    const occurrences = new Map<unknown, number>();
-    for (const message of values) {
-      const occurrence = (occurrences.get(message) ?? 0) + 1;
-      occurrences.set(message, occurrence);
-      if (occurrence > (reserved.get(message) ?? 0)) {
-        count++;
-        weight += messageWeight(message);
-        reserved.set(message, occurrence);
-      }
-    }
-  };
-  const required = (message: unknown) =>
-    mandatory.has(nativeHistoryMessageSourceIdentity(message) ?? "");
-  // Count complete source fragments and repeated occurrences, then union pins
-  // and the newest local reply without lending their atomicity exceptions.
-  reserve(messages.filter(required));
-  reserve(projection.messages.filter(required));
-  reserve(pins);
-  const local = projection.entries.findLast((entry) => entry.localOutput);
-  if (local) {
-    reserve([local.message]);
-  }
-  const limit = CHAT_RESIDENT_ENTRY_TARGET - count;
-  // UTF-8 wire bytes consume at least as much as the JSON code-unit estimate.
-  const maxBytes = CHAT_RESIDENT_WEIGHT_TARGET - weight;
-  return limit > CHAT_HISTORY_REQUEST_LIMIT && maxBytes > CHAT_HISTORY_REQUEST_MAX_BYTES
-    ? { limit, maxBytes }
-    : undefined;
-}
-
-function intrinsicGroup(group: { count: number; weight: number } | undefined) {
-  return Boolean(
-    group &&
-    (group.count > CHAT_RESIDENT_ENTRY_TARGET || group.weight + 1 > CHAT_RESIDENT_WEIGHT_TARGET),
-  );
 }
 
 export function prepareChatHistorySegment(
@@ -420,21 +329,26 @@ export function extendChatHistoryWindow(
 export function chatHistoryReaderBridge(
   messages: readonly unknown[],
   pagination: ChatHistoryPagination,
-  reader: string | null | undefined,
+  reader: ChatTranscriptReaderSnapshot | null | undefined,
   direction: "older" | "newer",
 ): readonly string[] {
   const segments = pagination.segments ?? [];
-  const index = segments.findIndex((segment) => reader && segment.sources.includes(reader));
-  if (index < 0 || !reader) {
+  const covered = new Set(segments.flatMap((segment) => segment.sources));
+  const visible = reader?.visibleSources.filter((source) => covered.has(source)) ?? [];
+  const boundary = direction === "older" ? visible.at(-1) : visible[0];
+  const index = segments.findIndex((segment) => boundary && segment.sources.includes(boundary));
+  if (index < 0 || !boundary) {
     return [];
   }
   const segment = segments[index]!;
-  const sourceIndex = segment.sources.indexOf(reader);
+  const sourceIndex = segment.sources.indexOf(boundary);
   const intact =
     segment.boundedPacket &&
+    reader?.anchor != null &&
+    segment.sources.includes(reader.anchor) &&
     !messages.some(
       (message) =>
-        nativeHistoryMessageSourceIdentity(message) === reader &&
+        nativeHistoryMessageSourceIdentity(message) === reader?.anchor &&
         nativeHistoryMessageSourceId(message),
     );
   return direction === "older"
@@ -455,6 +369,7 @@ export function selectChatHistoryResidency(
   direction: "older" | "newer" | "tail" = "tail",
   readerSource?: string | null,
   localOutputs: readonly unknown[] = [],
+  admission?: { visibleSources: readonly string[]; pins: readonly unknown[] },
 ): { messages: readonly unknown[]; pagination: ChatHistoryPagination; withinBudget: boolean } {
   if (!pagination.segments?.length && !localOutputs.length) {
     return { messages, pagination, withinBudget: true };
@@ -464,8 +379,17 @@ export function selectChatHistoryResidency(
       ? pagination.segments
       : [prepareChatHistorySegment(messages, pagination, pagination.newerCursor)]),
   ];
+  const ordered = admission ? segments.flatMap((segment) => segment.sources) : [];
+  const visible = new Set(admission?.visibleSources);
+  const firstVisible = ordered.findIndex((source) => visible.has(source));
+  const lastVisible = ordered.findLastIndex((source) => visible.has(source));
+  const protectedSources = new Set(
+    firstVisible < 0 ? [] : ordered.slice(firstVisible, lastVisible + 1),
+  );
   const protectsReader = (segment: ChatHistorySegment) =>
-    readerSource != null && segment.sources.includes(readerSource);
+    segment.sources.some((source) => source === readerSource || protectedSources.has(source));
+  const mayCut = (sources: readonly string[]) =>
+    sources.every((source) => source !== readerSource && !protectedSources.has(source));
   const groups = sourceGroups(messages);
   const newestOutput = localOutputs.at(-1);
   const localCount = localOutputs.length ? 1 : 0;
@@ -486,7 +410,10 @@ export function selectChatHistoryResidency(
     : undefined;
   let readerPacket = segments.find(
     (segment) =>
-      protectsReader(segment) && segment.boundedPacket && !groups.get(readerSource!)?.reopenable,
+      readerSource != null &&
+      segment.sources.includes(readerSource) &&
+      segment.boundedPacket &&
+      !groups.get(readerSource)?.reopenable,
   );
   // Ordinary packets remain charged. Only the unavoidable over-budget packet
   // containing an unkeyed reader may retain its original opaque boundaries.
@@ -508,11 +435,40 @@ export function selectChatHistoryResidency(
       ? new Set(readerPacket!.sources)
       : null;
   const sources = () => new Set(segments.flatMap((segment) => segment.sources));
+  const pinCounts = new Map<unknown, number>();
+  const messageCounts = new Map<unknown, number>();
+  for (const message of admission?.pins ?? []) {
+    pinCounts.set(message, (pinCounts.get(message) ?? 0) + 1);
+  }
+  if (pinCounts.size) {
+    for (const message of messages) {
+      messageCounts.set(message, (messageCounts.get(message) ?? 0) + 1);
+    }
+  }
+  const pinGroups = admission?.pins.length ? sourceGroups(admission.pins) : undefined;
   let localOutputSource: string | undefined;
   const cost = () => {
     let count = localCount;
     let weight = 1 + localWeight;
-    for (const source of sources()) {
+    const retained = sources();
+    for (const [message, occurrences] of pinCounts) {
+      const source = nativeHistoryMessageSourceIdentity(message);
+      // Canonical lifecycle pins keep their own indivisibility exception,
+      // never an exemption for the visible interval or neighboring sources.
+      if (
+        source
+          ? intrinsicGroup(pinGroups?.get(source))
+          : messageWeight(message) + 1 > CHAT_RESIDENT_WEIGHT_TARGET
+      ) {
+        continue;
+      }
+      const covered =
+        source !== null && retained.has(source) ? (messageCounts.get(message) ?? 0) : 0;
+      const extra = Math.max(0, occurrences - covered);
+      count += extra;
+      weight += extra * messageWeight(message);
+    }
+    for (const source of retained) {
       const group = groups.get(source);
       if (
         source === intrinsicSource ||
@@ -568,13 +524,13 @@ export function selectChatHistoryResidency(
           (source, sourceIndex) =>
             sourceIndex < segment.sources.length - 1 &&
             groups.get(source)?.reopenable &&
-            (!readerSource || !segment.sources.slice(sourceIndex + 1).includes(readerSource)),
+            mayCut(segment.sources.slice(sourceIndex + 1)),
         )
       : segment.sources.findIndex(
           (source, sourceIndex) =>
             sourceIndex > 0 &&
             groups.get(source)?.reopenable &&
-            (!readerSource || !segment.sources.slice(0, sourceIndex).includes(readerSource)),
+            mayCut(segment.sources.slice(0, sourceIndex)),
         );
     if (cut < 0) {
       return false;
@@ -751,5 +707,5 @@ export type ChatHistoryResidencyOwner = {
   chatHistoryPagination?: ChatHistoryPagination;
   lastLocalTerminalReconcile?: { runId: string | null } | null;
   transcriptMessagesRetired?: (messages: readonly unknown[]) => void;
-  readTranscriptAnchorSource?: () => string | null;
+  readTranscriptReaderSnapshot?: () => ChatTranscriptReaderSnapshot | null;
 };

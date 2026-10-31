@@ -210,7 +210,10 @@ it("preserves an admitted intrinsic source while reopening a disk-trimmed older 
   const restored = await parseSnapshotRecord(prepared!.record, state.sessionKey);
   expect(restored).not.toBeNull();
   applyChatCacheSnapshot(state, restored!.snapshot);
-  state.readTranscriptAnchorSource = () => "id:source-91";
+  state.readTranscriptReaderSnapshot = () => ({
+    anchor: "id:source-91",
+    visibleSources: ["id:source-91"],
+  });
   expect(state.chatMessages).toEqual([...giant, sourceMessage(91)]);
   expect(state.chatHistoryPagination).toMatchObject({
     needsBoundary: true,
@@ -269,7 +272,7 @@ it.each(["unchanged", "replace", "append", "remove"] as const)(
     );
     await loadChatHistory(state, { deferBranches: true });
     await pane.loadOlderMessages();
-    state.readTranscriptAnchorSource = () => "seq:2";
+    state.readTranscriptReaderSnapshot = () => ({ anchor: "seq:2", visibleSources: ["seq:2"] });
     const oldPacket = () =>
       state.chatHistoryPagination.segments?.find((segment) => segment.sources.includes("seq:1"));
     expect(oldPacket()).toMatchObject({ boundedPacket: true, hasNewer: true });

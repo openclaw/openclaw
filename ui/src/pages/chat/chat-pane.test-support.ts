@@ -144,7 +144,9 @@ export type TestChatPane = HTMLElement &
     loadCatalogSession: ChatPaneRuntime["loadCatalogSession"];
     prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
     loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
-    readTranscriptAnchorSource: () => string | null;
+    readTranscriptReaderSnapshot: () =>
+      | import("./chat-history-pagination.ts").ChatTranscriptReaderSnapshot
+      | null;
     retireTranscriptMessageSources: (messages: readonly unknown[]) => void;
     retireTranscriptReads: (keepLiveTools?: boolean) => void;
     resetOlderMessagesViewport: () => void;
@@ -237,7 +239,7 @@ export function createTestChatPane(
   pane.state = state;
   // This lightweight host skips start(); bind the same transcript custody
   // callbacks so page adoption exercises the real pane lifetime owners.
-  state.readTranscriptAnchorSource = () => pane.readTranscriptAnchorSource();
+  state.readTranscriptReaderSnapshot = () => pane.readTranscriptReaderSnapshot();
   state.transcriptMessagesRetired = (messages) => pane.retireTranscriptMessageSources(messages);
   state.beforeHistoryTailRestore = () => pane.retireTranscriptReads();
   pane.chatState.attach(state);

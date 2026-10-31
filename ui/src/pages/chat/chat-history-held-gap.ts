@@ -21,6 +21,7 @@ import {
   getChatSessionProjection,
   ownsChatSessionProjectionScope,
   readChatLocalOutputEntries,
+  readChatSessionProjectionScope,
 } from "./history-merge.ts";
 import { hasPendingManualChatScroll } from "./scroll.ts";
 
@@ -36,7 +37,7 @@ export function captureHeldHistoryContinuity(
   state: ChatState,
   cursor: string,
 ): HeldHistoryContinuity | undefined {
-  const source = state.readTranscriptAnchorSource?.();
+  const source = state.readTranscriptReaderSnapshot?.()?.anchor;
   if (!state.chatHistoryPagination.hasNewer || !source || hasPendingManualChatScroll(state)) {
     return undefined;
   }
@@ -64,7 +65,7 @@ export async function readContinuousHeldHistory(
   const ownsReader = () =>
     isCurrent() &&
     !hasPendingManualChatScroll(state) &&
-    state.readTranscriptAnchorSource?.() === predecessor.source &&
+    state.readTranscriptReaderSnapshot?.()?.anchor === predecessor.source &&
     ownsChatSessionProjectionScope(state, predecessor.scope);
   if (!ownsReader()) {
     return undefined;
@@ -156,10 +157,20 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
   if (!cursor) {
     return { result: tail };
   }
+  const scope = readChatSessionProjectionScope(state, {
+    sessionKey,
+    agentId: requestAgentId,
+    sessionId: historySessionId(tail),
+    ...(Object.hasOwn(tail.sessionInfo ?? {}, "activeLeafEntryId")
+      ? { activeLeafEntryId: tail.sessionInfo?.activeLeafEntryId?.trim() || null }
+      : {}),
+  });
   const messages = visibleChatHistoryMessages(tail.messages ?? []);
   const pagination = resolveChatHistoryPagination(tail);
+  // The old displayed viewport cannot constrain a fresh tail refill. Its
+  // already accepted sources are protected explicitly throughout this chain.
   let prepared = prepareChatHistoryPages(
-    { chatMessages: [], chatHistoryPagination: { hasMore: false } },
+    state,
     [
       {
         ...tail,
@@ -169,6 +180,7 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
     ],
     "around",
     readChatLocalOutputEntries(state),
+    { messages: [], pagination: { hasMore: false }, reader: null, scope },
   );
   let result = tail;
   if (!prepared.fits) {
@@ -193,14 +205,11 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
       break;
     }
     const next = prepareChatHistoryPages(
-      {
-        chatMessages: prepared.messages,
-        chatHistoryPagination: prepared.pagination,
-        readTranscriptAnchorSource: state.readTranscriptAnchorSource,
-      },
+      state,
       [older],
       "older",
       readChatLocalOutputEntries(state),
+      { messages: prepared.messages, pagination: prepared.pagination, reader: null, scope },
     );
     const retained = new Set(next.pagination.segments?.flatMap((segment) => segment.sources));
     // Refilling cannot evict its fresh tail or an already accepted gap packet.

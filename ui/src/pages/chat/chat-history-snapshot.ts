@@ -42,6 +42,7 @@ import {
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
   readChatLocalOutputEntries,
+  prepareChatHistoryProjectionMessages,
 } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
@@ -333,15 +334,24 @@ export function reopenChatHistoryBoundary(
 
 /** Prepare packet coverage without acquiring producer observations or publishing. */
 export function prepareChatHistoryPages(
-  state: Pick<ChatState, "chatMessages" | "chatHistoryPagination" | "readTranscriptAnchorSource">,
+  state: Pick<ChatState, "chatMessages" | "chatHistoryPagination" | "readTranscriptReaderSnapshot">,
   results: readonly ChatHistoryResult[],
   direction: "older" | "newer" | "around",
   localEntries: readonly SessionProjectionEntry[] = readChatLocalOutputEntries(state),
+  previousView?: {
+    messages: readonly unknown[];
+    pagination: ChatHistoryPagination;
+    reader?: import("./chat-history-pagination.ts").ChatTranscriptReaderSnapshot | null;
+    scope?: import("@openclaw/gateway-client/browser").SessionProjectionScope;
+  },
 ) {
   const localOutputs = localEntries.map((entry) => entry.message);
-  const previous = state.chatMessages;
-  const previousPagination = state.chatHistoryPagination;
-  const reader = state.readTranscriptAnchorSource?.();
+  const previous = previousView?.messages ?? state.chatMessages;
+  const previousPagination = previousView?.pagination ?? state.chatHistoryPagination;
+  const reader =
+    previousView?.reader !== undefined
+      ? previousView.reader
+      : state.readTranscriptReaderSnapshot?.();
   const held = previousPagination.segments ?? [
     prepareChatHistorySegment(previous, previousPagination, previousPagination.newerCursor),
   ];
@@ -395,14 +405,31 @@ export function prepareChatHistoryPages(
     );
     messages = next;
   }
-  const resident = selectChatHistoryResidency(messages, coverage, movement, reader, localOutputs);
+  const transformed = prepareChatHistoryProjectionMessages(state, messages, previousView?.scope);
+  messages = transformed.messages;
+  coverage = invalidateChatHistoryPacketSources(coverage, transformed.changedSources);
+  const covered = new Set(coverage.segments?.flatMap((segment) => segment.sources));
+  const pinned = new Set(transformed.pins.map(nativeHistoryMessageSourceIdentity));
+  const visible = direction === "around" ? [] : (reader?.visibleSources ?? []);
+  const knownVisible = visible.every((source) => covered.has(source) || pinned.has(source));
+  const resident = selectChatHistoryResidency(
+    messages,
+    coverage,
+    movement,
+    reader?.anchor,
+    localOutputs,
+    { visibleSources: visible, pins: transformed.pins },
+  );
   const retained = new Set(resident.pagination.segments?.flatMap((segment) => segment.sources));
   // Incoming sources and the actual reader bridge must survive together.
   return {
     messages,
     pagination: resident.pagination,
     requiredSources: required,
-    fits: [...required].every((source) => retained.has(source)) && resident.withinBudget,
+    fits:
+      knownVisible &&
+      [...required].every((source) => retained.has(source)) &&
+      resident.withinBudget,
   };
 }
 

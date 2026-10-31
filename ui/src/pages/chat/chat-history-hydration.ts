@@ -389,19 +389,22 @@ export async function hydrateChatHistory(
           previousSessionId,
         })
       : null;
+    const scope = readChatSessionProjectionScope(state, {
+      sessionKey,
+      agentId: requestAgentId,
+      sessionId: nextSessionId,
+      ...(hasActiveLeafEntryId ? { activeLeafEntryId: nextDisplayedLeafEntryId } : {}),
+    });
     const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     if (continuousRead) {
       // Check current local replies at this synchronous publication, including
       // commands received while the continuity request was pending.
       const prepared = prepareChatHistoryPages(
-        {
-          chatMessages: [],
-          chatHistoryPagination: { hasMore: false },
-          readTranscriptAnchorSource: state.readTranscriptAnchorSource,
-        },
+        state,
         [res],
         "around",
         readChatLocalOutputEntries(state),
+        { messages: [], pagination: { hasMore: false }, scope },
       );
       if (!prepared.fits) {
         throw new Error(t("chat.thread.historyCapacity"));
@@ -422,12 +425,6 @@ export async function hydrateChatHistory(
             reconciledHistory?.retainedCoverage ? reconciledHistory.pagination : undefined,
             prepareChatHistoryPacket(visibleMessages, nextPagination, res.newerCursor),
           ));
-    const scope = readChatSessionProjectionScope(state, {
-      sessionKey,
-      agentId: requestAgentId,
-      sessionId: nextSessionId,
-      ...(hasActiveLeafEntryId ? { activeLeafEntryId: nextDisplayedLeafEntryId } : {}),
-    });
     state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new

@@ -2,8 +2,13 @@ import { createSessionProjection, reduceSessionProjection } from "@openclaw/gate
 import { expect, it } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
+import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { admitChatHistoryPages, prepareChatHistoryPages } from "./chat-history-snapshot.ts";
+import {
+  admitChatHistoryPages,
+  prepareChatHistoryPages,
+  resolveChatHistoryPagination,
+} from "./chat-history-snapshot.ts";
 import {
   extendChatHistoryWindow,
   prepareChatHistorySegment,
@@ -20,6 +25,72 @@ import {
 } from "./history-merge.ts";
 
 const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
+
+it("revokes around packet provenance when canonical pairing media enriches its body", () => {
+  const host = makeChatHost();
+  const plain = {
+    role: "assistant",
+    content: [{ type: "text", text: "pairing" }],
+    __openclaw: { id: "pairing", seq: 1 },
+  };
+  const qr = { type: "openclaw_pairing_qr", image_url: "data:image/png;base64,aQ==" };
+  const live = { ...plain, content: [...plain.content, qr] };
+  admitChatHistoryPages(host, [{ messages: [live] }], "around");
+  const packet = prepareChatHistoryPacket([plain], { hasMore: false });
+  expect(packet.boundedPacket).toBe(true);
+  const result = { messages: [plain], packet };
+  const prepared = prepareChatHistoryPages(host, [result], "around");
+  expect(prepared.fits).toBe(true);
+  expect(readPairingQrContent(prepared.messages[0])).toEqual([qr]);
+  expect(prepared.pagination.segments?.[0]?.boundedPacket).toBeUndefined();
+  expect(admitChatHistoryPages(host, [result], "around")).toBe("messages");
+  expect(readPairingQrContent(host.chatMessages[0])).toEqual([qr]);
+  expect(host.chatHistoryPagination.segments?.[0]?.boundedPacket).toBeUndefined();
+});
+
+it.each(["local", "pin"] as const)(
+  "rechecks charged viewport fit after a %s body arrives before admission",
+  (arrival) => {
+    const host = makeChatHost();
+    const held = [499, 500].map((seq) =>
+      Object.assign(durable(seq), { content: "x".repeat(4_000) }),
+    );
+    admitChatHistoryPages(
+      host,
+      [{ messages: held, hasMore: true, olderCursor: "older-498", newerCursor: "newer-501" }],
+      "around",
+    );
+    host.readTranscriptReaderSnapshot = () => ({
+      anchor: "id:source-499",
+      visibleSources: ["id:source-499", "id:source-500"],
+    });
+    const result = {
+      messages: [{ ...durable(498), content: "y".repeat(80 * 1024) }],
+      hasMore: true,
+      olderCursor: "older-497",
+    };
+    expect(prepareChatHistoryPages(host, [result], "older").fits).toBe(true);
+    const message = {
+      role: arrival === "local" ? "system" : "assistant",
+      content: "z".repeat(CHAT_RESIDENT_WEIGHT_TARGET - 64 * 1024),
+      ...(arrival === "pin" ? { __openclaw: { id: "source-501", seq: 501, runId: "pin" } } : {}),
+    };
+    if (arrival === "local") {
+      reduceChatSessionProjection(host, { type: "localOutput", message });
+    } else {
+      reduceChatSessionProjection(host, { type: "runDelta", runId: "pin", message });
+      reduceChatSessionProjection(host, { type: "messagePersisted", message });
+    }
+    expect(host.chatMessages).toContain(message);
+    const before = host.chatMessages;
+    const coverage = host.chatHistoryPagination;
+    expect(prepareChatHistoryPages(host, [result], "older").fits).toBe(false);
+    expect(admitChatHistoryPages(host, [result], "older")).toBe(false);
+    expect(host.chatMessages).toBe(before);
+    expect(host.chatHistoryPagination).toBe(coverage);
+    expect(host.chatMessages).toEqual([...held, message]);
+  },
+);
 
 it("keeps an indivisible source group above the entry target", () => {
   const messages = Array.from({ length: 401 }, (_, index) => ({
@@ -425,7 +496,10 @@ it("records one admitted intrinsic source and releases the old reader exception 
   const b = giant(2);
   const host = makeChatHost();
   let reader: string | null = "id:source-3";
-  host.readTranscriptAnchorSource = () => reader;
+  host.readTranscriptReaderSnapshot = () => ({
+    anchor: reader,
+    visibleSources: reader ? [reader] : [],
+  });
   admitChatHistoryPages(host, [{ messages: a, hasMore: true, olderCursor: "older-2" }], "around");
   expect(
     admitChatHistoryPages(
@@ -461,7 +535,10 @@ it("retires an old intrinsic group sharing the reader's single packet after read
   const b = giant(2);
   const host = makeChatHost();
   let reader = "id:source-1";
-  host.readTranscriptAnchorSource = () => reader;
+  host.readTranscriptReaderSnapshot = () => ({
+    anchor: reader,
+    visibleSources: reader ? [reader] : [],
+  });
   admitChatHistoryPages(host, [{ messages: [...a, ...b] }], "around");
   expect(host.chatMessages).toEqual([...a, ...b]);
   reader = "id:source-2";
@@ -558,8 +635,8 @@ it.each([
     const owner = {
       sessionKey: "agent:main:pairing",
       chatMessages: [] as unknown[],
-      chatHistoryPagination: undefined as ChatHistoryPagination | undefined,
-      readTranscriptAnchorSource: () => "seq:2",
+      chatHistoryPagination: resolveChatHistoryPagination(undefined),
+      readTranscriptReaderSnapshot: () => ({ anchor: "seq:2", visibleSources: ["seq:2"] }),
     };
     const scope = { sessionKey: owner.sessionKey };
     const reply = {
@@ -598,18 +675,22 @@ it.each([
     const nextPagination = { hasMore: false as const };
     const nextPacket = prepareChatHistoryPacket(incoming, nextPagination);
     const prepared = prepareChatHistoryPages(
-      {
-        chatMessages: owner.chatMessages,
-        chatHistoryPagination: owner.chatHistoryPagination,
-        readTranscriptAnchorSource: owner.readTranscriptAnchorSource,
-      },
+      owner,
       [{ ...nextPagination, messages: incoming, packet: nextPacket }],
       direction,
     );
     expect(prepared.fits).toBe(true);
-    expect(prepared.messages).toContain(reply);
+    const replies = prepared.messages.filter(
+      (message) => nativeHistoryMessageSourceIdentity(message) === "id:source-3",
+    );
+    expect(replies).toHaveLength(retainQr ? 2 : 1);
     if (retainQr) {
-      expect(prepared.messages).toContain(owner.chatMessages[1]);
+      expect(replies).toContain(owner.chatMessages[1]);
+      expect(replies).toEqual([initial, initial]);
+      expect(replies.map(readPairingQrContent)).toEqual([[qr], [qr]]);
+    } else {
+      expect(replies).toEqual([reply]);
+      expect(replies[0]).toBe(reply);
     }
     const incomingPacket =
       direction === "older"

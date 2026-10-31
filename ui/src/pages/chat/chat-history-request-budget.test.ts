@@ -1,7 +1,7 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
+import { prepareChatHistoryRequestBudget } from "./chat-history-cost.ts";
 import { prepareChatHistoryPages, admitChatHistoryPages } from "./chat-history-snapshot.ts";
-import { prepareChatHistoryRequestBudget } from "./chat-history-window.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   getChatSessionProjection,
@@ -66,7 +66,10 @@ it("uses the publication owner's terminal pin, independently of the active run o
   const host = makeChatHost();
   const native = source(1);
   admitChatHistoryPages(host, [{ messages: [native] }], "around");
-  host.readTranscriptAnchorSource = () => "id:source-1";
+  host.readTranscriptReaderSnapshot = () => ({
+    anchor: "id:source-1",
+    visibleSources: ["id:source-1"],
+  });
   const terminal = { ...source(2), __openclaw: { id: "source-2", seq: 2, runId: "terminal" } };
   Object.assign(host, { lastLocalTerminalReconcile: { runId: "terminal" } });
   reduceChatSessionProjection(host, {

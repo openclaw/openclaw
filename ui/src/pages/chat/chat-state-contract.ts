@@ -12,7 +12,11 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
-import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type {
+  ChatHistoryCursor,
+  ChatHistoryPagination,
+  ChatTranscriptReaderSnapshot,
+} from "./chat-history-pagination.ts";
 import type { ChatPendingInputView } from "./chat-pending-inputs.types.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
@@ -116,7 +120,7 @@ export type ChatState = StreamCausalBoundaryState & {
   transcriptLoadingChanged?: () => void;
   /** Release dormant derived sources synchronously at canonical body retirement. */
   transcriptMessagesRetired?: (messages: readonly unknown[]) => void;
-  readTranscriptAnchorSource?: () => string | null;
+  readTranscriptReaderSnapshot?: () => ChatTranscriptReaderSnapshot | null;
   beforeHistoryTailRestore?: () => void;
   /** Reports transient read recovery to the shell connection indicator. */
   historyRecoveryChanged?: () => void;
