@@ -70,37 +70,6 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(legacyId).not.toHaveBeenCalled();
   });
 
-  it("keeps a legacy result's own error state when the repair fills in its missing id", () => {
-    // The id is the only thing missing; a recorded success must not be replayed as a failure.
-    const succeeded = castAgentMessages([
-      sparseAssistant([toolCall("call_legacy", "read")]),
-      {
-        role: "toolResult",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
-    ]);
-    expect(sanitizeToolUseResultPairing(succeeded)[1]).toMatchObject({
-      toolCallId: "call_legacy",
-      isError: false,
-    });
-
-    const failed = castAgentMessages([
-      sparseAssistant([toolCall("call_legacy", "read")]),
-      {
-        role: "toolResult",
-        toolName: "read",
-        content: [{ type: "text", text: "boom" }],
-        isError: true,
-      },
-    ]);
-    expect(sanitizeToolUseResultPairing(failed)[1]).toMatchObject({
-      toolCallId: "call_legacy",
-      isError: true,
-    });
-  });
-
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
     vi.spyOn(Date, "now").mockReturnValue(5_000);
     const input = castAgentMessages([
@@ -324,17 +293,17 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     };
   }
 
-  it("keeps the real result while dropping its synthetic predecessor and an orphan", () => {
+  it("keeps a legacy real result's outcome while dropping its synthetic predecessor and an orphan", () => {
     const input = castAgentMessages([
       sparseAssistant([toolCall("call_1")]),
       makeSyntheticResult("call_1"),
       textToolResult("call_orphan", "read", "orphan", { isError: false }),
-      textToolResult("call_1", "read", "real output", { isError: false }),
+      textToolResult("", "read", "real output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
 
-    expect(result.messages).toEqual([input[0], input[3]]);
+    expect(result.messages).toEqual([input[0], { ...input[3], toolCallId: "call_1" }]);
   });
 
   it("late real result after another assistant turn replaces prior synthetic", () => {

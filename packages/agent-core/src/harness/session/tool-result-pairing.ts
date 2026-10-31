@@ -206,8 +206,6 @@ export function normalizeLegacyToolResultId(
   if (resultName && callName && resultName !== callName) {
     return message;
   }
-  // Only the id is missing here; the message is a real recorded outcome, so it keeps its own
-  // error state. Synthetic failures go through makeMissingToolResult, which also marks them.
   return { ...message, toolCallId: toolCall.id };
 }
 
