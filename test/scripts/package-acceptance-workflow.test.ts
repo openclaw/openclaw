@@ -203,6 +203,7 @@ const WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW = ".github/workflows/windows-blacksmit
 const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
+const SCHEDULED_REPO_E2E_WORKFLOW = ".github/workflows/openclaw-scheduled-repo-e2e.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const RELEASE_CHECK_ARTIFACT_RESOLVER = "scripts/github/resolve-release-check-artifacts.sh";
 const RELEASE_FILTER_VALIDATOR = "scripts/github/validate-release-suite-filters.sh";
@@ -10277,6 +10278,10 @@ describe("package artifact reuse", () => {
     expect(daily.with).toMatchObject({
       enable_prepublish_plugin_registry: true,
       ref: "${{ github.sha }}",
+      include_repo_e2e: false,
+      include_release_path_suites: true,
+      include_openwebui: true,
+      include_live_suites: true,
     });
     expect(weekly.if).toBe(
       "github.repository == 'openclaw/openclaw' && github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'",
@@ -10304,6 +10309,84 @@ describe("package artifact reuse", () => {
     expect(weekly.with).not.toHaveProperty("docker_e2e_bare_image");
     expect(weekly.with).not.toHaveProperty("docker_e2e_functional_image");
     expect(weekly.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
+  });
+
+  it("gives daily repo E2E an independent secretless schedule without live or release suites", () => {
+    const workflow = readWorkflow(SCHEDULED_REPO_E2E_WORKFLOW);
+    const caller = workflowJob(SCHEDULED_REPO_E2E_WORKFLOW, "repo_e2e");
+    const permissions = {
+      actions: "read",
+      contents: "read",
+      packages: "read",
+      "pull-requests": "read",
+    };
+    expect(workflow.on).toEqual({
+      schedule: [{ cron: "53 3 * * *" }],
+      workflow_dispatch: null,
+    });
+    expect(workflow.concurrency).toEqual({
+      group: "openclaw-scheduled-repo-e2e-${{ github.ref }}",
+      "cancel-in-progress": false,
+    });
+    expect(workflow.permissions).toEqual(permissions);
+    expect(Object.keys(workflow.jobs ?? {})).toEqual(["repo_e2e"]);
+    expect(caller.permissions).toEqual(permissions);
+    expect(caller.if).toBe("github.repository == 'openclaw/openclaw'");
+    expect(caller.uses).toBe(`./${LIVE_E2E_WORKFLOW}`);
+    expect(caller.with).toEqual({
+      ref: "${{ github.sha }}",
+      include_repo_e2e: true,
+      include_release_path_suites: false,
+      include_openwebui: false,
+      include_live_suites: false,
+      allow_unreleased_changelog: true,
+      shared_image_artifact_namespace: "scheduled-repo-e2e",
+      shared_image_policy: "no-push-artifact",
+    });
+    expect(caller.secrets).toBeUndefined();
+
+    const reusable = readWorkflow(LIVE_E2E_WORKFLOW);
+    const inputs = {
+      ...Object.fromEntries(
+        Object.entries(reusable.on?.workflow_call?.inputs ?? {}).map(([name, input]) => [
+          name,
+          input && typeof input === "object" && "default" in input ? input.default : "",
+        ]),
+      ),
+      ...caller.with,
+    };
+    const plan = createReleaseWorkflowMatrixPlan({
+      includeLiveSuites: inputs.include_live_suites,
+      includeReleasePathSuites: inputs.include_release_path_suites,
+    });
+    expect([plan.dockerE2e.count, plan.liveDocker.count, plan.liveModels.count]).toEqual([0, 0, 0]);
+    const enabledJobs = Object.entries(reusable.jobs ?? {})
+      .filter(([, job]) =>
+        evaluateWorkflowExpression(`\${{ ${job.if ?? "success()"} }}`, {
+          eventName: "schedule",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          inputs,
+          additionalNeeds: {
+            plan_release_workflow_matrices: {
+              outputs: {
+                docker_e2e_count: String(plan.dockerE2e.count),
+                live_docker_count: String(plan.liveDocker.count),
+                live_models_count: String(plan.liveModels.count),
+              },
+            },
+            prepare_docker_e2e_image: { result: "skipped", outputs: {} },
+          },
+        }),
+      )
+      .map(([name]) => name);
+    expect(enabledJobs).toEqual([
+      "validate_selected_ref",
+      "plan_release_workflow_matrices",
+      "validate_repo_e2e_gateway",
+      "validate_repo_e2e_runtime",
+      "validate_special_e2e",
+    ]);
   });
 
   it.each([false, true])(

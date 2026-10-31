@@ -8,6 +8,14 @@ read_when:
 
 ## Live and Docker/Parallels workflows
 
+Repository E2E has its own daily **OpenClaw Scheduled Repo E2E** workflow at
+03:53 UTC, covering Gateway, UI, Agent plugin Gateway, and OpenShell without live
+provider credentials. **OpenClaw Scheduled Live And E2E Checks** retains the
+04:23 UTC live-provider, OpenWebUI, and release-path suites but no longer runs
+repo E2E. Manual **OpenClaw Release Checks** still includes repo E2E. See
+[daily repo E2E](/ci/scheduled-workflows#daily-repo-e2e) for ownership and failure
+triage.
+
 When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image checks): `pnpm test:live`
