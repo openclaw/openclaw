@@ -365,6 +365,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-transcript-recovery.test.ts",
   "src/agents/embedded-agent-runner/run.compaction-runtime.test.ts",
   "src/agents/embedded-agent-subscribe.handlers.compaction.test.ts",
+  "src/agents/embedded-agent-subscribe.reply-source.test.ts",
   "src/agents/embedded-agent-runner/wait-for-idle-before-flush.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-identity.worker.test.ts",
   "src/agents/embedded-agent-runner/run-entry.cleanup.test.ts",

@@ -177,6 +177,8 @@ export class EmbeddedAgentSubscribeState {
   assistantMessageIndex = 0;
   /** Physical message boundary; assistantMessageIndex also advances between content blocks. */
   assistantMessageStartIndex = 0;
+  /** Input snapshot for the physical assistant message, shared by all its blocks. */
+  declare assistantReplyToId?: string;
   lastAssistantStreamContentIndex?: number = undefined;
   lastAssistantStreamItemId?: string = undefined;
   lastAssistantTextMessageIndex = -1;

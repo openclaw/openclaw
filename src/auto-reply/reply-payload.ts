@@ -319,7 +319,7 @@ export type ReplyPayloadMetadata = {
   };
   /** The final-dispatch owner joins cleanup to the core dispatcher's settled receipt. */
   pendingFinalDeliveryCleanup?: { preserveActivity?: boolean };
-  /** replyToId existed before reply threading could inject an implicit target. */
+  /** Explicit quote identity; false retains a producer-selected implicit reply target. */
   replyToIdExplicit?: boolean;
   /** The host's single-use reply policy already consumed its target. */
   replyTargetSuppressed?: true;

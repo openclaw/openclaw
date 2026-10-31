@@ -348,6 +348,7 @@ function prepareStream(
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     session: activeSession,
+    getUserTranscriptContexts: input.getUserTranscriptContexts,
     onModelUsage: input.onModelUsage,
     messageChannel: input.runtimeChannel,
     hookRunner: getGlobalHookRunner() ?? undefined,

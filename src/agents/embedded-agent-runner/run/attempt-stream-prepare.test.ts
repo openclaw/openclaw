@@ -207,6 +207,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       messageChannel: projected.messageChannel,
       hookRunner: projected.hookRunner,
       reasoningMode: projected.reasoningMode,
+      getUserTranscriptContexts: projected.getUserTranscriptContexts,
       thinkingLevel: projected.thinkingLevel,
       hasDeliveredMessageToolOnlySourceReply: projected.hasDeliveredMessageToolOnlySourceReply,
       onDeliveredMessageToolOnlySourceReply: projected.onDeliveredMessageToolOnlySourceReply,
