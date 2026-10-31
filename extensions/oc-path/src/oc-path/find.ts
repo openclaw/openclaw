@@ -108,7 +108,11 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
     case "yaml":
       if (ast.doc.contents !== null) {
         yamlDoc = ast.doc;
-        yamlOps.walk(ast.doc.contents, subs, 0, [], context);
+        try {
+          yamlOps.walk(ast.doc.contents, subs, 0, [], context);
+        } finally {
+          yamlDoc = undefined;
+        }
       }
       break;
   }
@@ -424,7 +428,7 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
   },
 };
 
-/** Document of the YAML AST being walked, so `yamlOps` can follow aliases. */
+/** Document of the YAML AST being walked by `findOcPaths`; reset after each walk. */
 let yamlDoc: Document | undefined;
 
 const yamlOps: WalkOps<Node> = {
@@ -464,10 +468,7 @@ const yamlOps: WalkOps<Node> = {
         return null;
       }
       const child = derefYamlNode(yamlDoc, node.items[idx]);
-      if (child === null) {
-        return null;
-      }
-      return { keySub: key, child };
+      return child === null ? null : { keySub: key, child };
     }
     return null;
   },
