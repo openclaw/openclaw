@@ -28,7 +28,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
   ),
   command(
     "config",
-    "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
+    "Non-interactive config helpers (get/explain/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     true,
     { machineOutput: ({ argv }) => isConfigMachineOutput(argv) },
   ),
