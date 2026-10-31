@@ -359,11 +359,7 @@ describe("snapshot legacy cron identity", () => {
           copiedEnv,
         ),
       );
-      expect(selection).toMatchObject(
-        selector === "moved" || selector === "released envelope"
-          ? { status: "unresolved" }
-          : { status: "ready", storeKey },
-      );
+      expect(selection).toMatchObject({ status: "ready", storeKey });
       expect(await fs.readFile(source)).toEqual(original);
     },
   );
