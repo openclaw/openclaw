@@ -102,7 +102,12 @@ function convertMessages<T extends GoogleApiType>(
   videoMetadata: Record<string, unknown>,
 ): GoogleInteractionsStep[] {
   const steps: GoogleInteractionsStep[] = [];
-  const messages = transformProviderMessages(context.messages, model);
+  // Canonical transcript types omit video; blocks the provider input admits survive
+  // the transform, as on the GenerateContent projection.
+  const messages = transformProviderMessages(
+    context.messages,
+    model,
+  ) as ProviderContext["messages"];
 
   for (const message of messages) {
     if (message.role === "user") {
