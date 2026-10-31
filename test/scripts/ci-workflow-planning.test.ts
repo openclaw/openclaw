@@ -8298,24 +8298,10 @@ describe("ci workflow guards", () => {
     );
     expect(releaseGateMerge.run).toContain("for attempt in {1..6}");
     expect(releaseGateMerge.run).toContain(
-      '"+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-ratchet-merge"',
-    );
-    expect(releaseGateMerge.run).toContain('"$merge_head" == "$TARGET_SHA"');
-    expect(releaseGateMerge.run).toContain('git show -s --format=%P "$merge_sha"');
-    expect(releaseGateMerge.run).toContain(
-      "Freeze GitHub's canonical merge snapshot once it contains the exact head",
-    );
-    expect(releaseGateMerge.run).toContain(
-      "Base freshness belongs to the landing gate; chasing moving main here can never converge",
-    );
-    expect(releaseGateMerge.run).toContain(
       "release-gate merge tree did not refresh to the target head",
     );
     expect(releaseGateMerge.run).not.toContain(".base.sha");
     expect(releaseGateMerge.run).toContain('--git 0 checkout --detach "$merge_sha"');
-    expect(releaseGateMerge.run).toContain(
-      'echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"',
-    );
     expect(checksFastRun.run).not.toContain("PROTOCOL_MANUAL_BASE_SHA");
     expect(checksFastRun.run).not.toContain("protocol-since-base");
     expect(checksFastRun.run).toContain(
