@@ -422,7 +422,15 @@ function appendVoiceTranscript(
                 // agent database was displaced or removed: recovery owns that state and
                 // reopening it here would recreate metadata it deliberately dropped.
                 if (await agentDatabaseIsUsable(normalized.agentId)) {
-                  await patchSessionEntryCore(transcriptTarget, () => ({
+                  const entryScope = {
+                    agentId: normalized.agentId,
+                    sessionKey: normalized.sessionKey,
+                    sessionId: entry.sessionId,
+                    ...(normalized.sessionTarget.storePath
+                      ? { storePath: normalized.sessionTarget.storePath }
+                      : {}),
+                  };
+                  await patchSessionEntryCore(entryScope, () => ({
                     lastInteractionAt: timestamp,
                     updatedAt: timestamp,
                   }));
