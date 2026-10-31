@@ -363,13 +363,24 @@ async function finishSettledUpdate(
     }
     // Final recovery may still start the stopped Gateway. Retain the enabled
     // task and its compensation until that owner's readiness check settles.
-    await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(
-      rolledBack ||
-        isUpdateGatewayReadinessPending(finalResult) ||
-        finalResult.status === "ok" ||
-        (finalResult.recovery?.serviceRestartSafe === true &&
-          finalResult.recovery.service === "healthy"),
-    );
+    try {
+      await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(
+        rolledBack ||
+          isUpdateGatewayReadinessPending(finalResult) ||
+          finalResult.status === "ok" ||
+          (finalResult.recovery?.serviceRestartSafe === true &&
+            finalResult.recovery.service === "healthy"),
+      );
+    } catch (cause) {
+      rolledBack = false;
+      restoreFailure = await settlePostUpdateWindowsAutoStartFailure(
+        params,
+        finalResult,
+        result,
+        cause,
+        currentServiceStop,
+      );
+    }
     pendingResult = terminal.completeUpdateCommandResult(
       params,
       captured.interruptedResult(finalResult),

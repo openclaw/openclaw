@@ -1,2 +1,2 @@
 # Same-version npm failure recovery through real finalization and Windows autostart ownership.
-26
+27
