@@ -634,6 +634,7 @@ export async function gatherDispatchRequest(
     markIdle: (reason: string) => messageLifecycle.markIdle(reason),
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
+    boundAcpDispatchSessionKey,
     dispatchKind,
     markProgress,
     sessionStoreEntry,

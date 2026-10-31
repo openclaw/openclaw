@@ -1,3 +1,4 @@
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions/session-entry-current-check.js";
 // Bundled runtime authority for selected sessions and conversation bindings.
 import {
@@ -5,6 +6,7 @@ import {
   composeSessionSourceAssertion,
   type PreparedSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { guardAcpBindingPlatformSend } from "../infra/outbound/acp-binding-authority.js";
 import { projectPluginSessionEntry } from "./session-store-runtime-internal.js";
 
 export type { PreparedSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -46,3 +48,17 @@ export {
   type AsyncSessionBindingService,
   type SessionBindingServiceV2,
 } from "../infra/outbound/session-binding-service.js";
+
+/**
+ * Native channel sends: re-check an ACP child reply's conversation binding right
+ * before each platform send, after any async media load. No-op for other replies.
+ */
+export function guardAcpBoundReplyPlatformSend(
+  payload: object,
+  onPlatformSendDispatch?: () => Promise<void>,
+): (() => Promise<void>) | undefined {
+  return guardAcpBindingPlatformSend(
+    getReplyPayloadMetadata(payload)?.acpBindingAuthority,
+    onPlatformSendDispatch,
+  );
+}

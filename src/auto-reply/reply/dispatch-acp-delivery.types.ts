@@ -10,6 +10,7 @@ import type { GetReplyOptions, SourceReplyDeliveryMode } from "../get-reply-opti
 import type { FinalizedMsgContext, FinalizedRuntimeMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockReplySource } from "./block-reply-source.types.js";
+import type { AcpBoundDeliveryRevocation } from "./dispatch-acp-delivery-binding.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -73,6 +74,7 @@ export type AcpDispatchDeliveryParams = {
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
   suppressBlockUserDelivery?: boolean;
+  isUserDeliveryRevoked?: AcpBoundDeliveryRevocation;
   suppressReplyLifecycle?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
@@ -92,7 +94,11 @@ export type AcpDispatchAttemptResult = {
 
 export type AcpDispatchAttemptParams = Omit<
   AcpDispatchDeliveryParams,
-  "agentId" | "ctx" | "suppressBlockUserDelivery" | "preparedTtsPreferences"
+  | "agentId"
+  | "ctx"
+  | "suppressBlockUserDelivery"
+  | "isUserDeliveryRevoked"
+  | "preparedTtsPreferences"
 > & {
   preparedTtsPreferences?: PreparedTtsPreferences;
   ctx: FinalizedRuntimeMsgContext;

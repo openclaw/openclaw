@@ -10,6 +10,7 @@ import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { assertAcpConversationBindingCurrent } from "./acp-binding-authority.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
@@ -101,7 +102,17 @@ export async function buildRecoveryDeliverParams(
       ? {
           onDirectAdapterHandoff: async () => assertCurrent(),
           assertDirectAdapterHandoff: assertCurrent,
-          onPlatformSendDispatch: async () => assertCurrent(),
+        }
+      : {}),
+    // A recovered ACP child reply replays only while the same binding still owns the conversation.
+    ...(pendingFinal || entry.acpBindingAuthority
+      ? {
+          onPlatformSendDispatch: async () => {
+            await assertAcpConversationBindingCurrent(entry.acpBindingAuthority);
+            if (pendingFinal) {
+              assertCurrent();
+            }
+          },
         }
       : {}),
     deliveryQueueId: entry.id,

@@ -40,6 +40,7 @@ function resolveReplyPolicyConversationType(ctx: GatherDispatchRequestReadyState
 
 export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyState) {
   const {
+    boundAcpDispatchSessionKey,
     cfg,
     ctx,
     groupId,
@@ -63,6 +64,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
           assertCurrent: assertPreparationCurrent,
         },
         (session) =>
+          // A parent-linked child bound to this conversation is its user-facing owner.
+          !boundAcpDispatchSessionKey &&
           isParentOwnedBackgroundAcpSession(
             session?.entry ? { ...session.entry, acp: session.acp } : undefined,
           ),

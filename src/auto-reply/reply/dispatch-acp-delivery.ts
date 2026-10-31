@@ -28,6 +28,7 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import type { BlockReplySource } from "./block-reply-source.types.js";
+import { guardAcpTransportHandoff } from "./dispatch-acp-delivery-binding.js";
 import type {
   AcpBlockText,
   AcpDispatchDeliveryMeta,
@@ -42,6 +43,7 @@ import {
   recoverAcpBlockText,
   shouldTreatDeliveredTextAsVisible,
 } from "./dispatch-acp-payload.js";
+import { createAcpToolMessageEditor } from "./dispatch-acp-tool-edit.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import {
   resolveRoutedReplyDeliveryOutcome,
@@ -65,9 +67,6 @@ const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-rep
 const channelPluginRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/plugins/index.js"),
 );
-const messageActionRuntimeLoader = createLazyImportLoader(
-  () => import("../../infra/outbound/message-action-runner.js"),
-);
 
 export type AcpDispatchDeliveryCoordinator = ReturnType<
   typeof createAcpDispatchDeliveryCoordinator
@@ -85,6 +84,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     routedChannel ?? directChannel,
     explicitAccountId,
   );
+  const routedSendGuard = guardAcpTransportHandoff(params.dispatcher, params.isUserDeliveryRevoked);
   const routedReplyDelivery = params.originatingChannel
     ? createReplyDeliveryContext(
         resolveReplyToMode(
@@ -179,44 +179,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     });
   };
 
-  const tryEditToolMessage = async (
-    payload: ReplyPayload,
-    toolCallId: string,
-  ): Promise<boolean> => {
-    const handle = state.toolMessageByCallId.get(toolCallId);
-    if (!handle?.messageId) {
-      return false;
-    }
-    const message = normalizeOptionalString(payload.text);
-    if (!message) {
-      return false;
-    }
-
-    try {
-      const { runMessageAction } = await messageActionRuntimeLoader.load();
-      await runMessageAction({
-        cfg: params.cfg,
-        action: "edit",
-        params: {
-          channel: handle.channel,
-          to: handle.to,
-          threadId: handle.threadId,
-          messageId: handle.messageId,
-          message,
-        },
-        defaultAccountId: handle.accountId,
-        sessionKey: params.ctx.SessionKey,
-        requesterAccountId: params.ctx.AccountId,
-      });
-      state.routedCounts.tool += 1;
-      return true;
-    } catch (error) {
-      logVerbose(
-        `dispatch-acp: tool message edit failed for ${toolCallId}: ${formatErrorMessage(error)}`,
-      );
-      return false;
-    }
-  };
+  const tryEditToolMessage = createAcpToolMessageEditor(params, state, routedSendGuard);
 
   const deliver = async (
     kind: ReplyDispatchKind,
@@ -345,7 +308,12 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       }
       await startReplyLifecycleOnce();
 
-      if (params.suppressUserDelivery) {
+      const viaDispatcher = !(
+        params.shouldRouteToOriginating &&
+        params.originatingChannel &&
+        params.originatingTo
+      );
+      if (params.suppressUserDelivery || (await params.isUserDeliveryRevoked?.(viaDispatcher))) {
         return false;
       }
       if (
@@ -491,6 +459,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
           mirror: false,
           replyKind: sendKind,
           runId: params.runId,
+          ...(await routedSendGuard?.()),
         });
         const outcome = resolveRoutedReplyDeliveryOutcome(result);
         const pending = outcome === "recovery-owned" || outcome === "failed-deliver";

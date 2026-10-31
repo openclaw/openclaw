@@ -370,6 +370,60 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("withdraws user delivery once the conversation binding is revoked", async () => {
+    let revoked = false;
+    const dispatcher = createDispatcher();
+    vi.spyOn(dispatcher, "sendFinalReply");
+    const coordinator = createCoordinator({
+      dispatcher,
+      isUserDeliveryRevoked: async () => revoked,
+    });
+    expect(await coordinator.deliver("final", { text: "while bound" }, { skipTts: true })).toBe(
+      true,
+    );
+    revoked = true;
+    expect(await coordinator.deliver("final", { text: "after unbind" }, { skipTts: true })).toBe(
+      false,
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+
+    deliveryMocks.routeReply.mockClear();
+    const routed = createCoordinator({
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+      isUserDeliveryRevoked: async () => true,
+    });
+    expect(await routed.deliver("final", { text: "x" }, { skipTts: true })).toBe(false);
+    expect(deliveryMocks.routeReply).not.toHaveBeenCalled();
+  });
+
+  it("withholds a queued reply when the binding is revoked before transport", async () => {
+    let bound = true;
+    const sent: unknown[] = [];
+    const firstSend = createDeferred();
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        if (sent.length === 0) {
+          sent.push(payload.text);
+          await firstSend.promise;
+          return;
+        }
+        sent.push(payload.text);
+      },
+    });
+    const coordinator = createCoordinator({
+      dispatcher,
+      isUserDeliveryRevoked: async () => !bound,
+    });
+    await coordinator.deliver("block", { text: "while bound" }, { skipTts: true });
+    await coordinator.deliver("block", { text: "queued" }, { skipTts: true });
+    bound = false;
+    firstSend.resolve();
+    await dispatcher.waitForIdle();
+    expect(sent).toEqual(["while bound"]);
+  });
+
   it("routes ACP replies through the configured default account when AccountId is omitted", async () => {
     await expectVisibleChatBlockRoutesToAccount(
       createAcpTestConfig({

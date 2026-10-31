@@ -64,6 +64,10 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+import {
+  createAcpBoundDeliveryRevocation,
+  hasBoundConversationForSession,
+} from "./dispatch-acp-delivery-binding.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type {
   AcpDispatchAttemptParams,
@@ -162,29 +166,16 @@ export async function tryDispatchAcpReplyCore(
       : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
   const effectiveDispatchAccountId =
     explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
-  const hasBoundConversationForSession = async (): Promise<boolean> => {
-    const channel = normalizedDispatchChannel;
-    if (!channel) {
-      return false;
-    }
-    const normalizedAccountId =
-      normalizeOptionalLowercaseString(effectiveDispatchAccountId) ?? "default";
-    const { listSessionBindingsBySessionAsync } = await loadDispatchAcpManagerRuntime();
-    const bindings = await listSessionBindingsBySessionAsync(canonicalSessionKey);
-    return bindings.some(
-      (binding) =>
-        normalizeOptionalLowercaseString(binding.conversation.channel) === channel &&
-        (normalizeOptionalLowercaseString(binding.conversation.accountId) || "default") ===
-          normalizedAccountId &&
-        Boolean(normalizeOptionalString(binding.conversation.conversationId)),
-    );
-  };
 
   const shouldEmitResolvedIdentityNotice =
     !params.suppressUserDelivery &&
     identityPendingBeforeTurn &&
     ((params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim() !== "") ||
-      (await hasBoundConversationForSession()));
+      (await hasBoundConversationForSession({
+        channel: normalizedDispatchChannel,
+        accountId: effectiveDispatchAccountId,
+        sessionKey: canonicalSessionKey,
+      })));
 
   const resolvedAcpAgent =
     acpResolution.kind === "ready"
@@ -210,6 +201,11 @@ export async function tryDispatchAcpReplyCore(
     agentId: acpAgentId,
     sessionKey: canonicalSessionKey,
     suppressBlockUserDelivery: shouldDeferVisibleTextForTts,
+    isUserDeliveryRevoked: createAcpBoundDeliveryRevocation(
+      params,
+      acpAgentId,
+      canonicalSessionKey,
+    ),
   });
   const pendingAnswerText = params.ctx.agentText.trim();
   const persistInput = inputRecorder

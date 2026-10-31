@@ -8,6 +8,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
+import type { AcpConversationBindingAuthority } from "../infra/outbound/acp-binding-authority.types.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -300,6 +301,8 @@ export type ReplyPayloadMetadata = {
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
   sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+  /** ACP conversation binding a durable send persists and re-checks before transport. */
+  acpBindingAuthority?: AcpConversationBindingAuthority;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** One host-visible status gates a child-completion wake for this exact turn. */

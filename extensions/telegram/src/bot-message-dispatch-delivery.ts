@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { guardAcpBoundReplyPlatformSend } from "openclaw/plugin-sdk/session-binding-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import {
   resetLaneState,
@@ -304,7 +305,11 @@ export async function sendPayload(
       silent,
       mediaLoader: loadWebMedia,
       promptContextSequence: projectionSequence,
-      onPlatformSendDispatch: options?.onPlatformSendDispatch,
+      // Re-check an ACP child binding at the handoff, after media loads.
+      onPlatformSendDispatch: guardAcpBoundReplyPlatformSend(
+        payload,
+        options?.onPlatformSendDispatch,
+      ),
       assertPlatformSendAuthorized: options?.assertPlatformSendAuthorized,
       ...(options?.textMode ? { textMode: options.textMode } : {}),
     });
@@ -569,6 +574,10 @@ export async function deliverFallback(turn: Turn, replies: ReplyPayload[], silen
       ...createDeliveryBaseOptions(turn),
       silent,
       mediaLoader: loadWebMedia,
+      onPlatformSendDispatch: replies.reduce<(() => Promise<void>) | undefined>(
+        (hook, reply) => guardAcpBoundReplyPlatformSend(reply, hook),
+        undefined,
+      ),
     });
     if (result.delivered && !turn.previewLifecycle.finalDelivered) {
       await observeFinalDelivery(turn, { visibleReplySent: true, receipt: result.receipt }, true);

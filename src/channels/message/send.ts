@@ -7,6 +7,7 @@ import {
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { guardAcpBindingPlatformSend } from "../../infra/outbound/acp-binding-authority.js";
 import {
   type OutboundDeliveryResult,
   isOutboundDeliveryError,
@@ -422,7 +423,7 @@ async function sendMessageBatch(
     for (const authority of new Set(ephemeralWriterAuthorities)) {
       prepared.push(await prepareSessionWriterDeliveryAuthority(authority));
     }
-    const onPlatformSendDispatch =
+    const baseOnPlatformSendDispatch =
       ephemeralWriterAuthorities.length > 0
         ? async () => {
             for (const { authority } of prepared) {
@@ -431,6 +432,16 @@ async function sendMessageBatch(
             await params.onPlatformSendDispatch?.();
           }
         : params.onPlatformSendDispatch;
+    // An ACP child reply queued by a channel callback keeps its binding check live and durable.
+    const acpBindingAuthority =
+      params.acpBindingAuthority ??
+      params.payloads
+        .map((payload) => getReplyPayloadMetadata(payload)?.acpBindingAuthority)
+        .find(Boolean);
+    const onPlatformSendDispatch = guardAcpBindingPlatformSend(
+      acpBindingAuthority,
+      baseOnPlatformSendDispatch,
+    );
     const assertDirectAdapterHandoff =
       ephemeralWriterAuthorities.length > 0
         ? () => {
@@ -444,6 +455,7 @@ async function sendMessageBatch(
       {
         ...params,
         ...pendingFinalDelivery,
+        ...(acpBindingAuthority ? { acpBindingAuthority } : {}),
         onPlatformSendDispatch,
         assertDirectAdapterHandoff,
       },
