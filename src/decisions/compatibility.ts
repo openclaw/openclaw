@@ -5,7 +5,6 @@ import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-
 import {
   DecisionContractError,
   MAX_DECISION_V1_QUESTIONS,
-  validateDecisionBatch,
   validateDecisionBatchShape,
   validateDecisionResult,
 } from "./validation.js";
