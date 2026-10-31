@@ -85,7 +85,8 @@ task/script counters are unavailable; use its separate Inspector timeline for
 elapsed-time attribution, never its aged CPU utilization as action CPU.
 
 Rank against longest task ≤50 ms at Chromium 1×, ≤200 ms at 4×, event-to-frame
-≤100 ms at 4×, CLS zero, and WebKit/Chromium untraced wall ratio ≤1.3. One sample
+≤100 ms at 4×, CLS zero, and WebKit/Chromium untraced input-to-commit application
+ratio ≤1.3 for single actions. Keep compound cycles diagnostic. One sample
 only diagnoses coverage. A claimed optimization needs ten serial interleaved
 pairs and an A/A control: median regressions ≤5% and no worse p95, or ten further
 pairs confirming that band. On a noisy host, use Chromium task/script CPU and
