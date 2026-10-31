@@ -375,6 +375,7 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
     properties: appSidebarProperties,
     connected: (host) => sidebarOwners.get(host)?.attach(),
     disconnected: (host) => {
+      dismissSidebarTransientMenus(host);
       // Match the bridge's retained view when native layout reparents its host.
       queueMicrotask(() => {
         if (!host.isConnected) {
