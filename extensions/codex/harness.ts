@@ -119,6 +119,7 @@ type CodexAppServerAgentHarnessOptions = {
   providerIds?: Iterable<string>;
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
+  resolveSupportPluginConfig?: () => unknown;
   resolveConfig?: () => OpenClawConfig | undefined;
   runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
@@ -394,7 +395,9 @@ export function createCodexAppServerAgentHarness(
         }
       }
       const appServer = readWorkerPluginConfig(
-        options.resolvePluginConfig?.() ?? options.pluginConfig,
+        options.resolveSupportPluginConfig
+          ? options.resolveSupportPluginConfig()
+          : (options.resolvePluginConfig?.() ?? options.pluginConfig),
       ).appServer;
       if (
         (appServer?.transport ?? "stdio") === "stdio" &&
