@@ -74,7 +74,8 @@ project skills overriding bundled skills, and managed-worktree skills overriding
 project checkout skills, are warnings; other collisions are informational.
 Worktree provenance uses the configured `worktreeRoot` (the state directory's
 `worktrees/` by default), without checking Git. Identical content stays silent.
-Unchanged root-pair summaries are not repeated on refresh; changes to content,
+Unchanged root-pair summaries are not repeated on refresh or when switching
+between execution workspaces and the agent-only catalog; changes to content,
 declared metadata, or collision membership update the summary. Precedence is unchanged.
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
