@@ -7,6 +7,7 @@ import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.
 import { assertDaemonRuntimePinDefinition } from "./runtime-pin-state.js";
 import {
   buildHiddenLauncherScript,
+  buildTaskScript,
   buildStartupLauncherScript,
   readScheduledTaskCommand,
   resolveStartupEntryPaths,
@@ -293,8 +294,21 @@ describe("readScheduledTaskCommand", () => {
     });
   });
 
+  it("inspects a generated launcher with a trailing-backslash cwd and argument", async () => {
+    const workingDirectory = "C:\\Program Files\\OpenClaw\\";
+    const programArguments = ["node.exe", "gateway.js", workingDirectory, "SENTINEL-NEXT", ""];
+    const env = await writeScheduledTaskScript([
+      buildTaskScript({ workingDirectory, programArguments }),
+    ]);
+    await expect(readScheduledTaskCommand(env, { requireEffective: true })).resolves.toMatchObject({
+      workingDirectory,
+      programArguments,
+    });
+  });
+
   it.each([
     "node gateway.js & node another.js",
+    'node gateway.js --msg "a\\" >b" >out',
     'node gateway.js >> "C:\\Logs\\gateway.log"2>&1',
     '"%NODE_EXE%" gateway.js < NUL',
     "node gateway.js !WORKSPACE! < NUL",

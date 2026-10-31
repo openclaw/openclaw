@@ -7,6 +7,7 @@ import type {
 import type { BaseOpenAIStreamOptions, CompactionReplayRejection } from "../provider-options.js";
 import {
   isOpenAIResponsesCompactionOutput,
+  publishResponsesCompactionInput,
   readOpenAIResponsesCompactionWindow,
   type OpenAIResponsesCompactionOutput,
 } from "./openai-responses-compaction-window.js";
@@ -270,13 +271,15 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
             : (replay.replayIndex ?? 0),
       };
     }
+    const item: ResponseCompactionItemParam = {
+      type: "compaction",
+      ...(isSafeResponsesReplayItemId(replay.id) ? { id: replay.id } : {}),
+      encrypted_content: replay.data,
+    };
+    publishResponsesCompactionInput(replay, [item]);
     return {
       owner: message,
-      item: {
-        type: "compaction",
-        ...(isSafeResponsesReplayItemId(replay.id) ? { id: replay.id } : {}),
-        encrypted_content: replay.data,
-      },
+      item,
       mode: "compacted-prefix",
       replayIndex: replay.replayIndex ?? 0,
     };

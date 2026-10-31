@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as tar from "tar";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
@@ -21,6 +22,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import type { BackupManifest } from "./backup-verify-manifest.js";
+import { prepareBackupArchive } from "./backup-verify.js";
 import {
   createDatabaseMigrationCapture,
   restoreDatabaseMigrationCapture,
@@ -180,6 +183,43 @@ describe("exact database migration capture", () => {
       kind: "socket",
       socket: { socket_token: "retained-private-token" },
     });
+  });
+
+  it("refuses a verified PostgreSQL companion base before creating capture output", async () => {
+    const prepared = await prepareBackupArchive(baseArchive);
+    const extracted = state.path("companion-base");
+    await fs.mkdir(extracted);
+    await tar.x({ file: baseArchive, cwd: extracted });
+    const manifestPath = path.join(extracted, prepared.result.archiveRoot, "manifest.json");
+    const manifest: BackupManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    const sourcePath = state.statePath("state/openclaw.sqlite");
+    const anchor = path.join(extracted, buildBackupArchivePath(manifest.archiveRoot, sourcePath));
+    await fs.unlink(anchor);
+    {
+      using database = new DatabaseSync(anchor);
+      database.exec(
+        "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)",
+      );
+      database.exec(
+        "INSERT INTO openclaw_engine_anchor VALUES ('companion-store', 'postgres', 'companion_namespace')",
+      );
+    }
+    manifest.profile = "local-companion";
+    manifest.postgresSnapshots = [];
+    manifest.postgresAnchors = [
+      { sourcePath, storeId: "companion-store", namespace: "companion_namespace" },
+    ];
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    const archive = state.path("companion-base.tar.gz");
+    await tar.c({ file: archive, gzip: true, cwd: extracted }, [manifest.archiveRoot]);
+    const companion = await prepareBackupArchive(archive);
+    expect(companion.databaseRestoreCandidates).toHaveLength(0);
+    expect(companion.manifest.postgresAnchors).toHaveLength(1);
+    const output = state.path("refused-companion-capture");
+    await expect(createDatabaseMigrationCapture({ baseArchive: archive, output })).rejects.toThrow(
+      "requires a SQLite-only base archive",
+    );
+    await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses an output directory aliased into live state before creating artifacts", async () => {

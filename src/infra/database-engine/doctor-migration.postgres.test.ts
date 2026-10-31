@@ -251,20 +251,27 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     `);
   }
 
-  async function prepare(fail = false, provenance = true) {
+  async function prepare(fail = false, provenance = true, sourceVersion = target - 1) {
+    const source = {
+      ...predecessor,
+      ...originalMigrations!.find((migration) => migration.version === sourceVersion + 1)!
+        .fromSchema,
+      version: sourceVersion,
+    };
     // Build an honestly absent optional fragment, rather than dropping a sealed table.
     await prepareSource(
       provenance
-        ? predecessor
+        ? source
         : {
-            ...predecessor,
-            postgresFragments: predecessor.postgresFragments?.filter(
+            ...source,
+            postgresFragments: source.postgresFragments?.filter(
               ({ id }) => id !== "agent_provenance",
             ),
           },
     );
     const registered = originalMigrations!.find((migration) => migration.version === target)!;
     stateEngineSchema.postgresMigrations = [
+      ...originalMigrations!.filter((migration) => migration.version < target),
       {
         ...registered,
         backup,
@@ -303,7 +310,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     }
   }
 
-  it.each([24, 25, 26, 27, 28, 31, 33, 34, 35])(
+  it.each([24, 25, 26, 27, 28, 31, 33, 34, 35, 36])(
     "backs up and restores the real version %s before the registered migration",
     async (sourceVersion) => {
       stateEngineSchema.postgresMigrations = originalMigrations;
@@ -365,7 +372,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   it.each([true, false])(
     "migrates installed Template facts from v35 with optional provenance present: %s",
     async (provenance) => {
-      await prepare(false, provenance);
+      await prepare(false, provenance, 35);
       await client.query(`
         INSERT INTO "${namespace}".claw_package_refs VALUES (
           'starter', 'skill', 'clawhub', '@fixture/claw', '0.1.1', 'sha256:claw',
@@ -377,8 +384,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             : ""
         }
       `);
-      expect((await runDoctor()).warnings).toEqual([]);
-      expect(admit(stateEngineSchema)?.version).toBe(36);
+      expect((await runDoctor(35)).warnings).toEqual([]);
+      expect(admit(stateEngineSchema)?.version).toBe(stateEngineSchema.version);
       expect(
         (
           await client.query(`SELECT schema_version, origin, package_integrity

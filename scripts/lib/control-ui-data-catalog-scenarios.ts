@@ -8,7 +8,10 @@ import type {
   PluginDiscoveryResult,
 } from "../../ui/src/lib/plugins/index.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
-import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  waitForControlUiRoute,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   openNavigationDrawer,
   prepareInteractionNavigation,
@@ -1009,6 +1012,45 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     },
   },
   agentFirstOpenScenario,
+  {
+    ...agentSelectionScenario(0),
+    id: "page-agent-selector-visit-and-open",
+    route: pathForRoute("new-session"),
+    explicitOnly: true,
+    expected: "Navigate from New Session and open the 300-agent selector in the same document.",
+    prepare: async (page) => {
+      await waitForControlUiRoute(page, { routeId: "new-session" });
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const requestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+      const start = await page.evaluate(() => ({
+        at: performance.now(),
+        timeOrigin: performance.timeOrigin,
+      }));
+      await page.evaluate(
+        (pathname) => {
+          window.openclawControlUi!.navigate("agents", { pathname });
+        },
+        pathForAgentPanel("main", "overview"),
+      );
+      await waitForControlUiRoute(page, { routeId: "agents" });
+      await agentFirstOpenScenario.prepare(page, gateway);
+      const evidence = await agentFirstOpenScenario.run(page, gateway);
+      const visitAndFirstOpenMs = await page.evaluate((started) => {
+        if (performance.timeOrigin !== started.timeOrigin) {
+          throw new Error("Agent selector flow reloaded its document");
+        }
+        return performance.now() - started.at;
+      }, start);
+      return {
+        ...evidence,
+        visitAndFirstOpenMs,
+        flowIdentityRequests:
+          (await gateway.getRequests("agent.identity.get")).length - requestsBefore,
+      };
+    },
+  },
   agentSelectionScenario(0),
   agentSelectionScenario(100),
   agentReopenRetentionScenario,

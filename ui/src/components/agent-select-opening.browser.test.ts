@@ -20,12 +20,19 @@ async function fixture(
   await select.updateComplete;
   const trigger = select.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
   const menu = select.querySelector<HTMLElement>('[role="menu"]')!;
-  const items = [...select.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
   const open = async () => {
     await page.elementLocator(trigger).click();
     await expect.poll(() => menu.matches(":popover-open")).toBe(true);
   };
-  return { select, trigger, menu, items, open };
+  return {
+    select,
+    trigger,
+    menu,
+    get items() {
+      return [...select.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+    },
+    open,
+  };
 }
 
 describe("Agent select native menu", () => {

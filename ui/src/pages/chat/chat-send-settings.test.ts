@@ -85,7 +85,7 @@ it.each(["success", "failure"] as const)(
     });
     await host.sessions.refresh({ agentId: "main", force: true });
     const selection = switchChatModel(host, `openai/${model}`);
-    const send = handleSendChat(host);
+    const send = handleSendChat(host, undefined, undefined, new Event("submit"));
     let later: Promise<void> | undefined;
     try {
       await waitForFast(() => expect(host.chatQueue[0]?.sendState).toBe("waiting-model"));

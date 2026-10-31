@@ -1,2 +1,2 @@
-# Exact-state capture/restore, credential promotion, alias rejection, and physical-engine refusal.
-292
+# Exact capture/restore, credential promotion, alias and physical-engine refusal; verified companion-anchor admission and SQLite-only companion control.
+354

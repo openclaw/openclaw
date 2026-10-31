@@ -357,7 +357,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   gap: var(--oc-space-3);
   padding: var(--oc-space-4);
   border: 1px solid var(--oc-border-subtle);
-  border-radius: var(--oc-radius-surface);
+  border-radius: var(--radius-md);
   background: var(--oc-surface-card-strong);
   color: var(--oc-text-secondary);
   font-size: var(--oc-font-size-sm);
