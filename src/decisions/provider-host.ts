@@ -25,10 +25,10 @@ import {
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
 import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
-import type { DecisionOutcome, UnavailableReason } from "./host-outcomes.js";
+import type { DecisionOutcome, DecisionOutcomeV2, UnavailableReason } from "./host-outcomes.js";
 import type { ProviderFailureReason } from "./provider-outcomes.js";
 import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
-import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
+import type { DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionBatch } from "./types.js";
 import { DecisionContractError, validateDecisionResult } from "./validation.js";
 

@@ -18,9 +18,9 @@ export type {
   DecisionBatchV2,
   DecisionAnswerV2,
   DecisionBatchResultV2,
-  ProviderDecisionOutcomeV2,
-  DecisionOutcomeV2,
 } from "../decisions/types-v2.js";
+export type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
+export type { DecisionOutcomeV2 } from "../decisions/host-outcomes.js";
 export {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,

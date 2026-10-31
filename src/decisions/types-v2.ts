@@ -1,6 +1,4 @@
-import type { DecisionOutcome } from "./host-outcomes.js";
 import type { DecisionEntry, DecisionQuestion, JsonValue } from "./input-types.js";
-import type { ProviderDecisionOutcome } from "./provider-outcomes.js";
 
 /** Explicit evidence supplied by the caller; the host collects no additional context. */
 export type DecisionContentV2 =
@@ -105,15 +103,3 @@ export type DecisionBatchResultV2 = {
   };
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 };
-
-export type ProviderDecisionOutcomeV2 =
-  | { readonly status: "ok"; readonly result: DecisionBatchResultV2 }
-  | Extract<ProviderDecisionOutcome, { status: "unavailable" }>;
-
-export type DecisionOutcomeV2 =
-  | {
-      readonly status: "ok";
-      readonly result: DecisionBatchResultV2;
-      readonly provenance: Extract<DecisionOutcome, { status: "ok" }>["provenance"];
-    }
-  | Extract<DecisionOutcome, { status: "unavailable" }>;
