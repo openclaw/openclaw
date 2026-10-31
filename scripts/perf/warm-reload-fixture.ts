@@ -190,7 +190,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
   }
   const now = Date.now();
   const sessionKeys = [
-    "agent:main:24800000-0000-4000-8000-000000000001",
+    options.transcriptLatePaint
+      ? "agent:main:dashboard:24800000-0000-4000-8000-000000000001"
+      : "agent:main:24800000-0000-4000-8000-000000000001",
     "agent:main:dashboard:24800001-0000-4000-8000-000000000001",
   ];
   const baseOptions = parseTeamShapeOptions([
@@ -527,12 +529,16 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       chatPath: buildControlUiSessionPath({
         namespace: "chat",
         sessionKey: targets[0]!.key,
-        exactKey: true,
+        ...(options.transcriptLatePaint
+          ? { displayName: targets[0]!.label, shortIdLength: 32 }
+          : { exactKey: true }),
       })!,
       dashboardPath: buildControlUiSessionPath({
         namespace: "dashboard",
         sessionKey: targets[1]!.key,
-        exactKey: true,
+        ...(options.transcriptLatePaint
+          ? { displayName: targets[1]!.label, shortIdLength: 32 }
+          : { exactKey: true }),
       })!,
       fixtureSummary,
       async prepareGateway(request: RequestGateway) {

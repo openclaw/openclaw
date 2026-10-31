@@ -169,74 +169,98 @@ async function regionBoxes(page: Page) {
   }, proofRegions);
 }
 
-async function readWarmCache(page: Page, sessionKey: string) {
-  return await page.evaluate(async (key) => {
-    // Inspect the existing disposable cache; never create or populate a database for proof.
-    const name = "openclaw-chat-snapshots";
-    if (!(await indexedDB.databases()).some((database) => database.name === name)) {
-      return { targetSnapshots: 0, snapshots: 0, sidebarSnapshots: 0 };
-    }
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(name);
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener(
-        "error",
-        () => reject(new Error("Unable to open snapshot cache", { cause: request.error })),
-        { once: true },
-      );
-    });
-    try {
-      const readKeys = (store: string) =>
-        new Promise<IDBValidKey[]>((resolve, reject) => {
-          const request = database.transaction(store, "readonly").objectStore(store).getAllKeys();
-          request.addEventListener("success", () => resolve(request.result), { once: true });
-          request.addEventListener(
-            "error",
-            () => reject(new Error("Unable to read snapshot cache", { cause: request.error })),
-            { once: true },
-          );
-        });
-      const snapshots = await readKeys("snapshots");
-      const sidebar = await readKeys("sidebarSnapshots");
-      const targetKeys = snapshots.filter(
-        (value) =>
-          typeof value === "string" &&
-          value.startsWith("scope:[") &&
-          value.endsWith(`\u0000${key}`),
-      );
-      const targetRecords = await Promise.all(
-        targetKeys.map(
+async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = false) {
+  return await page.evaluate(
+    async ({ key, removeTarget }) => {
+      // Inspect the existing disposable cache; never create or populate a database for proof.
+      const name = "openclaw-chat-snapshots";
+      if (!(await indexedDB.databases()).some((database) => database.name === name)) {
+        return { targetSnapshots: 0, snapshots: 0, sidebarSnapshots: 0 };
+      }
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener(
+          "error",
+          () => reject(new Error("Unable to open snapshot cache", { cause: request.error })),
+          { once: true },
+        );
+      });
+      try {
+        const readKeys = (store: string) =>
+          new Promise<IDBValidKey[]>((resolve, reject) => {
+            const request = database.transaction(store, "readonly").objectStore(store).getAllKeys();
+            request.addEventListener("success", () => resolve(request.result), { once: true });
+            request.addEventListener(
+              "error",
+              () => reject(new Error("Unable to read snapshot cache", { cause: request.error })),
+              { once: true },
+            );
+          });
+        const snapshots = await readKeys("snapshots");
+        const sidebar = await readKeys("sidebarSnapshots");
+        const targetKeys = snapshots.filter(
           (value) =>
-            new Promise<unknown>((resolve, reject) => {
-              const request = database
-                .transaction("snapshots", "readonly")
-                .objectStore("snapshots")
-                .get(value);
-              request.addEventListener("success", () => resolve(request.result), { once: true });
-              request.addEventListener(
-                "error",
-                () => reject(new Error("Unable to read warm snapshot", { cause: request.error })),
-                { once: true },
-              );
-            }),
-        ),
-      );
-      return {
-        targetSnapshots: targetKeys.length,
-        targetSnapshotBytes: targetRecords.reduce<number>(
-          (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
-          0,
-        ),
-        snapshots: snapshots.length,
-        sidebarSnapshots: sidebar.length,
-      };
-    } finally {
-      database.close();
-    }
-  }, sessionKey);
+            typeof value === "string" &&
+            value.startsWith("scope:[") &&
+            value.endsWith(`\u0000${key}`),
+        );
+        const targetRecords = await Promise.all(
+          targetKeys.map(
+            (value) =>
+              new Promise<unknown>((resolve, reject) => {
+                const request = database
+                  .transaction("snapshots", "readonly")
+                  .objectStore("snapshots")
+                  .get(value);
+                request.addEventListener("success", () => resolve(request.result), { once: true });
+                request.addEventListener(
+                  "error",
+                  () => reject(new Error("Unable to read warm snapshot", { cause: request.error })),
+                  { once: true },
+                );
+              }),
+          ),
+        );
+        if (removeTarget && targetKeys.length) {
+          // The caller has left the app. Retain sidebar/settings while making the
+          // next document's target visit genuinely uncached, including its memory.
+          await new Promise<void>((resolve, reject) => {
+            const transaction = database.transaction(
+              ["snapshots", "snapshotMetadata"],
+              "readwrite",
+            );
+            for (const store of ["snapshots", "snapshotMetadata"]) {
+              for (const target of targetKeys) {
+                transaction.objectStore(store).delete(target);
+              }
+            }
+            transaction.addEventListener("complete", () => resolve(), { once: true });
+            transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+          });
+        }
+        return {
+          targetSnapshots: targetKeys.length,
+          targetSnapshotBytes: targetRecords.reduce<number>(
+            (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
+            0,
+          ),
+          snapshots: snapshots.length,
+          sidebarSnapshots: sidebar.length,
+        };
+      } finally {
+        database.close();
+      }
+    },
+    { key: sessionKey, removeTarget },
+  );
 }
 
 type WireFrame = { file: string; epochMs: number; clockSource: "surface" | "arrival" };
+type ShortVisit = {
+  cache: Awaited<ReturnType<typeof inspectWarmCache>>;
+  elapsedBeforeCaptureMs: number;
+};
 async function captureReload(
   page: Page,
   cdp: CDPSession,
@@ -593,8 +617,12 @@ const results: Array<{
   arm: string;
   route: "chat" | "dashboard";
   coldReset: unknown;
-  warmCache: Awaited<ReturnType<typeof readWarmCache>> | null;
-  runs: Array<Awaited<ReturnType<typeof captureReload>>>;
+  warmCache: Awaited<ReturnType<typeof inspectWarmCache>> | null;
+  runs: Array<
+    Awaited<ReturnType<typeof captureReload>> & {
+      shortVisit?: ShortVisit;
+    }
+  >;
 }> = [];
 try {
   const arms: Array<{
@@ -866,7 +894,7 @@ try {
             arm: arm.name,
             route,
             coldReset,
-            warmCache: null as Awaited<ReturnType<typeof readWarmCache>> | null,
+            warmCache: null as Awaited<ReturnType<typeof inspectWarmCache>> | null,
             runs: [
               await captureReload(
                 page,
@@ -910,7 +938,7 @@ try {
               .waitFor({ state: "visible" });
           }
           const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
-          const cache = await readWarmCache(page, target.key);
+          const cache = await inspectWarmCache(page, target.key);
           results.at(-1)!.warmCache = cache;
           await writeFile(
             path.join(arm.directory, route, "warm-cache.json"),
@@ -941,10 +969,13 @@ try {
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "active" });
           }
+          let shortVisit: ShortVisit | undefined;
           if (values["reload-after-navigation"]) {
-            await evaluateControlUiContext(item.page, (context) =>
-              context.navigateAndWait("new-session"),
-            );
+            await item.page.goto(`${baseUrl}/healthz`);
+            const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
+            await inspectWarmCache(item.page, target.key, true);
+            await item.page.goto(`${baseUrl}/new`);
+            await waitForControlUiGatewayReady(item.page, 60000);
             const visitedAtMs = await evaluateControlUiContext(
               item.page,
               async (context, target) => {
@@ -959,17 +990,23 @@ try {
               (start) => performance.now() >= start + 4000,
               visitedAtMs,
             );
+            shortVisit = {
+              cache: await inspectWarmCache(item.page, target.key),
+              elapsedBeforeCaptureMs: await item.page.evaluate(
+                (start) => performance.now() - start,
+                visitedAtMs,
+              ),
+            };
           }
-          item.result.runs.push(
-            await captureReload(
-              item.page,
-              item.cdp,
-              `${baseUrl}${routePath}`,
-              path.join(item.arm.directory, route, `warm-${String(index).padStart(2, "0")}`),
-              true,
-              route,
-            ),
+          const run = await captureReload(
+            item.page,
+            item.cdp,
+            `${baseUrl}${routePath}`,
+            path.join(item.arm.directory, route, `warm-${String(index).padStart(2, "0")}`),
+            true,
+            route,
           );
+          item.result.runs.push({ ...run, ...(shortVisit ? { shortVisit } : {}) });
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "frozen" });
           }
@@ -990,7 +1027,7 @@ try {
     captureMs,
     reloads,
     reloadSequence: values["reload-after-navigation"]
-      ? "Internal /new → target navigation, four-second visit, reload (after the initial cold capture)"
+      ? "Remove target snapshot outside the app, fresh /new document → target navigation, four-second first visit, reload; sidebar/settings retained"
       : "Repeated reload after the initial cold capture",
     admission: admission
       ? {
