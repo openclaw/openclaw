@@ -214,7 +214,7 @@ final class RootSidebarModel {
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
-    private(set) var isSessionRosterComplete = true
+    private(set) var isSessionRosterComplete = false
     private var rosterGeneration = 0
     private var sessionObserverVisibility = false
     private var sessionObserverSync: Task<Void, Never>?
@@ -251,6 +251,7 @@ final class RootSidebarModel {
         mainSessionKey: String,
         activeAgentID: String?,
         groups: [OpenClawChatSessionGroup],
+        rosterIsComplete: Bool = false,
         sessionRoutingContract: String? = nil,
         now: Date = .now) -> [ChatSessionSidebarModel.Section]
     {
@@ -260,19 +261,26 @@ final class RootSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             sessionRoutingContract: sessionRoutingContract)
-        let selectedIsSnoozed = sessions.contains {
-            $0.key == selectedSessionKey && $0.isSnoozed(at: now)
+        // Sidebar search and selection may reveal active automations, unlike
+        // the browser's Active scope. Archived and snoozed rows stay hidden.
+        let isActiveSession: (OpenClawChatSessionEntry) -> Bool = {
+            $0.archived != true && !$0.isSnoozed(at: now)
         }
+        let selectedSession = sessions.first { $0.key == selectedSessionKey }
+        let selectedIsHidden = selectedSession.map { !isActiveSession($0) }
+            ?? rosterIsComplete
         // Resolve aliases before keeping the selected automation reachable.
         let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let browsingSessions = sessions.filter {
-            !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
-                !OpenClawChatSessionListVisibility.isAutomationSession($0))
+            isActiveSession($0) &&
+                (isSearching || $0.key == selectedSessionKey ||
+                    !OpenClawChatSessionListVisibility.isAutomationSession($0))
         }
         return ChatSessionSidebarModel.sections(
             sessions: browsingSessions,
-            // The shared sidebar otherwise creates a placeholder for a missing selected row.
-            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
+            // Do not recreate archived or snoozed selections as placeholders.
+            // Retain placeholders only while cached or partial data catches up.
+            currentSessionKey: selectedIsHidden ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,

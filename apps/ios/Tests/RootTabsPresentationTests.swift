@@ -605,13 +605,15 @@ struct RootTabsPresentationTests {
         #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
     }
 
-    @Test(arguments: ["recent", "agent:main:later", "later"])
-    func `iOS sidebar groups awake sessions without restoring a snoozed selection`(currentSessionKey: String) {
+    @Test(arguments: ["recent", "agent:main:later", "later", "agent:main:archived", "archived"])
+    func `iOS sidebar groups active sessions without restoring hidden selections`(currentSessionKey: String) {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
         let sections = RootSidebarModel.sections(
             sessions: [
                 Self.sessionEntry(key: "pinned", pinned: true),
                 Self.sessionEntry(key: "recent"),
+                Self.sessionEntry(key: "agent:main:archived", archived: true, pinned: true),
+                Self.sessionEntry(key: "archived-unpinned", archived: true),
                 Self.sessionEntry(
                     key: "agent:main:later",
                     snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
@@ -631,17 +633,35 @@ struct RootTabsPresentationTests {
         #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
     }
 
+    @Test(arguments: [false, true])
+    func `complete active roster does not invent a missing selected row`(rosterIsComplete: Bool) {
+        let sections = RootSidebarModel.sections(
+            sessions: [Self.sessionEntry(key: "agent:main:recent")],
+            query: "",
+            currentSessionKey: "agent:main:removed",
+            mainSessionKey: "main",
+            activeAgentID: "main",
+            groups: [],
+            rosterIsComplete: rosterIsComplete)
+        let keys = Set(sections.flatMap(\.nodes).map(\.session.key))
+        #expect(keys == (rosterIsComplete
+                ? ["agent:main:recent"]
+                : ["agent:main:recent", "agent:main:removed"]))
+    }
+
     @Test(arguments: [
-        ("", "conversation", false),
-        ("", "agent:main:cron:daily", true),
-        ("Scheduled", "conversation", true),
+        ("", "conversation", false, false),
+        ("", "agent:main:cron:daily", false, true),
+        ("Scheduled", "conversation", false, true),
+        ("", "agent:main:cron:daily", true, false),
+        ("Scheduled", "conversation", true, false),
     ])
     func `pinned automations stay discoverable through selection and search`(
-        query: String, selected: String, showsAutomation: Bool) throws
+        query: String, selected: String, archived: Bool, showsAutomation: Bool) throws
     {
         let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
         [
-          {"key":"agent:main:cron:daily","label":"Scheduled task","pinned":true},
+          {"key":"agent:main:cron:daily","label":"Scheduled task","pinned":true,"archived":\(archived)},
           {"key":"conversation"}
         ]
         """.utf8))

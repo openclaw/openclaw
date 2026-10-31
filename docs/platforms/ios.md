@@ -194,10 +194,11 @@ credentials are not exported to Apple Watch or cloud workers.
 ## Sessions
 
 Choose **All Sessions…** in the sidebar to browse **Active**, **Snoozed**,
-**Automations**, or **Archived** sessions. Automation-created sessions stay out of
-ordinary browsing, including pinned rows, unless selected. Open **Automations**
-to find their transcripts; sidebar search also includes matching automation sessions.
-Saved pins are preserved.
+**Automations**, or **Archived** sessions. The sidebar follows the **Active**
+scope: archived and snoozed chats stay hidden even when pinned or still open.
+Automation-created sessions stay out of ordinary browsing, including pinned rows,
+unless selected. Open **Automations** to find their transcripts; sidebar search
+also includes matching active automation sessions. Saved pins are preserved.
 
 Long-press an eligible session and choose **Snooze**:
 **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, only when more than
