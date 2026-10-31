@@ -135,6 +135,8 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       host.closeAdmission();
     });
     await peer.sent;
+    // SDK 1.0.26 tries the completion RPC first and falls back to session.send on MethodNotFound.
+    expect(peer.unsupported).toEqual(["session.sendAndWait"]);
     await peer.requestTool("exec", {
       code: 'await yield_control(); await fixture_gate({}); text("STALE AFTER CLOSE"); return "stale";',
     });
