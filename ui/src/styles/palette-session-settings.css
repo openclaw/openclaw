@@ -202,12 +202,7 @@
 }
 
 .palette-session-settings__heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 7px 5px;
-  font-size: 12px;
-  font-weight: 600;
+  padding-inline: 7px 2px;
 }
 
 .palette-session-settings__back {
@@ -220,18 +215,6 @@
   border-radius: 5px;
   background: transparent;
   color: var(--muted);
-}
-
-.palette-session-settings__search {
-  width: calc(100% - 14px);
-  margin: 0 7px 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--input);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
 }
 
 .palette-session-settings__choices {
