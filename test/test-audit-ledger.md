@@ -29,14 +29,21 @@ Its failed CI remains failed; no current-head CI success is claimed.
 
 ## Current qualification
 
-Pinned main `c94084ca253`. Qualify five assertion-only reductions: Copilot's
+Pinned main `c94084ca253`; [189405](https://github.com/openclaw/openclaw/pull/189405)
+removes five assertion-only repetitions: Copilot's
 fingerprint self-comparison, ClickClack's mock identity, SMS's repeated partial
 send count and implied retry exclusion, and TypeSafe's implied serialized-token
 absence. Exact fingerprint, captured constructor arguments, shared partial-send
 receipt/order/count proof, exact retry list and exact public failure result stay.
 Full source/history and independent preservation review found no assertions to
-carry or production seams to remove. Runtime baseline and removal scans pending;
-no deletion has been qualified for this batch yet.
+carry or production seams to remove. Baseline and candidate both pass180 tests/7
+suites. Wrong fingerprint prefix, wrong handshake deadline, a third partial SMS
+send, extra4xx retry and bypassed reflection guard fail ten keeper cases;
+production was restored byte for byte. Typed lint, scoped compilation and format
+pass. Every removal-scan phase is clean before and after: production/full-tree
+exports and unused files, plus script exports. Six test LOC removed, including
+one unused import; no declarations, production or support removed. The PR tracks
+fresh review and CI.
 
 ## Completed source review
 
