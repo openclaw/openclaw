@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createJiti } from "./jiti-factory.js";
 import { inspectPluginSourceDependencies } from "./plugin-generation-source-inspection.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { visitPluginSourceReferences } from "./plugin-source-references.js";
 import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -47,6 +49,29 @@ it("inspects retained import.meta reads and assignments without evaluating depen
     { source: codec, specifier: "inspection/resolved", target: resolved },
   ]);
   expect(inspection.unresolved).toEqual([]);
+});
+
+it("reports used URL assets but not discarded URL calculations", () => {
+  // Generated codec glue like this once made a model-change plugin reload capture the host build.
+  const root = temp.make("plugin-inspection-discarded-url-");
+  const codec = path.join(root, "codec.mjs");
+  writeTree(root, {
+    "codec.mjs": `const _scriptName = import.meta.url;
+     export const wasm = new URL("./codec.wasm", _scriptName);
+     export function probe() {
+       if (globalThis.window) new URL(".", _scriptName).href;
+       new URL("..", import.meta.resolve("./glue.mjs"));
+     }`,
+  });
+
+  const visited: string[] = [];
+  visitPluginSourceReferences(
+    codec,
+    fs.readFileSync(codec, "utf8"),
+    createJiti(codec, { fsCache: false, moduleCache: false }),
+    (reference, kind) => visited.push(`${kind} ${reference}`),
+  );
+  expect(visited).toEqual(["asset ./codec.wasm", "import ./glue.mjs"]);
 });
 
 it("names the dependency whose source cannot be parsed", () => {
