@@ -218,6 +218,7 @@ describe("new work meeting links", () => {
         runAudioCaptureScript({
           currentUrl,
           inCallControl,
+          meetingUrl: SHORT,
           priorMeeting: { identity: normalizeTeamsMeetingUrlForReuse(SHORT) },
         }),
       ).rejects.toThrow(expected === "admitted" ? "capture admitted" : "no longer owns");
