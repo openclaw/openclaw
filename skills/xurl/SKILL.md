@@ -69,7 +69,7 @@ xurl dm @handle "message"
 xurl dms -n 10
 ```
 
-`POST_ID` can be a full `https://x.com/<user>/status/<id>` URL.
+`POST_ID` can be a full post URL such as `https://x.com/USERNAME/status/POST_ID`.
 
 ## Media
 
