@@ -8,6 +8,7 @@ import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-confi
 import { requireGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
@@ -62,8 +63,8 @@ export async function prepareLocalWorkspaceCheckout(params: {
       PATH: process.env.PATH,
       HOME: temporary,
       GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       GIT_NO_REPLACE_OBJECTS: "1",
       GIT_TERMINAL_PROMPT: "0",
     };
