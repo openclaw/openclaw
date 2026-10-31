@@ -150,14 +150,16 @@ No test declarations or production code change.
 
 Additional source review (no runtime result claimed):
 
-| Owner scope                                                                     | Suites read     | Decision                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS app                                                                       | 304 Swift files | 2,653 declaration sites: retain 2,635, repair eight proofs, qualify nine consolidations and one decoding-order deletion. Local owners/support read; native execution remains pending.       |
-| CLI channel/root, message/device, skills/templates, session/storage             | 98              | Retain 542 declarations; one mock workshop replay may be absorbed by the real persisted CLI/Gateway keeper. Three unreachable fixture branches remain after earlier case removals.          |
-| Auto-reply execution, CLI execution, settlement/presentation, remaining helpers | 52              | Retain 322 declarations; repair one account-isolation case whose differing text hides a broken account discriminator. Queue and other reply scopes remain open.                             |
-| Cohere, Featherless, Groq, LongCat, SGLang, SubQ                                | 12              | Retain all 33 declarations: real payload/replay, discovery, config, credential rotation and cancellation contracts differ. Live suites were read, not executed.                             |
-| Auto-reply queue policy/state/admission/drain                                   | 20              | Retain 92 declarations; repair one per-case cleanup key that leaves an unrelated source pending until file cleanup. Exact inventories now cover 235 of 429 reply suites; 194 remain unread. |
-| Voice-call media/config/CLI/delivery                                            | 20              | Retain 165 declarations; repair one monotonic-deadline pending-state oracle whose resolved-promise race cannot detect early settlement. No absorbing layer or orphan support established.   |
+| Owner scope                                                                     | Suites read     | Decision                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS app                                                                       | 304 Swift files | 2,653 declaration sites: retain 2,635, repair eight proofs, qualify nine consolidations and one decoding-order deletion. Local owners/support read; native execution remains pending.                      |
+| CLI channel/root, message/device, skills/templates, session/storage             | 98              | Retain 542 declarations; remove one absorbed workshop mock and three unreachable fixture branches, with qualification below.                                                                               |
+| Auto-reply execution, CLI execution, settlement/presentation, remaining helpers | 52              | Retain 322 declarations; repair one account-isolation case whose differing text hides a broken account discriminator. Queue and other reply scopes remain open.                                            |
+| Cohere, Featherless, Groq, LongCat, SGLang, SubQ                                | 12              | Retain all 33 declarations: real payload/replay, discovery, config, credential rotation and cancellation contracts differ. Live suites were read, not executed.                                            |
+| Auto-reply queue policy/state/admission/drain                                   | 20              | Retain 92 declarations; repair one per-case cleanup key that leaves an unrelated source pending until file cleanup. Exact inventories now cover 235 of 429 reply suites; 194 remain unread.                |
+| Voice-call media/config/CLI/delivery                                            | 20              | Retain 165 declarations; repair one monotonic-deadline pending-state oracle whose resolved-promise race cannot detect early settlement. No absorbing layer or orphan support established.                  |
+| Auto-reply collector/followup                                                   | 11              | Retain 124 declarations; repair two mislabeled abort/abandonment rows and collapse one redundant source-kind axis while preserving three real failure branches. Exact reply coverage is 246 of 429 suites. |
+| Voice-call manager/store/recovery                                               | 14              | Retain all 98 declarations: real persistence, timers, FIFO replay, lost ownership, playback settlement and teardown differ. Full plugin inventory is 64 suites; 30 remain outside these two passes.        |
 
 The CLI fixture batch starts at `64daa25640d`. Retire unused config routing in
 `argv-invocation.test.ts`, unused Tailscale setup in `qr-cli.test.ts`, and unused
@@ -171,7 +173,12 @@ Remove the workshop mock replay in favor of the unchanged persisted keeper in
 55 passed across five suites. A temporary fault reacquired custody, replayed the
 committed restore locally and preserved the original transport error. The keeper
 failed on three persisted change rows instead of two. Production source was restored
-byte for byte before test removal. Candidate checks, fresh review and landing remain pending.
+byte for byte before test removal. Candidate `081185dc134`: 54 passed across the same
+five suites. Core lint, the affected config/CLI compiler graph, formatting and docs
+lint passed; fresh independent review found no correctness or security findings.
+The first direct run hit an unchanged text assertion under forced color; the failed
+and unfinished scopes passed with the native wrapper's `NO_COLOR=1 FORCE_COLOR=0`.
+Final removal checks and landing: [PR #189259](https://github.com/openclaw/openclaw/pull/189259).
 
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
