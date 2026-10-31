@@ -7,6 +7,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
+  "test/plugins/zalouser-recovery.integration.test.ts",
 ];
 
 // Native database consumers retain lifecycle cleanup within each forked process.
@@ -547,6 +548,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
+  "test/plugins/zalouser-recovery.integration.test.ts",
 ];
 
 export const gatewayClientTestInclude = [

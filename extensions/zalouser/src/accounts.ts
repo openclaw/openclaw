@@ -70,4 +70,10 @@ export async function checkZcaAuthenticated(
   return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile, options);
 }
 
+export async function checkZcaLinkState(
+  profile: string,
+): Promise<"linked" | "not-linked" | "unknown"> {
+  return await (await loadZalouserAccountsRuntime()).checkZaloLinkState(profile);
+}
+
 export type { ResolvedZalouserAccount } from "./types.js";

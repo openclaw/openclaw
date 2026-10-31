@@ -10,7 +10,7 @@ import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
-  checkZcaAuthenticated,
+  checkZcaLinkState,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
@@ -84,8 +84,7 @@ export function createZalouserPluginBase(params: {
     config: {
       ...zalouserConfigAdapter,
       isConfigured: (account) => Boolean(account.profile),
-      isLinked: async (account) =>
-        (await checkZcaAuthenticated(account.profile)) ? "linked" : "not-linked",
+      isLinked: async (account) => await checkZcaLinkState(account.profile),
       unconfiguredReason: () => "not configured",
       unlinkedReason: () => "not authenticated",
       describeAccount: (account) =>
