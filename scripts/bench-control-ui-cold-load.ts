@@ -1,5 +1,6 @@
 // Opt-in production-bundle benchmark; real delays model wire delivery, not test synchronization.
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
+// --coverage: separate --untraced run without CPU profiling; retains thread CPU metrics.
 // --thread-cpu-time excludes renderer descheduling from CDP duration metrics.
 // Traces report coarse V8 module parse/compile CPU, not exhaustive compiler CPU.
 // javaScriptResources includes completed modulepreloads absent from V8 coverage.
@@ -415,6 +416,12 @@ const cpuProfile = values["cpu-profile"] || Boolean(values["cpu-profile-compare"
 const performanceTimeDomain = values["thread-cpu-time"] ? "threadTicks" : "timeTicks";
 const allocations = values.allocations;
 const traced = !values.untraced && !values["filmstrip-only"];
+// Coverage and CPU sampling use separate CDP sessions with isolate-global coverage state.
+if (values.coverage && (traced || cpuProfile)) {
+  throw new Error(
+    "coverage requires --untraced without --cpu-profile or --cpu-profile-compare; run CPU sampling separately",
+  );
+}
 if (
   allocations &&
   (!values["live-events"] || !values.untraced || cpuProfile || values["filmstrip-only"])
