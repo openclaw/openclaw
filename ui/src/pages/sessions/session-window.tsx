@@ -85,11 +85,17 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
   let scroller: HTMLElement | null = null;
   let current: SessionEntry[] = [];
   let focusedKey: string | undefined;
+  let previousExpandedKey: string | null = null;
   let synchronizeScrollOffset: (() => void) | undefined;
-  const windowed = () => props.entries.length > 20;
+  const entries = createMemo(() => props.entries);
+  const expandedKey = createMemo(() => props.expandedSessionKey);
+  const menuKey = createMemo(() => props.sessionMenu?.key);
+  // The default 25-row page costs less to render than to measure and window.
+  const windowed = createMemo(() => entries().length > 25);
+  const columnCount = createMemo(() => sessionsTableColumnCount(props));
   const getItemKey = createMemo(() => {
-    const entries = props.entries;
-    return (index: number) => entries[index]!.key;
+    const staticEntries = entries();
+    return (index: number) => staticEntries[index]!.key;
   });
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>({
     items: [],
@@ -112,10 +118,10 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
     overscan: 3,
     onChange: publish,
   });
-  const pinFocus = (expandedKey: string | null, menuKey: string | undefined) => {
+  const pinFocus = (pinnedExpandedKey: string | null, pinnedMenuKey: string | undefined) => {
     const index = current.findIndex((entry) => entry.key === focusedKey);
-    const expanded = current.findIndex((entry) => entry.row?.key === expandedKey);
-    const menu = current.findIndex((entry) => entry.row?.key === menuKey);
+    const expanded = current.findIndex((entry) => entry.row?.key === pinnedExpandedKey);
+    const menu = current.findIndex((entry) => entry.row?.key === pinnedMenuKey);
     const first = current.findIndex((entry) => Boolean(entry.row));
     const last = current.findLastIndex((entry) => Boolean(entry.row));
     const previous = current.findLastIndex(
@@ -145,37 +151,72 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
   });
   createLayoutMeasurement(
     () => ({
-      entries: props.entries,
+      entries: entries(),
       windowed: windowed(),
       getItemKey: getItemKey(),
-      expanded: props.expandedSessionKey,
-      menu: props.sessionMenu?.key,
+      expanded: expandedKey(),
+      menu: menuKey(),
     }),
     (next) => {
       if (!next) {
         return;
       }
-      scroller = start.closest<HTMLElement>(".data-table-container");
+      if (
+        previousExpandedKey &&
+        (previousExpandedKey !== next.expanded ||
+          !next.entries.some((entry) => entry.row?.key === previousExpandedKey))
+      ) {
+        // The old panel may unmount before its collapsed height can be measured.
+        const index = current.findIndex((entry) => entry.row?.key === previousExpandedKey);
+        if (index >= 0) {
+          virtualizer.resizeItem(index, virtualizer.options.estimateSize(index));
+        }
+      }
+      previousExpandedKey = next.expanded;
       current = next.entries;
-      const margin = scroller
-        ? start.getBoundingClientRect().top -
-          scroller.getBoundingClientRect().top +
-          scroller.scrollTop
-        : 0;
       virtualizer.setOptions({
         ...virtualizer.options,
         enabled: next.windowed && Boolean(scroller),
         count: current.length,
         getItemKey: next.getItemKey,
-        scrollMargin: margin,
-        scrollPaddingStart: margin,
       });
       pinFocus(next.expanded, next.menu);
       const { _willUpdate: update } = virtualizer;
       update();
       publish();
     },
-    { targets: () => [start, ...(scroller ? [scroller] : [])], changeTiming: "sync", fonts: true },
+    { targets: () => [], measureWithoutTarget: true, changeTiming: "sync" },
+  );
+  // Inventory changes reuse the viewport geometry; only layout invalidation reads it again.
+  createLayoutMeasurement(
+    () => ({ windowed: windowed(), columns: columnCount() }),
+    (next) => {
+      if (!next?.windowed) {
+        return undefined;
+      }
+      scroller = start.closest<HTMLElement>(".data-table-container");
+      const margin = scroller
+        ? start.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top +
+          scroller.scrollTop
+        : 0;
+      return () => {
+        virtualizer.setOptions({
+          ...virtualizer.options,
+          enabled: Boolean(scroller),
+          scrollMargin: margin,
+          scrollPaddingStart: margin,
+        });
+        const { _willUpdate: update } = virtualizer;
+        update();
+        publish();
+      };
+    },
+    {
+      targets: (next) => (next?.windowed ? [start, ...(scroller ? [scroller] : [])] : []),
+      changeTiming: "sync",
+      fonts: true,
+    },
   );
   createLayoutMeasurement(
     () => window().height,
@@ -188,19 +229,19 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
   const indexed = createMemo(() => {
     let rowIndex = 2;
     return new Map(
-      props.entries.map((entry, index) => {
+      entries().map((entry, index) => {
         const item = { entry, index, rowIndex };
-        rowIndex += 1 + Number(entry.row?.key === props.expandedSessionKey);
+        rowIndex += 1 + Number(entry.row?.key === expandedKey());
         return [entry.key, item] as const;
       }),
     );
   });
   const visible = createMemo(() => {
     if (!windowed()) {
-      return props.entries;
+      return entries();
     }
     if (!window().items.length) {
-      return props.entries.slice(0, 12);
+      return entries().slice(0, 12);
     }
     return window().items.flatMap((item) => indexed().get(String(item.key))?.entry ?? []);
   });
@@ -235,30 +276,39 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
   function Entry(item: { entry: SessionEntry }) {
     let element: HTMLTableSectionElement;
     const position = () => indexed().get(item.entry.key)!;
-    const before = () => (windowed() ? (geometry().get(item.entry.key)?.before ?? 0) : 0);
-    const after = () => (windowed() ? (geometry().get(item.entry.key)?.after ?? 0) : 0);
+    const expanded = createMemo(() => expandedKey() === item.entry.row?.key);
     function Content() {
-      // Measure the row and its optional details together, after the estimated first paint.
-      createLayoutMeasurement(
-        () => ({
-          index: position().index,
-          expanded: props.expandedSessionKey === item.entry.row?.key,
-          windowed: windowed(),
-          before: before(),
-          after: after(),
-        }),
-        (next) => {
-          if (next?.windowed) {
-            virtualizer.resizeItem(
-              next.index,
-              element.getBoundingClientRect().height - next.before - next.after,
-            );
-          }
-        },
-        { targets: () => [element] },
+      const before = createMemo(() =>
+        windowed() ? (geometry().get(item.entry.key)?.before ?? 0) : 0,
       );
+      const after = createMemo(() =>
+        windowed() ? (geometry().get(item.entry.key)?.after ?? 0) : 0,
+      );
+      function Measurement() {
+        // Measure the row and its optional details together after the estimated first paint.
+        createLayoutMeasurement(
+          () => ({
+            index: position().index,
+            expanded: expanded(),
+            before: before(),
+            after: after(),
+          }),
+          (next) => {
+            if (!next) {
+              return undefined;
+            }
+            const size = element.getBoundingClientRect().height - next.before - next.after;
+            return () => virtualizer.resizeItem(next.index, size);
+          },
+          { targets: () => [element] },
+        );
+        return null;
+      }
       return (
         <>
+          <Show when={windowed()}>
+            <Measurement />
+          </Show>
           <Spacer height={before()} />
           {item.entry.row ? (
             <SessionRows {...props} row={item.entry.row} rowIndex={position().rowIndex} />
@@ -279,10 +329,10 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
           focusedKey = item.entry.key;
           if (windowed()) {
             synchronizeScrollOffset?.();
-            pinFocus(props.expandedSessionKey, props.sessionMenu?.key);
+            pinFocus(expandedKey(), menuKey());
             publish();
             // Native focus scrolls the control; a tall details panel must not align its bottom.
-            if (props.expandedSessionKey !== item.entry.row?.key) {
+            if (!expanded()) {
               virtualizer.scrollToIndex(position().index);
             }
           }
@@ -302,7 +352,7 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
         </tr>
       </tbody>
       {/* Stable empty slots avoid moving a focused tbody when the window changes. */}
-      <For each={props.entries} keyed={(entry) => entry.key}>
+      <For each={entries()} keyed={(entry) => entry.key}>
         {(entry) => <Entry entry={entry()} />}
       </For>
     </>

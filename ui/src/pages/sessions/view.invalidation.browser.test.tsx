@@ -184,5 +184,19 @@ it.each([1280, 390])(
     expect(document.activeElement?.closest(".session-data-row")?.textContent).toContain(
       "window-99",
     );
+
+    // Collapsing an offscreen panel must retire its cached height with its pin.
+    setCurrent((previous) => ({ ...previous, expandedSessionKey: result.sessions[49]!.key }));
+    flush();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    const panelHeight = view.container
+      .querySelector<HTMLElement>(".session-details-row")!
+      .getBoundingClientRect().height;
+    const expandedHeight = scroller.scrollHeight;
+    setCurrent((previous) => ({ ...previous, expandedSessionKey: null }));
+    flush();
+    await expect.poll(() => scroller.scrollHeight).toBeLessThan(expandedHeight - panelHeight + 2);
   },
 );
