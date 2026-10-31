@@ -32,19 +32,19 @@ sessions. Completed one-shot runs still start a fresh conversation.
 
 ## Native agents in the model picker
 
-Install GitHub Copilot CLI, Kilo Code, OpenCode, Pi ACP, or Qwen Code and complete its login on the Gateway host,
+Install GitHub Copilot CLI, Grok Build, Kilo Code, OpenCode, Pi ACP, or Qwen Code and complete its login on the Gateway host,
 then refresh the model catalog. Choose one of its models to use that agent in ordinary chat.
 The agent owns its credentials; OpenClaw keeps the conversation transcript and asks for approval
 when the agent requests permission. Pi does not request tool approval unless an extension adds it.
 The same selection works in the web app and channels.
 
-The runtime and provider IDs are `acp-copilot`, `acp-kilocode`, `acp-opencode`, `acp-pi`, and `acp-qwen`.
+The runtime and provider IDs are `acp-copilot`, `acp-grok-build`, `acp-kilocode`, `acp-opencode`, `acp-pi`, and `acp-qwen`.
 Each model keeps its native ID, including any slashes. Configured ACP agent commands take
 precedence over installed defaults. Catalog refresh uses installed commands and does not install
 missing agents. Explicit ACP commands and bindings keep their existing agent names.
 
 Models settings lists detected agents on the Gateway machine. Turn each native agent on or off
-there, or set `plugins.entries.acpx.config.nativeAgents.<id>` to `false` (`copilot`, `kilocode`,
+there, or set `plugins.entries.acpx.config.nativeAgents.<id>` to `false` (`copilot`, `grok-build`, `kilocode`,
 `opencode`, `pi`, or `qwen`). Missing flags are enabled. Disabling an agent prevents new native turns
 and catalog discovery without interrupting a running turn or deleting history. Classic ACP
 commands and `acp.allowedAgents` keep their existing behavior. Detection checks installed
@@ -55,6 +55,9 @@ the catalog. Copilot owns GitHub authentication, model access, and plan usage. I
 configured BYOK providers remain CLI-owned and can incur separate API charges; OpenClaw does
 not select a BYOK route for it. See the
 [Copilot setup and billing notes](https://docs.openclaw.ai/tools/acp-agents-setup#github-copilot-cli-in-native-chat).
+
+Grok Build uses the installed `grok agent stdio` command and its own login and model catalog.
+See [Grok Build setup](https://docs.openclaw.ai/tools/acp-agents-setup#grok-build-in-native-chat).
 
 Native picker runtimes run on the Gateway host and use the native app's permissions.
 OpenClaw checks that execution choice before dispatching a chat turn; ACP runners do not

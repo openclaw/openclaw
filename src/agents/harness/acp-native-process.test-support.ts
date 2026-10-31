@@ -31,7 +31,7 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerAgentHarness } from "./registry.js";
 
-const agents = ["opencode", "qwen", "pi", "kilocode"] as const;
+const agents = ["opencode", "qwen", "pi", "kilocode", "grok-build"] as const;
 export function useNativeProcessFixture() {
   let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
   let lifetime: ReturnType<typeof createFixtureLifetime>;
