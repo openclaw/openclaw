@@ -371,6 +371,51 @@ describe("Gateway GitHub publication attribution", () => {
     });
   });
 
+  it("publishes a description that repeats the session-footer shape without stalling", async () => {
+    await persistPublicationTestSession();
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    await upsertSessionEntryCore(scope, {
+      publicShare: {
+        id: "a".repeat(48),
+        sessionId: loadSessionEntryReadOnly(scope)!.sessionId,
+        createdAt: 1,
+      },
+    });
+    const config = {
+      gateway: { publicOrigin: "https://team.example", controlUi: { basePath: "/control" } },
+    };
+    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+    mocks.attribution.mockReturnValue({ trailers: [], logins: [], prompt: "" });
+    const coordinator = createGitHubPublicationCoordinator();
+
+    // A footer-shaped run that never completes a footer: the stripper's repeated
+    // group used to split the whitespace between units exponentially.
+    const unit = "\t---\n[View the OpenClaw team session]()";
+    const adversarial = `Body text.${unit.repeat(30)}X`;
+    expect(adversarial.length).toBeLessThan(8 * 1024); // inside GitHubPublicationBodySchema
+
+    const started = process.hrtime.bigint();
+    const result = await coordinator.requestForSessionV2(
+      publicationRequest("footer-shaped-description", {
+        title: "fix: keep publication responsive",
+        body: adversarial,
+      }),
+    );
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    expect(result).toMatchObject({ status: "published" });
+    const post = commandCalls.find(({ argv }) => argv.includes("POST"));
+    const published = JSON.parse(post?.input ?? "null") as { body: string };
+    // Nothing was stripped (the run never completes a footer), and the canonical
+    // footer is still appended exactly once.
+    expect(published.body.startsWith("Body text.")).toBe(true);
+    expect(published.body).toContain("X\n\n<!-- openclaw-publication:");
+    expect(published.body.match(/\[View the OpenClaw team session\]\(https/gu)).toHaveLength(1);
+    // 365 ms on this head; 4.7 s with the pattern restored, through this same request.
+    // The bound sits an order of magnitude from the repaired path.
+    expect(elapsedMs).toBeLessThan(2_000);
+  });
+
   it.each(
     (["local", "repository"] as const).flatMap((surface) =>
       ["private", "public", "revoked", "newly-public", "replaced", "revoked-before-run"].map(
