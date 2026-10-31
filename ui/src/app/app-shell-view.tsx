@@ -1,4 +1,5 @@
 import "../lib/toast-host.tsx";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
@@ -17,6 +18,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import {
   ShellComponentBoundary,
@@ -97,6 +99,46 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  const [dismissedReadOnlyNotice, setDismissedReadOnlyNotice] = createSignal<string | null>(null);
+  const readOnlyNotice = createMemo(
+    () => {
+      const notice = view().runtime.readOnlyConfig;
+      if (!notice) {
+        return undefined;
+      }
+      const key =
+        "openclaw:control-ui:config-read-only:" +
+        gatewayOriginScope(view().context.gateway.connection.gatewayUrl);
+      const message = notice.message || t("nav.gateway.configReadOnlyHint");
+      const value = JSON.stringify([message, notice.docsUrl ?? null]);
+      const identity = JSON.stringify([key, value]);
+      if (dismissedReadOnlyNotice() === identity) {
+        return undefined;
+      }
+      try {
+        if (getSafeLocalStorage()?.getItem(key) === value) {
+          return undefined;
+        }
+      } catch {
+        // An unreadable receipt must not hide guidance the user has not dismissed.
+      }
+      return { ...notice, message, key, value, identity };
+    },
+    { equals: (previous, next) => previous?.identity === next?.identity },
+  );
+  function dismissReadOnlyNotice() {
+    const notice = readOnlyNotice();
+    if (!notice) {
+      return;
+    }
+    setDismissedReadOnlyNotice(notice.identity);
+    content.focus({ preventScroll: true });
+    try {
+      getSafeLocalStorage()?.setItem(notice.key, notice.value);
+    } catch {
+      // Dismiss for this page even when browser storage is unavailable.
+    }
+  }
   const sessionOwner = createMemo(() => view().context.sessions);
   const sessionRows = createMemo(() =>
     projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
@@ -343,14 +385,13 @@ export function ApplicationShell(props: {
             }
           />
         </Show>
-        <Show when={view().runtime.readOnlyConfig} keyed>
+        <Show when={readOnlyNotice()} keyed>
           {(notice) => (
             <p
               class="shell-config-read-only callout info"
               inert={view().mobileNavLayout && view().navDrawerOpen}
             >
-              <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
-              {notice.message || t("nav.gateway.configReadOnlyHint")}
+              <strong>{t("nav.gateway.configReadOnly")}</strong> {notice.message}
               <Show when={notice.docsUrl}>
                 {" "}
                 <a
@@ -362,6 +403,14 @@ export function ApplicationShell(props: {
                   {t("common.learnMore")}
                 </a>
               </Show>
+              <button
+                type="button"
+                class="btn btn--sm btn--ghost btn--icon"
+                aria-label={t("common.dismiss")}
+                onClick={dismissReadOnlyNotice}
+              >
+                <Icon name="x" />
+              </button>
             </p>
           )}
         </Show>
