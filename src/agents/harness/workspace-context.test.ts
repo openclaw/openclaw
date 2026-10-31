@@ -104,6 +104,43 @@ it("routes root memory before budgeting and keeps nested memory as context", asy
   expect(context.instructionSnapshot.files).toEqual([contextFile(instructions)]);
 });
 
+it("selects the root instruction snapshot by source path before projecting it", async () => {
+  const projectedWorkspace = path.resolve("workspace-context-sandbox-fixture");
+  const instructions = bootstrapFile("AGENTS.md", "Root fixture operating rules.");
+  const nestedInstructions = bootstrapFile(
+    "AGENTS.md",
+    "Nested fixture rules.",
+    "packages/pkg/AGENTS.md",
+  );
+  for (const scope of ["full", "instructions-only"] as const) {
+    const context = await prepare([nestedInstructions, instructions], {
+      scope,
+      projectPath: (filePath) =>
+        path.join(projectedWorkspace, path.relative(workspaceDir, filePath)),
+    });
+    const projectedInstructionsPath = path.join(projectedWorkspace, "AGENTS.md");
+    expect(context.instructionSnapshot.files).toEqual([
+      { path: projectedInstructionsPath, content: instructions.content },
+    ]);
+    expect(context.instructionSnapshot.instructions).toContain(
+      `### ${projectedInstructionsPath}\n\nRoot fixture operating rules.`,
+    );
+    expect(context.instructionSnapshot.instructions).not.toContain("Nested fixture rules.");
+    expect(context.instructionSnapshot.instructions).not.toContain(instructions.path);
+    // The snapshot carries the root document; project context must not repeat it.
+    expect(context.promptContextFiles).toEqual(
+      scope === "full"
+        ? [
+            {
+              path: path.join(projectedWorkspace, "packages", "pkg", "AGENTS.md"),
+              content: "Nested fixture rules.",
+            },
+          ]
+        : [],
+    );
+  }
+});
+
 it("passes agent context to memory guidance without MEMORY.md", async () => {
   const promptBuilder = (context: {
     agentId?: string;

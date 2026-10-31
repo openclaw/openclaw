@@ -7,6 +7,7 @@ import {
   PERSONAL_USER_CONTEXT_INSTRUCTIONS,
   prepareContextFilesForPrompt,
 } from "../system-prompt-context-files.js";
+import { renderAgentWorkspaceInstructionSnapshot } from "./workspace-instruction-snapshot.js";
 import {
   buildAgentWorkspaceInstructionSnapshot,
   selectAgentWorkspaceInstructionFiles,
@@ -71,13 +72,20 @@ export async function prepareAgentWorkspaceContext(
     : memoryToolRouted
       ? bootstrapFiles.filter((file) => !isRootMemoryPath(file.path, params.workspaceDir))
       : bootstrapFiles;
-  const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) =>
-    projectContextFile(file, params.projectPath),
+  const sourceContextFiles = buildBootstrapContextForFiles(budgetFiles, params);
+  // Root instruction identity is decided on source paths; projected paths never match workspaceDir.
+  const sourceInstructionFiles = new Set(
+    selectAgentWorkspaceInstructionFiles(sourceContextFiles, params.workspaceDir),
   );
-  const instructionSnapshot = buildAgentWorkspaceInstructionSnapshot(
-    contextFiles,
-    params.workspaceDir,
-  );
+  const instructionFiles = new Set<EmbeddedContextFile>();
+  const contextFiles = sourceContextFiles.map((file) => {
+    const projected = projectContextFile(file, params.projectPath);
+    if (sourceInstructionFiles.has(file)) {
+      instructionFiles.add(projected);
+    }
+    return projected;
+  });
+  const instructionSnapshot = renderAgentWorkspaceInstructionSnapshot([...instructionFiles]);
   if (instructionsOnly) {
     return {
       bootstrapFiles,
@@ -103,7 +111,7 @@ export async function prepareAgentWorkspaceContext(
       const basename = contextFileBasename(file.path);
       const nativeProjectDocument = params.nativeProjectDocBasenames
         ? params.nativeProjectDocBasenames.has(basename)
-        : selectAgentWorkspaceInstructionFiles([file], params.workspaceDir).length > 0;
+        : instructionFiles.has(file);
       return (
         basename.length > 0 &&
         !nativeProjectDocument &&
