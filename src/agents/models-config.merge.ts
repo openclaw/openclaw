@@ -300,8 +300,15 @@ function shouldPreserveExistingApiKey(params: {
   existing: ExistingProviderConfig;
   nextEntry: ProviderConfig;
   secretRefManagedProviders: ReadonlySet<string>;
+  configAuthoredApiKeyProviders: ReadonlySet<string>;
 }): boolean {
   const { providerKey, existing, nextEntry, secretRefManagedProviders } = params;
+  // A key the operator authored in config is authoritative for its provider: the
+  // generated file holds a resolved snapshot, not a newer value, so keeping it would
+  // silently shadow a credential the user just saved (Control UI, models auth).
+  if (params.configAuthoredApiKeyProviders.has(providerKey)) {
+    return false;
+  }
   const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey : "";
   if (nextApiKey && isNonSecretApiKeyMarker(nextApiKey)) {
     return false;
@@ -341,8 +348,15 @@ export function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
+  /** Providers whose ``apiKey`` was authored in config rather than generated. */
+  configAuthoredApiKeyProviders?: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders } = params;
+  const {
+    nextProviders,
+    existingProviders,
+    secretRefManagedProviders,
+    configAuthoredApiKeyProviders = new Set<string>(),
+  } = params;
   const normalizedExistingProviders = normalizeProviderMapKeys(existingProviders);
   const normalizedNextProviders = normalizeProviderMapKeys(nextProviders);
 
@@ -366,6 +380,7 @@ export function mergeWithExistingProviderSecrets(params: {
         existing,
         nextEntry: newEntry,
         secretRefManagedProviders,
+        configAuthoredApiKeyProviders,
       })
     ) {
       preserved.apiKey = existing.apiKey;

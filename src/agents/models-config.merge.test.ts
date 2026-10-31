@@ -38,6 +38,24 @@ function mergeCustom(next: ProviderOverrides, existing: ProviderOverrides) {
 }
 
 describe("models-config merge", () => {
+  it("lets a config-authored api key replace the stored secret", () => {
+    // The operator saved a new key; the generated file still holds the previous one.
+    const merged = merge.mergeWithExistingProviderSecrets({
+      nextProviders: { custom: provider({ apiKey: "key-saved-in-config" }) },
+      existingProviders: { custom: provider({ apiKey: "stale-generated-secret" }) },
+      secretRefManagedProviders: new Set(),
+      configAuthoredApiKeyProviders: new Set(["custom"]),
+    });
+
+    expect(merged.custom?.apiKey).toBe("key-saved-in-config");
+  });
+
+  it("keeps the generated secret for providers without a config-authored key", () => {
+    const merged = mergeCustom({ apiKey: "CONFIG_KEY" }, { apiKey: "AGENT_KEY" });
+
+    expect(merged?.apiKey).toBe("AGENT_KEY");
+  });
+
   it("merges headers and refreshes metadata while preserving authored fields", () => {
     const { input: _input, ...authored } = model({
       reasoning: false,

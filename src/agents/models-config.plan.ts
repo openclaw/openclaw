@@ -300,6 +300,7 @@ function resolveProvidersForMode(params: {
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
+  configAuthoredApiKeyProviders?: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -312,6 +313,9 @@ function resolveProvidersForMode(params: {
     nextProviders: params.providers,
     existingProviders: existing.providers as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
+    ...(params.configAuthoredApiKeyProviders
+      ? { configAuthoredApiKeyProviders: params.configAuthoredApiKeyProviders }
+      : {}),
   });
 }
 
@@ -354,6 +358,15 @@ export async function planOpenClawModelsJson(params: {
 
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
+  // Config-authored provider keys outrank the resolved snapshot stored in models.json.
+  const configAuthoredApiKeyProviders = new Set(
+    Object.entries(cfg.models?.providers ?? {})
+      .filter(([, provider]) => {
+        const apiKey = provider?.apiKey;
+        return typeof apiKey === "string" && apiKey.trim().length > 0;
+      })
+      .map(([key]) => key),
+  );
   const providerPolicyManifestRegistry =
     context.pluginMetadataSnapshot?.pluginIds === undefined
       ? context.pluginMetadataSnapshot?.manifestRegistry
@@ -400,6 +413,7 @@ export async function planOpenClawModelsJson(params: {
     existingParsed: { providers: generatedCatalogProviders },
     providers: normalizedProviders,
     secretRefManagedProviders,
+    configAuthoredApiKeyProviders,
   });
   const finalizeProviders = (candidateProviders: Record<string, ProviderConfig>) => {
     const normalized =
