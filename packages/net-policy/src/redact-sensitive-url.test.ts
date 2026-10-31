@@ -255,7 +255,9 @@ it("masks a signature while keeping the signing metadata beside it readable", ()
     redactSensitiveUrl(
       "https://example.com/?signature_algorithm=HMAC-SHA256&SignatureVersion=2&signature=synthetic-secret&page=2",
     ),
-  ).toBe("https://example.com/?signature_algorithm=HMAC-SHA256&SignatureVersion=2&signature=***&page=2");
+  ).toBe(
+    "https://example.com/?signature_algorithm=HMAC-SHA256&SignatureVersion=2&signature=***&page=2",
+  );
 });
 
 it.each([
