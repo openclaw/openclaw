@@ -342,7 +342,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   color: var(--muted);
 }
 
-/* Keep artwork at its resting size inside a consistent 25px circular ring.
+/* Keep artwork at its resting size inside a consistent 24px circular ring.
    Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
   position: absolute;
