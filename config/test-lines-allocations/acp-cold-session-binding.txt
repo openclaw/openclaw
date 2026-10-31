@@ -1,0 +1,3 @@
+54
+# Source a821e857d37421375e3cbfdabd664a7773e2a740; Add ledger readSessionKey operation and tracked wrapper, then resume fallback with Gateway canonicalization; preserve explicit routing and include long-replay load path from 9237ad230bee5f190e2f55942922dd82924aeb98. Related selected items: 9237ad230bee (release 11.8, rank 516).
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
