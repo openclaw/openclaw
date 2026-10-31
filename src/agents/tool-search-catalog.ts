@@ -20,6 +20,7 @@ import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { formatUnknownToolIdError, type ToolLookupErrorOptions } from "./tool-search-recovery.js";
 import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
   createToolSearchSelectionMatcher,
@@ -654,4 +655,34 @@ export function addClientToolsToToolCatalog(params: {
     directClientTools: visible,
   });
   return { tools: visible, compacted: entries.length > 0, catalogToolCount: entries.length };
+}
+
+export function findToolSearchCatalogEntry(
+  catalog: ToolSearchCatalogSession,
+  id: string,
+  options?: CatalogVisibilityOptions & ToolLookupErrorOptions,
+  match: "id-or-name" | "exact-id" = "id-or-name",
+): ToolSearchCatalogEntry {
+  const needle = id.trim();
+  const entries = match === "exact-id" ? catalog.entries : visibleCatalogEntries(catalog, options);
+  const exactIdEntry = entries.find((candidate) => candidate.id === needle);
+  if (exactIdEntry) {
+    return exactIdEntry;
+  }
+  const namedEntries =
+    match === "exact-id" ? [] : entries.filter((candidate) => candidate.name === needle);
+  if (namedEntries.length > 1 || namedEntries[0]?.requiresExactId) {
+    throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
+  }
+  const namedEntry = namedEntries[0];
+  if (!namedEntry) {
+    throw new ToolInputError(
+      formatUnknownToolIdError(
+        needle,
+        entries,
+        match === "exact-id" ? { ...options, exactIdOnly: true } : options,
+      ),
+    );
+  }
+  return namedEntry;
 }

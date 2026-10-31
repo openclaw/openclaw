@@ -195,6 +195,10 @@ function ToolCardView(props: ToolCardProps) {
           fallback={
             <div
               ref={(element) => (host = element)}
+              style={{
+                display:
+                  card().name === "show_widget" && outcome() !== "failed" ? "none" : undefined,
+              }}
               class={[
                 "chat-tool-msg-collapse chat-tool-msg-collapse--manual",
                 { "is-open": props.options.expanded },

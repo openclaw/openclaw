@@ -66,6 +66,19 @@ function runLint(root: string, args: string[]) {
 }
 
 describe("Control UI controller guard", () => {
+  it("limits the opaque widget input runtime to one document-lifetime listener", () => {
+    const root = fixture();
+    const file = "ui/src/lib/widget-input-runtime.js";
+    const listener = 'window.addEventListener("message", handler);';
+    write(root, file, listener);
+    expect(main(root, [])).toBe(0);
+    write(root, file, listener + "\n" + listener);
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(
+      "opaque widget input runtime permits only one native listener",
+    );
+  });
+
   it.each([
     "extensions/workboard/browser/page.tsx",
     "extensions/memory-core/browser/page.tsx",

@@ -12,6 +12,7 @@ import type { MessageClientSource } from "../../../../src/chat/message-client-so
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
+import type { WidgetInputPreview } from "../../../../src/shared/widget-input-preview.js";
 import type { CyberAccessProgram } from "../../api/types.ts";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { IconName } from "../../components/icon-data.ts";
@@ -527,7 +528,26 @@ export type ToolCard = {
   /** Tab actions can identify a route without a previewable page URL. */
   browserTab?: BrowserTabTarget;
   preview?:
-    | (NonNullable<ReturnType<typeof extractCanvasFromText>> & { surface: "assistant_message" })
+    | (NonNullable<ReturnType<typeof extractCanvasFromText>> & {
+        surface: "assistant_message";
+        /** UI-only handoff from the same live tool call, never a document capability. */
+        inputViewId?: string;
+      })
+    | {
+        kind: "canvas";
+        surface: "assistant_message";
+        render: "input";
+        viewId: string;
+        title: string;
+        input: WidgetInputPreview;
+        url?: never;
+        sandbox?: never;
+        mcpApp?: never;
+        boardWidgetName?: never;
+        preferredHeight?: never;
+        className?: never;
+        style?: never;
+      }
     | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
 };
 

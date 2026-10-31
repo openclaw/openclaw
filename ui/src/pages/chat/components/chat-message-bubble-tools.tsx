@@ -5,6 +5,7 @@ import { readNodePermissionRequest } from "../../../../../packages/gateway-proto
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { isToolCardError } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
@@ -167,6 +168,12 @@ function ToolMessageFallback(props: ToolMessageProps) {
   return (
     <div
       ref={(element) => (host = element)}
+      style={{
+        display:
+          identity()?.name === "show_widget" && !isToolCardError(props.state().singleToolCard!)
+            ? "none"
+            : undefined,
+      }}
       class={[
         "chat-tool-msg-collapse chat-tool-msg-collapse--manual",
         { "is-open": props.state().toolMessageExpanded },

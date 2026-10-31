@@ -2,6 +2,7 @@ import type { AgentMessage } from "../../../../packages/agent-core/src/types.js"
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -12,6 +13,7 @@ import type { EmbeddedRunAttemptParams, StreamRunState } from "./types.js";
 
 export type PrepareEmbeddedAttemptStreamInput = {
   attempt: EmbeddedRunAttemptInternalParams;
+  toolSearchCatalogRef?: ToolSearchCatalogRef;
   agentSession: Pick<
     Awaited<ReturnType<typeof prepareEmbeddedAttemptAgentSession>>,
     | "activeSession"

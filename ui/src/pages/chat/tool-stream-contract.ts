@@ -1,5 +1,6 @@
 import type { AgentEvent } from "../../../../packages/gateway-protocol/src/schema/agent.js";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { WidgetInputPreview } from "../../../../src/shared/widget-input-preview.js";
 // Leaf contract for the tool-stream lane: the host-state shape and event
 // payload types shared by tool-stream, its status/preamble modules, and the
 // chat state owners. Keep this module import-light so the lane stays acyclic.
@@ -43,6 +44,8 @@ export type ToolStreamEntry = {
   details?: unknown;
   /** Monotonic edit counts received while the tool arguments stream. */
   liveDiffStat?: DiffStat;
+  widgetInputPreview?: WidgetInputPreview;
+  widgetInputClosed?: boolean;
   isError?: boolean;
   exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */

@@ -466,6 +466,13 @@ function solidPatterns(root: string, sources: ReadonlyMap<string, string>) {
     };
     visit(tree);
   }
+  // This import-free classic asset runs in an opaque document, outside Solid.
+  // Its one parent-message listener lives and dies with that document.
+  const inputRuntime = "ui/src/lib/widget-input-runtime.js";
+  if ((counts.addEventListener.get(inputRuntime) ?? 0) > 1) {
+    forbidden.push(`${inputRuntime}: opaque widget input runtime permits only one native listener`);
+  }
+  counts.addEventListener.delete(inputRuntime);
   return { counts, forbidden };
 }
 

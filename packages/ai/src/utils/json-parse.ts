@@ -104,13 +104,16 @@ export function parseJsonWithRepair(json: string): unknown {
  * @param partialJson The partial JSON string from streaming
  * @returns Parsed object or empty object if parsing fails
  */
-export function parseStreamingJson(partialJson: string | undefined): Record<string, unknown> {
+export function parseStreamingJson(
+  partialJson: string | undefined,
+  options?: { preserveValidControlEscapes?: boolean },
+): Record<string, unknown> {
   if (!partialJson || partialJson.trim() === "") {
     return {};
   }
 
   try {
-    return asNonArrayRecord(parseJsonWithRepair(partialJson));
+    return asNonArrayRecord(JSON.parse(repairJson(partialJson, options)));
   } catch {
     try {
       return asNonArrayRecord(partialParse(partialJson));

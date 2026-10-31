@@ -64,6 +64,155 @@ declare global {
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+
+  it.each([false, true])(
+    "keeps the measured live widget height through its interactive result (ToolSearch %s)",
+    async (toolSearch) => {
+      await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+        const html =
+          "<h3>Observations</h3><p>Review complete.</p><button onclick=\"this.textContent='Counted'\">Count observation</button>";
+        const gateway = await installMockGateway(page, {
+          sessionKey: "main",
+          heldMethods: ["canvas.document.view"],
+          historyMessages: [
+            { role: "user", content: "Show an observations widget.", timestamp: 1 },
+            {
+              role: "assistant",
+              runId: "widget-height",
+              content: [{ type: "toolCall", id: "skill-call", name: "skills_read", arguments: {} }],
+              timestamp: 2,
+            },
+            {
+              role: "toolResult",
+              toolCallId: "skill-call",
+              toolName: "skills_read",
+              content: [{ type: "text", text: "Use an inline HTML widget." }],
+              timestamp: 3,
+            },
+          ],
+          methodResponses: {
+            "canvas.document.view": canvasView(buildWidgetDocument("Observations", html)),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("connect");
+        const emit = (phase: string, data: Record<string, unknown>, seq: number) =>
+          gateway.emitGatewayEvent("agent", {
+            runId: "widget-height",
+            sessionKey: "main",
+            seq,
+            ts: Date.now(),
+            stream: "tool",
+            data: { name: "show_widget", toolCallId: "height-call", phase, ...data },
+          });
+        await emit(
+          "widget_preview",
+          {
+            preview: {
+              title: "Observations",
+              html: '<div id="app"></div><style>#app{padding:24px;min-height:400px}</style><script>document.getElementById("app").textContent="Not available until execution";</script>',
+            },
+          },
+          1,
+        );
+        const pendingPreview = page.locator('[data-content-kind="widget-input"]');
+        await pendingPreview.waitFor({ state: "attached" });
+        await expect.poll(async () => (await pendingPreview.boundingBox())?.height).toBe(0);
+        await emit("widget_preview", { preview: { title: "Observations", html } }, 2);
+        const preview = page.locator('[data-content-kind="widget-input"] iframe');
+        await preview.contentFrame().getByText("Review complete.", { exact: true }).waitFor();
+        // Wait for the real document's size report instead of assuming a particular layout size.
+        await expect
+          .poll(async () =>
+            Math.abs(
+              (await preview.boundingBox())!.height -
+                (await preview
+                  .contentFrame()
+                  .locator("body")
+                  .evaluate((body) => body.scrollHeight)),
+            ),
+          )
+          .toBeLessThanOrEqual(1);
+        const learned = (await preview.boundingBox())!.height;
+        await page.evaluate(() => {
+          Reflect.set(window, "handoffHeights", []);
+          Reflect.set(window, "sampleHandoff", true);
+          const sample = () => {
+            if (!Reflect.get(window, "sampleHandoff")) {
+              return;
+            }
+            const frame = document.querySelector(
+              ".chat-pane-cache__pane--active .chat-tool-card__preview",
+            );
+            if (frame) {
+              Reflect.get(window, "handoffHeights").push(frame.getBoundingClientRect().height);
+            }
+            requestAnimationFrame(sample);
+          };
+          sample();
+        });
+        await emit("start", { name: toolSearch ? "dispatch_action" : "show_widget" }, 3);
+        if (toolSearch) {
+          await emit(
+            "start",
+            {
+              toolCallId: "height-child",
+              parentToolCallId: "height-call",
+            },
+            4,
+          );
+        }
+        const result = {
+          kind: "canvas",
+          presentation: { target: "assistant_message", title: "Observations", sandbox: "scripts" },
+          view: { id: documentId, url: `/__openclaw__/canvas/documents/${documentId}/index.html` },
+        };
+        await emit(
+          "result",
+          {
+            result: { content: [{ type: "text", text: JSON.stringify(result) }], details: result },
+            ...(toolSearch ? { toolCallId: "height-child", parentToolCallId: "height-call" } : {}),
+          },
+          5,
+        );
+        if (toolSearch) {
+          await emit(
+            "result",
+            {
+              name: "dispatch_action",
+              result: {
+                content: [{ type: "text", text: JSON.stringify(result) }],
+                details: result,
+              },
+            },
+            6,
+          );
+        }
+        await gateway.waitForRequest("canvas.document.view");
+        await page.evaluate(async () => {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+        });
+        await gateway.resolveDeferred("canvas.document.view");
+        await preview.waitFor({ state: "detached" });
+        const completed = page
+          .locator('[data-content-kind="canvas-html"] iframe')
+          .contentFrame()
+          .frameLocator("iframe");
+        await completed.getByRole("button", { name: "Count observation" }).click();
+        await completed.getByRole("button", { name: "Counted" }).waitFor();
+        const heights = await page.evaluate(() => {
+          Reflect.set(window, "sampleHandoff", false);
+          return Reflect.get(window, "handoffHeights") as number[];
+        });
+        expect(heights.length).toBeGreaterThan(1);
+        expect(Math.max(...heights)).toBeLessThanOrEqual(learned + 1);
+        expect(Math.min(...heights)).toBeGreaterThanOrEqual(learned - 1);
+      });
+    },
+  );
+
   it("reserves a learned widget height from the first reload frame through delayed content", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const sessionKey = "agent:main:dashboard:widget-reload";

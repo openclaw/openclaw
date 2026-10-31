@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
@@ -13,7 +14,7 @@ import {
   summarizeToolGroup,
   readPreparedActivity,
 } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
@@ -119,6 +120,15 @@ function prepareActivityGroup(
 
   return {
     firstGroup,
+    // Temporarily hide routine widget receipts while retaining their activity and controls.
+    hideWidgetReceipt:
+      cards.length > 0 &&
+      cards.every(
+        (card) =>
+          card.name === "show_widget" &&
+          !asNullableRecord(card.details)?.permissionMissing &&
+          resolveToolCardOutcome(card, opts.runActive) !== "failed",
+      ),
     headline,
     groupSummaryLabel,
     currentActivity,
@@ -154,6 +164,7 @@ function ActivityGroupBody(props: {
     compact() && props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey);
   return (
     <div
+      style={{ display: state().hideWidgetReceipt ? "none" : undefined }}
       class={[
         "chat-activity-group",
         {
@@ -241,6 +252,7 @@ export function ActivityGroupContent(props: {
           fallback={<ActivityGroupBody {...props} state={activity()} />}
         >
           <div
+            style={{ display: activity().hideWidgetReceipt ? "none" : undefined }}
             class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
             data-chat-row-key={activity().firstGroup.key}
           >

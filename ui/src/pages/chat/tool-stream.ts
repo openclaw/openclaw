@@ -5,6 +5,7 @@ import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
 } from "../../../../src/shared/tool-approval-reviews.js";
+import { readWidgetInputPreview } from "../../../../src/shared/widget-input-preview.js";
 import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
 import {
   readToolApprovalReviewOutcome,
@@ -151,6 +152,14 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     // or a status-less history placeholder. Transcript messages never carry these,
     // so historical output-less calls (aborted runs) stay inert.
     __openclawToolStreamLive: true,
+    ...(entry.widgetInputPreview
+      ? {
+          __openclawWidgetInputPreview: {
+            ...entry.widgetInputPreview,
+            identity: buildToolStreamIdentity(entry.runId, entry.toolCallId),
+          },
+        }
+      : {}),
     __openclawToolStreamResultReceived: entry.resultReceived === true,
     __openclawToolStreamItemEnded: itemEnded === true,
     ...(entry.resultReceived !== true && !itemEnded && entry.liveDiffStat
@@ -484,6 +493,28 @@ export function handleAgentEvent(
   }
 
   if (
+    payload.stream === "lifecycle" &&
+    (payload.data.phase === "end" || payload.data.phase === "error")
+  ) {
+    let changed = false;
+    for (const entry of host.toolStreamById.values()) {
+      if (entry.runId !== payload.runId) {
+        continue;
+      }
+      entry.widgetInputClosed = true;
+      if (!entry.widgetInputPreview) {
+        continue;
+      }
+      entry.widgetInputPreview = undefined;
+      entry.message = buildToolStreamMessage(entry);
+      changed = true;
+    }
+    if (changed) {
+      flushToolStreamSync(host);
+    }
+  }
+
+  if (
     handleUsageEvent(host, payload) ||
     handleNoticeEvent(host, payload) ||
     handleStreamStatus(host, payload) ||
@@ -541,6 +572,19 @@ export function handleAgentEvent(
   const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
   let entry = host.toolStreamById.get(toolStreamIdentity);
   const phase = typeof data.phase === "string" ? data.phase : "";
+  const widgetInputPreview =
+    phase === "widget_preview" ? readWidgetInputPreview(data.preview) : undefined;
+  if (
+    phase === "widget_preview" &&
+    (source !== "live" ||
+      data.name !== "show_widget" ||
+      entry?.resultReceived ||
+      entry?.widgetInputClosed ||
+      (entry && entry.name !== "show_widget") ||
+      (data.preview !== null && !widgetInputPreview))
+  ) {
+    return true;
+  }
   const approvalReview = phase === "review" ? normalizeToolApprovalReview(data.review) : null;
   if (phase === "review" && !approvalReview) {
     return true;
@@ -624,7 +668,12 @@ export function handleAgentEvent(
   if (liveDiffStat) {
     entry.liveDiffStat = liveDiffStat;
   }
+  if (phase === "widget_preview") {
+    entry.widgetInputPreview = widgetInputPreview;
+  }
   if (phase === "result") {
+    entry.widgetInputPreview = undefined;
+    entry.widgetInputClosed = true;
     entry.liveDiffStat = undefined;
     entry.resultReceived = true;
   }

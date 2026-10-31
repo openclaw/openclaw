@@ -53,7 +53,7 @@ const widgets = new Map<
 
 function documentPreview(
   id: string,
-  overrides: Partial<Extract<PreviewState["preview"], { kind: "canvas" }>> = {},
+  overrides: Partial<Extract<PreviewState["preview"], { kind: "canvas"; render: "url" }>> = {},
 ) {
   return {
     ...canvasPreview,

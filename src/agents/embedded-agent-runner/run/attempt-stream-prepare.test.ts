@@ -148,6 +148,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       verboseLevel: "full" as const,
       toolResultFormat: "markdown" as const,
       toolProgressDetail: "raw" as const,
+      clientCaps: ["inline-widgets"],
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => true,
       sourceReplyDeliveryMode: undefined,

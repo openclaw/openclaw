@@ -77,6 +77,7 @@ export function mount(
   docId = "cv_inline",
   parent: Element | ShadowRoot = document.body,
   operatorScopes?: string[],
+  inputPreview?: OpenClawCanvasWidgetView["inputPreview"],
 ) {
   const view = new CanvasWidgetView.Element();
   const listeners = new Set<GatewayEventListener>();
@@ -125,6 +126,7 @@ export function mount(
       } as unknown as ApplicationContext);
     }
   });
+  view.inputPreview = inputPreview;
   view.docId = docId;
   view.sessionKey = "agent:main:widget-test";
   view.messageTimestamp = Date.now();

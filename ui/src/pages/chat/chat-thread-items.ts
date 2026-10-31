@@ -29,6 +29,7 @@ import {
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
@@ -125,6 +126,32 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>) {
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
+  // Project transient input alongside canonical canvas content before hidden
+  // tool rows are discarded. Only the live stream can supply this field.
+  const input =
+    toolMessage["__openclawToolStreamLive"] === true
+      ? asRecord(toolMessage["__openclawWidgetInputPreview"])
+      : null;
+  if (typeof input?.identity === "string") {
+    const preview = readCanvasContentPreview({
+      type: "canvas",
+      preview: {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "input",
+        viewId: `input:${input.identity}`,
+        input,
+      },
+    });
+    if (preview) {
+      return {
+        runId: typeof toolMessage.runId === "string" ? toolMessage.runId : undefined,
+        preview,
+        text: null,
+        timestamp: rawMessageTimestamp(toolMessage),
+      };
+    }
+  }
   const cards = extractToolCardsCached(toolMessage);
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
@@ -132,7 +159,16 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>) {
       return {
         runId: card.runId,
         parentToolCallId: card.parentToolCallId,
-        preview: card.preview,
+        preview:
+          toolMessage["__openclawToolStreamLive"] === true &&
+          card.preview.render === "url" &&
+          card.runId &&
+          card.callId
+            ? {
+                ...card.preview,
+                inputViewId: `input:${buildToolStreamIdentity(card.runId, card.parentToolCallId ?? card.callId)}`,
+              }
+            : card.preview,
         text: card.outputText ?? null,
         timestamp: rawMessageTimestamp(toolMessage),
       };
@@ -240,12 +276,12 @@ export function findNearestAssistantMessage(
     if (item?.kind !== "message") {
       continue;
     }
-    const message = asRecord(item.message);
-    if (typeof message?.role !== "string" || message.role.toLowerCase() !== "assistant") {
+    const message = safeNormalizeMessage(item.message);
+    if (!message || normalizeRoleForGrouping(message.role) !== "assistant") {
       continue;
     }
     last = { index, item };
-    const timestamp = safeNormalizeMessage(item.message)?.timestamp;
+    const timestamp = message.timestamp;
     if (toolTimestamp == null || timestamp == null) {
       continue;
     }

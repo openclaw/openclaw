@@ -27,7 +27,8 @@ export function isManagedCanvasDocumentPreview(preview: CanvasToolPreview): bool
 export function widgetPreviewLayoutKey(preview: CanvasToolPreview): string {
   return preview.mcpApp
     ? `mcp:${preview.mcpApp.viewId}`
-    : preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(preview)
+    : preview.render === "input" ||
+        (preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(preview))
       ? `canvas:${preview.viewId!.trim()}`
       : `frame:${preview.url?.trim() || preview.viewId?.trim()}`;
 }
@@ -36,7 +37,9 @@ export function widgetPreviewLayoutKey(preview: CanvasToolPreview): string {
 export function widgetPreviewHeight(preview: CanvasToolPreview, layout?: ChatWidgetLayout): number {
   return (
     layout?.read(widgetPreviewLayoutKey(preview)) ??
-    preview.preferredHeight ??
-    (preview.mcpApp ? 600 : 420)
+    (preview.render === "url" && preview.inputViewId
+      ? layout?.read(`canvas:${preview.inputViewId}`)
+      : undefined) ??
+    (preview.render === "input" ? 0 : (preview.preferredHeight ?? (preview.mcpApp ? 600 : 420)))
   );
 }

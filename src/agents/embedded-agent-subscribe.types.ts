@@ -9,12 +9,14 @@ import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
+import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import type { NormalizedUsage } from "./usage.js";
 export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
 export type SubscribeEmbeddedAgentSessionParams = Pick<
   EmbeddedRunAttemptParams,
   | "runId"
+  | "clientCaps"
   | "lifecycleGeneration"
   | "messageChannel"
   | "initialReplayState"
@@ -115,6 +117,7 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   builtinToolNames?: ReadonlySet<string>;
   /** Exact raw names of core-owned tools registered for this run. */
   coreBuiltinToolNames?: ReadonlySet<string>;
+  toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Exact registered tool names whose concrete instances are safe to replay. */
   replaySafeToolNames?: ReadonlySet<string>;
   /** Exact names of the marked Code Mode `exec` control tool(s) registered for this run. */

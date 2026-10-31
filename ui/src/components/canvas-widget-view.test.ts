@@ -48,6 +48,55 @@ import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 setupCanvasWidgetTests();
 
 describe("Canvas widget view", () => {
+  it("keeps a transient frame while input grows, parks hidden updates, and loads only the final document", async () => {
+    const view = mount(client, "input:call", document.body, ["operator.read"], {
+      title: "Survey",
+      html: "<p>First",
+    });
+    view.allowScripts = false;
+    const frame = await frameFor(view);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    for (const height of [240, 120, 360]) {
+      message(frame, { type: "openclaw:widget-size", height }, [], "null");
+      await settle(view);
+      expect(Number.parseFloat(frame.style.height)).toBe(Math.max(240, height));
+    }
+    message(frame, { type: "openclaw:widget-input-ready" }, [], "null");
+    await settle(view);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    view.inputPreview = { title: "Survey", html: "<p>First complete</p>" };
+    await settle(view);
+    expect(view.querySelector("iframe")).toBe(frame);
+    expect(post.mock.calls.filter(([data]) => data.type === "openclaw:widget-input")).toHaveLength(
+      2,
+    );
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle(view);
+    post.mockClear();
+    view.inputPreview = { title: "Survey", html: "<p>First complete</p><p>Latest" };
+    await settle(view);
+    expect(post).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle(view);
+    expect(post.mock.calls.filter(([data]) => data.type === "openclaw:widget-input")).toHaveLength(
+      1,
+    );
+    view.inputPreview = undefined;
+    view.allowScripts = true;
+    view.docId = "cv_final";
+    await settle(view);
+    const finalFrame = await frameFor(view);
+    expect(finalFrame).not.toBe(frame);
+    message(finalFrame, { type: "openclaw:widget-size", height: 180 });
+    await settle(view);
+    expect(finalFrame.style.height).toBe("180px");
+    expectRead(client, "cv_final");
+    expect(client.request).toHaveBeenCalledOnce();
+  });
+
   it("loads authenticated HTML once for concurrent views and waits for the exact isolated proxy", async () => {
     const add = vi.spyOn(window, "addEventListener");
     const pending = createDeferred<CanvasDocumentViewResult>();

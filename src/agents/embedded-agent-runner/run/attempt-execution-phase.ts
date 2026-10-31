@@ -157,6 +157,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
+    toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
     projectSessionForkMessages: (messages) =>
       replayToolResultPromptProjections(messages, sessionRuntime.toolResultPromptProjectionState),
     readSessionForkBoundary: () => ({

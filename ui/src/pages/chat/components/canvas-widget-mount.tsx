@@ -15,6 +15,7 @@ type WidgetProperties = Pick<
   | "preferredHeight"
   | "onHeightChange"
   | "allowScripts"
+  | "inputPreview"
   | "connectionGeneration"
 >;
 type CanvasWidgetMountProps = WidgetProperties & {
@@ -117,6 +118,7 @@ function CanvasWidgetHost(props: {
               "prop:preferredHeight": props.properties.preferredHeight,
               "prop:onHeightChange": props.properties.onHeightChange,
               "prop:allowScripts": props.properties.allowScripts,
+              "prop:inputPreview": props.properties.inputPreview,
               "prop:connectionGeneration": props.properties.connectionGeneration,
               "prop:presentationActive": presented(),
             }),

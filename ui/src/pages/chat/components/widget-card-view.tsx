@@ -372,8 +372,11 @@ function WidgetContent(props: {
   onExportSource: (source: WidgetExportSource) => void;
 }) {
   const rowKey = useContext(TranscriptRowKeyContext);
+  const input = () => (props.preview.render === "input" ? props.preview.input : undefined);
+  const allowScripts = createMemo(() => !input() && props.sandbox.includes("allow-scripts"));
   const managed = () =>
-    props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
+    Boolean(input()) ||
+    (props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview));
   const layoutKey = () => widgetPreviewLayoutKey(props.preview);
   const height = () => widgetPreviewHeight(props.preview, props.options?.widgetLayout);
   return (
@@ -428,7 +431,8 @@ function WidgetContent(props: {
                     onHeightChange={(nextHeight, settled) =>
                       props.options?.widgetLayout?.write(layoutKey(), nextHeight, rowKey(), settled)
                     }
-                    allowScripts={props.sandbox.includes("allow-scripts")}
+                    inputPreview={input()}
+                    allowScripts={allowScripts()}
                     connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
                   />
                 </ChatLazyBoundary>
@@ -511,6 +515,7 @@ function CanvasPreview(props: {
   const canPin = () => {
     const board = provider();
     return (
+      props.preview.render !== "input" &&
       board &&
       pinName() &&
       (props.preview.mcpApp
@@ -523,7 +528,9 @@ function CanvasPreview(props: {
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
   const hasActions = () =>
-    props.options?.mediaReadAllowed !== false && Boolean(canPin() || hasMenu());
+    props.preview.render !== "input" &&
+    props.options?.mediaReadAllowed !== false &&
+    Boolean(canPin() || hasMenu());
   const pinTarget = createMemo(
     (): WidgetPinTarget | undefined =>
       canPin()
@@ -546,7 +553,21 @@ function CanvasPreview(props: {
     <div
       ref={widgetActionsPlacementRef(hasActions)}
       class="chat-tool-card__preview"
-      data-content-kind={props.preview.mcpApp ? "mcp-app" : "canvas-html"}
+      style={{
+        "--widget-height-duration":
+          props.preview.render === "url" &&
+          props.preview.inputViewId &&
+          props.options?.widgetLayout?.read(`canvas:${props.preview.inputViewId}`)
+            ? "var(--duration-normal)"
+            : undefined,
+      }}
+      data-content-kind={
+        props.preview.render === "input"
+          ? "widget-input"
+          : props.preview.mcpApp
+            ? "mcp-app"
+            : "canvas-html"
+      }
       data-has-widget-actions={hasActions() ? "" : undefined}
       data-kind="canvas"
       data-surface={props.surface}

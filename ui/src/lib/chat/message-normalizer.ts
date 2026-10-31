@@ -22,6 +22,7 @@ import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-cont
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
+import { readWidgetInputPreview } from "../../../../src/shared/widget-input-preview.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
@@ -197,12 +198,24 @@ export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
 export function readCanvasContentPreview(content: unknown): CanvasPreview | null {
   const item = asOptionalRecord(content);
   const preview = item?.type === "canvas" ? asOptionalRecord(item.preview) : undefined;
-  if (
-    !preview ||
-    preview.kind !== "canvas" ||
-    preview.surface === "tool_card" ||
-    preview.render !== "url"
-  ) {
+  if (!preview || preview.kind !== "canvas" || preview.surface === "tool_card") {
+    return null;
+  }
+  if (preview.render === "input") {
+    const input = readWidgetInputPreview(preview.input);
+    const viewId = readStringField(preview, "viewId");
+    return input && viewId?.startsWith("input:")
+      ? {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "input",
+          viewId,
+          title: input.title,
+          input,
+        }
+      : null;
+  }
+  if (preview.render !== "url") {
     return null;
   }
   const result: CanvasPreview = { kind: "canvas", surface: "assistant_message", render: "url" };
@@ -211,6 +224,10 @@ export function readCanvasContentPreview(content: unknown): CanvasPreview | null
     if (value !== undefined) {
       result[key] = value;
     }
+  }
+  const inputViewId = readStringField(preview, "inputViewId");
+  if (inputViewId?.startsWith("input:")) {
+    result.inputViewId = inputViewId;
   }
   const preferredHeight = asFiniteNumber(preview.preferredHeight);
   if (preferredHeight !== undefined) {
