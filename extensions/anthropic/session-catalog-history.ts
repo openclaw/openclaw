@@ -57,6 +57,17 @@ export async function importClaudeHistory(params: {
   config: OpenClawConfig;
 }): Promise<void> {
   const items = params.items.toReversed();
+  // A retained-window position is not durable identity: growth between import
+  // attempts shifts the window, so one index maps to different messages across
+  // recovery, and the conflicting-key rejection permanently blocks adoption.
+  const missingUuid = items.findIndex((item) => !item.uuid);
+  if (missingUuid !== -1) {
+    // params.items is newest-first; report the caller-facing row position.
+    const callerRow = items.length - 1 - missingUuid;
+    throw new Error(
+      `claude transcript row ${callerRow}/${items.length} has no stable import uuid for ${params.threadId}; the transcript reader must supply source-coordinate uuids`,
+    );
+  }
   await withSessionTranscriptWrite(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
       const imported = importedClaudeMessage(item, Date.now() + index);
@@ -66,7 +77,7 @@ export async function importClaudeHistory(params: {
       // The idempotency key rides on the message so recovery re-imports dedupe.
       const message: AgentMessage & { idempotencyKey: string } = {
         ...imported,
-        idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
+        idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid}`,
       };
       await transcript.appendMessage({
         message,

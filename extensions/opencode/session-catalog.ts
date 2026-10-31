@@ -441,7 +441,9 @@ function openCodeTranscriptItems(value: unknown): SessionCatalogTranscriptItem[]
   if (!isRecord(value) || !Array.isArray(value.messages)) {
     throw new Error("OpenCode returned an invalid session export");
   }
-  return value.messages.flatMap((message): SessionCatalogTranscriptItem[] => {
+  // Export positions are stable under append-only growth; catalog history
+  // import uses them as durable identity when the message carries no native id.
+  return value.messages.flatMap((message, messageRow): SessionCatalogTranscriptItem[] => {
     if (!isRecord(message) || !isRecord(message.info) || !Array.isArray(message.parts)) {
       return [];
     }
@@ -468,7 +470,9 @@ function openCodeTranscriptItems(value: unknown): SessionCatalogTranscriptItem[]
       }
       const id =
         optionalOpenCodeString(part.id, 256) ??
-        (messageId ? `${messageId}:${String(partIndex)}` : undefined);
+        (messageId
+          ? `${messageId}:${String(partIndex)}`
+          : `oc-row-${String(messageRow)}:${String(partIndex)}`);
       const common = {
         ...(id ? { id } : {}),
         ...(timestamp ? { timestamp } : {}),

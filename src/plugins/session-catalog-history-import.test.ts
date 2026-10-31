@@ -132,6 +132,60 @@ it("imports and deduplicates in the supplied config store without polluting runt
   );
 });
 
+it("rejects id-less items instead of minting window-position identity", async () => {
+  await withTempHome(async (home) => {
+    const { scope, config } = catalogStore(home, "id-less-rejected");
+    await initializeStore(scope);
+    await expect(
+      importSessionCatalogHistory({
+        ...scope,
+        config,
+        catalogId: "fixture-catalog",
+        threadId: "source-thread",
+        read: catalogReader([
+          { id: "stable", type: "userMessage", text: "Has a stable id" },
+          { type: "userMessage", text: "Window position is not durable identity" },
+        ]),
+      }),
+    ).rejects.toThrow("no stable import id");
+    expect(await readMessages(scope)).toEqual([]);
+  });
+});
+
+it("dedupes a shifted recovery window through stable source-coordinate ids", async () => {
+  await withTempHome(async (home) => {
+    const { scope, config } = catalogStore(home, "coordinate-recovery");
+    await initializeStore(scope);
+    const coordinateItem = (row: number): SessionCatalogTranscriptItem => ({
+      id: `pi-row-${row}`,
+      type: "userMessage",
+      text: `message-${row}`,
+    });
+    const importWindow = async (rows: number) =>
+      importSessionCatalogHistory({
+        ...scope,
+        config,
+        catalogId: "pi",
+        threadId: "thread-idless",
+        read: catalogReader(Array.from({ length: rows }, (_, index) => coordinateItem(index))),
+      });
+    // Recovery repro from issue #127378: the first import completes, source
+    // growth shifts the retained window, and the retry must dedupe the overlap
+    // through coordinate ids instead of remapping one window index to new content.
+    await importWindow(200);
+    const firstImport = await readMessages(scope);
+    expect(firstImport).toHaveLength(200);
+    expect(firstImport[0]?.idempotencyKey).toBe("pi-catalog:thread-idless:pi-row-0");
+
+    await importWindow(201);
+    const stored = await readMessages(scope);
+    expect(stored).toHaveLength(201);
+    expect(stored.slice(0, firstImport.length)).toEqual(firstImport);
+    expect(new Set(stored.map((entry) => entry.idempotencyKey)).size).toBe(201);
+    expect(stored.at(-1)?.idempotencyKey).toBe("pi-catalog:thread-idless:pi-row-200");
+  });
+});
+
 it("rechecks authority after awaited content preparation", async () => {
   await withTempHome(async (home) => {
     const { scope, config } = catalogStore(home, "prepared");
@@ -303,7 +357,10 @@ it("preserves inline fallback through native storage, text catalog and untrusted
         catalogId: "external",
         threadId: "incident",
         read: catalogReader(
-          catalog.items.toReversed().map((item) => ({
+          catalog.items.toReversed().map((item, index) => ({
+            // Catalog copies must carry stable import identity; this one-shot
+            // snapshot copy anchors each row to its position in the read.
+            id: item.id ?? `inline-${index}`,
             type: item.type,
             text: item.text,
             raw: result.details,

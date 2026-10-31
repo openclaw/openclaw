@@ -18,7 +18,12 @@ import {
   PI_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
   PI_SESSION_ID_PATTERN as SESSION_ID_PATTERN,
 } from "./pi-session-catalog-shared.js";
-import { listPiSummaryPage, piMessageText, readPiSessionById } from "./pi-session-store.js";
+import {
+  listPiSummaryPage,
+  piMessageText,
+  piSourceRowId,
+  readPiSessionById,
+} from "./pi-session-store.js";
 
 const MAX_SEARCH_LENGTH = 500;
 
@@ -95,7 +100,7 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
   }
   const message = entry.message;
   const role = message.role;
-  const id = optionalPiString(entry.id, 256);
+  const id = optionalPiString(entry.id, 256) ?? piSourceRowId(entry);
   const timestamp = timestampMsToIsoString(
     parseDateFirstTimestampMs(message.timestamp) ?? parseDateFirstTimestampMs(entry.timestamp),
   );
@@ -173,7 +178,7 @@ function piTranscriptItems(entries: Record<string, unknown>[]): SessionCatalogTr
     if (entry.type === "message") {
       return piMessageItems(entry);
     }
-    const id = optionalPiString(entry.id, 256);
+    const id = optionalPiString(entry.id, 256) ?? piSourceRowId(entry);
     const timestamp = optionalPiString(entry.timestamp, 128);
     const common = { ...(id ? { id } : {}), ...(timestamp ? { timestamp } : {}) };
     if (

@@ -56,7 +56,11 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   };
 });
 
-import { capturePiContinuationCatalog, usePiFixtures } from "./pi-session-catalog.test-support.js";
+import {
+  capturePiContinuationCatalog,
+  piSessionHeader,
+  usePiFixtures,
+} from "./pi-session-catalog.test-support.js";
 
 const { createStore, installPi } = usePiFixtures();
 let sessionDirectory: string;
@@ -153,6 +157,56 @@ describe("Pi session catalog continuation", () => {
     );
     expect(entries).toEqual([]);
     expect(transcriptMocks.messages).toEqual([]);
+  });
+
+  it("recovers an id-less legacy adoption after the source grows past the import window", async () => {
+    const { createSessionEntry, provider } = catalog;
+    const sessionFile = path.join(sessionDirectory, "session.jsonl");
+    // Legacy linear sessions (version < 2) emit every entry, including rows
+    // without native ids; the reader must anchor those to stable JSONL line
+    // numbers so recovery re-imports dedupe instead of colliding (issue #127378).
+    const messageLine = (index: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-07-13T10:00:01.000Z",
+        message: {
+          role: "user",
+          content: `message-${index}`,
+          timestamp: 1_783_938_001_000 + index,
+        },
+      });
+    await fs.writeFile(
+      sessionFile,
+      `${[
+        JSON.stringify(piSessionHeader({ version: 1 })),
+        // A blank line must not shift the line-number coordinates of later rows.
+        "",
+        ...Array.from({ length: 200 }, (_, index) => messageLine(index)),
+      ].join("\n")}\n`,
+    );
+
+    await provider.continueSession!(continueRequest);
+    expect(transcriptMocks.messages).toHaveLength(200);
+    expect(transcriptMocks.messages[0]?.idempotencyKey).toBe("pi-catalog:pi-session:pi-row-2");
+    const createParams = createSessionEntry.mock.calls[0]?.[0];
+    const entry = await createSessionEntry.mock.results[0]?.value;
+
+    await fs.appendFile(sessionFile, `${messageLine(200)}\n`);
+    // Recovery reruns afterCreate against the grown source; the retained window
+    // shifts by one, so only the new row may append.
+    await createParams?.afterCreate?.(entry);
+
+    const texts = transcriptMocks.messages.map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : (message.content as Array<{ text?: string }>)[0]?.text,
+    );
+    expect(transcriptMocks.messages).toHaveLength(201);
+    expect(texts[0]).toBe("message-0");
+    expect(texts.at(-1)).toBe("message-200");
+    expect(new Set(transcriptMocks.messages.map((message) => message.idempotencyKey)).size).toBe(
+      201,
+    );
   });
 
   it("rejects paired-node and unknown session continuation", async () => {

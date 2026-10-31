@@ -23,6 +23,15 @@ const IO_CONCURRENCY = 8;
 const PI_FILE_CANDIDATE_CACHE_TTL_MS = 32_000;
 const PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES = 8;
 
+/** JSONL line number attached by parsePiJsonLines; stable under append-only growth. */
+export const PI_SOURCE_ROW_KEY = "__openclawSourceRow";
+
+/** Durable import identity for entries without a native id. */
+export function piSourceRowId(entry: Record<string, unknown>): string | undefined {
+  const row = entry[PI_SOURCE_ROW_KEY];
+  return typeof row === "number" ? `pi-row-${String(row)}` : undefined;
+}
+
 type PiSessionSummary = SessionCatalogSession & { file: string; version: number };
 
 type PiFileCandidate = {
@@ -205,6 +214,21 @@ function parsePiJsonLines(content: string): Record<string, unknown>[] {
     }
     const value = safeParseJson<unknown>(line);
     return isRecord(value) ? [value] : [];
+  });
+}
+
+function parsePiJsonLinesWithSourceRows(content: string): Record<string, unknown>[] {
+  return content.split(/\r?\n/u).flatMap((line, lineNo) => {
+    if (!line.trim()) {
+      return [];
+    }
+    const value = safeParseJson<unknown>(line);
+    if (!isRecord(value)) {
+      return [];
+    }
+    // Line numbers are stable under append-only growth; catalog history import
+    // uses them as durable identity when the entry carries no native id.
+    return [{ ...value, [PI_SOURCE_ROW_KEY]: lineNo }];
   });
 }
 
@@ -477,7 +501,7 @@ export async function readPiSessionById(
     if (stats.size > MAX_SESSION_BYTES) {
       throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
     }
-    const entries = parsePiJsonLines(await fs.readFile(file, "utf8"));
+    const entries = parsePiJsonLinesWithSourceRows(await fs.readFile(file, "utf8"));
     if (entries[0]?.type !== "session" || entries[0].id !== threadId) {
       throw new Error("Pi session changed during read");
     }

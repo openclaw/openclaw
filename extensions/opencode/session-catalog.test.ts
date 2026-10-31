@@ -437,6 +437,69 @@ describe("OpenCode session catalog", () => {
     },
   );
 
+  it("derives stable export-position ids for messages without native ids", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-idless-"));
+    temporaryDirectories.push(directory);
+    const exportPayload = {
+      info: {
+        id: "ses_test",
+        title: "Id-less catalog",
+        created: 1_700_000_000_000,
+        updated: 1_700_000_001_000,
+        projectId: "project",
+        directory: "/workspace",
+      },
+      messages: [
+        {
+          info: { role: "user", time: { created: 1_700_000_000_000 } },
+          parts: [{ type: "text", text: "hello" }],
+        },
+        {
+          info: { role: "assistant", time: { created: 1_700_000_001_000 } },
+          parts: [{ type: "text", text: "hi" }],
+        },
+      ],
+    };
+    // The fake CLI reads the export payload from disk so the test can grow it
+    // without rewriting the executable.
+    await fs.writeFile(path.join(directory, "export.json"), JSON.stringify(exportPayload));
+    const script = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("1.0.0");
+  process.exit(0);
+}
+if (args[0] === "--pure" && args[1] === "export") {
+  process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(path.join(directory, "export.json"))}, "utf8"));
+  process.exit(0);
+}
+process.exitCode = 2;
+`;
+    await fs.writeFile(path.join(directory, "opencode.js"), script);
+    await fs.symlink(
+      new URL("./test-fixtures/opencode-command.sh", import.meta.url),
+      path.join(directory, "opencode"),
+    );
+    process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
+
+    const first = await readTestTranscript({ limit: 10 });
+    expect(first.items.map((item) => item.id)).toEqual(["oc-row-1:0", "oc-row-0:0"]);
+
+    // Export positions are stable under append-only growth, so recovery
+    // re-imports dedupe the overlap instead of remapping window indexes.
+    exportPayload.messages.push({
+      info: { role: "user", time: { created: 1_700_000_002_000 } },
+      parts: [{ type: "text", text: "newest" }],
+    });
+    await fs.writeFile(path.join(directory, "export.json"), JSON.stringify(exportPayload));
+    const grown = await readTestTranscript({ limit: 10 });
+    expect(grown.items.map((item) => [item.id, item.text])).toEqual([
+      ["oc-row-2:0", "newest"],
+      ["oc-row-1:0", "hi"],
+      ["oc-row-0:0", "hello"],
+    ]);
+  });
+
   itWithCli.each([1, 2])(
     "searches and reads canonical titles through the v%s CLI JSON surfaces",
     async (version) => {

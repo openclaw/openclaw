@@ -158,6 +158,9 @@ export async function readLocalClaudeTranscriptPage(
           fragments = [];
           if (item) {
             item.resumeCursor = encodeOffset(position + index + 1 + line.length);
+            // Byte offsets are stable under append-only growth; catalog history
+            // import uses them as durable identity when the row has no native uuid.
+            item.uuid ??= `claude-row-${String(position + index + 1)}`;
             found.push({ item, start: position + index + 1 });
             if (found.length > params.limit) {
               break;
@@ -176,6 +179,7 @@ export async function readLocalClaudeTranscriptPage(
           const item = parseTranscriptLine(line);
           if (item) {
             item.resumeCursor = encodeOffset(line.length);
+            item.uuid ??= "claude-row-0";
             found.push({ item, start: 0 });
           }
         }

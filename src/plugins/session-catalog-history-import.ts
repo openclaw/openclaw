@@ -205,6 +205,15 @@ export async function importSessionCatalogHistory(params: {
     read: params.read,
     limits: SESSION_CATALOG_CONTINUATION_LIMITS,
   });
+  // A retained-window position is not durable identity: growth between import
+  // attempts shifts the window, so one index maps to different messages across
+  // recovery, and the conflicting-key rejection permanently blocks adoption.
+  const missingId = items.findIndex((item) => !item.id);
+  if (missingId !== -1) {
+    throw new Error(
+      `session catalog history item ${missingId}/${items.length} has no stable import id for ${params.catalogId}:${params.threadId}; readers must supply source-coordinate ids`,
+    );
+  }
   const fallbackTimestamp = Date.now();
   await withSessionTranscriptWrite(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
@@ -218,7 +227,7 @@ export async function importSessionCatalogHistory(params: {
       }
       const message = {
         ...imported,
-        idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:${item.id ?? index}`,
+        idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:${item.id}`,
       };
       await transcript.appendMessage({
         message,
