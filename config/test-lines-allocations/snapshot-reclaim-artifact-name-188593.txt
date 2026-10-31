@@ -1,2 +1,0 @@
-# Snapshot reclamation skips must name the rejected staging entry for diagnosis (#188593).
-2
