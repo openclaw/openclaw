@@ -34,6 +34,11 @@ Doctor names the session and asks the operator to inspect its retained identitie
 and delivery outcome against the transcript before repairing custody. Legacy scalar
 delivery fields can still be normalized without discarding the pending final, so
 ordinary admission no longer depends on the retired tombstone gate.
+For unmatched custody with no live execution owner, `openclaw doctor --fix` backs
+up and retires the legacy recovery fields when the session is terminal or archived,
+preserving its status, archive, current writer identities, and delivery notice
+without resuming it or replaying a pending final; startup reports an aggregate
+count per agent instead of repeating warnings for each such session.
 
 ## What survives a restart
 
