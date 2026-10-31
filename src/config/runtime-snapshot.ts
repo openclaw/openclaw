@@ -247,9 +247,7 @@ function publishRuntimeConfigSnapshot(
   runtimeConfigSnapshot = config;
   runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
-  if (sourceConfig) {
-    recordPublishedRuntimeConfigSource(config, sourceConfig);
-  }
+  recordPublishedRuntimeConfigSource(config, sourceConfig ?? config);
   runtimeConfigSnapshotMetadata = metadata;
   if (
     runtimeModelConfigCacheKey === null ||

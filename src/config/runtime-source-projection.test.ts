@@ -175,4 +175,8 @@ it("follows a newer source republished for the same runtime object", () => {
   expect(pluginSource(runtime)).toEqual({ apiKey: pluginRef("PLUGIN_KEY_B") });
   setSnapshot(pluginConfig("resolved-key", { lastTouchedVersion: "x" }));
   expect(pluginSource(runtime)).toEqual({ apiKey: pluginRef("PLUGIN_KEY_B") });
+  // Republishing without a source makes the runtime object its own source again.
+  setSnapshot(runtime);
+  expect(pluginSource(runtime)).toEqual({ apiKey: "resolved-key" });
+  expect(pluginSource(capture(runtime))).toEqual({ apiKey: "resolved-key" });
 });
