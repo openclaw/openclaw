@@ -1,5 +1,5 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -19,7 +19,11 @@ import {
   resolvePluginPrereleaseExtensionRuntime,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowExpression,
+  evaluateWorkflowRunner,
+  runWorkflowShellScript,
+} from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -81,8 +85,7 @@ function runPluginPhaseValidation(params: {
   if (!step?.run) {
     throw new Error("Missing plugin prerelease phase validation step");
   }
-  return spawnSync("bash", ["-c", step.run], {
-    encoding: "utf8",
+  return runWorkflowShellScript(step.run, {
     env: {
       CANDIDATE_ARTIFACT_JSON: params.candidateArtifactJson ?? "",
       EXPECTED_SHA: params.expectedSha ?? "",
@@ -108,9 +111,9 @@ function runPluginManifest(
   }
   const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
   const outputPath = join(root, "github-output");
-  const result = spawnSync("bash", ["-c", step.run], {
+  const result = runWorkflowShellScript(step.run, {
     cwd: targetRoot,
-    encoding: "utf8",
+    linuxWorkflow: true,
     env: {
       FULL_RELEASE_VALIDATION: eventName === "schedule" ? "false" : "true",
       GITHUB_EVENT_NAME: eventName,
@@ -145,8 +148,7 @@ function runPluginSummary(params: {
   if (!step?.run) {
     throw new Error("Missing plugin prerelease summary step");
   }
-  return spawnSync("bash", ["-c", step.run], {
-    encoding: "utf8",
+  return runWorkflowShellScript(step.run, {
     env: {
       DOCKER_RESULT: params.docker,
       EXTENSIONS_RESULT: params.extensions,
