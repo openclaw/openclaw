@@ -1,0 +1,2 @@
+34
+# Quoting-format table, generated service readback, strict ambiguous-quote rejection, and native cmd.exe argv regression for #140180.

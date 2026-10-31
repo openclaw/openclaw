@@ -243,6 +243,12 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
+/* Same system colors as browser find, so matches read in every theme. */
+::highlight(openclaw-chat-search) {
+  background-color: Mark;
+  color: MarkText;
+}
+
 .chat-workspace-conflict-notice,
 .chat-cloud-disk-space-notice {
   flex: 0 0 auto;

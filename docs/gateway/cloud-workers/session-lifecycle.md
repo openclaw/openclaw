@@ -278,3 +278,30 @@ Checkpoint history stays until session deletion; the managed-worktree seven-day 
 While the worker is active, **Files**, file editing, and diffs inspect its actual checkout through the authenticated node connection. After Stop, retained changed-file previews and change paths remain available, but unchanged upstream files, editing, and full diffs require a running worker. The diff panel explains that the workspace is stopped. Opening these views never substitutes the agent's Gateway workspace.
 
 After a reclaimed placement or a previously active failed placement, the next message starts a replacement on the original destination once cleanup and workspace recovery are complete. If initial setup never completed or the original destination is unavailable, use **Restart session…** to choose where to continue. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
+
+## Exact provider-resource receipts
+
+New Linux Azure Sandbox allocations made through Crabbox record their observed
+resource identity in the existing environment store before setup or node enrollment.
+The original provision operation remains the allocation recovery key. Restart
+recovery reuses that operation and refuses a different resource; an unavailable
+observation does not prove that the original resource was deleted.
+
+Stop still performs the existing final workspace save. Provider teardown then
+uses the saved exact resource identity and remains pending until the provider
+confirms deletion. A missing local claim, timeout, or failed observation cannot
+complete cleanup. Existing environments without a receipt retain their original
+fixed-lease cleanup behavior; they are not silently rebound to a newly observed
+resource. Providers without receipt support remain unchanged, but cannot operate
+on an environment that already has a receipt.
+
+This is a prerequisite for retained session disks, not activation: idle suspension
+still follows the existing lifecycle, and Gateway workspace checkpoints remain
+the recovery source. It enables neither retained allocation nor pause/resume nor
+disk-authoritative workspaces.
+
+The shared-state schema upgrade preserves old rows with an absent receipt and
+fences older binaries that cannot honor recorded identities. To roll back, first
+settle the new environments and their pending cleanup, then restore the matching
+pre-upgrade state backup with its binary. Do not perform a package-only downgrade
+or erase receipt metadata to force cleanup.

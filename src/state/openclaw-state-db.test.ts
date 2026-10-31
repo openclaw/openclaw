@@ -52,6 +52,7 @@ import {
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
+  expectedStateMigrationsFromV27,
   expectV2026_7_1_2CronHistoryPreserved,
   markStateDatabaseVersion,
   materializeV2026_7_1_2StateDatabase,
@@ -1623,13 +1624,7 @@ describe("openclaw state database", () => {
       { kind: "portable-identity-columns-v22", path: fixture.databasePath },
       { kind: "task-run-indexes-v24", path: fixture.databasePath },
       { kind: "subagent-operator-recovery-v25", path: fixture.databasePath },
-      { kind: "state-write-indexes-v27", path: fixture.databasePath },
-      { kind: "github-publication-draft-v28", path: fixture.databasePath },
-      { kind: "local-client-credentials-v29", path: fixture.databasePath },
-      { kind: "automation-policy-fence-v30", path: fixture.databasePath },
-      { kind: "local-workspace-manifests-v31", path: fixture.databasePath },
-      { kind: "local-workspace-cas-v35", path: fixture.databasePath },
-      { kind: "template-names-v36", path: fixture.databasePath },
+      ...expectedStateMigrationsFromV27(fixture.databasePath),
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1833,13 +1828,7 @@ describe("openclaw state database", () => {
       { kind: "task-run-indexes-v24", path: seeded.databasePath },
       { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
       { kind: "session-state-head-layout-v26", path: seeded.databasePath },
-      { kind: "state-write-indexes-v27", path: seeded.databasePath },
-      { kind: "github-publication-draft-v28", path: seeded.databasePath },
-      { kind: "local-client-credentials-v29", path: seeded.databasePath },
-      { kind: "automation-policy-fence-v30", path: seeded.databasePath },
-      { kind: "local-workspace-manifests-v31", path: seeded.databasePath },
-      { kind: "local-workspace-cas-v35", path: seeded.databasePath },
-      { kind: "template-names-v36", path: seeded.databasePath },
+      ...expectedStateMigrationsFromV27(seeded.databasePath),
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     await expectRepair(options, [
@@ -2047,13 +2036,7 @@ describe("openclaw state database", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "subagent-operator-recovery-v25", path: databasePath },
-      { kind: "state-write-indexes-v27", path: databasePath },
-      { kind: "github-publication-draft-v28", path: databasePath },
-      { kind: "local-client-credentials-v29", path: databasePath },
-      { kind: "automation-policy-fence-v30", path: databasePath },
-      { kind: "local-workspace-manifests-v31", path: databasePath },
-      { kind: "local-workspace-cas-v35", path: databasePath },
-      { kind: "template-names-v36", path: databasePath },
+      ...expectedStateMigrationsFromV27(databasePath),
     ]);
 
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));

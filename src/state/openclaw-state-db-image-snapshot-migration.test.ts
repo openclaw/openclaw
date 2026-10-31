@@ -68,7 +68,11 @@ it("ordinary open with a lazy-column gap rolls back malformed images, then impor
     const after = db.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all();
     expect(after).toHaveLength(rows.length);
     for (const [index, row] of after.entries()) {
-      expect(row).toEqual({ ...rows[index], profile_snapshot_json: expect.any(String) });
+      expect(row).toEqual({
+        ...rows[index],
+        profile_snapshot_json: expect.any(String),
+        resource_receipt_json: null,
+      });
       expect(JSON.parse(String(row.profile_snapshot_json))).toEqual({
         install: "bundle",
         settings: { provider: "synthetic" },

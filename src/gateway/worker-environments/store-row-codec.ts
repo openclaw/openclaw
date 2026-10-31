@@ -6,6 +6,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
+import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
 import type {
   DB as StateDatabase,
   WorkerEnvironmentCredentials,
@@ -103,6 +104,10 @@ export function decodeWorkerEnvironmentRow(
     profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerProfile,
     preparation: readWorkerEnvironmentPreparation(row),
     provisionOperationId: row.provision_operation_id,
+    resourceReceipt:
+      row.resource_receipt_json === null
+        ? null
+        : requireWorkerResourceReceipt(JSON.parse(row.resource_receipt_json)),
     nodeSetupId: row.node_setup_id,
     nodeDeviceId: row.node_device_id,
     sharedHost: row.shared_host === null ? null : row.shared_host === 1,

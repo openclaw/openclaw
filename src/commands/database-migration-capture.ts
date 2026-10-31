@@ -156,7 +156,10 @@ export async function createDatabaseMigrationCapture(options: {
       }
       const configCapture = await resolveBackupConfigCapture(configuration, { env });
       const preparedBase = await prepareBackupArchive(options.baseArchive);
-      if (preparedBase.databaseRestoreCandidates.length > 0) {
+      if (
+        preparedBase.databaseRestoreCandidates.length > 0 ||
+        (preparedBase.manifest.postgresAnchors?.length ?? 0) > 0
+      ) {
         throw new Error("Migration capture requires a SQLite-only base archive.");
       }
       if (

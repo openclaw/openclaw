@@ -61,6 +61,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 describe.skipIf(process.platform !== "win32")("Windows launcher redirection ownership", () => {
   it.each([
     ["a >b & c", true],
+    ["C:\\Program Files\\OpenClaw\\", true],
     ["quoted expansion", true, "", '"%CD%\\gateway output.log"'],
     ['a "q" >b', false],
     ["comma target", false, ",extra"],
@@ -125,6 +126,7 @@ server.listen(port, "127.0.0.1", () => {
         String(port),
         "--msg",
         message,
+        "SENTINEL-NEXT",
       ];
       const content =
         buildTaskScript({

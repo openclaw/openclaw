@@ -1,17 +1,15 @@
-/* @vitest-environment jsdom */
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+/* @vitest-environment jsdom */
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import type { AttachmentCardHeaderOptions } from "./chat-attachment-card.ts";
 import { CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import { resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import {
   handleTranscriptContextMenu,
   resetThreadPresentation,
