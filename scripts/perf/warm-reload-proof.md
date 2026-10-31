@@ -39,8 +39,10 @@ the other route. Default coverage is **one cold navigation and eleven warm
 reloads per route**, each route in an independent initially empty browser context.
 
 For transcript late-paint attribution, add `--transcript-late-paint`. Both targets
-are archived and pinned, and the transcript includes extended nested lists, bold
-text, code, tables, and links. The synthetic operator uses Involving me, category
+are archived dashboard-key sessions, opened through slug + full-UUID references
+in their respective chat and dashboard namespaces. They are pinned, and the
+transcript includes extended nested lists, bold text, code, tables, and links.
+The synthetic operator uses Involving me, category
 grouping, Created sorting, five collapsed categories, always-visible empty groups,
 and no previews; the catalog has 97 groups and 102 section-order entries. This
 mode records read-only IndexedDB request start/completion times and whether an
@@ -50,12 +52,14 @@ independently of a dashboard occupying the main region. These are DOM and I/O
 milestones; filmstrip inspection still owns paint claims.
 
 Run this mode twice for the two visit sequences. The default repeats reloads.
-Adding `--reload-after-navigation` navigates internally through `/new` back to the
-target before each warm capture, then reloads four seconds after that navigation
-started. The fixed visit duration is workload, not a cache-readiness condition.
-Both modes retain the initial cold capture and persistence preparation, so the
-navigation variant exercises a short return visit to a previously loaded
-transcript, not the first uncached visit. The report records this distinction.
+Adding `--reload-after-navigation` leaves the app, removes only the synthetic
+target's transcript snapshot and metadata, opens a fresh `/new` document, and
+navigates internally to the target. It reloads after a four-second first visit;
+sidebar snapshots and operator settings survive. The fixed visit duration is
+workload, not a cache-readiness condition. Each warm run records the target's
+cache inventory and elapsed visit time before capture. This tests short-visit
+persistence rather than a return visit to an already-persisted transcript. The
+initial cold capture remains separate from these independently reset visits.
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
