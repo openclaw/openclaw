@@ -181,6 +181,133 @@ describe("redactConfigSnapshot", () => {
 });
 
 describe("generated redaction hints", () => {
+  it("preserves a non-sensitive encryption union branch beside a redacted passphrase", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    const config = {
+      storage: {
+        locations: {
+          plain: {
+            provider: "filesystem",
+            settings: {},
+            encryption: "none",
+          },
+          encrypted: {
+            provider: "filesystem",
+            settings: {},
+            encryption: { passphrase: "synthetic-storage-passphrase" },
+          },
+        },
+      },
+    };
+    const result = redactConfigSnapshot(makeSnapshot(config), hints);
+    const expected = {
+      storage: {
+        locations: {
+          plain: {
+            provider: "filesystem",
+            settings: {},
+            encryption: "none",
+          },
+          encrypted: {
+            provider: "filesystem",
+            settings: {},
+            encryption: { passphrase: REDACTED_SENTINEL },
+          },
+        },
+      },
+    };
+
+    expectProjections(result, expected);
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+  });
+
+  it("round-trips heuristic-sensitive strings at schema traversal prefixes", () => {
+    const hints: ConfigUiHints = { "nested.token.child": { sensitive: true } };
+    const config = { nested: { token: "synthetic-traversal-token" } };
+    const result = redactConfigSnapshot(makeSnapshot(config), hints);
+
+    expect(result.config).toEqual({ nested: { token: REDACTED_SENTINEL } });
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+  });
+
+  it("honors a sensitive wildcard beyond an exact traversal prefix", () => {
+    const hints: ConfigUiHints = {
+      "foo.*": { sensitive: true },
+      "foo.bar.child": { sensitive: true },
+    };
+    const config = { foo: { bar: "synthetic-wildcard-secret" } };
+    const result = redactConfigSnapshot(makeSnapshot(config), hints);
+
+    expect(result.config).toEqual({ foo: { bar: REDACTED_SENTINEL } });
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+  });
+
+  it("keeps an explicitly non-sensitive wildcard editable beyond a traversal prefix", () => {
+    const hints: ConfigUiHints = {
+      "foo.*": { sensitive: false },
+      "foo.bar.child": { sensitive: true },
+    };
+    const config = { foo: { bar: "synthetic-editable-value" } };
+    const result = redactConfigSnapshot(makeSnapshot(config), hints);
+
+    expect(result.config).toEqual(config);
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+  });
+
+  it("redacts generated plugin array secrets across every snapshot projection", () => {
+    const hints = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "array-proof",
+          configSchema: {
+            type: "object",
+            additionalProperties: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  value: { type: "string" },
+                },
+              },
+            },
+          },
+          configUiHints: { "*": { sensitive: true } },
+          configSecretInputPaths: ["entries[].value"],
+        },
+      ],
+      cache: false,
+    }).uiHints;
+    const config = {
+      plugins: {
+        entries: {
+          "array-proof": {
+            config: {
+              entries: [{ value: "synthetic-plugin-array-secret" }],
+            },
+          },
+        },
+      },
+    };
+    const raw = JSON.stringify(config);
+    const result = redactConfigSnapshot(makeSnapshot(config, raw), hints);
+    const expected = {
+      plugins: {
+        entries: {
+          "array-proof": {
+            config: {
+              entries: [{ value: REDACTED_SENTINEL }],
+            },
+          },
+        },
+      },
+    };
+
+    expectProjections(result, expected);
+    expect(result.raw).toBe(JSON.stringify(expected));
+    expect(JSON.stringify(result)).not.toContain("synthetic-plugin-array-secret");
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+  });
+
   it("preserves account SecretRef identity via generated channel metadata hints", () => {
     const hints = buildConfigSchemaCore().uiHints;
     expect(hints["channels.matrix.accounts.*.password"]?.sensitive).toBe(true);
@@ -205,8 +332,21 @@ describe("generated redaction hints", () => {
       plugins: [
         {
           id: "endpoint-proof",
-          configSchema: { type: "object", properties: { endpoint: { type: "string" } } },
-          configUiHints: { endpoint: { sensitive: false, tags: [" URL-SECRET "] } },
+          configSchema: {
+            type: "object",
+            properties: {
+              endpoint: {
+                oneOf: [
+                  { type: "string" },
+                  { type: "object", properties: { token: { type: "string" } } },
+                ],
+              },
+            },
+          },
+          configUiHints: {
+            endpoint: { sensitive: false, tags: [" URL-SECRET "] },
+            "endpoint.token": { sensitive: true },
+          },
         },
       ],
     }).uiHints;
@@ -229,6 +369,21 @@ describe("generated redaction hints", () => {
       expect(JSON.stringify(result)).not.toContain(secret);
     }
     expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+
+    const objectConfig = {
+      plugins: {
+        entries: {
+          "endpoint-proof": {
+            config: { endpoint: { token: "synthetic-endpoint-token" } },
+          },
+        },
+      },
+    };
+    const objectResult = redactConfigSnapshot(makeSnapshot(objectConfig), hints);
+    expect(objectResult.config.plugins?.entries?.["endpoint-proof"]?.config?.endpoint).toEqual({
+      token: REDACTED_SENTINEL,
+    });
+    expect(restoreRedactedValues(objectResult.config, objectConfig, hints)).toEqual(objectConfig);
   });
 });
 
