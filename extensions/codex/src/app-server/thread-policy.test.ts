@@ -43,15 +43,11 @@ describe("native thread policy refresh", () => {
         await update;
         expect(request.method).toBe("thread/inject_items");
         const text = request.params.items[0].content[0].text;
-        expect(text).toContain("replaces only earlier blocks with the same delimiters");
+        expect(text).toContain("fully replaces only earlier blocks with the same tag");
         expect(text).not.toContain("legacy OpenClaw-supplied generic policy");
-        expect(text).toContain("an empty block withdraws that policy");
-        expect(text).toContain(
-          "current-inference persona, skills, memory and conversation guidance",
-        );
-        expect(text).toContain(
-          "independent native managed, guardian, security, collaboration and project instructions",
-        );
+        expect(text).toContain("an empty block withdraws their entire policy");
+        expect(text).toContain("Rules omitted from it are withdrawn from those blocks");
+        expect(text).toContain("Instructions outside those blocks retain their authority");
         expect(text).toContain(
           "does not erase conversation history, facts or results, or cancel unfinished user requests",
         );
