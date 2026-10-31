@@ -67,7 +67,11 @@ import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
-import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
+import {
+  canAutoFollowChat,
+  handleChatScrollTakeover,
+  hasPendingManualChatScroll,
+} from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -438,6 +442,8 @@ export abstract class ChatPaneStateOwner {
     getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+    hasPendingScrollCommand: () =>
+      this.state !== undefined && hasPendingManualChatScroll(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
   });
   protected get progressCards() {

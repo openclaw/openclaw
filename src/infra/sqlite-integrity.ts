@@ -445,7 +445,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
     details.push("additional violations omitted");
   }
-  throw new SqliteForeignKeyIntegrityError(
+  throw new SqliteIntegrityError(
     `SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`,
   );
 }
@@ -484,9 +484,6 @@ export class SqliteIntegrityError extends Error {
     this.name = "SqliteIntegrityError";
   }
 }
-
-/** Relational findings can be retained in an original image without declaring it healthy. */
-export class SqliteForeignKeyIntegrityError extends SqliteIntegrityError {}
 
 function retainSortedForeignKeyViolation(
   retained: SqliteForeignKeyViolation[],

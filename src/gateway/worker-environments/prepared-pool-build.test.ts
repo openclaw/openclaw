@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import {
   IDLE_TIMEOUT_MS,
+  PRESENCE_REPOSITORY,
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
@@ -74,6 +75,34 @@ it.each(["new build", "promoted reserve"] as const)(
     );
   },
 );
+
+it("leaves repository builds with their request owner while still expiring them", async () => {
+  const build = await f.seed("repository-build", {
+    purpose: "build",
+    repository: PRESENCE_REPOSITORY,
+  });
+  const prepareRetention = vi.fn<PoolOptions["prepareRetention"]>();
+  const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>();
+  const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
+  const owner = f.pool({ prepareRetention, prepareIntent, reconcile });
+  await f.schedule(owner);
+  expect(f.store.get(build.environmentId)).toMatchObject({
+    state: "requested",
+    destroyRequestedAtMs: null,
+  });
+  expect(prepareRetention).not.toHaveBeenCalled();
+  expect(prepareIntent).not.toHaveBeenCalled();
+  expect(reconcile).not.toHaveBeenCalled();
+  f.nowMs += IDLE_TIMEOUT_MS;
+  await f.schedule(owner);
+  expect(f.store.get(build.environmentId)?.destroyRequestedAtMs).toBe(f.nowMs);
+  expect(reconcile).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ environmentId: build.environmentId, destroyRequestedAtMs: f.nowMs }),
+    expect.any(AbortSignal),
+    expect.any(Function),
+  );
+  expect(f.reserves()).toHaveLength(1);
+});
 
 it("prefers a new build to a commit activated in the same millisecond", async () => {
   f.developmentProfile.readyWorkers = 0;

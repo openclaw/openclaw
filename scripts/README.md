@@ -331,6 +331,33 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+`--pages` selects the route-catalog census: first visit after boot, each page's
+primary interaction, and route leave. The manifest records redirects,
+unavailable states and pages excluded for an active campaign; none silently
+count as passing coverage. Include `--source-root <checkout>` for the compiled
+Workboard fixture; comparisons also need `--compare-source-root <checkout>`
+matching their bundle's Workboard source. Run Chromium at `--cpu-throttle 1` and again at
+`--cpu-throttle 4`, then WebKit at 1x, using `--viewport both`. Narrow a follow-up
+with `--steps page-<route>-visit,page-<route>-action,page-<route>-leave`.
+Use `--pages --page-phases visit` to validate every route's loaded state before
+the `--page-phases action,leave` sweep; the default includes all three phases.
+The page table includes longest observed main-thread task, standard CLS, all
+layout shifts including those after input, and DOM counts. Unsupported browser
+metrics are null. DOM counts are collected after the measured interval so the
+census does not add list-size-dependent work to timings. Use a separate `--trace` pass for WebKit script/style/layout
+attribution; its durations are elapsed time, never action CPU. One-pair sweeps
+rank candidates; performance claims require the paired runs and controls below.
+Every phase starts after New Session reports route-ready. Route-ready time ends
+after the loaded page is visible for two animation frames;
+wall time additionally includes driver round trips and assertions. Page targets
+are a longest task of 50 ms at 1x or 200 ms at 4x, zero CLS, and WebKit ready time
+at most 1.3x Chromium. Redirects, native-only actions, and resource execution
+outside the selected flow are recorded explicitly in the coverage manifest.
+
+Store benchmark artifacts on the SSD with `--output`. The harness intentionally
+leaves `TMPDIR` unchanged so OpenClaw's secure-temp guard keeps using the
+OS-provided private temporary directory.
+
 The opt-in [`chat-actions` census](bench-control-ui-chat-actions.md) covers command
 and mention menus, message actions, attachments, transcript search, and side panels.
 
@@ -346,15 +373,27 @@ its estimate requires at least one second of interior sample coverage. The expli
 `provider-model-picker-cycles`, `session-switch-cycles`, `sidebar-toggle-cycles`,
 and `cron-held-typing-cycles` steps repeat eight fixed actions for longer CPU
 intervals, retaining their selection, focus, and held-request contracts. Use
-separate untraced runs for timing. Compare automation wall time
-across engines; do not divide their script or CPU measurements as though they
-were the same metric. `scenarioMs` includes input delivery and scenario assertions;
-`settleWaitMs` isolates the final two-frame wait, and their sum is `wallMs`.
-The consecutive-frame timestamp intervals report cadence, not the full wait.
-Traced actions that retain their document also write `*.user-timing.json` with
-native input and run-boundary marks; marker collection adds overhead and does not
-measure input-to-paint latency. Navigating/reloading scenarios retain their existing
-boot probes instead, since navigation discards the original document's marks.
+separate untraced runs for timing. The headline ratio ranks `actionTiming.applicationMs`:
+first trusted pointer/keyboard/input/wheel event to the last observed DOM mutation
+batch or native input value edit before the scenario returns. `driverMs` measures
+the initial delivery prefix; `settleMs` measures the remaining assertion/settle tail.
+These browser-clock phases sum to `browserSpanMs`, not Node `wallMs`. The report
+keeps wall and driver ratios visible. Missing input/commit boundaries are unranked,
+including navigation/reload and memory scenes.
+
+This is an elapsed DOM-commit proxy, not CPU or input-to-paint latency. The driver
+prefix can include application focus work, and compound actions retain driver gaps
+between successive inputs inside `applicationMs`. Raw first/last-input, focus and
+commit timestamps plus input/mutation counts let traces distinguish those cases.
+Native input value edits may commit without MutationObserver records. Mutations after
+scenario return, paint-only work and CSS transitions are not commit boundaries.
+`scenarioMs` still includes delivery and assertions; `settleWaitMs` is only the
+final two-frame wait, and their sum remains `wallMs`. The probe adds a scenario-end
+RPC; do not compare instrumented wall times with historical uninstrumented runs as
+an application speedup. Consecutive-frame timestamp intervals report cadence, not
+the full wait. Traced document-retaining actions write `*.user-timing.json` with
+the same native input/run boundaries and last-commit mark. Navigation/reload retain
+their existing boot probes because navigation discards document-local marks.
 Mock routing
 disables HTTP caching; warm reload measures persisted state in the same context.
 Boot observations include browser-local transcript/composer readiness, navigation
