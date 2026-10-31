@@ -27,6 +27,7 @@ import {
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { collectMcpTransportIssues } from "./mcp-config-normalize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
@@ -103,6 +104,10 @@ export function validatePreparedConfigWithPlugins(
   const ensureSchemaValidations = () =>
     (schemaValidations ??= preparePluginSchemaValidations(ensureLoadedRegistryInfo().registry));
 
+  const warnings = collectMcpTransportIssues(parsedConfig);
+  if (opts.semanticValidation === "strict" && warnings.length > 0) {
+    return { ok: false, issues: warnings, warnings: [] };
+  }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
         env: opts.env,
@@ -119,11 +124,10 @@ export function validatePreparedConfigWithPlugins(
       })
     : parsedConfig;
   if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
-    return { ok: true, config, warnings: [] };
+    return { ok: true, config, warnings };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
   const preserveUnavailableConfig = (path: string): boolean => {
     const diagnostic = findUninspectedPluginDiagnostic(
       ensureLoadedRegistryInfo().registry.diagnostics,

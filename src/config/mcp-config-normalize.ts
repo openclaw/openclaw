@@ -1,6 +1,10 @@
 // Normalizes MCP config records into canonical runtime shape.
-import { normalizeLowercaseStringOrEmpty as normalizeMcpString } from "@openclaw/normalization-core/string-coerce";
+import {
+  readNonBlankString,
+  normalizeLowercaseStringOrEmpty as normalizeMcpString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
 type OpenClawMcpHttpTransport = "sse" | "streamable-http";
 
@@ -10,6 +14,33 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   sse: "sse",
   stdio: "stdio",
 };
+
+/** Non-empty launch fields together would silently select stdio over HTTP. */
+export function hasMixedMcpServerTransports(server: Record<string, unknown>): boolean {
+  return Boolean(readNonBlankString(server.command) && readNonBlankString(server.url));
+}
+
+/** Strict writes reject ambiguity; runtime reads retain legacy behavior with a warning. */
+export function collectMcpTransportIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  return (
+    [
+      ["mcp.servers", config.mcp?.servers],
+      ["nodeHost.mcp.servers", config.nodeHost?.mcp?.servers],
+    ] as const
+  ).flatMap(([path, servers]) =>
+    Object.entries(servers ?? {}).flatMap(([name, server]) =>
+      hasMixedMcpServerTransports(server)
+        ? [
+            {
+              path: `${path}.${name}`,
+              message:
+                'MCP server cannot combine "command" and "url"; choose stdio or HTTP. Existing shared configs use stdio; run "openclaw doctor --fix" to remove ignored HTTP fields.',
+            },
+          ]
+        : [],
+    ),
+  );
+}
 
 /** Reads the canonical transport prepared by config migration or bundle ingestion. */
 export function resolveConfiguredMcpTransport(server: unknown): string | undefined {

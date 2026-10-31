@@ -6,6 +6,7 @@ import {
 import {
   canonicalizeConfiguredMcpServer,
   isKnownCliMcpTypeAlias,
+  hasMixedMcpServerTransports,
 } from "../../../config/mcp-config-normalize.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
@@ -14,14 +15,6 @@ const MCP_SERVER_TIMEOUT_ALIASES = [
   ["connect_timeout", "connectionTimeoutMs"],
   ["timeout", "requestTimeoutMs"],
 ] as const;
-
-function* mcpServerEntries(value: unknown): Generator<[string, Record<string, unknown>]> {
-  for (const [name, server] of Object.entries(getRecord(value) ?? {})) {
-    if (isRecord(server)) {
-      yield [name, server];
-    }
-  }
-}
 
 function mcpServerRules(
   message: string,
@@ -39,40 +32,43 @@ function mcpServerRules(
 }
 
 function hasMcpServerLegacyAliases(server: Record<string, unknown>): boolean {
-  const codex = isRecord(server.codex) ? server.codex : undefined;
+  const codex = getRecord(server.codex);
   return (
-    Object.hasOwn(server, "workingDirectory") ||
-    ["supports_parallel_tool_calls", "ssl_verify", "client_cert", "client_key"].some((key) =>
-      Object.hasOwn(server, key),
-    ) ||
+    [
+      "workingDirectory",
+      "supports_parallel_tool_calls",
+      "ssl_verify",
+      "client_cert",
+      "client_key",
+    ].some((key) => Object.hasOwn(server, key)) ||
     Boolean(codex && Object.hasOwn(codex, "default_tools_approval_mode"))
   );
 }
 
-function migrateMcpServerAliases(servers: unknown, pathPrefix: string, changes: string[]): void {
+function migrateMcpServers(servers: unknown, pathPrefix: string, changes: string[]): void {
   const records = getRecord(servers);
   if (!records) {
     return;
   }
-  for (const [serverName, value] of mcpServerEntries(records)) {
-    if (!hasMcpServerLegacyAliases(value) && !isKnownCliMcpTypeAlias(value.type)) {
+  for (const [serverName, entry] of Object.entries(records)) {
+    if (!isRecord(entry)) {
       continue;
     }
-    const normalized = canonicalizeConfiguredMcpServer(value);
-    if (JSON.stringify(normalized) === JSON.stringify(value)) {
-      continue;
+    let server = entry;
+    const disabled = server.disabled;
+    if (typeof disabled === "boolean") {
+      if (typeof server.enabled !== "boolean") {
+        server.enabled = !disabled;
+        changes.push(
+          `Moved ${pathPrefix}.${serverName}.disabled ${disabled} → enabled ${!disabled}.`,
+        );
+      } else {
+        changes.push(
+          `Removed ${pathPrefix}.${serverName}.disabled ${disabled} because enabled is already set to ${server.enabled}.`,
+        );
+      }
+      delete server.disabled;
     }
-    records[serverName] = normalized;
-    changes.push(`Canonicalized legacy aliases in ${pathPrefix}.${serverName}.`);
-  }
-}
-
-function migrateMcpServerTimeoutAliases(
-  servers: unknown,
-  pathPrefix: string,
-  changes: string[],
-): void {
-  for (const [serverName, server] of mcpServerEntries(servers)) {
     for (const [alias, canonical] of MCP_SERVER_TIMEOUT_ALIASES) {
       if (!Object.hasOwn(server, alias)) {
         continue;
@@ -97,30 +93,33 @@ function migrateMcpServerTimeoutAliases(
       }
       delete server[alias];
     }
-  }
-}
-
-function migrateMcpServerDisabledFlags(
-  servers: unknown,
-  pathPrefix: string,
-  changes: string[],
-): void {
-  for (const [serverName, rawServer] of mcpServerEntries(servers)) {
-    if (typeof rawServer.disabled !== "boolean") {
-      continue;
+    if (hasMcpServerLegacyAliases(server) || isKnownCliMcpTypeAlias(server.type)) {
+      server = canonicalizeConfiguredMcpServer(server);
+      records[serverName] = server;
+      changes.push(`Canonicalized legacy aliases in ${pathPrefix}.${serverName}.`);
     }
-    const disabled = rawServer.disabled;
-    if (typeof rawServer.enabled !== "boolean") {
-      rawServer.enabled = !disabled;
+    // Requester-scoped definitions must never become shared stdio execution,
+    // including malformed records whose auth field is missing.
+    if (
+      hasMixedMcpServerTransports(server) &&
+      getRecord(server.oauth)?.identity !== "per-requester"
+    ) {
+      for (const field of [
+        "url",
+        "headers",
+        "auth",
+        "oauth",
+        "sslVerify",
+        "clientCert",
+        "clientKey",
+      ]) {
+        delete server[field];
+      }
+      delete server.transport;
       changes.push(
-        `Moved ${pathPrefix}.${serverName}.disabled ${disabled} → enabled ${!disabled}.`,
-      );
-    } else {
-      changes.push(
-        `Removed ${pathPrefix}.${serverName}.disabled ${disabled} because enabled is already set to ${rawServer.enabled}.`,
+        `Preserved historical stdio behavior for ${pathPrefix}.${serverName} by removing ignored HTTP fields.`,
       );
     }
-    delete rawServer.disabled;
   }
 }
 
@@ -128,6 +127,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] =
   {
     id: "mcp.servers.canonicalize",
     legacyRules: [
+      ...mcpServerRules(
+        'entries combine "command" and "url". Run "openclaw doctor --fix" to preserve shared stdio behavior; for requester identity, choose HTTP-only access or a separate stdio server explicitly.',
+        hasMixedMcpServerTransports,
+      ),
       ...mcpServerRules(
         'entries use the unsupported "disabled" key; use "enabled" with the inverse boolean value. Run "openclaw doctor --fix" to migrate it.',
         (server) => typeof server.disabled === "boolean",
@@ -152,9 +155,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] =
         [mcp, "mcp.servers"],
         [nodeHostMcp, "nodeHost.mcp.servers"],
       ] as const) {
-        migrateMcpServerDisabledFlags(owner?.servers, path, changes);
-        migrateMcpServerTimeoutAliases(owner?.servers, path, changes);
-        migrateMcpServerAliases(owner?.servers, path, changes);
+        migrateMcpServers(owner?.servers, path, changes);
       }
     },
   },

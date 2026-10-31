@@ -6,6 +6,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { defaultRuntime } from "../runtime.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createConfigIO } from "./io.js";
 import * as metadata from "./io.plugin-metadata.js";
 import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import type { OpenClawConfig } from "./types.js";
@@ -99,6 +100,47 @@ const pluginConfig = (enabled: boolean, config?: Record<string, unknown>) => ({
 const issue = (path: string, details = {}) => ({
   valid: false,
   issues: [expect.objectContaining({ path, ...details })],
+});
+
+it.each(["mcp", "nodeHost"] as const)(
+  "rejects mixed %s MCP transports through the CLI",
+  async (owner) => {
+    const mcp = { servers: { docs: { command: "node", url: "https://example.com/mcp" } } };
+    const output = await runCli(owner === "mcp" ? { mcp } : { nodeHost: { mcp } });
+    expect(output).toMatchObject(
+      issue(`${owner === "mcp" ? "mcp" : "nodeHost.mcp"}.servers.docs`, {
+        message: expect.stringMatching(/command.*url/),
+      }),
+    );
+  },
+);
+
+it("warns while loading existing mixed config and rejects writes without changing the file", async () => {
+  await withOpenClawTestState({ prefix: "mixed-mcp-upgrade-" }, async (state) => {
+    await state.writeConfig({
+      mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
+    });
+    const raw = fs.readFileSync(state.configPath, "utf8");
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const io = createConfigIO({
+      env: state.env,
+      configPath: state.configPath,
+      observe: false,
+      pluginValidation: "core-only",
+      logger,
+    });
+    expect(io.loadConfig().mcp?.servers?.docs).toEqual({
+      command: "node",
+      url: "https://example.com/mcp",
+    });
+    expect(logger.warn.mock.calls.flat().join("\n")).toMatch(/mcp.servers.docs.*command.*url/s);
+    await expect(
+      io.writeConfigFile({
+        mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
+      }),
+    ).rejects.toThrow(/docs.*command.*url/s);
+    expect(fs.readFileSync(state.configPath, "utf8")).toBe(raw);
+  });
 });
 
 it.each([
