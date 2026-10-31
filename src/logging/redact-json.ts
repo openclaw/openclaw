@@ -454,13 +454,19 @@ export function redactJsonRecord(
             if (batch && tokens.length === 0) {
               tokens = readBatchTokens(input, origins, batch.preserveLines);
             }
-            for (
-              let index = firstIntersectingToken(tokens, capture.start);
-              index < tokens.length;
-              index += 1
-            ) {
+            const firstIndex = firstIntersectingToken(tokens, capture.start);
+            for (let index = firstIndex; index < tokens.length; index += 1) {
               const token = expectDefined(tokens[index], "serialized capture token");
               if (token.currentStart >= capture.end) {
+                break;
+              }
+              // A record scalar is a complete text on its own, so no assignment can
+              // span two of them: the `","` separating them belongs to the JSON, not
+              // to any URL or form body. A capture that reaches past the scalar it
+              // started in is therefore a scanning artifact, and masking what follows
+              // would rewrite an unrelated field -- including a key. Batch tokens are
+              // lines of one text, where a capture legitimately spans several.
+              if (!batch && index > firstIndex) {
                 break;
               }
               const unquoted = token.raw || token.deferEncoding;
