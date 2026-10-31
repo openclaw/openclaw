@@ -6,6 +6,8 @@ import { createDecisionRegistry } from "../../decisions/contract.test-support.js
 import { evaluateDecisionInRegistry } from "../../decisions/runtime.js";
 import { answer, batch, config, options } from "../../decisions/runtime.test-support.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
+import { runPluginRegisterSyncInRegistry } from "../../plugins/loader-module-runtime.js";
+import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -25,6 +27,7 @@ it.each([1, 2] as const)(
   "validates the actual inspection response with a decision provider: %s",
   async (contractVersion) => {
     let calls = 0;
+    const selectedReady = vi.fn(() => true);
     const builder = createDecisionRegistry(
       config,
       contractVersion === 2
@@ -39,6 +42,7 @@ it.each([1, 2] as const)(
         : {
             id: "fixture",
             contractVersion: 1,
+            isReady: selectedReady,
             async evaluate() {
               if (++calls > 1) {
                 return { status: "unavailable", reason: "transport" };
@@ -51,14 +55,40 @@ it.each([1, 2] as const)(
       registry,
       record: { id: pluginId },
     } = builder;
+    const selectedInspection = vi.spyOn(registry.decisionProviders[0]!.host, "inspect");
+    const unrelatedReady = vi.fn(() => true);
+    const unrelated = createPluginRecord({
+      id: "unrelated",
+      source: "/synthetic/unrelated.ts",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+      contracts: { decisionProviders: ["unrelated"] },
+    });
+    runPluginRegisterSyncInRegistry(
+      (api) =>
+        api.registerDecisionProvider({
+          id: "unrelated",
+          contractVersion: 1,
+          isReady: unrelatedReady,
+          evaluate: async () => answer,
+        }),
+      builder.createApi(unrelated, { config }),
+      registry,
+      unrelated.id,
+    );
+    registry.plugins.push(unrelated);
     onTestFinished(async () => {
-      await getPluginInstance(builder.record)?.dispose();
+      for (const record of registry.plugins) {
+        await getPluginInstance(record)?.dispose();
+      }
     });
     if (contractVersion === 1) {
       for (let index = 0; index < 2; index++) {
         await evaluateDecisionInRegistry(batch, options(), registry, config);
       }
     }
+    selectedReady.mockClear();
     const inspection = {
       ok: true,
       plugin: { id: pluginId, name: "Decision fixture", installed: true, enabled: true },
@@ -88,13 +118,16 @@ it.each([1, 2] as const)(
         },
       }),
     );
+    expect(selectedInspection).toHaveBeenCalledTimes(1);
+    expect(selectedReady).toHaveBeenCalledTimes(contractVersion === 1 ? 1 : 0);
+    expect(unrelatedReady).not.toHaveBeenCalled();
     expect(response).toMatchObject({
       decisions: [
         {
           providerId: "fixture",
           pluginId,
           configured: true,
-          ...(contractVersion === 1 ? { credentialReady: false } : {}),
+          ...(contractVersion === 1 ? { credentialReady: true } : {}),
           callable: true,
           successCount: contractVersion === 1 ? 1 : 0,
           activeRequests: 0,
