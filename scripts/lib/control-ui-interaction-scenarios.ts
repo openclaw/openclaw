@@ -1584,9 +1584,9 @@ async function prepareCron(page: Page) {
     await more.click();
     await page.waitForFunction((expected) => {
       const row = document.querySelector(".cron-table__row");
-      const count = row?.getAttribute("aria-setsize");
+      const size = row?.getAttribute("aria-setsize");
       return (
-        (count ? Number(count) : document.querySelectorAll(".cron-table__row").length) === expected
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === expected
       );
     }, count);
   }
