@@ -227,6 +227,19 @@ disabling or narrowing the job itself stops later requests and retries in the
 current invocation. A confirmed write still returns its result if authority ends
 while the response is pending.
 
+### Webhook delivery output
+
+A job with `delivery.mode: "webhook"` POSTs the finished run event to its URL.
+The event's `summary` keeps its 2,000-character cap for backward compatibility.
+Isolated and current-session agent-turn runs additionally include `outputText`
+with the run's full final agent text, untruncated, whenever that text is
+non-empty. Silent or empty runs omit the field entirely, and failed-run webhooks
+keep their existing text-free payload without `summary`, diagnostics, or
+`outputText`. `outputText` is a webhook-only projection: it is not persisted in
+run history, not returned by `openclaw automations runs`, and not announced to
+chat. Main-session and named-session (`session:<key>`) agent turns do not carry
+it yet; their settled turn result only retains the bounded summary.
+
 ### Inference account continuity
 
 New isolated agent-turn jobs privately retain their selected stored inference account

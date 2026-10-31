@@ -160,6 +160,12 @@ export type CronEvent = {
   completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
+  /**
+   * Full non-empty agent text output for the run, without the bounded `summary`
+   * truncation. Projected into primary webhook payloads only: persisted run
+   * history and service event fan-out intentionally keep the bounded summary.
+   */
+  outputText?: string;
   result?: AutomationResult;
   diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
@@ -263,6 +269,8 @@ export type CronJobExecutionResult = CronRunOutcome &
     scriptStateChanged?: boolean;
     scriptState?: unknown;
     triggerEval?: CronTriggerEvalOutcome;
+    /** Last non-empty agent text output (not truncated); forwarded to webhook events only. */
+    outputText?: string;
   };
 
 /** One run's requested delay before the same paced job or one-shot continuation runs again. */
