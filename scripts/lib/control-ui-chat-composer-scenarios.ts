@@ -72,7 +72,11 @@ export async function installChatActionObservation(page: Page) {
         data.removedRows += rows(record.removedNodes);
       }
     });
-    mutations.observe(document.querySelector(".chat-pane-cache") ?? document.body, {
+    const transcript = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
+    if (!transcript) {
+      throw new Error("Chat action observation requires the prepared transcript");
+    }
+    mutations.observe(transcript, {
       childList: true,
       subtree: true,
     });
