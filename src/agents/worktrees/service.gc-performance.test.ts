@@ -562,7 +562,7 @@ describe("worktree Git maintenance", () => {
       vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
         const result = await stat(...args);
         const name = String(args[0]);
-        if (paths.has(name.replace(/\.(pack|idx)$/, ""))) {
+        if (result && paths.has(name.replace(/\.(pack|idx)$/, ""))) {
           result.size = name.endsWith(".pack") ? packBytes : indexBytes;
         }
         return result;

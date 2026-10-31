@@ -473,7 +473,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         await report("throttled");
         continue;
       }
-      let stage: "objects" | "packs" | "maintenance" = "packs";
+      const state: { stage: "objects" | "packs" | "maintenance" } = { stage: "packs" };
       try {
         await withProjectCheckoutLifecycle(
           repoRoot,
@@ -489,7 +489,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             };
             // A busy checkout leaves its hourly slot available for the next sweep.
             nextRunAt.set(repoRoot, Date.now() + 60 * 60_000);
-            await report(stage);
+            await report(state.stage);
             // Snapshot failures describe graph availability, not pack integrity.
             // Verify bounded pack inputs before expiry; never gate them on full fsck.
             await maintainWorktreePacks(repoRoot, ownedParams, async (before, after) => {
@@ -497,7 +497,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
                 progress.result.packsRemoved =
                   (progress.result.packsRemoved ?? 0) + Math.max(0, before - after);
               }
-              await report(stage, { packsBefore: before, packsAfter: after });
+              await report(state.stage, { packsBefore: before, packsAfter: after });
             });
             const options = {
               operation,
@@ -511,8 +511,8 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             };
             let remote: string | undefined;
             if (params.retryDeferred) {
-              stage = "objects";
-              await report(stage);
+              state.stage = "objects";
+              await report(state.stage);
               const config = await runGit(
                 repoRoot,
                 ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
@@ -531,7 +531,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
                 params.signal,
               );
             }
-            stage = "maintenance";
+            state.stage = "maintenance";
             if (failed.has(repoRoot)) {
               progress.record(
                 "git-maintenance",
@@ -542,7 +542,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
               await report("suspended");
               return;
             }
-            await report(stage);
+            await report(state.stage);
             await withContentGitSlot(
               () =>
                 requireGit(
@@ -567,15 +567,15 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
           await report("throttled");
           continue;
         }
-        failed.set(repoRoot, stage);
+        failed.set(repoRoot, state.stage);
         progress.error("git-maintenance", error, repoRoot);
         await report("suspended");
         const recovery =
-          stage === "objects"
+          state.stage === "objects"
             ? "Check the promisor remote, then run openclaw worktrees gc --retry-deferred to resume object repair."
             : "Repair the repository, then run openclaw worktrees gc --retry-deferred or restart the Gateway to retry.";
         log.warn(
-          `worktree Git maintenance suspended (${stage}) for ${repoRoot}: ${String(error)}\n${recovery}`,
+          `worktree Git maintenance suspended (${state.stage}) for ${repoRoot}: ${String(error)}\n${recovery}`,
         );
       }
     }
