@@ -1,0 +1,2 @@
+52
+# Foreign provider transport origin regressions: destination refusal and same-origin/API-only cleanup.
