@@ -49,6 +49,11 @@ export function isDiagnosticsHeapSnapshotParams(
 ): value is import("typebox").Static<
   typeof import("../../schema/diagnostics-schemas.js").DiagnosticsHeapSnapshotParamsSchema
 >;
+export function isDiagnosticsPrepareParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/diagnostics-schemas.js").DiagnosticsPrepareParamsSchema
+>;
 export function isPluginsCredentialsInspectParams(
   value: unknown,
 ): value is import("typebox").Static<

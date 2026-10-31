@@ -71,6 +71,23 @@ and account. Removing the final attachment keeps new-session mode while
 instructions remain; clearing both files and instructions restores navigation.
 Reloading or leaving the app does not preserve this in-memory draft.
 
+## Diagnose a problem
+
+Open **Cmd/Ctrl+K** and choose **Diagnose a problem**. OpenClaw prepares a new
+conversation with the selected agent and attaches a sanitized diagnostic snapshot.
+Describe what happened and send the message when ready. Preparing the conversation
+does not start an agent turn, change configuration, or restart the Gateway.
+
+This action requires administrator access and an agent configured to run locally
+on the Gateway host. The conversation uses the installed OpenClaw directory and
+normal tool permissions. It does not redirect a sandbox or required remote worker
+onto the host. Existing conversations and drafts are kept.
+
+The attachment includes the installed version, read-only Doctor findings, and the
+same sanitized configuration and operational summaries used by diagnostic exports.
+Unavailable checks are labeled in the attachment. If the Gateway is offline, use
+[`openclaw triage`](/cli/triage) on its host instead.
+
 ## Automatic session names
 
 New Dashboard conversations receive a title from their opening task. Later messages

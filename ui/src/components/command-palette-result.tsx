@@ -107,6 +107,7 @@ function renderSnippet(text: string, query: string) {
 
 export function CommandPaletteResult(props: {
   item: CommandPaletteItem;
+  pending?: boolean;
   query: string;
   agent?: GatewayAgentRow;
   identity?: AgentIdentityResult | null;
@@ -132,7 +133,11 @@ export function CommandPaletteResult(props: {
           <span class="nav-item__icon" aria-hidden="true">
             <Show
               when={props.item.id === "panel-custodian"}
-              fallback={<Icon name={props.item.icon} />}
+              fallback={
+                <Show when={props.pending} fallback={<Icon name={props.item.icon} />}>
+                  <span class="session-run-spinner" aria-hidden="true" />
+                </Show>
+              }
             >
               <span class="lit-content" style={{ display: "contents" }}>
                 <ThemeBrandingIcon />

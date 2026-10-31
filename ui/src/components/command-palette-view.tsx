@@ -78,7 +78,11 @@ function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteI
 const paletteListboxId = "cmd-palette-listbox";
 
 function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
-  if (props.draft.submitting || props.searchDebouncing) {
+  if (props.draft.submitting || props.diagnostics.pending || props.searchDebouncing) {
+    return;
+  }
+  if (item.action === "diagnose") {
+    void props.diagnostics.start();
     return;
   }
   if (item.action.startsWith("nav:")) {
@@ -152,6 +156,10 @@ function handleKeydown(
     event.stopPropagation();
     return;
   }
+  if (props.diagnostics.pending && event.key !== "Escape") {
+    event.preventDefault();
+    return;
+  }
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
     event.preventDefault();
     event.stopPropagation();
@@ -215,6 +223,7 @@ function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: Command
       ? []
       : filterCommandPaletteItems({
           ...snapshot,
+          diagnosticsAvailable: snapshot.diagnostics.available,
           catalogItems: [
             ...getStaticCommandPaletteCatalogItems(
               snapshot.canAdmin,
@@ -391,7 +400,9 @@ function PaletteSearch(props: {
                       role="option"
                       aria-selected={active() ? "true" : "false"}
                       aria-disabled={
-                        current().draft.submitting || current().searchDebouncing
+                        current().draft.submitting ||
+                        current().diagnostics.pending ||
+                        current().searchDebouncing
                           ? "true"
                           : undefined
                       }
@@ -403,6 +414,7 @@ function PaletteSearch(props: {
                     >
                       <CommandPaletteResult
                         item={item()}
+                        pending={item().action === "diagnose" && current().diagnostics.pending}
                         query={current().searchQuery}
                         agent={agent()}
                         identity={current().agentIdentity?.get(agentId())}
@@ -462,7 +474,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const current = createMemo(() => props.readProps());
   const readCurrent = () => props.readProps();
   const drop = PaletteSessionDraft.createDropHandlers(() => readCurrent().draft);
-  const error = createMemo(() => current().draft.error);
+  const error = createMemo(() => current().diagnostics.error ?? current().draft.error);
   const saving = createSubmissionAction(
     () => readCurrent().draft,
     current,
@@ -544,8 +556,8 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             onCompositionStart={current().onCompositionStart}
             onCompositionEnd={current().onCompositionEnd}
             onPaste={(event) => readCurrent().draft.pasteImages(event)}
-            busy={current().draft.submitting}
-            readOnly={current().draft.messageLocked}
+            busy={current().draft.submitting || current().diagnostics.pending}
+            readOnly={current().draft.messageLocked || current().diagnostics.pending}
             controls={
               current().mentionMenu.open
                 ? mentionListboxId()
@@ -579,10 +591,14 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                     class="cmd-palette__create"
                     aria-label={t("palette.startSessionBackground")}
                     aria-busy={saving() || current().draft.submitting ? "true" : "false"}
-                    disabled={current().composing || !current().draft.canSubmit}
+                    disabled={
+                      current().composing ||
+                      current().diagnostics.pending ||
+                      !current().draft.canSubmit
+                    }
                     onClick={() => {
                       const snapshot = readCurrent();
-                      if (!snapshot.composing) {
+                      if (!snapshot.composing && !snapshot.diagnostics.pending) {
                         void snapshot.draft.submit();
                       }
                     }}

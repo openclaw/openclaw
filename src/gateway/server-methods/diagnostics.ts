@@ -3,7 +3,9 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   validateDiagnosticsHeapProfileParams,
   validateDiagnosticsHeapSnapshotParams,
+  validateDiagnosticsPrepareParams,
 } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { collectRuntimeCapabilities } from "../../infra/runtime-capabilities.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import type { DiagnosticProfileOutcome } from "../../logging/diagnostic-profile.js";
@@ -11,7 +13,9 @@ import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
+import { resolveSessionCreateAgentId } from "../session-request-agent.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
@@ -57,6 +61,74 @@ function profileHandler<P>(
 }
 
 export const diagnosticsHandlers: GatewayRequestHandlers = {
+  "diagnostics.prepare": async ({
+    params,
+    client,
+    signal,
+    context,
+    respond,
+    hasCurrentClientAuthority,
+  }) => {
+    const input = params === undefined ? {} : params;
+    if (!validateDiagnosticsPrepareParams(input)) {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "diagnostics.prepare accepts only an optional agentId",
+      );
+      return;
+    }
+    const config = context.getRuntimeConfig();
+    const selected = resolveSessionCreateAgentId(config, { agentId: input.agentId });
+    if (!selected.ok) {
+      respond(false, undefined, selected.error);
+      return;
+    }
+    const lifetime = AbortSignal.any(
+      [signal, client?.connectionSignal, context.requestEntryLifetime?.signal].filter(
+        (value): value is AbortSignal => value !== undefined,
+      ),
+    );
+    const current = () =>
+      !lifetime.aborted && !client?.invalidated && (hasCurrentClientAuthority?.() ?? true);
+    if (!current()) {
+      return;
+    }
+    try {
+      const { prepareDiagnosticSession } = await import("../diagnostic-session.js");
+      const prepared = await prepareDiagnosticSession({
+        config,
+        agentId: selected.agentId,
+        signal: lifetime,
+        assertCurrent: () => {
+          if (!current()) {
+            throw new Error("Diagnostic preparation was cancelled.");
+          }
+        },
+        readHealthSnapshot: () => {
+          const health = context.getHealthCache();
+          if (!health) {
+            throw new Error("Gateway health snapshot is not available yet.");
+          }
+          return health;
+        },
+      });
+      if (current()) {
+        respond(true, prepared, undefined);
+      }
+    } catch (error) {
+      if (current()) {
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          redactSupportString(
+            error instanceof Error ? error.message : "Could not prepare diagnostics. Try again.",
+            { env: process.env, stateDir: resolveStateDir() },
+          ),
+        );
+      }
+    }
+  },
   "diagnostics.capabilities": ({ params, respond }) => {
     if (params !== undefined && (!isRecord(params) || Object.keys(params).length !== 0)) {
       respondError(

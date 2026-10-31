@@ -29,6 +29,7 @@ import {
   type CommandPaletteOpenInput,
   type CommandPaletteInputHandoff,
 } from "./command-palette-contract.ts";
+import { CommandPaletteDiagnostics } from "./command-palette-diagnostics.ts";
 import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
@@ -73,6 +74,7 @@ export class CommandPaletteState {
     this.publish();
   };
   open = false;
+  private readonly diagnostics: CommandPaletteDiagnostics;
   private pluginIconUrls: Record<string, string> = {};
   private readonly pluginIconTiles = new Set<() => string>();
   private readonly pluginIcons = new PluginIconOwner({
@@ -162,6 +164,12 @@ export class CommandPaletteState {
     private readonly onDraftInitialized: () => void,
     private readonly publish: () => void,
   ) {
+    this.diagnostics = new CommandPaletteDiagnostics(
+      this.context,
+      () => this.open && !this.draft.submitting,
+      this.changed,
+      () => this.closePalette(),
+    );
     this.draft = new PaletteSessionDraft(
       element,
       () => ({ context: this.context, open: this.open }),
@@ -188,6 +196,7 @@ export class CommandPaletteState {
     this.gateway = new GatewayPageBinding(this.changed, {
       getGateway: () => this.context?.gateway,
       invalidateRequests: (change) => {
+        this.diagnostics.cancel();
         this.invalidateSessionSearch();
         this.sessionSearchRead = undefined;
         this.catalogLoad = undefined;
@@ -242,6 +251,7 @@ export class CommandPaletteState {
   }
 
   disconnect() {
+    this.diagnostics.cancel();
     this.connected = false;
     this.initialInput = undefined;
     this.stopInputFocus?.();
@@ -252,7 +262,6 @@ export class CommandPaletteState {
     this.mentionMenu.dispose();
     this.composing = false;
     this.mentionInput = undefined;
-    this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
     this.draft.disconnect();
@@ -319,6 +328,7 @@ export class CommandPaletteState {
   };
 
   private closePalette() {
+    this.diagnostics.cancel();
     this.mentionMenu.close();
     this.composing = false;
     this.mentionInput = undefined;
@@ -634,7 +644,6 @@ export class CommandPaletteState {
   }
 
   readProps() {
-    const models = this.settledModels;
     return {
       ...this.props,
       basePath: this.context?.basePath ?? "",
@@ -692,7 +701,9 @@ export class CommandPaletteState {
         !this.gateway.connected && Boolean(normalizeOptionalString(this.searchQuery)),
       modelSearchError:
         this.gateway.connected && this.modelReader.failed ? t("palette.modelSearchFailed") : null,
-      primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
+      primaryModelSearch:
+        this.settledModels.hasSnapshot && !this.settledModels.modelSelectionPolicy?.restricted,
+      diagnostics: this.diagnostics,
       canAdmin: hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
       nativeDeviceSettings: this.context?.nativeDeviceSettings ?? null,
       catalogItems: this.catalogItems,

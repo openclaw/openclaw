@@ -425,27 +425,12 @@ function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
   return summary;
 }
 
-export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
+export async function collectDiagnosticSupportExport(
+  options: Omit<DiagnosticSupportExportOptions, "outputPath">,
+) {
   const env = process.env;
   const stateDir = resolveStateDir(env);
   const now = new Date();
-  const configuredOutputPath = options.outputPath;
-  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
-  const raw = readNonBlankString(configuredOutputPath);
-  let outputPath: string;
-  if (!raw) {
-    outputPath = path.join(stateDir, "logs", "support", filename);
-  } else {
-    const resolved = raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
-    outputPath = resolved;
-    try {
-      if (fs.statSync(resolved).isDirectory()) {
-        outputPath = path.join(resolved, filename);
-      }
-    } catch {
-      // Non-existing output paths are treated as files.
-    }
-  }
   const generatedAt = now.toISOString();
   const configPath = resolveConfigPath(env, stateDir);
   const stability = readStabilityBundle(options.stabilityBundle, stateDir);
@@ -639,10 +624,31 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     },
   };
 
-  const published = await writeSupportBundleZip({
-    outputPath,
-    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
-  });
+  return { files: [jsonSupportBundleFile("manifest.json", manifest), ...files], manifest };
+}
+
+export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
+  const stateDir = resolveStateDir(process.env);
+  const now = new Date();
+  const configuredOutputPath = options.outputPath;
+  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
+  const raw = readNonBlankString(configuredOutputPath);
+  let outputPath: string;
+  if (!raw) {
+    outputPath = path.join(stateDir, "logs", "support", filename);
+  } else {
+    const resolved = raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
+    outputPath = resolved;
+    try {
+      if (fs.statSync(resolved).isDirectory()) {
+        outputPath = path.join(resolved, filename);
+      }
+    } catch {
+      // Non-existing output paths are treated as files.
+    }
+  }
+  const { files, manifest } = await collectDiagnosticSupportExport(options);
+  const published = await writeSupportBundleZip({ outputPath, files });
   return {
     path: published.path,
     bytes: published.bytes,

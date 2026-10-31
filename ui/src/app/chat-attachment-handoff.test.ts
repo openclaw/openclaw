@@ -66,7 +66,7 @@ type Prepare = Parameters<Handoff["prepare"]>[0];
 function prepare(
   handoff: Handoff,
   owner: Prepare["owner"],
-  paneId: string,
+  paneId: string | null,
   scopeKey: string,
   attachments: ChatAttachment[],
   options: Partial<Omit<Prepare, "owner" | "paneId" | "scopeKey" | "attachments">> = {},
@@ -342,4 +342,33 @@ it("releases a late prepare after application disposal instead of restaging it",
 
   expect(getChatAttachmentDataUrl(annotation)).toBeNull();
   expect(consume(handoff, {} as GatewayBrowserClient, "p1", "agent:main:one")).toBeNull();
+});
+
+it("delivers new-session input once to its matching pane without moving another pane's draft", () => {
+  const fixture = createApplicationGateway();
+  const owner = { recoveryScope: "owner", recoveryScopeReady: true } as GatewayBrowserClient;
+  fixture.publish({ ...fixture.gateway.snapshot, phase: "connected", client: owner });
+  const handoff = handoffFor(fixture.gateway);
+  const attachment = storedAttachment("diagnostic", "text/plain");
+  const ordinary = storedAttachment("ordinary", "text/plain");
+  prepare(handoff, owner, null, "new-session", [attachment]);
+  prepare(handoff, owner, "p1", "other-session", [ordinary]);
+  expect(consume(handoff, owner, "p7", "other-session")).toBeNull();
+  handoff.clearPane("p1");
+  expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+  expect(consume(handoff, owner, "p7", "new-session")?.attachments).toEqual([attachment]);
+  expect(consume(handoff, owner, "p8", "new-session")).toBeNull();
+});
+
+it("releases unclaimed new-session input when the Gateway identity changes", () => {
+  const fixture = createApplicationGateway();
+  const owner = { recoveryScope: "owner", recoveryScopeReady: true } as GatewayBrowserClient;
+  fixture.publish({ ...fixture.gateway.snapshot, phase: "connected", client: owner });
+  const handoff = handoffFor(fixture.gateway);
+  const attachment = storedAttachment("unclaimed-diagnostic", "text/plain");
+  prepare(handoff, owner, null, "new-session", [attachment]);
+  Object.assign(fixture.gateway, { connectionRevision: fixture.gateway.connectionRevision + 1 });
+  fixture.publish({ ...fixture.gateway.snapshot });
+  expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  expect(consume(handoff, owner, "p7", "new-session")).toBeNull();
 });

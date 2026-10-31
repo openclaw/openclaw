@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayRequestEntryLifetime } from "../server-request-entry.js";
@@ -11,7 +12,9 @@ export function profileRequest(
       | "diagnostics.cpuProfile"
       | "diagnostics.heapProfile"
       | "diagnostics.heapSnapshot"
-      | "diagnostics.capabilities";
+      | "diagnostics.capabilities"
+      | "diagnostics.prepare";
+    config?: OpenClawConfig;
     scopes?: string[];
     role?: string;
     params?: unknown;
@@ -37,7 +40,8 @@ export function profileRequest(
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
     context: {
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => options.config ?? {},
+      getHealthCache: () => null,
       logGateway: { warn: vi.fn() },
       requestEntryLifetime: options.gateway,
     } as unknown as GatewayRequestOptions["context"],

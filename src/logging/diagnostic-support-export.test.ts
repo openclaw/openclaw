@@ -13,7 +13,10 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
-import { writeDiagnosticSupportExport } from "./diagnostic-support-export.js";
+import {
+  collectDiagnosticSupportExport,
+  writeDiagnosticSupportExport,
+} from "./diagnostic-support-export.js";
 import * as logTailModule from "./log-tail.js";
 import type { LogTailPayload } from "./log-tail.js";
 
@@ -74,7 +77,7 @@ describe("diagnostic support export", () => {
     vi.useRealTimers();
   });
 
-  it("includes separate redacted capabilities for the exporter and serving Gateway", async () => {
+  it("collects redacted exporter and Gateway capabilities without writing an archive", async () => {
     vi.stubGlobal("__openclawStandaloneBuildInfo", {
       mode: "aot",
       openclaw: { version: "2026.10.3", commit: "a".repeat(40) },
@@ -82,13 +85,15 @@ describe("diagnostic support export", () => {
       plugins: { embedded: ["synthetic-private@example.invalid"], omitted: [] },
     });
     try {
-      const entries = await exportEntries({
+      const { files } = await collectDiagnosticSupportExport({
         readGatewayCapabilities: async () => ({
           process: { kind: "bun", flavor: "jit" },
           source: "synthetic-private@example.invalid",
           token: "synthetic-secret-value",
         }),
       });
+      const entries = Object.fromEntries(files.map((file) => [file.path, file.content]));
+      expect(fs.readdirSync(tempDir)).toEqual([]);
       expect(readJsonEntry(entries, "runtime/capabilities.json")).toMatchObject({
         data: { process: { flavor: "aot" }, build: { openclaw: { commit: "a".repeat(40) } } },
       });

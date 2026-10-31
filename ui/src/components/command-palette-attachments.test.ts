@@ -4,13 +4,16 @@ import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { ShellCommandPaletteOwner } from "../app/app-shell-command-palette-loading.ts";
+import { createChatAttachmentHandoff } from "../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store-scope.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
+  findPaletteOption,
   openPalette,
   prepareDraftContext,
   mountPalette,
@@ -385,5 +388,92 @@ it("keeps mobile attachment Return native and starts only from its button", asyn
       message: "A mobile prompt",
       attachments: [expect.objectContaining(imageFields)],
     }),
+  );
+});
+
+describe("diagnostic conversation", () => {
+  const prepared = {
+    agentId: "main",
+    cwd: "/installation",
+    context: "Sanitized diagnostic context",
+  };
+
+  it("opens an empty conversation with a reviewable attachment while preserving launcher input", async () => {
+    const { context, palette, input, create } = await mount({
+      scopes: ["operator.admin"],
+      methods: ["sessions.create", "diagnostics.prepare"],
+      request: async () => prepared,
+    });
+    const handoff = createChatAttachmentHandoff(context.gateway);
+    Object.assign(context, { chatAttachmentHandoff: handoff });
+    onTestFinished(() => handoff.dispose());
+    setInputValue(input, "diagnose");
+    await palette.updateComplete;
+    pressKey(input, "Enter", { cancelable: true });
+    await vi.waitFor(() => expect(readers).toHaveLength(1));
+    expect(create).not.toHaveBeenCalled();
+    expect(input.value).toBe("diagnose");
+    finishRead(0, "data:text/plain;base64,U2FuaXRpemVkIGRpYWdub3N0aWMgY29udGV4dA==");
+    await vi.waitFor(() => expect(palette.isOpen).toBe(false));
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      { agentId: "main", cwd: "/installation", displayName: "Diagnose a problem" },
+      { signal: expect.any(AbortSignal), reconciliation: "background" },
+    );
+    expect(context.navigate).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        search: expect.stringContaining("__openclawComposerFocus=1"),
+      }),
+    );
+    const restored = handoff.consume({
+      owner: context.gateway.snapshot.client,
+      paneId: "surviving-pane",
+      scopeKey: storedChatOutboxScopeKey({
+        sessionKey: "agent:main:dashboard:image-task",
+        agentId: "main",
+      }),
+    });
+    expect(restored?.message).toBeUndefined();
+    expect(restored?.attachments).toHaveLength(1);
+    expect(restored?.attachments[0]).toMatchObject({
+      fileName: "openclaw-diagnostics.txt",
+      mimeType: "text/plain",
+    });
+    expect(payloads.getChatAttachmentDataUrl(restored!.attachments[0]!)).toContain("U2FuaXRpemVk");
+    payloads.releaseChatAttachmentPayloads(restored!.attachments);
+  });
+
+  it.each(["dismiss", "connection replacement", "failure"] as const)(
+    "keeps the current conversation when diagnostic preparation ends with %s",
+    async (outcome) => {
+      const preparation = createDeferred<typeof prepared>();
+      const { context, palette, input, create, publish, query } = await mount({
+        scopes: ["operator.admin"],
+        methods: ["sessions.create", "diagnostics.prepare"],
+        request: async (method) => (method === "diagnostics.prepare" ? preparation.promise : {}),
+      });
+      findPaletteOption(palette, "Diagnose a problem")!.click();
+      await palette.updateComplete;
+      expect(query(".session-run-spinner")).not.toBeNull();
+      if (outcome === "dismiss") {
+        pressKey(input, "Escape");
+      } else if (outcome === "connection replacement") {
+        Object.assign(context.gateway, { connectionRevision: 2 });
+        publish();
+        await palette.updateComplete;
+      }
+      if (outcome === "failure") {
+        preparation.reject(new Error("Choose an agent that runs on this Gateway."));
+        await vi.waitFor(() =>
+          expect(query('[role="alert"]')?.textContent).toContain("Choose an agent"),
+        );
+      } else {
+        preparation.resolve(prepared);
+        await palette.updateComplete;
+      }
+      expect(create).not.toHaveBeenCalled();
+      expect(context.navigate).not.toHaveBeenCalled();
+      expect(readers).toHaveLength(0);
+    },
   );
 });

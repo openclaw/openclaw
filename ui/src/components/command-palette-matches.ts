@@ -42,6 +42,7 @@ export function createCommandPaletteMatches(
         catalogItems(),
         snapshot.desktopAvailable,
         snapshot.custodianAvailable,
+        snapshot.diagnostics.available,
         snapshot.primaryModelSearch,
         snapshot.promptMode || snapshot.mentionMenu.open || snapshot.draft.mentions.length > 0,
       ] as const;
@@ -56,6 +57,7 @@ export function createCommandPaletteMatches(
       preparedCatalog,
       desktopAvailable,
       custodianAvailable,
+      diagnosticsAvailable,
       primaryModelSearch,
       hidden,
     ] = matchInputs();
@@ -68,6 +70,7 @@ export function createCommandPaletteMatches(
           catalogItems: preparedCatalog,
           desktopAvailable,
           custodianAvailable,
+          diagnosticsAvailable,
           primaryModelSearch,
         });
   });

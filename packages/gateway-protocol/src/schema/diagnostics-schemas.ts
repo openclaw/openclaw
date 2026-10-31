@@ -15,3 +15,7 @@ export const DiagnosticsHeapProfileParamsSchema = closedObject({
 export const DiagnosticsHeapSnapshotParamsSchema = closedObject({
   reason: Type.Optional(Type.String({ maxLength: 256 })),
 });
+
+export const DiagnosticsPrepareParamsSchema = closedObject({
+  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+});

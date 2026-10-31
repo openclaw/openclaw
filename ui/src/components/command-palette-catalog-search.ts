@@ -100,9 +100,21 @@ function navigationItem(
 function getCommandPaletteBaseItems(
   desktopAvailable: boolean,
   custodianAvailable: boolean,
+  diagnosticsAvailable: boolean,
 ): CommandPaletteItem[] {
   return [
     navigationItem("new-session", t("newSession.title"), "plus"),
+    ...(diagnosticsAvailable
+      ? [
+          {
+            id: "diagnose",
+            label: t("palette.items.diagnose"),
+            icon: "activity" as const,
+            category: "navigation" as const,
+            action: "diagnose",
+          },
+        ]
+      : []),
     navigationItem("sessions", t("palette.items.sessions"), "fileText"),
     navigationItem("meetings", t("tabs.meetings"), "book", {
       description: t("subtitles.meetings"),
@@ -150,10 +162,12 @@ export function filterCommandPaletteItems(params: {
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   primaryModelSearch?: boolean;
+  diagnosticsAvailable?: boolean;
 }): CommandPaletteItem[] {
   const baseItems = getCommandPaletteBaseItems(
     params.desktopAvailable,
     params.custodianAvailable,
+    params.diagnosticsAvailable === true,
   ).filter((item) => params.includeSlashCommands || item.category !== "search");
   if (!params.query) {
     return baseItems;

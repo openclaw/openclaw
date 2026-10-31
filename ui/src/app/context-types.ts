@@ -92,7 +92,9 @@ type ChatAttachmentHandoffKey = {
 
 export type ApplicationChatAttachmentHandoff = {
   prepare(
-    handoff: ChatAttachmentHandoffKey & {
+    handoff: Omit<ChatAttachmentHandoffKey, "paneId"> & {
+      /** A new session can hand its input to the first matching pane that mounts. */
+      paneId: string | null;
       attachments: readonly ChatAttachment[];
       fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
       message?: string;

@@ -16,7 +16,7 @@ type PendingChatAttachmentHandoff = NonNullable<
   ReturnType<ApplicationChatAttachmentHandoff["consume"]>
 > & {
   owner: NonNullable<Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0]["owner"]>;
-  paneId: string;
+  paneId: string | null;
   scopeKey: string;
   message: string;
   preparedAt: number;
@@ -73,7 +73,7 @@ export function createChatAttachmentHandoff(
       handoffAttachments(handoff).filter((attachment) => !retainedIds.has(attachment.id)),
     );
   };
-  const entryKey = (paneId: string, scopeKey: string) => JSON.stringify([paneId, scopeKey]);
+  const entryKey = (paneId: string | null, scopeKey: string) => JSON.stringify([paneId, scopeKey]);
   const take = (key: string) => {
     const handoff = pending.get(key);
     if (handoff) {
@@ -100,12 +100,12 @@ export function createChatAttachmentHandoff(
     new Set([...pending.values()].flatMap(handoffAttachments).map((item) => item.id));
   const retirePrivateOwners = () => {
     for (const [key, entry] of pending) {
-      if (privateDraft(entry) && !entry.isConnectionCurrent()) {
+      if ((entry.paneId === null || privateDraft(entry)) && !entry.isConnectionCurrent()) {
         releaseHandoff(take(key), retainedPayloadIds());
       }
     }
   };
-  // Retire private draft leases on connection changes, even while their panes are unmounted.
+  // Retire private and unclaimed new-session input on connection replacement.
   const stopGateway = gateway.subscribe(retirePrivateOwners);
   const privateEntry = () => {
     retirePrivateOwners();
@@ -263,7 +263,8 @@ export function createChatAttachmentHandoff(
       }
     },
     consume: ({ owner, paneId, scopeKey }) => {
-      const match = take(entryKey(paneId, scopeKey));
+      // Only newly created sessions opt into the unbound slot; ordinary pane drafts stay exact.
+      const match = take(entryKey(paneId, scopeKey)) ?? take(entryKey(null, scopeKey));
       // A Gateway mismatch is terminal for this exact presentation. Other
       // retained session scopes under the same logical pane remain independent.
       if (match?.owner === owner && match.isConnectionCurrent()) {
