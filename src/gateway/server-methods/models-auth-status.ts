@@ -494,6 +494,14 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             if (logoutProfileIds.has(prof.profileId)) {
               profile.logoutSupported = true;
             }
+            if (
+              prof.type === "oauth" &&
+              store.runtimeLocalProfileIds !== undefined &&
+              localProfileIds.has(prof.profileId) &&
+              !externalProfileIds.has(prof.profileId)
+            ) {
+              profile.reconnectSupported = true;
+            }
             return profile;
           }),
           ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),

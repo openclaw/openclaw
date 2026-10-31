@@ -19,7 +19,12 @@ import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
-import { buildLoginProviders, resolveLoginSelection } from "./login-providers.ts";
+import {
+  buildLoginProviders,
+  resolveLoginSelection,
+  resolveReconnectChoice,
+  type LoginChoice,
+} from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
 import "../../styles/model-providers.css";
 registerEnglishCatalog(registerSettingsEnglish);
@@ -200,6 +205,20 @@ export function createModelProviderLogin(options: {
     return open(undefined, {
       allowSetup: !models.some((model) => model.available !== false),
     });
+  }
+
+  function start(selected: LoginChoice, allowSetup = false): void {
+    if (!options.canStart() || selected.kind === "setup-secret") {
+      return;
+    }
+    authProviderId = canonicalModelAuthProviderId(selected.authProvider);
+    currentPicker = null;
+    const selectingModel = allowSetup && selected.requiresSetup;
+    loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
+    refreshWarning = null;
+    runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
+    const activation: { selectModel?: true } = selectingModel ? { selectModel: true } : {};
+    void run(() => runner.start(selected.id, "models.authLogin", activation));
   }
 
   async function open(
@@ -423,19 +442,7 @@ export function createModelProviderLogin(options: {
           options.onManualProvider?.(selected.id);
           return;
         }
-        authProviderId = canonicalModelAuthProviderId(selected.authProvider);
-        currentPicker = null;
-        const selectingModel = picker.allowSetup && selected.requiresSetup;
-        loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
-        refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
-        void run(() =>
-          runner.start(
-            selected.id,
-            "models.authLogin",
-            selectingModel ? { selectModel: true } : {},
-          ),
-        );
+        start(selected, picker.allowSetup);
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
@@ -670,6 +677,14 @@ export function createModelProviderLogin(options: {
         onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
         canConnect: (card: ModelProviderCard) =>
           loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
+        canReconnect: (id: string) => resolveReconnectChoice(loginProviders([id])) !== undefined,
+        reconnectDisabled: !options.canStart() || busy(),
+        onReconnect: (provider: string) => {
+          const choice = resolveReconnectChoice(loginProviders([provider]));
+          if (choice && !busy()) {
+            start(choice);
+          }
+        },
       };
     },
     get pageActions() {

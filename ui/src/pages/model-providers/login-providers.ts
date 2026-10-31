@@ -13,7 +13,7 @@ import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 
 registerModelSetupEnglish();
 
-type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
+export type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
   authProvider: string;
 };
@@ -138,4 +138,11 @@ export function resolveLoginSelection(
     modelRef,
     missing: { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider },
   };
+}
+
+export function resolveReconnectChoice(groups: LoginProvider[]) {
+  const choices = groups
+    .flatMap((group) => group.choices)
+    .filter((choice) => choice.kind === "oauth" || choice.kind === "device-code");
+  return choices.length === 1 ? choices[0] : undefined;
 }

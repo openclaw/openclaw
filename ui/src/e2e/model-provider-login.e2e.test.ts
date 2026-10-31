@@ -3,7 +3,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -32,10 +35,11 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
     return;
   }
   const page = content.page();
-  await writeFile(
-    path.join(suite.artifactDir, fileName),
-    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
-  );
+  const frame = await takeControlUiScreenshotFrame(page, content, [content], {
+    animations: "disabled",
+    scrollTo: content,
+  });
+  await writeFile(path.join(suite.artifactDir, fileName), frame.png);
 }
 
 suite.define(() => {
@@ -341,7 +345,7 @@ suite.define(() => {
           answer: { stepId: "browser-note" },
         });
         const dialog = page.locator("openclaw-modal-dialog");
-        await captureProviderProof("login-browser-callback-pending.png", dialog);
+        await captureProviderProof("login-browser-callback-pending.png", dialog.locator("dialog"));
         const openSignIn = dialog.getByRole("link", { name: "Reopen browser tab", exact: true });
         await openSignIn.waitFor();
         expect(await openSignIn.getAttribute("href")).toBe("https://provider.example/sign-in");
@@ -374,13 +378,156 @@ suite.define(() => {
         await gateway.resolveDeferred("wizard.next", { done: true, status: "done" });
         const saved = page.getByRole("status").filter({ hasText: "Provider credentials saved." });
         await saved.waitFor();
-        await captureProviderProof("login-browser-callback-completed.png", dialog);
+        await captureProviderProof(
+          "login-browser-callback-completed.png",
+          dialog.locator("dialog"),
+        );
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
         await page.locator('[data-provider-id="example"]').waitFor();
       },
     );
   });
+
+  it("reconnects an expired xAI OAuth profile without opening the login picker", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+        ...(recordVisuals
+          ? { recordVideo: { dir: suite.artifactDir, size: { height: 1000, width: 1440 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const now = Date.now();
+        const config = { agents: { defaults: { model: "xai/grok-4" } } };
+        const providerCapabilities = [
+          {
+            provider: "xai",
+            apiKeySupported: true,
+            quickApiKeySetup: true,
+            loginOptions: [
+              {
+                id: "xai/xai-api-key",
+                brandId: "xai",
+                label: "xAI API key",
+                kind: "secret",
+                featured: false,
+              },
+              {
+                id: "xai/xai-oauth",
+                brandId: "xai",
+                label: "xAI OAuth",
+                kind: "device-code",
+                featured: true,
+              },
+            ],
+          },
+        ];
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
+          models: [{ id: "grok-4", name: "Grok 4", provider: "xai", available: true }],
+          methodResponses: {
+            "config.get": {
+              config,
+              sourceConfig: config,
+              hash: "xai-reconnect",
+              issues: [],
+              raw: JSON.stringify(config),
+              valid: true,
+            },
+            "models.authStatus": {
+              ts: now,
+              providerCapabilities,
+              providers: [
+                {
+                  provider: "xai",
+                  displayName: "xAI",
+                  status: "expired",
+                  profiles: [
+                    {
+                      profileId: "xai:expired",
+                      email: "expired@example.invalid",
+                      type: "oauth",
+                      status: "expired",
+                      logoutSupported: true,
+                      reconnectSupported: true,
+                    },
+                  ],
+                },
+              ],
+            },
+            "models.authLogin": { done: false, status: "running" },
+            "wizard.next": {
+              done: false,
+              status: "running",
+              step: {
+                id: "device",
+                type: "action",
+                title: "xAI OAuth",
+                message: "Authorize this synthetic account in your browser.",
+                externalUrl: "https://example.invalid/xai",
+                deviceCode: { code: "XAI-TEST" },
+              },
+            },
+            "usage.status": { updatedAt: now, providers: [] },
+            "sessions.usage": { aggregates: { byProvider: [] } },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        const provider = await expandProvider(page, "xai");
+        await provider.getByText("expired@example.invalid", { exact: true }).waitFor();
+        await provider.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
+        await captureProviderProof("xai-reconnect-expired.png", provider);
+
+        await provider.getByRole("button", { name: "Reconnect", exact: true }).click();
+        const login = await gateway.waitForRequest("models.authLogin");
+        expect(login.params).toEqual({
+          sessionId: expect.any(String),
+          authChoice: "xai/xai-oauth",
+          agentId: "main",
+        });
+        expect(await page.locator("[data-models-login-choice]").count()).toBe(0);
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByText("XAI-TEST", { exact: true }).waitFor();
+        await captureProviderProof("xai-reconnect-device-code.png", dialog.locator("dialog"));
+
+        await gateway.setMethodResponse("models.authStatus", {
+          ts: now,
+          providerCapabilities,
+          providers: [
+            {
+              provider: "xai",
+              displayName: "xAI",
+              status: "ok",
+              profiles: [
+                {
+                  profileId: "xai:restored",
+                  email: "restored@example.invalid",
+                  type: "oauth",
+                  status: "ok",
+                },
+              ],
+            },
+          ],
+        });
+        await gateway.setMethodResponse("wizard.next", { done: true, status: "done" });
+        await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+        await dialog.getByText("xAI OAuth is connected", { exact: true }).waitFor();
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+        await dialog.waitFor({ state: "detached" });
+        const restoredProvider = await expandProvider(page, "xai");
+        await restoredProvider.getByText("restored@example.invalid", { exact: true }).waitFor();
+        expect(
+          await restoredProvider.getByRole("button", { name: "Reconnect", exact: true }).count(),
+        ).toBe(0);
+        await captureProviderProof("xai-reconnect-restored.png", restoredProvider);
+      },
+    );
+  });
+
   it.each([
     { value: "keep", label: "Keep current restrictions", native: false },
     { value: "all", label: "Show all Example models", native: true },
@@ -522,7 +669,10 @@ suite.define(() => {
         sessionId: loginParams.sessionId,
         answer: { stepId: "device" },
       });
-      await captureProviderProof(`login-model-access-${modelAccess.value}.png`, dialog);
+      await captureProviderProof(
+        `login-model-access-${modelAccess.value}.png`,
+        dialog.locator("dialog"),
+      );
       await gateway.setMethodResponse("wizard.next", {
         done: true,
         status: "done",
@@ -549,7 +699,10 @@ suite.define(() => {
           : "Provider credentials saved.",
       });
       await saved.waitFor();
-      await captureProviderProof(`login-after-saved-${modelAccess.value}.png`, dialog);
+      await captureProviderProof(
+        `login-after-saved-${modelAccess.value}.png`,
+        dialog.locator("dialog"),
+      );
       await dialog.getByRole("button", { name: "Close", exact: true }).click();
       const example = await expandProvider(page, "example");
       await example.getByText("signed-in@example.invalid", { exact: true }).waitFor();

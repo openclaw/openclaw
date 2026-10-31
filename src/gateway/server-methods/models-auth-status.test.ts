@@ -490,6 +490,48 @@ describe("models.authStatus", () => {
     expect(provider?.profiles[0]?.logoutSupported).toBeUndefined();
   });
 
+  it.each([
+    { name: "local", local: ["openai:default"], external: [], supported: true },
+    { name: "inherited", local: [], external: [], supported: false },
+    { name: "external", local: [], external: ["openai:default"], supported: false },
+    {
+      name: "external even with a local overlap",
+      local: ["openai:default"],
+      external: ["openai:default"],
+      supported: false,
+    },
+    { name: "unknown ownership", local: undefined, external: [], supported: false },
+  ])("projects reconnect ownership for a config-bound $name OAuth profile", async (fixture) => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.invalid/v1",
+            apiKey: "openai:default",
+            models: [],
+          },
+        },
+      },
+    });
+    setPreparedAuthStore({
+      version: 1,
+      profiles: { "openai:default": oauthCredential("openai") },
+      runtimeLocalProfileIds: fixture.local,
+      runtimeExternalProfileIds: fixture.external,
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+    const provider = await firstAuthStatusProvider();
+    const profile = provider?.profiles[0];
+    expect(profile?.source).toBe("config");
+    if (fixture.supported) {
+      expect(profile).toHaveProperty("reconnectSupported", true);
+    } else {
+      expect(profile).not.toHaveProperty("reconnectSupported");
+    }
+    // Reconnect eligibility must not change existing sign-out semantics.
+    expect(profile?.logoutSupported).toBe(fixture.external.length ? undefined : true);
+  });
+
   it("locks alias priority to the configured credential", async () => {
     const boundProfileId = "minimax:cn";
     const config = {
