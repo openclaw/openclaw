@@ -532,9 +532,10 @@ conversation after a Gateway restart, the page shows **Session not found** with
 actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
 
-Offline cache downloads yield while conversation history loads, including during
-the service worker's first installation. Interrupted downloads retain completed
-assets and resume after the conversation's network requests settle.
+Offline cache downloads yield while conversations, routes, and plugin interfaces
+load, including during the service worker's first installation. Downloads run in
+bounded batches at low priority. Interrupted downloads retain completed assets
+and resume after foreground imports and Gateway requests settle.
 
 When reconnecting to the same Gateway and account, the existing conversation
 history requests changes since its last cursor. The sidebar refresh runs alongside

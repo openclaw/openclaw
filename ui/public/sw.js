@@ -36,7 +36,7 @@ function isControlUiChatClient(url) {
 // belongs to the running worker, not its potentially old sw.js?v= registration URL.
 self.addEventListener("message", (event) => {
   if (
-    event.data?.type === "openclaw-history-activity" &&
+    event.data?.type === "openclaw-foreground-activity" &&
     event.source?.type === "window" &&
     controlUiPathname(new URL(event.source.url)) !== null
   ) {
@@ -205,7 +205,7 @@ async function reuseOfflineAsset(cache, asset, previous) {
   return false;
 }
 
-async function cacheOfflineAsset(cache, asset, signal, previous, background = false) {
+async function cacheOfflineAsset(cache, asset, signal, previous) {
   try {
     if (await reuseOfflineAsset(cache, asset, previous)) {
       return true;
@@ -221,7 +221,7 @@ async function cacheOfflineAsset(cache, asset, signal, previous, background = fa
       redirect: "error",
       integrity: asset.integrity,
       signal,
-      ...(background ? { priority: "low" } : {}),
+      priority: "low",
     });
     if (!cacheableResponse(response) || signal.aborted) {
       return false;
@@ -292,7 +292,7 @@ function prepareDeferredAssets() {
           ready = await Promise.all(
             OFFLINE_BOOT.deferredAssets
               .slice(index, index + 4)
-              .map((asset) => cacheOfflineAsset(cache, asset, controller.signal, previous, true)),
+              .map((asset) => cacheOfflineAsset(cache, asset, controller.signal, previous)),
           );
         } finally {
           clearTimeout(timeout);
@@ -337,11 +337,19 @@ async function precacheOfflineShell(signal) {
   const previous = (await caches.keys()).filter(
     (name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME,
   );
-  const ready = await Promise.all(
-    OFFLINE_BOOT.assets.map((asset) => cacheOfflineAsset(cache, asset, signal, previous)),
-  );
-  if (!ready.every(Boolean)) {
-    return;
+  // Bound already-buffered bytes when a foreground operation interrupts installation.
+  for (let index = 0; index < OFFLINE_BOOT.assets.length; index += 4) {
+    if (signal.aborted) {
+      return;
+    }
+    const ready = await Promise.all(
+      OFFLINE_BOOT.assets
+        .slice(index, index + 4)
+        .map((asset) => cacheOfflineAsset(cache, asset, signal, previous)),
+    );
+    if (!ready.every(Boolean)) {
+      return;
+    }
   }
   // A deep chat URL must resolve the portable bundle against the registered app
   // root. No fetched document, credential, or route-specific metadata is retained.

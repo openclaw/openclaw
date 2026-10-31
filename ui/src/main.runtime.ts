@@ -1,8 +1,8 @@
-import { reportPendingHistoryActivity } from "./api/gateway-history-activity.ts";
 import { mountOpenClawApp } from "./app/app-root.tsx";
 import type { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { bootstrapApplication } from "./app/bootstrap.ts";
 import type { EarlyApplicationGateway } from "./app/early-gateway.ts";
+import { reportPendingForegroundActivity } from "./app/foreground-activity.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
@@ -92,7 +92,7 @@ export async function startControlUi(
     void navigator.serviceWorker
       .register(swUrl, { updateViaCache: "none" })
       .then((registration) => {
-        reportPendingHistoryActivity(registration);
+        reportPendingForegroundActivity(registration);
         return refresh();
       })
       .catch((error: unknown) => {

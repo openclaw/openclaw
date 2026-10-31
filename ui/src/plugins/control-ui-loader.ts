@@ -5,6 +5,7 @@ import type {
   ControlUiChannelSettingsView,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -92,10 +93,9 @@ export async function loadControlUiPluginAssets(
     return loaded;
   });
   // Fetch code alongside CSS; publish only after this revision's styles are ready.
-  const [module]: [ControlUiPluginModule, void[]] = await Promise.all([
-    import(/* @vite-ignore */ urls.entry),
-    Promise.all(stylesLoaded),
-  ]);
+  const [module]: [ControlUiPluginModule, void[]] = await trackForegroundActivity(
+    Promise.all([import(/* @vite-ignore */ urls.entry), Promise.all(stylesLoaded)]),
+  );
   signal.throwIfAborted();
   return module;
 }

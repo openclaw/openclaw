@@ -484,6 +484,7 @@ describe("Control UI offline app shell", () => {
         {
           credentials: "same-origin",
           redirect: "error",
+          priority: "low",
           integrity: offlineBootFixture.assets[1].integrity,
           signal: expect.any(AbortSignal),
         },
@@ -539,6 +540,7 @@ describe("Control UI offline app shell", () => {
         expect(worker.fetch).toHaveBeenCalledWith(worker.scope + asset.path, {
           credentials: "same-origin",
           redirect: "error",
+          priority: "low",
           integrity: asset.integrity,
           signal: expect.any(AbortSignal),
         });
@@ -572,6 +574,7 @@ describe("Control UI offline app shell", () => {
         {
           credentials: "same-origin",
           redirect: "error",
+          priority: "low",
           integrity: asset.integrity,
           signal: expect.any(AbortSignal),
         },

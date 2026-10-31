@@ -19,6 +19,7 @@ import type {
 } from "@openclaw/gateway-client/scope-upgrade";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -49,7 +50,6 @@ import {
   type GatewayBrowserConnectOptions,
 } from "./gateway-connect-plan.ts";
 import { resolveMaxInboundSilenceMs } from "./gateway-heartbeat-policy.ts";
-import { trackHistoryActivity } from "./gateway-history-activity.ts";
 import { requestTalkCatalog } from "./gateway-talk-catalog.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 export { GatewayRequestError, resolveGatewayErrorDetailCode };
@@ -702,7 +702,7 @@ export class GatewayBrowserClient {
             requestOptions,
           )
         : this.chatEvents.request<T>(this.client, method, params, requestOptions);
-    return trackHistoryActivity(method, request);
+    return trackForegroundActivity(request);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {

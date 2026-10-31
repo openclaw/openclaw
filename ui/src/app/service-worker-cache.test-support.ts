@@ -71,7 +71,12 @@ export function stallDownloads(worker: ReturnType<typeof createFetchServiceWorke
 
 export function createFetchServiceWorker(
   scope = "https://control.example/openclaw/",
-  options: { clientUrl?: string; clientType?: string; online?: boolean } = {},
+  options: {
+    clientUrl?: string;
+    clientType?: string;
+    online?: boolean;
+    assets?: Array<{ path: string; integrity: string }>;
+  } = {},
 ) {
   const listeners = new Map<string, (event: ServiceWorkerFetchEventStub) => void>();
   const cache = new Map<string, Response>();
@@ -118,7 +123,8 @@ export function createFetchServiceWorker(
     .readFileSync(serviceWorkerPath, "utf8")
     .replace(
       "const OFFLINE_BOOT = null;",
-      () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBootFixture)};`,
+      () =>
+        `const OFFLINE_BOOT = ${JSON.stringify({ ...offlineBootFixture, assets: options.assets ?? offlineBootFixture.assets })};`,
     );
   new vm.Script(source, {
     filename: "ui/public/sw.js",
@@ -177,9 +183,9 @@ export function createFetchServiceWorker(
     skipWaiting,
     waitUntil,
     probeReply,
-    historyActivity(active: boolean, windowIndex = 0) {
+    foregroundActivity(active: boolean, windowIndex = 0) {
       listeners.get("message")?.({
-        data: { type: "openclaw-history-activity", active },
+        data: { type: "openclaw-foreground-activity", active },
         source: windowClients[windowIndex],
         request: createLifecycleRequest(),
         clientId: "",

@@ -1,10 +1,10 @@
 // Count across replacement clients: an old request can settle after its successor starts.
-let pendingHistoryRequests = 0;
-export function reportPendingHistoryActivity(registration: ServiceWorkerRegistration): void {
+let pendingForegroundRequests = 0;
+export function reportPendingForegroundActivity(registration: ServiceWorkerRegistration): void {
   for (const worker of [registration.installing, registration.waiting, registration.active]) {
     try {
       worker?.postMessage(
-        { type: "openclaw-history-activity", active: pendingHistoryRequests > 0 },
+        { type: "openclaw-foreground-activity", active: pendingForegroundRequests > 0 },
         [],
       );
     } catch {
@@ -13,10 +13,10 @@ export function reportPendingHistoryActivity(registration: ServiceWorkerRegistra
   }
 }
 
-function reportHistoryActivity(change: 1 | -1): void {
-  pendingHistoryRequests += change;
+function reportForegroundActivity(change: 1 | -1): void {
+  pendingForegroundRequests += change;
   if (
-    (change === 1 ? pendingHistoryRequests !== 1 : pendingHistoryRequests !== 0) ||
+    (change === 1 ? pendingForegroundRequests !== 1 : pendingForegroundRequests !== 0) ||
     typeof navigator === "undefined" ||
     !("serviceWorker" in navigator)
   ) {
@@ -27,16 +27,13 @@ function reportHistoryActivity(change: 1 | -1): void {
     .getRegistration()
     .then((registration) => {
       if (registration) {
-        reportPendingHistoryActivity(registration);
+        reportPendingForegroundActivity(registration);
       }
     })
     .catch(() => {}); // Optional offline caching never owns request success.
 }
 
-export function trackHistoryActivity<T>(method: string, request: Promise<T>): Promise<T> {
-  if (!["chat.history", "chat.startup", "sessions.messages.subscribe"].includes(method)) {
-    return request;
-  }
-  reportHistoryActivity(1);
-  return request.finally(() => reportHistoryActivity(-1));
+export function trackForegroundActivity<T>(request: Promise<T>): Promise<T> {
+  reportForegroundActivity(1);
+  return request.finally(() => reportForegroundActivity(-1));
 }
