@@ -23,10 +23,7 @@ import {
   captureRequesterSessionEntryCurrent,
   withSubagentRequesterSource,
 } from "../agents/subagents/announce/subagent-announce-delivery.runtime.js";
-import {
-  resolveAnnounceOrigin,
-  resolveSubagentCompletionOrigin,
-} from "../agents/subagents/announce/subagent-announce-origin.js";
+import { resolveAnnounceOrigin } from "../agents/subagents/announce/subagent-announce-origin.js";
 import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
@@ -147,17 +144,6 @@ async function deliverAgentHarnessCompletionBound(
     const directOrigin = requesterIsSubagent
       ? scope.requesterOrigin
       : resolveAnnounceOrigin(requester.entry, scope.requesterOrigin);
-    const completionDirectOrigin =
-      requesterIsSubagent || !directOrigin
-        ? directOrigin
-        : await resolveSubagentCompletionOrigin({
-            childSessionKey,
-            requesterSessionKey,
-            requesterOrigin: directOrigin,
-            childRunId: childSessionKey,
-            spawnMode: "run",
-            expectsCompletionMessage: true,
-          });
     const internalEvents: AgentInternalEvent[] = [
       {
         type: AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
@@ -231,7 +217,10 @@ async function deliverAgentHarnessCompletionBound(
               triggerMessage: prompt,
               internalEvents,
               requesterSessionOrigin: scope.requesterOrigin,
-              completionDirectOrigin: completionDirectOrigin ?? directOrigin,
+              completionDirectOrigin: directOrigin,
+              completionTarget: "parent",
+              completionRequesterSessionId: requesterSessionId,
+              completionRequesterLifecycleRevision: requesterLifecycleRevision,
               directOrigin,
               sourceSessionKey: childSessionKey,
               sourceTool: "agent_harness_completion",

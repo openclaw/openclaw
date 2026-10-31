@@ -11,7 +11,6 @@ import type * as AnnounceRuntime from "../agents/subagents/announce/subagent-ann
 const mocks = vi.hoisted(() => ({
   deliver: vi.fn(),
   loadRequester: vi.fn(),
-  resolveCompletionOrigin: vi.fn(async () => undefined),
   custodyCurrent: true,
   custodyError: new Error("Completion custody retired"),
   runWithCustody: vi.fn(
@@ -44,9 +43,11 @@ vi.mock(
     }),
   }),
 );
-vi.mock("../agents/subagents/announce/subagent-announce-origin.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce-origin.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../agents/subagents/announce/subagent-announce-origin.js")
+  >()),
   resolveAnnounceOrigin: () => ({ channel: "test", to: "requester" }),
-  resolveSubagentCompletionOrigin: mocks.resolveCompletionOrigin,
 }));
 import * as completionSdk from "./agent-harness-completion.js";
 import {
@@ -96,10 +97,11 @@ const replaceRequester = () =>
   mocks.loadRequester.mockReturnValue({
     entry: { sessionId: source.requesterSessionId, lifecycleRevision: "successor" },
   });
-function retireDuringOriginResolution(retire: () => void) {
-  mocks.resolveCompletionOrigin.mockImplementation(async () => {
+function retireDuringRequesterRead(retire: () => void) {
+  const requester = mocks.loadRequester(source.requesterSessionKey, source.requesterAgentId);
+  mocks.loadRequester.mockImplementationOnce(async () => {
     retire();
-    return undefined;
+    return requester;
   });
 }
 
@@ -135,7 +137,6 @@ it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.custodyCurrent = true;
-  mocks.resolveCompletionOrigin.mockImplementation(async () => undefined);
   mocks.loadRequester.mockReturnValue({
     entry: {
       sessionId: source.requesterSessionId,
@@ -169,9 +170,9 @@ it("enters retained custody without exposing its internal execution callback", a
   expect(Object.hasOwn(completionSdk, "runWithAgentHarnessCompletionCustody")).toBe(false);
 });
 
-it("rejects custody retired during awaited origin resolution", async () => {
+it("rejects custody retired during the awaited requester read", async () => {
   const custody = custodyFixture();
-  retireDuringOriginResolution(() => {
+  retireDuringRequesterRead(() => {
     mocks.custodyCurrent = false;
   });
   await expect(deliver({ completionCustody: custody })).rejects.toMatchObject({
@@ -250,8 +251,8 @@ it("rechecks source authority after asynchronous delivery work", async () => {
   await rejects({ isSourceSessionAdmissionAllowed: () => current }, "source owner retired");
 });
 
-it("blocks a replaced requester revision after awaited origin resolution", async () => {
-  retireDuringOriginResolution(replaceRequester);
+it("blocks a replaced requester revision after the awaited requester read", async () => {
+  retireDuringRequesterRead(replaceRequester);
   await expect(deliver()).resolves.toMatchObject({ delivered: false, recoveryBlocked: true });
   expect(mocks.deliver).not.toHaveBeenCalled();
 });

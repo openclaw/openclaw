@@ -5719,7 +5719,6 @@
 ["src/plugin-activation-boundary.test.ts","./plugins/plugin-registry.js","002297ede76df959f83d8d9ffb68a0400d5d91f1b3be5330ef8fc19b11133cf2",1]
 ["src/plugin-sdk/acp-runtime.test.ts","../auto-reply/reply/dispatch-acp.runtime.js","c4575c8af22284d651326b59e12902e0ca2e7139b5aea0fe11277beb66f6cea9",1]
 ["src/plugin-sdk/agent-harness-completion.test.ts","../agents/subagents/announce/subagent-announce-delivery.js","8628e9e5b5f2a0dce57401ba8ad92979ea638a1edf238fc916c2a61465b0c6b2",1]
-["src/plugin-sdk/agent-harness-completion.test.ts","../agents/subagents/announce/subagent-announce-origin.js","a1032f9897a27a107b3d8dc532785823c451851763ae78824ed9af059f7d8d77",1]
 ["src/plugin-sdk/agent-harness-mcp-forms.test.ts","../agents/mcp-form-resource-upload.js","475d1c0f0ca4f7a3f68a8d585b59738d651be03624e11c7b6ac19dbbec5a751e",1]
 ["src/plugin-sdk/agent-harness-mcp-forms.test.ts","../gateway/mcp-app-form-resources.js","b8815cd492786c917b6a40cf906e8a2b145d77a2ad6b2e4eb3a25da739a76135",1]
 ["src/plugin-sdk/agent-runtime-model-catalog-contract.test.ts","../agents/prepared-model-catalog.js","72907b375e54d0bfd458e28f2f37a62d73607189e93671081e20b5b74d56c087",1]
