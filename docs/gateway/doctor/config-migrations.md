@@ -70,13 +70,16 @@ runtime and config validation keep ignoring an older `plugins.entries.skill-work
 entry, including its old settings, and the `skill-workshop` id in `plugins.deny`.
 Validation reports that Doctor will remove them.
 
-Doctor, which also runs during `openclaw update`, removes that older policy, adds
-`skill-workshop` to a non-empty `plugins.allow`, and records the marker. An ordinary
-config write records the marker only when no older policy needs repair. After that,
-`skill-workshop` policy applies like any other plugin's.
+Doctor, which also runs during `openclaw update`, removes that older policy and records
+the marker. It does not change `plugins.allow` or `plugins.enabled`. An ordinary
+config write records the marker only when no older policy needs repair. While an older
+entry or deny id is ignored, config writes that change `plugins` are refused with the
+next step: run `openclaw doctor --fix`, then retry. After that, `skill-workshop` policy
+applies like any other plugin's.
 
-With `plugins.enabled: false`, Doctor reports that the switch now also turns off
-learned skills. To keep them, enable plugins and limit them with `plugins.allow`.
+An exclusive `plugins.allow` without `skill-workshop`, or `plugins.enabled: false`, keeps
+the plugin off, so learned skills do not load. Doctor's Skill Workshop health check warns
+about either switch while Workshop is on and names the fix.
 
 ## Group allowlist fallback
 

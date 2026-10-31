@@ -1,4 +1,3 @@
-import { listAgentIds } from "../agents/agent-scope.js";
 import {
   maybeRepairOwnedChromeExtensionNativeHosts,
   collectBrowserReadinessFindings,
@@ -25,8 +24,6 @@ import {
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
-import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { acpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
@@ -36,6 +33,7 @@ import type { DoctorHealthCheckContext } from "./doctor-health-contribution-type
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { skillWorkshopToolPolicyCheck } from "./doctor-skill-workshop-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
@@ -49,7 +47,6 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
-const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 
 const gatewayConfigCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-config",
@@ -105,36 +102,6 @@ const commandOwnerCheck: CoreHealthCheck = {
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
       },
     ];
-  },
-};
-
-const skillWorkshopToolPolicyCheck: CoreHealthCheck = {
-  id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-  description: "Autonomous Skill Workshop capture has a callable review tool.",
-  async detect(ctx) {
-    const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
-    const listedAgentIds = listAgentIds(ctx.cfg);
-    const diagnostics = (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).flatMap(
-      (agentId) => {
-        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-          config: ctx.cfg,
-          workshopEnabled,
-          ...(agentId ? { agentId } : {}),
-        });
-        return diagnostic ? [diagnostic] : [];
-      },
-    );
-    return diagnostics.map((diagnostic) => ({
-      checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-      category: "fix-now",
-      docsUrl: "https://docs.openclaw.ai/tools/skill-workshop",
-      severity: "warning",
-      message: diagnostic.detail,
-      path: diagnostic.source,
-      target: diagnostic.agentId,
-      requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
-      fixHint: diagnostic.fix,
-    }));
   },
 };
 

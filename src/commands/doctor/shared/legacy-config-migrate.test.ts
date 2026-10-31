@@ -72,7 +72,7 @@ it("collapses split spawn flags per scope and resolves conflicts conservatively"
 
 it("strips explicit bundled discovery mode after machine-state capture", () => {
   const plugins = { allow: ["telegram"], bundledDiscovery: "allowlist" };
-  expect(migrate({ plugins }).config?.plugins).toEqual({ allow: ["telegram", "skill-workshop"] });
+  expect(migrate({ plugins }).config).toEqual({ plugins: { allow: ["telegram"] } });
 });
 
 it("removes a zero port and its empty gateway section", () => {
@@ -678,7 +678,7 @@ it.each([
       "entries.codex-supervisor.hooks.enabled": true,
     }),
     expected: configAt({
-      allow: ["telegram", "codex", "skill-workshop"],
+      allow: ["telegram", "codex"],
       "entries.codex.enabled": true,
       "entries.codex.config.supervision": { enabled: true, ...supervision },
     }),
@@ -765,7 +765,7 @@ describe("legacy bundled provider discovery migrate", () => {
       "plugins.slots.memory": "openai-codex",
     });
 
-    expect(res.config?.plugins?.allow).toEqual(["telegram", "openai", "skill-workshop"]);
+    expect(res.config?.plugins?.allow).toEqual(["telegram", "openai"]);
     expect(res.config?.plugins?.deny).toEqual(["openai"]);
     expect(res.config?.plugins?.entries?.openai).toEqual({ enabled: false });
     expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();

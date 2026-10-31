@@ -4,9 +4,8 @@ import { describe, expect, it } from "vitest";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
+  findSkillWorkshopPolicyWriteRefusal,
   materializeSkillWorkshopPlugin,
-  projectSkillWorkshopPluginPolicy,
-  stampSkillWorkshopPluginMigration,
 } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -22,13 +21,14 @@ describe("materializeSkillWorkshopPlugin", () => {
   it("drops policy written while Workshop was built in, so Workshop keeps running", () => {
     const { config, changes } = materializeSkillWorkshopPlugin(builtInEraConfig());
 
+    // The allowlist is never rewritten; Doctor's health check reports it instead.
     expect(config.plugins).toEqual({
-      allow: ["diffs", "skill-workshop"],
+      allow: ["diffs"],
       deny: [],
       entries: { diffs: { enabled: true } },
     });
     expect(config.meta?.migrations?.skillWorkshopPlugin).toBe(true);
-    expect(changes).toHaveLength(3);
+    expect(changes).toHaveLength(2);
   });
 
   it("keeps policy a write adds to an unmarked config", () => {
@@ -44,46 +44,25 @@ describe("materializeSkillWorkshopPlugin", () => {
     expect(changes).toEqual([]);
   });
 
-  it("keeps a newly written disable through reload and Doctor while older policy awaits repair", () => {
-    const previous: OpenClawConfig = { plugins: { deny: ["skill-workshop"] } };
-    const next: OpenClawConfig = {
-      plugins: { deny: ["skill-workshop"], entries: { "skill-workshop": { enabled: false } } },
-    };
+  it.each([
+    ["an entry", { entries: { "skill-workshop": { enabled: false } } }],
+    ["a deny", { deny: ["skill-workshop"] }],
+  ])("refuses plugins writes while %s from the built-in era is ignored", (_name, plugins) => {
+    const previousConfig: OpenClawConfig = { plugins };
+    const refusal = (writesPlugins: boolean, nextConfig: unknown = previousConfig) =>
+      findSkillWorkshopPolicyWriteRefusal({ previousConfig, nextConfig, writesPlugins });
 
-    const written = stampSkillWorkshopPluginMigration(next, previous);
-
-    expect(written.plugins).toEqual({
-      deny: [],
-      entries: { "skill-workshop": { enabled: false } },
-    });
-    expect(projectSkillWorkshopPluginPolicy(written).config).toBe(written);
-    expect(materializeSkillWorkshopPlugin(written).config).toBe(written);
-  });
-
-  it("keeps an explicitly written value that equals the older policy", () => {
-    const previous: OpenClawConfig = {
-      plugins: { deny: ["skill-workshop"], entries: { "skill-workshop": { enabled: false } } },
-    };
-    const paths = [["plugins", "entries", "skill-workshop", "enabled"]];
-
-    const written = stampSkillWorkshopPluginMigration(structuredClone(previous), previous, paths);
-
-    expect(written.plugins).toEqual({
-      deny: [],
-      entries: { "skill-workshop": { enabled: false } },
-    });
-    expect(written.meta?.migrations?.skillWorkshopPlugin).toBe(true);
-  });
-
-  it("keeps only the settings a write names inside an older entry", () => {
-    const previous: OpenClawConfig = {
-      plugins: { entries: { "skill-workshop": { enabled: false, config: { maxSkillBytes: 1 } } } },
-    };
-    const paths = [["plugins", "entries", "skill-workshop", "enabled"]];
-
-    const written = stampSkillWorkshopPluginMigration(structuredClone(previous), previous, paths);
-
-    expect(written.plugins?.entries).toEqual({ "skill-workshop": { enabled: false } });
+    expect(refusal(true)).toContain("openclaw doctor --fix");
+    expect(refusal(false)).toBeUndefined();
+    // Doctor's repair is the write that records the marker.
+    expect(refusal(true, materializeSkillWorkshopPlugin(previousConfig).config)).toBeUndefined();
+    expect(
+      findSkillWorkshopPolicyWriteRefusal({
+        previousConfig: { plugins: { allow: ["diffs"] } },
+        nextConfig: {},
+        writesPlugins: true,
+      }),
+    ).toBeUndefined();
   });
 
   it("lets ordinary writes record the marker only when no older policy needs repair", () => {

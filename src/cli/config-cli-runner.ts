@@ -17,7 +17,7 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import type { ConfigSchemaResponse } from "../config/schema.js";
-import { projectSkillWorkshopPluginPolicy } from "../config/skill-workshop-plugin-migration.js";
+import { findSkillWorkshopPolicyWriteRefusal } from "../config/skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
@@ -477,6 +477,15 @@ export async function runConfigOperations(params: {
       previousEnv: preparedPreviousValues.resolutionEnv,
     };
   }
+  // Refuse before any offline write or Gateway-routed patch, including an equal value.
+  const workshopPolicyRefusal = findSkillWorkshopPolicyWriteRefusal({
+    previousConfig: authoredPreviousConfig,
+    nextConfig: authoredNextConfig,
+    writesPlugins: appliedOperations.some(({ setPath }) => setPath[0] === "plugins"),
+  });
+  if (workshopPolicyRefusal) {
+    throw new Error(workshopPolicyRefusal);
+  }
   const validation = await validateConfigMutation({
     config: nextConfig,
     modelValidation,
@@ -487,12 +496,7 @@ export async function runConfigOperations(params: {
     unchanged:
       params.successMode === "set" &&
       isDeepStrictEqual(currentConfig, nextConfig) &&
-      isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig) &&
-      // An equal value under ignored older Workshop policy is new intent; the writer repairs it.
-      !(
-        appliedOperations.some(({ setPath }) => setPath[0] === "plugins") &&
-        projectSkillWorkshopPluginPolicy(authoredPreviousConfig).ignored
-      ),
+      isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig),
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
     databaseOnly: params.databaseOnly,

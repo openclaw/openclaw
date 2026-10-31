@@ -26,8 +26,9 @@ Learned skills belong to one agent and are always visible to it: they bypass
 one, archive it.
 
 Skill Workshop ships as the bundled `skill-workshop` plugin, enabled by default.
-Disabling it (`plugins.entries.skill-workshop.enabled: false`, or
-`plugins.enabled: false`) stops loading learned skills into the agent's prompt.
+Disabling it (`plugins.entries.skill-workshop.enabled: false`, `plugins.enabled: false`,
+or a `plugins.allow` list without `skill-workshop`) stops loading learned skills into the
+agent's prompt.
 
 Skills you write yourself (workspace, project, managed, ClawHub, plugin, and
 bundled skills) are not Workshop skills. Edit them at their source; see

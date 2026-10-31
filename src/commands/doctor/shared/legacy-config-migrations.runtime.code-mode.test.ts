@@ -58,8 +58,6 @@ it.each(cases)(
         ? { plugins: roster === "entries" ? { enabled: false } : { allow: ["openai"] } }
         : {};
     const raw = {
-      // Already migrated, so only Code Mode may change plugin policy here.
-      meta: { migrations: { skillWorkshopPlugin: true } },
       tools: { codeMode: { ...globalLimits, ...entry.global } },
       agents: agentRoster(roster, {
         tools: { codeMode: { ...agentLimits, ...entry.agent } },

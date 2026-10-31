@@ -74,8 +74,6 @@ export function stampConfigWriteMetadata(
   version: string = VERSION,
   previousConfig?: unknown,
   env: NodeJS.ProcessEnv = process.env,
-  /** Paths the writer set or unset on request, so equal values still count as new intent. */
-  explicitPaths: readonly (readonly string[])[] = [],
 ): OpenClawConfig {
   const migrationStamped =
     previousConfig === undefined
@@ -86,7 +84,6 @@ export function stampConfigWriteMetadata(
             previousConfig,
           ).config,
           previousConfig,
-          explicitPaths,
         );
   if (resolveUpdateRehearsalRoot(env)) {
     // Released drivers compare this copy before activation. Keep real migrations,

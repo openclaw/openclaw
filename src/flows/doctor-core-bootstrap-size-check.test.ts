@@ -152,6 +152,16 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       fixHint: `Add ${prefix}tools.alsoAllow: ["skill_workshop"].`,
     });
 
+  it.each([
+    [{ allow: ["diffs"] }, "plugins.allow"],
+    [{ enabled: false }, "plugins.enabled"],
+  ] as const)("warns when %o keeps the skill-workshop plugin off", async (plugins, path) => {
+    expect(await detect({ plugins })).toEqual([
+      expect.objectContaining({ severity: "warning", path }),
+    ]);
+    expect(await detect({ plugins: { allow: ["diffs", "skill-workshop"] } })).toEqual([]);
+  });
+
   it("warns when autonomous capture is enabled but policy hides its tool", async () => {
     expect(await detect({ tools: { profile: "messaging" } })).toEqual([warning()]);
   });
