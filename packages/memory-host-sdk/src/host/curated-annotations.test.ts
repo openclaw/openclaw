@@ -3,7 +3,9 @@ import {
   INVALID_PROJECT_ANNOTATION_KEY,
   extractCuratedEntryRecallMetadata,
   extractProjectKeysFromCuratedEntry,
+  hasPerEntryChunkingMarker,
   stripMemoryAnnotationCarriers,
+  stripPerEntryChunkingMarkers,
 } from "./curated-annotations.js";
 
 describe("curated annotation grammar", () => {
@@ -15,6 +17,9 @@ describe("curated annotation grammar", () => {
     ["<!--trigger:x <!--\nimportance:7 -->", "<!--trigger:x"],
     ["text <!--note: visible -->", "text <!--note: visible -->"],
     ["a \t<!--trigger: x -->\r\nb \tX", "a\r\nb \tX"],
+    // Chunking markers are file-level controls, not entry carriers; snippets keep them.
+    ["<!--\nchunking: entries -->", "<!--\nchunking: entries -->"],
+    ["```md\n<!-- chunking: entries -->\n```", "```md\n<!-- chunking: entries -->\n```"],
   ])("strips carriers without changing the grammar of %j", (input, expected) => {
     expect(stripMemoryAnnotationCarriers(input)).toBe(expected);
   });
@@ -88,5 +93,40 @@ describe("curated annotation grammar", () => {
       triggers: null,
       projectKey: INVALID_PROJECT_ANNOTATION_KEY,
     });
+  });
+
+  it.each([
+    ["- ```md\n  <!-- chunking: entries -->\n  ```", false],
+    ["- Example:\n  ```md\n  sample\n\n<!-- chunking: entries -->", true],
+  ])("handles container fences in %j", (input, expected) => {
+    expect(hasPerEntryChunkingMarker(input)).toBe(expected);
+    expect(stripPerEntryChunkingMarkers(input)).toBe(
+      expected ? input.replace("<!-- chunking: entries -->", "") : input,
+    );
+  });
+
+  it.each([
+    ["<!-- chunking: sentences -->", false],
+    ["    <!-- chunking: entries -->", false],
+    ["   <!-- chunking: entries -->", true],
+    ["~~~\n<!-- chunking: entries -->\n~~~\n<!-- chunking: entries -->", true],
+    ["```txt\n```not-a-close\n<!-- chunking: entries -->\n```", false],
+    ["```txt\n````  \n<!-- chunking: entries -->", true],
+    ["``` `x`\n<!-- chunking: entries -->", true],
+    ["```txt\u2028example\n<!-- chunking: entries -->\n```", false],
+    ["~~~txt\u2029example\n<!-- chunking: entries -->\n~~~", false],
+  ])("detects the per-entry chunking marker in %j", (input, expected) => {
+    expect(hasPerEntryChunkingMarker(input)).toBe(expected);
+  });
+
+  it.each([
+    ["<!-- chunking: entries -->\n# A", "\n# A"],
+    ["# A\r\n <!-- chunking: entries -->\r\n- b", "# A\r\n\r\n- b"],
+    ["<!--\nchunking: entries -->", "<!--\nchunking: entries -->"],
+    ["x <!-- chunking: entries -->", "x <!-- chunking: entries -->"],
+    ["```md\n<!-- chunking: entries -->\n```", "```md\n<!-- chunking: entries -->\n```"],
+    ["    <!-- chunking: entries -->", "    <!-- chunking: entries -->"],
+  ])("blanks only per-entry marker lines in %j", (input, expected) => {
+    expect(stripPerEntryChunkingMarkers(input)).toBe(expected);
   });
 });

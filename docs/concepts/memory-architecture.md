@@ -261,6 +261,11 @@ from 1 to 10. When either annotation is absent, the index keeps its column
 `NULL`, so older entries remain neutral and never become trigger candidates
 until a writer adds metadata.
 
+Per-entry chunking applies to these two files. A topic file under `memory/` can
+opt into it with a `<!-- chunking: entries -->` line; that changes chunk
+boundaries only, and the file stays outside the curated tier. See
+[Builtin memory engine](/concepts/memory-builtin#how-indexing-works).
+
 Auto-injection is restricted to the curated tier. Entries from `MEMORY.md`
 and `USER.md` qualify; daily notes and transcripts never auto-inject,
 regardless of match strength. They remain reachable only through the

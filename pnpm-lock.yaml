@@ -2967,6 +2967,9 @@ importers:
       '@openclaw/retry':
         specifier: workspace:*
         version: link:../retry
+      markdown-it:
+        specifier: 15.0.3
+        version: 15.0.3
       p-map:
         specifier: 7.1.1
         version: 7.1.1

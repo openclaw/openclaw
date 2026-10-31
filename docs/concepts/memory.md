@@ -53,6 +53,10 @@ observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
 
+Topic files under `memory/` that use the same one-fact-per-bullet style as
+`MEMORY.md` can opt into per-entry indexing with a `<!-- chunking: entries -->`
+line. See [Builtin memory engine](/concepts/memory-builtin#how-indexing-works).
+
 Daily-memory maintenance requires valid UTF-8. If decoding fails, the operation
 stops before rewriting that file. Preserve the original and convert a copy to
 UTF-8 before retrying.
