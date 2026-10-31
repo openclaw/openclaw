@@ -59,11 +59,13 @@ export function prepareGroupMessage(
   });
   const fullMessage = details?.fullMessage;
   if (fullMessage) {
-    const { messageId, state: expansion } = fullMessage;
+    const { messageId } = fullMessage;
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
-      !expansion ||
-      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+      opts.loadFullAssistantMessage &&
+      (!expansion ||
+        (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT))
     ) {
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }

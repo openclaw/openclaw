@@ -1,5 +1,4 @@
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -21,34 +20,18 @@ suite.define(() => {
   it("keeps the complete displayed Markdown while reloading offline and reconnecting", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:chat:long-answer";
-      const row = createControlUiSessionRow(sessionKey, "Synthetic long answer", 1);
-      const gateway = await installMockGateway(
-        page,
-        {
-          sessionKey,
-          sessions: [row],
-          authMethod: "trusted-proxy",
-          authMode: "trusted-proxy",
-          subscriptionInitialHistory: false,
-          deferredMethods: ["connect"],
-          methodResponses: { "chat.message.get": { ok: true, message } },
-        },
-        {
-          requestHandlers: {
-            "chat.startup": (params) => {
-              const maxChars = asOptionalRecord(params)?.maxChars;
-              return {
-                messages: projectChatDisplayMessages([message], {
-                  maxChars: typeof maxChars === "number" ? maxChars : undefined,
-                }),
-                sessionId: row.sessionId,
-                sessionInfo: row,
-                hasMore: false,
-              };
-            },
-          },
-        },
-      );
+      const row = createControlUiSessionRow(sessionKey, "Synthetic long answer", 1, {
+        lifecycleRevision: "revision-1",
+      });
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        sessions: [row],
+        authMethod: "trusted-proxy",
+        authMode: "trusted-proxy",
+        historyMessages: projectChatDisplayMessages([message]),
+        deferredMethods: ["connect"],
+        methodResponses: { "chat.message.get": { ok: true, message } },
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
@@ -70,7 +53,7 @@ suite.define(() => {
       expect(await body.textContent()).not.toContain("...(truncated)...");
       const cachedHeight = await body.evaluate((element) => element.getBoundingClientRect().height);
       await gateway.resolveDeferred("connect");
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("chat.message.get");
       await expect.poll(() => body.textContent()).toBe(liveText);
       expect(
         Math.abs(

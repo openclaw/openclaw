@@ -112,11 +112,7 @@ function PreparedMessage(props: {
     const actionDetails = prepared().actions;
     let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
     const fullMessage = actionDetails?.fullMessage;
-    if (
-      fullMessage &&
-      props.options.loadFullAssistantMessage &&
-      props.options.onToggleAssistantMessageExpanded
-    ) {
+    if (fullMessage) {
       const { messageId, state: expansion } = fullMessage;
       const retriesExhausted =
         expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;

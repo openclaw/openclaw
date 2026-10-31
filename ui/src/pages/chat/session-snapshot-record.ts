@@ -181,9 +181,18 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-// Refill history whose text projection preceded automatic full-message recovery.
+// Refill rows whose automatic full-message recovery was not retained for reload.
 export const CHAT_SNAPSHOT_PROJECTION_VERSION = 14;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
+
+function snapshotDisplayMessage(message: unknown): unknown {
+  const record = asOptionalRecord(message);
+  if (!record || !Object.hasOwn(record, "openclawResponsesInputReplay")) {
+    return message;
+  }
+  const { openclawResponsesInputReplay: _replay, ...display } = record;
+  return display;
+}
 
 export async function createSnapshotRecord(
   sessionKey: string,
@@ -236,23 +245,22 @@ export async function createSnapshotRecord(
     const projected = boundChatThumbnails(
       Object.keys(changes).length ? { ...source, ...changes } : source,
     );
+    const recoveredMessages = new Set(
+      Object.values(projected.rowDisplay ?? {}).flatMap((row) =>
+        row.recoveredMessage ? [row.recoveredMessage.message] : [],
+      ),
+    );
     // Pairing credentials stay in the live projection, never the browser's disk cache.
     const serialized = JSON.stringify(projected, (_key, value: unknown) => {
       if (value instanceof Blob) {
         return undefined;
       }
       if (value === projected.messages) {
-        return projected.messages.map((message) => {
-          const record = asOptionalRecord(message);
-          if (!record || !Object.hasOwn(record, "openclawResponsesInputReplay")) {
-            return message;
-          }
-          const { openclawResponsesInputReplay: _replay, ...display } = record;
-          return display;
-        });
+        return projected.messages.map(snapshotDisplayMessage);
       }
-      const sanitized = removePairingQrContent(value);
-      historyChanged ||= sanitized !== value;
+      const display = recoveredMessages.has(value) ? snapshotDisplayMessage(value) : value;
+      const sanitized = removePairingQrContent(display);
+      historyChanged ||= sanitized !== display;
       return sanitized;
     });
     snapshot = JSON.parse(serialized);

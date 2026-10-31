@@ -1,2 +1,2 @@
-# Production projection-to-disk regression plus native offline reload/reconnect fidelity.
-109
+# Scoped full-message persistence/privacy and native offline reload fidelity; existing media test also covers cached and changed source.
+150

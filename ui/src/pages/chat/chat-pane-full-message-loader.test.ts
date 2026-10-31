@@ -6,6 +6,12 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  resolveChatSnapshotKey,
+} from "./session-message-cache.ts";
+import { createSnapshotRecord, parseSnapshotRecord } from "./session-snapshot-record.ts";
 
 const messageRequest = { sessionKey: "agent:main:example", messageId: "answer" };
 const result = { ok: true, message: { role: "assistant", content: "The full answer" } };
@@ -33,6 +39,54 @@ function fixture(request = vi.fn().mockResolvedValue(result)) {
 }
 
 describe("explicit full-message reads", () => {
+  it("persists the recovered long answer with its capped source for reload", async () => {
+    const markdown = Array.from(
+      { length: 24 },
+      (_, i) => `- **Verification ${i + 1}** ${"Synthetic evidence. ".repeat(30)}`,
+    ).join("\n\n");
+    const source = {
+      role: "assistant",
+      content: `${markdown.slice(0, 8000)}\n...(truncated)...`,
+      __openclaw: { id: "answer", seq: 1, truncated: true, reason: "display-cap" },
+    };
+    const { state, load } = fixture(
+      vi.fn().mockResolvedValue({
+        ok: true,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: markdown },
+            {
+              type: "openclaw_pairing_qr",
+              terminalText: "synthetic pairing QR",
+            },
+          ],
+          openclawResponsesInputReplay: { text: "Server replay only" },
+        },
+      }),
+    );
+    const target = { sessionKey: state.sessionKey };
+    cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+      messages: [source],
+      pagination: { hasMore: false },
+      sessionId: state.currentSessionId!,
+    });
+    await load()(messageRequest);
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target)!;
+    expect(snapshot.rowDisplay?.answer?.recoveredMessage?.message).toMatchObject({
+      content: [{ type: "text", text: markdown }],
+    });
+    const prepared = await createSnapshotRecord(resolveChatSnapshotKey(state, target), {
+      savedAt: 1,
+      snapshot,
+    });
+    const restored = await parseSnapshotRecord(prepared?.record);
+    expect(restored?.snapshot.rowDisplay?.answer?.recoveredMessage).toEqual({
+      source: source.content,
+      message: { role: "assistant", content: [{ type: "text", text: markdown }] },
+    });
+  });
+
   it.each(["sharing or config", "role", "scopes"] as const)(
     "rechecks full-message reads after current %s authority changes without rerendering",
     async (change) => {

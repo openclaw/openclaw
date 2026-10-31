@@ -188,7 +188,11 @@ export function createChatDisplayFacts(
           }
           const previous = snapshot.rowDisplay?.[messageId];
           const row = parseSnapshot(chatRowDisplaySchema, { ...previous, ...update });
-          if (!row || JSON.stringify(row).length > 8192) {
+          if (!row) {
+            return;
+          }
+          const { recoveredMessage: _recoveredMessage, ...display } = row;
+          if (JSON.stringify(display).length > 8192) {
             return;
           }
           cacheChatSessionSnapshot(cache, host, target, {
