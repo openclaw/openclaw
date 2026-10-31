@@ -4,7 +4,7 @@ import { flush } from "../test-helpers/solid-settle.ts";
 import { SessionHovercard } from "./session-hovercard-solid.tsx";
 import "../styles/base.css";
 
-it("keeps failure rows at the same spacing as the other compact sections", () => {
+it("separates the top block and following sections with fixed gaps", () => {
   const { container } = mountSolid(() => (
     <SessionHovercard
       row={{
@@ -33,11 +33,10 @@ it("keeps failure rows at the same spacing as the other compact sections", () =>
     />
   ));
   flush();
-  const context = container.querySelector(".session-hovercard__context")!;
-  const branch = container.querySelector(".session-hovercard__branch-row")!;
-  const error = container.querySelector(".session-hovercard__error > span:last-child")!;
-  const compactGap = branch.getBoundingClientRect().top - context.getBoundingClientRect().bottom;
-  const errorGap = error.getBoundingClientRect().top - branch.getBoundingClientRect().bottom;
-  expect(compactGap).toBeGreaterThan(0);
-  expect(errorGap).toBe(compactGap);
+  const top = container.querySelector(".session-hovercard__top")!;
+  const header = container.querySelector(".session-hovercard__section--header")!;
+  const context = container.querySelector(".session-hovercard__section--metadata")!;
+  const error = container.querySelector(".session-hovercard__error")!;
+  expect(context.getBoundingClientRect().top - header.getBoundingClientRect().bottom).toBe(8);
+  expect(error.getBoundingClientRect().top - top.getBoundingClientRect().bottom).toBe(16);
 });
