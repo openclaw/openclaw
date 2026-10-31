@@ -511,6 +511,9 @@ sleep, restart, and update. Its `manifest.json` records each input bundle's dire
 build metadata, and `indexSha256`: the SHA-256 of the original `index.html` bytes,
 before any synthetic update rewrite. Match these hashes to the intended saved
 bundles when comparing results.
+`--service-workers allow|block` defaults to `allow` and records the selected policy
+in both the manifest and results. Use `block` to diagnose service-worker overlap;
+compare timings only between runs with the same policy.
 
 Heavy-content steps use `heavy-<fixture>-<action>` IDs. Fixtures are `code`
 (5,000 TypeScript lines), `auto-code` (5,000 language-free lines), `diff`
