@@ -22,15 +22,15 @@ describe("YAML", () => {
     { operation: "map insertion", address: "options/+enabled", value: "true" },
     { operation: "sequence append", address: "items/+", value: "2" },
     { operation: "indexed insertion", address: "items/+0", value: "2" },
-  ])("preserves untouched numeric sources during $operation", ({ address, value }) => {
+  ])("preserves CRLF and untouched numeric sources during $operation", ({ address, value }) => {
     const before =
-      "id: 9007199254740993\nratio: 1.0000000000000001\nname: old\n" +
-      "options: {}\nitems: [9007199254740995]\n";
+      "id: 9007199254740993\r\nratio: 1.0000000000000001\r\nname: old\r\n" +
+      "options: {}\r\nitems: [9007199254740995]\r\n";
     const ast = parseYaml(before);
     const result = setOcPath(ast, path(address), value);
 
-    expect(result.raw).toContain("id: 9007199254740993\n");
-    expect(result.raw).toContain("ratio: 1.0000000000000001\n");
+    expect(result.raw).toContain("id: 9007199254740993\r\n");
+    expect(result.raw).toContain("ratio: 1.0000000000000001\r\n");
     expect(result.raw).toContain("9007199254740995");
     expect(typeof parseYaml(result.raw).doc.get("id")).toBe("number");
     expect(ast.raw).toBe(before);

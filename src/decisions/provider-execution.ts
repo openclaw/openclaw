@@ -2,7 +2,7 @@ import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/mod
 import type { DecisionProviderContextV2 } from "./provider-context.js";
 import type { DecisionProviderV2 } from "./provider-types.js";
 import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "./types-v2.js";
-import { validateDecisionResultV2 } from "./validation-v2.js";
+import { validateAdmittedDecisionResultV2 } from "./validation-v2.js";
 
 /** Invoked and awaited within the prepared model's lifetime, with host-owned validation facts. */
 export async function evaluatePreparedDecisionProvider(params: {
@@ -20,7 +20,7 @@ export async function evaluatePreparedDecisionProvider(params: {
   const status = result.status;
   if (status === "ok") {
     const value = result.result;
-    if (!validateDecisionResultV2(params.offered, value, params.capabilities)) {
+    if (!validateAdmittedDecisionResultV2(params.offered, value, params.capabilities)) {
       return { status: "unavailable", reason: "invalid-response" };
     }
     params.isAdmissible();

@@ -47,6 +47,7 @@ export function createVitestWorkerRun(
   env: NodeJS.ProcessEnv = process.env,
   parent?: VitestWorkerDescriptor,
   requestedPreset?: VitestWorkerPreset,
+  compilerExecPath = process.execPath,
 ) {
   const preset = parent ? (parent.preset ?? "full") : (requestedPreset ?? "full");
   if (preset === "runtime" && requestedPreset === "full") {
@@ -101,7 +102,7 @@ export function createVitestWorkerRun(
       }
       compilerJoined = false;
       const code = await runManagedCommand({
-        bin: process.execPath,
+        bin: compilerExecPath,
         args: [
           fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)),
           directory,

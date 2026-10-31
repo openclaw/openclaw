@@ -29,6 +29,7 @@ import {
   createNodePackageFixture,
   expectSetupPhases,
   readLaunch,
+  runtimeManifestSha256,
   type DesktopFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
@@ -326,6 +327,72 @@ childProcess.spawn = (command, args, options) => {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it("installs and reuses a bundle beside a retained npm runtime without rerunning npm", async () => {
+    const bytes = await createNodePackageFixture(
+      (prefix) => tempDirs.make(prefix),
+      "offline",
+      receipts,
+      "process.exit(98)",
+      "bundle",
+    );
+    const served = await serveArtifact(bytes);
+    const worker = await serveArtifact(Buffer.from("verified-worker-archive"));
+    const manifestSha256 = await runtimeManifestSha256(bytes);
+    if (!manifestSha256) {
+      throw new Error("Fixture runtime manifest is missing");
+    }
+    const bootstrap = {
+      ...served.nodeBootstrap,
+      install: "bundle" as const,
+      buildId: "fixture-runtime-build",
+      manifestSha256,
+    };
+    const { url: _nodeUrl, token: _nodeToken, install: _install, ...nodeIdentity } = bootstrap;
+    const {
+      sha256,
+      bytes: workerSize,
+      packageRelativePath,
+    } = workerBundleFor(worker.nodeBootstrap);
+    const identity = {
+      nodeBootstrap: nodeIdentity,
+      workerBundle: { sha256, bytes: workerSize, packageRelativePath },
+    };
+    const { home, stateDir } = testHome();
+    const retained = await servePackage("retained-npm-runtime");
+    await expectSetupPhases(
+      enroll(home, retained.nodeBootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap)),
+    );
+    const npmCalls = readText(home, "npm-calls");
+    const retainedInstallation = readText(
+      runtimePackage(home, retained.nodeBootstrap.sha256),
+      "installed.json",
+    );
+    const prepare = () =>
+      enroll(home, bootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap));
+    await expectSetupPhases(prepare(), identity);
+    expect(readText(home, "npm-calls")).toBe(npmCalls);
+    expectAbsent(path.join(runtimePackage(home, bootstrap.sha256), "installed.json"), stateDir);
+    expect(
+      readText(runtimePackage(home, bootstrap.sha256), "node_modules/runtime-fixture/index.js"),
+    ).toContain("2026.8.1");
+    await expectSetupPhases(prepare(), identity);
+    expect(served.authorizations).toHaveLength(1);
+    expect(worker.authorizations).toHaveLength(2);
+    const failed = await enroll(
+      home,
+      { ...bootstrap, manifestSha256: "0".repeat(64) },
+      undefined,
+      true,
+      workerBundleFor(worker.nodeBootstrap),
+    );
+    expectFailure(failed, "inventory does not match");
+    expect(readText(home, "npm-calls")).toBe(npmCalls);
+    expect(readText(runtimePackage(home, retained.nodeBootstrap.sha256), "installed.json")).toBe(
+      retainedInstallation,
+    );
+    expectAbsent(stateDir);
+  });
+
   it.each(["present", "absent", "rejected", "download failure"])(
     "installs a prepared runtime with a %s project lock and keeps fallback available",
     async (mode) => {

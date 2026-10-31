@@ -1,7 +1,16 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
+import {
+  CRABBOX_LOCAL_RUNTIME_ARCHIVE_SOURCE,
+  validateCrabboxOfflineRuntimeArchives,
+  type CrabboxOfflineRuntimeSetupOptions,
+} from "./crabbox-worker-offline-archives.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
+import {
+  CRABBOX_RUNTIME_VERIFICATION_SOURCE,
+  type CrabboxRuntimeInstallationIdentity,
+} from "./crabbox-worker-runtime-verification.js";
 import {
   createCrabboxWorkerStateDirScript,
   wrapCrabboxNodeScript,
@@ -45,23 +54,68 @@ export function createCrabboxNodeRuntimeSetup(params: {
   return createCrabboxNodeSetup(params);
 }
 
-function createCrabboxNodeSetup(params: {
-  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
-  leaseId: string;
-  enrollment?: CrabboxWorkerNodeEnrollment;
-  workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
-  desktop?: boolean;
-  desktopSetup?: string;
-  target?: CrabboxOperatingSystem;
-}): { command: string; forwardedEnv: Record<string, string> } {
+/** Install verified local runtime archives without enrollment or a logical lease. */
+export function createCrabboxOfflineRuntimeSetup(params: CrabboxOfflineRuntimeSetupOptions): {
+  command: string;
+  forwardedEnv: Record<string, string>;
+} {
+  validateCrabboxOfflineRuntimeArchives(params);
+  return createCrabboxNodeSetup({ ...params, offline: true });
+}
+
+/** Verify the retained cache without repairing, publishing or enrolling it. */
+export function createCrabboxRuntimeCacheVerification(
+  params: CrabboxRuntimeInstallationIdentity & { target?: CrabboxOperatingSystem },
+): { command: string; forwardedEnv: Record<string, string> } {
+  for (const artifact of [params.nodeBootstrap, params.workerBundle]) {
+    if (
+      !/^[a-f0-9]{64}$/u.test(artifact.sha256) ||
+      !Number.isSafeInteger(artifact.bytes) ||
+      artifact.bytes <= 0
+    ) {
+      throw new Error("Runtime cache archive identity is invalid");
+    }
+  }
+  return createCrabboxNodeSetup({
+    offline: true,
+    verifyOnly: true,
+    nodeBootstrap: params.nodeBootstrap,
+    workerBundle: params.workerBundle,
+    target: params.target,
+  });
+}
+
+function createCrabboxNodeSetup(
+  params: {
+    enrollment?: CrabboxWorkerNodeEnrollment;
+    desktop?: boolean;
+    desktopSetup?: string;
+    target?: CrabboxOperatingSystem;
+  } & (
+    | ({ offline: true; leaseId?: never; verifyOnly?: false } & CrabboxOfflineRuntimeSetupOptions)
+    | ({ offline: true; leaseId?: never; verifyOnly: true } & CrabboxRuntimeInstallationIdentity)
+    | {
+        offline?: false;
+        verifyOnly?: false;
+        nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+        leaseId: string;
+        workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
+      }
+  ),
+): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, linuxToolchainSetup, installLock, ...nodeBootstrap } = params.nodeBootstrap;
+  const { token, linuxToolchainSetup, installLock } = params.offline ? {} : params.nodeBootstrap;
+  const nodeBootstrap = params.offline
+    ? params.nodeBootstrap
+    : (({ token: _token, linuxToolchainSetup: _setup, installLock: _lock, ...artifact }) =>
+        artifact)(params.nodeBootstrap);
   const lockArtifact = installLock
     ? (({ token: _token, ...artifact }) => artifact)(installLock)
     : undefined;
-  const workerBundle = params.workerBundle
-    ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
-    : undefined;
+  const workerBundle =
+    !params.offline && params.workerBundle
+      ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
+      : params.workerBundle;
   const desktopTarget = params.desktop ? (params.target ?? "linux") : undefined;
   const desktopEnvironment =
     desktopTarget === "linux"
@@ -92,9 +146,9 @@ const displayName = ${JSON.stringify(enrollment?.displayName)};
 const mode = ${JSON.stringify(enrollment?.mode)};
 const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const desktopSetup = ${JSON.stringify(params.desktopSetup)};
-const credentials = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
-const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
-const workerCodexBase64 = process.env.${CLOUD_WORKER_CODEX_ENV};
+const credentials = ${params.offline ? "undefined" : `process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV}`};
+const setupCode = ${params.offline ? "undefined" : `process.env.${CLOUD_SETUP_CODE_ENV}`};
+const workerCodexBase64 = ${params.offline ? "undefined" : `process.env.${CLOUD_WORKER_CODEX_ENV}`};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_WORKER_CODEX_ENV};
@@ -116,7 +170,7 @@ setPhase("preparation");
   try { tokens = JSON.parse(credentials || "{}"); }
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
-  const stateDir = ${createCrabboxWorkerStateDirScript(leaseId)};
+  const stateDir = ${leaseId === undefined ? "undefined" : createCrabboxWorkerStateDirScript(leaseId)};
   const stageWorkerCodex = () => {
     if (!workerCodexBase64) return;
     let settings;
@@ -154,10 +208,10 @@ setPhase("preparation");
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
-  const pidFile = path.join(stateDir, "node.pid");
-  const launchFile = path.join(stateDir, "node-launch.json");
-  const setupFile = path.join(stateDir, "setup-code");
-  const runtimeLink = path.join(stateDir, "runtime");
+  const pidFile = stateDir && path.join(stateDir, "node.pid");
+  const launchFile = stateDir && path.join(stateDir, "node-launch.json");
+  const setupFile = stateDir && path.join(stateDir, "setup-code");
+  const runtimeLink = stateDir && path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   // Tools travel inside the verified full-node artifact and share its preparation identity.
   if (process.platform !== "win32") {
@@ -198,7 +252,7 @@ setPhase("preparation");
   // overlaps that with SSH readiness. Best effort: images without cron keep the cold start.
   // Only a Crabbox run on this lease edits the crontab; local executions (tests) never do.
   const installRuntimePrefetch = () => {
-    if (process.platform !== "linux" || process.env.CRABBOX_LEASE_ID !== leaseId) return;
+    if (!leaseId || process.platform !== "linux" || process.env.CRABBOX_LEASE_ID !== leaseId) return;
     try {
       const script = path.join(runtimeRoot, ".prefetch.sh");
       const nodeDir = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
@@ -220,48 +274,7 @@ setPhase("preparation");
     delete nodeEnv.XDG_RUNTIME_DIR;
     Object.assign(nodeEnv, JSON.parse(desktop.stdout));
   }
-  if (mode) {
-    fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
-    if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
-    else if (path.dirname(stateDir) === path.join(path.parse(home).root, "ocw")) {
-      // The drive root does not inherit the worker profile's private permissions.
-      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
-      const secureState = "$ErrorActionPreference = 'Stop'; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; icacls.exe " + quote(stateDir) + " /inheritance:r /grant:r ('*' + $sid + ':(OI)(CI)F') /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' | Out-Null; exit $LASTEXITCODE";
-      const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", secureState], { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: 10000 });
-      if (result.error || result.status !== 0) throw subprocessError("Cloud worker state directory permissions could not be secured", result);
-    }
-  }
-  ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
-  // Lease-private settings are never part of runtime-only preparation or its captured image.
-  if (mode) stageWorkerCodex();
-  if (desktopTarget === "macos") finishDesktopSetup();
-  if (reuseNodeProcess()) {
-    if (desktopTarget !== "macos") finishDesktopSetup();
-    setPhase("complete");
-    return;
-  }
-  const verifyRuntime = (root) => {
-    setPhase("runtime verification");
-    if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
-    const packageRoot = path.join(root, "node_modules", "openclaw");
-    const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-    if (manifest.name !== "openclaw" || manifest.version !== bootstrap.openclawVersion) throw new Error("Cloud worker bootstrap package identity does not match the Gateway");
-    const probe = spawnSync(process.execPath, [path.join(packageRoot, "openclaw.mjs"), "--version"], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
-    const version = probe.stdout?.trim();
-    const expected = "OpenClaw " + bootstrap.openclawVersion;
-    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw subprocessError("Cloud worker bootstrap CLI could not verify its Gateway version", probe);
-  };
-  const verifyArchive = async (source, artifact) => {
-    const hash = crypto.createHash("sha256");
-    let bytes = 0;
-    for await (const chunk of source) {
-      bytes += chunk.byteLength;
-      if (bytes > artifact.bytes) throw new Error("Cloud worker bootstrap archive exceeds its declared size");
-      hash.update(chunk);
-    }
-    if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
-  };
-  const downloadAbort = new AbortController();
+  ${CRABBOX_RUNTIME_VERIFICATION_SOURCE}
   const downloadAttempt = async (artifact, token, archive, offset, reportPhase) => {
     reportPhase("download connection");
     // A reset after the final bytes needs verification, not an unsatisfiable range.
@@ -358,6 +371,7 @@ setPhase("preparation");
     let retainedAnyBytes = false;
     const partial = archive + ".partial";
     try {
+      ${CRABBOX_LOCAL_RUNTIME_ARCHIVE_SOURCE}
       origin = new URL(artifact.url).origin;
       for (;;) {
         try {
@@ -398,28 +412,6 @@ setPhase("preparation");
       throw downloadAbort.signal.reason;
     } finally { fs.rmSync(partial, { force: true }); }
   };
-  const workerArchivePath = (root) => {
-    const relative = workerBundle.packageRelativePath;
-    const parts = relative.split("/");
-    if (parts.length !== 2 || !/^[a-z][a-z-]*$/.test(parts[0]) || parts[1] !== workerBundle.sha256 + ".tgz" || !/^[a-f0-9]{64}$/.test(workerBundle.sha256)) throw new Error("Cloud worker archive package path is invalid");
-    return path.join(root, "node_modules", "openclaw", ...parts);
-  };
-  const verifyWorkerArchive = async (root) => {
-    setPhase("worker archive verification");
-    const archive = workerArchivePath(root);
-    let handle;
-    // A non-regular artifact (including a FIFO) must reject without blocking preparation.
-    try { handle = await fsp.open(archive, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
-    catch (error) { if (error.code === "ENOENT") return false; throw error; }
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.nlink !== 1 || stat.size !== workerBundle.bytes || fs.realpathSync(archive) !== archive) throw new Error("Cloud worker prepared archive path or length is unsafe");
-      const source = handle.createReadStream({ autoClose: false });
-      try { await verifyArchive(source, workerBundle); }
-      finally { source.destroy(); }
-    } finally { await handle.close(); }
-    return true;
-  };
   const publishWorkerArchive = (root, downloaded) => {
     if (!workerBundle) return;
     setPhase("worker archive publication");
@@ -436,10 +428,40 @@ setPhase("preparation");
       }
     }
   };
+  // Verify before state creation, archive pruning/publication or runtime binding.
+  if (${Boolean(params.verifyOnly)}) {
+    await verifyRuntime(runtimeDir);
+    if (!await verifyWorkerArchive(runtimeDir)) throw new Error("Cloud worker prepared archive is missing");
+    reportRuntimeInstallation("existing-verified");
+    setPhase("complete");
+    return;
+  }
+  if (mode) {
+    fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
+    if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
+    else if (path.dirname(stateDir) === path.join(path.parse(home).root, "ocw")) {
+      // The drive root does not inherit the worker profile's private permissions.
+      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
+      const secureState = "$ErrorActionPreference = 'Stop'; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; icacls.exe " + quote(stateDir) + " /inheritance:r /grant:r ('*' + $sid + ':(OI)(CI)F') /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' | Out-Null; exit $LASTEXITCODE";
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", secureState], { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: 10000 });
+      if (result.error || result.status !== 0) throw subprocessError("Cloud worker state directory permissions could not be secured", result);
+    }
+  }
+  ${leaseId === undefined ? "const desktopTarget = undefined;" : createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  // Lease-private settings are never part of runtime-only preparation or its captured image.
+  if (mode) stageWorkerCodex();
+  if (desktopTarget === "macos") finishDesktopSetup();
+  if (mode && reuseNodeProcess()) {
+    if (desktopTarget !== "macos") finishDesktopSetup();
+    setPhase("complete");
+    return;
+  }
+  const downloadAbort = new AbortController();
   fs.mkdirSync(runtimeRoot, { recursive: true, ...directoryOptions });
   const existingRuntime = fs.existsSync(runtimeDir);
-  if (existingRuntime) verifyRuntime(runtimeDir);
-  if (existingRuntime && (!workerBundle || await verifyWorkerArchive(runtimeDir))) {
+  if (existingRuntime) await verifyRuntime(runtimeDir);
+  const reusedRuntime = existingRuntime && (!workerBundle || await verifyWorkerArchive(runtimeDir));
+  if (reusedRuntime) {
     publishWorkerArchive(runtimeDir);
   } else {
   const stage = fs.mkdtempSync(path.join(runtimeRoot, "node-bootstrap-"));
@@ -455,6 +477,7 @@ setPhase("preparation");
         await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
         downloadAbort.signal.throwIfAborted();
         fs.mkdirSync(installDir, directoryOptions);
+        if (bootstrap.install === "npm") {
         let locked = false;
         const warnUnlocked = (reason) => console.error("CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:" + reason);
         if (installLock) {
@@ -530,7 +553,58 @@ setPhase("preparation");
           const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
           throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
         }
-        verifyRuntime(installDir);
+        } else {
+        const packageRoot = path.join(installDir, "node_modules", "openclaw");
+        fs.mkdirSync(packageRoot, { recursive: true, ...directoryOptions });
+        const runTar = (args) => new Promise((resolve, reject) => {
+          const child = spawn(process.platform === "win32" ? "tar.exe" : "tar", args, { env: nodeEnv, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+          const output = []; let bytes = 0; let failure;
+          const kill = () => {
+            if (!child.pid) return;
+            try {
+              if (process.platform === "win32") {
+                const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                if (result.error) failure ||= result.error;
+              }
+              else process.kill(-child.pid, "SIGKILL");
+            } catch (error) { if (error.code !== "ESRCH") failure ||= error; }
+          };
+          const stop = () => { failure ||= downloadAbort.signal.reason; kill(); };
+          const cancel = () => downloadAbort.abort(new Error("Cloud worker runtime extraction cancelled"));
+          const timeout = setTimeout(() => { failure = new Error("Cloud worker runtime extraction timed out"); kill(); }, 600000);
+          process.once("SIGTERM", cancel); process.once("SIGINT", cancel);
+          downloadAbort.signal.addEventListener("abort", stop, { once: true });
+          child.stdout.on("data", (chunk) => {
+            bytes += chunk.length;
+            if (bytes > 32 * 1024 * 1024) { failure = new Error("Cloud worker runtime archive listing exceeds its limit"); kill(); }
+            else output.push(chunk);
+          });
+          child.stderr.resume();
+          child.once("error", (error) => { failure = error; });
+          child.once("close", (status) => {
+            clearTimeout(timeout); process.removeListener("SIGTERM", cancel); process.removeListener("SIGINT", cancel);
+            downloadAbort.signal.removeEventListener("abort", stop);
+            if (failure || status !== 0) reject(failure || new Error("Cloud worker runtime archive extraction failed; verify tar is available in the image"));
+            else resolve(Buffer.concat(output).toString("utf8"));
+          });
+          if (downloadAbort.signal.aborted) stop();
+        });
+        // Only regular producer-owned files/directories enter the private staging tree.
+        // Listing before extraction prevents tar from following archive links or escaping package/.
+        setPhase("extraction");
+        const names = (await runTar(["-tzf", archive])).trimEnd().split("\\n");
+        const seen = new Set();
+        if (names.length > 250000) throw new Error("Cloud worker runtime archive exceeds its entry limit");
+        for (const name of names) {
+          const relative = name.endsWith("/") ? name.slice(0, -1) : name;
+          if (seen.has(relative) || relative.includes("\\\\") || path.posix.normalize(relative) !== relative || (relative !== "package" && !relative.startsWith("package/")) || relative.split("/").some((part) => !part || part === ".." || part === ".")) throw new Error("Cloud worker runtime archive path is unsafe");
+          seen.add(relative);
+        }
+        const types = (await runTar(["-tvzf", archive])).trimEnd().split("\\n");
+        if (types.some((entry) => !["-", "d"].includes(entry[0]))) throw new Error("Cloud worker runtime archive contains an unsafe entry type");
+        await runTar(["-xzf", archive, "--strip-components=1", "--no-same-owner", "--no-same-permissions", "-C", packageRoot]);
+        }
+        await verifyRuntime(installDir, true);
       })().catch((error) => {
         if (!downloadAbort.signal.aborted) downloadAbort.abort(Object.assign(error, { downloadPhase: phase }));
         throw downloadAbort.signal.reason;
@@ -548,6 +622,8 @@ setPhase("preparation");
   installRuntimePrefetch();
   // A project snapshot contains only verified runtime bytes, never enrollment state.
   if (!mode) {
+    // npm installations do not carry the manifest/build identity this receipt certifies.
+    if (workerBundle && bootstrap.install !== "npm") reportRuntimeInstallation(reusedRuntime ? "existing-verified" : "installed");
     setPhase("complete");
     return;
   }
@@ -581,22 +657,26 @@ setPhase("preparation");
         script.trimEnd(),
         params.target,
         "CRABBOX_NODE_ENROLLMENT_SCRIPT",
-        "bootstrap",
+        params.verifyOnly ? "runtime" : "bootstrap",
       ),
-    forwardedEnv: {
-      ...(enrollment?.workerCodex
-        ? {
-            [CLOUD_WORKER_CODEX_ENV]: Buffer.from(JSON.stringify(enrollment.workerCodex)).toString(
-              "base64",
-            ),
-          }
-        : {}),
-      [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
-        nodeBootstrap: token,
-        workerBundle: params.workerBundle?.token,
-        installLock: installLock?.token,
-      }),
-      ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
-    },
+    forwardedEnv: params.offline
+      ? {}
+      : {
+          ...(enrollment?.workerCodex
+            ? {
+                [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
+                  JSON.stringify(enrollment.workerCodex),
+                ).toString("base64"),
+              }
+            : {}),
+          [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
+            nodeBootstrap: token,
+            workerBundle: params.workerBundle?.token,
+            installLock: installLock?.token,
+          }),
+          ...(enrollment?.mode === "connect"
+            ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode }
+            : {}),
+        },
   };
 }

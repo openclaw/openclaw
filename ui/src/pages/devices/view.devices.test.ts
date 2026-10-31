@@ -67,7 +67,7 @@ function findButton(scope: Element, label: string): HTMLButtonElement {
   return button;
 }
 
-async function selectMenuItem(scope: Element, value: string): Promise<HTMLButtonElement> {
+async function openMenu(scope: Element): Promise<void> {
   const trigger = expectDefined(
     scope.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
     "device actions trigger",
@@ -76,6 +76,10 @@ async function selectMenuItem(scope: Element, value: string): Promise<HTMLButton
     trigger.click();
     await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
   }
+}
+
+async function selectMenuItem(scope: Element, value: string): Promise<HTMLButtonElement> {
+  await openMenu(scope);
   const item = expectDefined(
     scope.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`),
     `menu item ${value}`,
@@ -457,18 +461,11 @@ describe("devices inventory rendering", () => {
     const node = { nodeId: "node-one", displayName: "Node One", paired: true, connected: true };
     const props = createDevicesViewProps({ nodes: [node] });
     const container = renderDevicesContainer(props);
+    await openMenu(getSettingsRow(container, "Node One"));
     const copy = expectDefined(
       container.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="copy"]'),
       "Copy device ID menu item",
     );
-    const trigger = expectDefined(
-      getSettingsRow(container, "Node One").querySelector<HTMLButtonElement>(
-        ".device-entry__menu-trigger",
-      ),
-      "device actions trigger",
-    );
-    trigger.click();
-    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
     copy.focus();
     expect(document.activeElement).toBe(copy);
 
@@ -544,7 +541,7 @@ describe("devices inventory rendering", () => {
     expect(approvals).toEqual(["node-req-1"]);
   });
 
-  it("disables a pending node's approve and reject while its decision is in flight", () => {
+  it("disables a pending node's approve and reject while its decision is in flight", async () => {
     const container = renderDevicesContainer({
       nodes: [
         {
@@ -559,6 +556,7 @@ describe("devices inventory rendering", () => {
       devicesDeciding: [{ requestId: "node-req-1" }],
     });
     const row = getSettingsRow(container, "clawmac");
+    await openMenu(row);
     for (const action of ["approve", "reject"]) {
       expect(
         row.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${action}"]`)?.disabled,
@@ -846,7 +844,7 @@ describe("devices inventory rendering", () => {
 });
 
 describe("devices access gating", () => {
-  it("disables pairing and admin mutations with one browsing-only notice", () => {
+  it("disables pairing and admin mutations with one browsing-only notice", async () => {
     const onInventoryRemove = vi.fn();
     const onNodeApprove = vi.fn();
     const onNodeReject = vi.fn();
@@ -896,6 +894,7 @@ describe("devices access gating", () => {
     for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }
+    await openMenu(getSettingsRow(container, "Device One"));
     const remove = getSettingsRow(container, "Device One").querySelector<HTMLButtonElement>(
       '[role="menuitem"][data-value="remove"]',
     );
@@ -908,6 +907,7 @@ describe("devices access gating", () => {
     expect(editAlias?.getAttribute("title")).toContain("operator.pairing");
     remove?.click();
     editAlias?.click();
+    await openMenu(getSettingsRow(container, "Pending node"));
     for (const action of ["approve", "reject"]) {
       const item = expectDefined(
         getSettingsRow(container, "Pending node").querySelector<HTMLButtonElement>(

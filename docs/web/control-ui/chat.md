@@ -30,6 +30,10 @@ Hidden panes, background tabs, and programmatic or maintenance scrolling do not
 trigger automatic loading. An incomplete history page does not show the new-chat welcome
 screen.
 
+Hidden history rows do not end pagination while older source rows remain. The
+Gateway continues from the consumed source boundary, including hidden rows, and
+stops offering earlier history when that source is exhausted.
+
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
 option changes only that conversation. Explicit choices stay in this browser for this
@@ -1126,7 +1130,8 @@ files. Ordinary documents without an authored CSP retain their existing preview
 behavior.
 
 Authored in-page HTML links such as `href="#section"` scroll within the preview, including
-in `strict` mode. This leaves the original file and **Source** unchanged; authored
+in `strict` mode. Fragment navigation does not depend on the relative-resource CSP
+subset above. This leaves the original file and **Source** unchanged; authored
 base URLs, links targeting another window, and download links keep their behavior.
 
 Workspace file reads and edits retain their existing 256 KiB limit. After a successful save, Files refreshes its metadata and Review refreshes its diff without switching the active panel or clearing the current Files search.

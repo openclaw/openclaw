@@ -6408,7 +6408,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     const coreWrapper = readFileSync("scripts/openclaw-npm-publish.sh", "utf8");
     expect(coreWrapper).toMatch(
-      /--verify-publication-authority\s*\nfi\s*\n"\$\{publish_cmd\[@\]\}"/u,
+      /--verify-publication-authority\s*\nfi\s*\nif "\$\{publish_cmd\[@\]\}" 2>"\$\{publish_stderr\}"; then/u,
     );
     const authority = readFileSync("scripts/npm-preflight-tooling-identity.mjs", "utf8");
     expect(authority).toContain("releasePublishRunAttempt: env.RELEASE_PUBLISH_RUN_ATTEMPT");
@@ -8778,6 +8778,21 @@ test "$package_manager" = "pnpm@12.1.0"
     expect((outputs.docker_lanes ?? "").split(/\s+/u)).toContain("update-first-hop-compat");
   });
 
+  it("selects only packaged older-runtime recovery in custom acceptance", () => {
+    const lane = "package-installed-recovery-older-runtime";
+    const { outputs, result } = runPackageAcceptanceProfile({
+      suiteProfile: "custom",
+      dockerLanes: lane,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs).toMatchObject({
+      docker_lanes: lane,
+      include_openwebui: "false",
+      include_release_path_suites: "false",
+      telegram_enabled: "false",
+    });
+  });
+
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
     const { outputs, result } = runPackageAcceptanceProfile({
       suiteProfile: "telegram",
@@ -10701,7 +10716,7 @@ describe("package artifact reuse", () => {
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
     expect(openCodeGoSmoke.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
   });

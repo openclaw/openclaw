@@ -292,6 +292,8 @@ type EnglishCatalog = TranslationMap & {
       | "unsentDraft"
       | "noArchivedSessions"
       | "status"
+      | "all"
+      | "snoozed"
       | "statusLive"
       | "statusIdle"
       | "statusUnknown"
@@ -571,6 +573,7 @@ const startupEnglish = {
     staleTitle: "This view could not load",
     staleSubtitle:
       "Some interface files could not be downloaded. Check your connection, then reload.",
+    bootDraftRecovery: "Copy the draft below before clearing it and reloading.",
     reloading: "Reloading…",
     retry: "Retry",
     stylesFailed: "Styles failed to load, so the page may look broken.",
@@ -733,6 +736,8 @@ const startupEnglish = {
     unsentDraft: "Unsent draft",
     noArchivedSessions: "No archived sessions.",
     status: "Status",
+    all: "All",
+    snoozed: "Snoozed",
     statusLive: "Live",
     statusIdle: "Idle",
     statusUnknown: "Unknown",

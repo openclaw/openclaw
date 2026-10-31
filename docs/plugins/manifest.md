@@ -213,6 +213,35 @@ The anchors from the single-page version still resolve here.
 }
 ```
 
+## Generation overlap
+
+`generationOverlap: true` opts a native plugin into replacement while previously
+admitted turns finish on its old generation. Omitted or `false` preserves serialized
+replacement. Other value types are rejected. Both the predecessor and successor
+must opt in; the Gateway also checks their registered resource surfaces.
+If both `generationOverlap` and `reload.turnHandover` are declared, overlap takes
+precedence: admitted turns keep their old generation, and any serialized
+replacement waits for them to finish.
+
+Declare this only when registration, service startup, runtime state, and cleanup
+are independent for each generation. A successor must not overwrite a shared
+module singleton, close its predecessor's resources, or take an exclusive
+listener, port, or subscription that the predecessor still needs. If successor
+preparation fails, cleaning up that successor must leave the predecessor usable.
+Shared persistent data must remain compatible across both generations, and its
+writer coordination must span separately loaded module copies. Timers and
+watchers belong to their service or instance cleanup owner, which must stop and
+join them during retirement.
+An opted-in service must meet the same generation ownership contract. Channel
+replacement remains serialized, as do other exclusive resource surfaces.
+
+For eligible replacements, new work selects the successor once it is published.
+Already admitted turns retain their original tools, hooks, and end hooks until
+they finish. The predecessor's services and registration cleanup retire after
+its last admitted holder releases. The declaration does not bypass current
+credentials, approvals, or external-effect authorization. See
+[Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup).
+
 ## Top-level field reference
 
 | Field                                | Required | Type                         | What it means                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -220,6 +249,7 @@ The anchors from the single-page version still resolve here.
 | `id`                                 | Yes      | `string`                     | Primary plugin id. This is the id used in `plugins.entries.<id>`. Exception: a package whose `package.json` declares multiple plugin entries registers each entry as `<id>/<entry-basename>` (for example `pack/one`), and that entry-scoped id is the `plugins.entries` key for that entry. Entry basenames must be unique within the package; colliding basenames are rejected at discovery. |
 | `configSchema`                       | Yes      | `object`                     | Inline JSON Schema for this plugin's config.                                                                                                                                                                                                                                                                                                                                                   |
 | `requiresPlugins`                    | No       | `string[]`                   | Plugin ids that must also be installed for this plugin to have an effect. Discovery keeps the plugin loadable but warns when any required plugin is missing.                                                                                                                                                                                                                                   |
+| `generationOverlap`                  | No       | `boolean`                    | Explicit author opt-in for independently owned plugin generations to overlap during replacement. Defaults to serialized replacement; see [Generation overlap](#generation-overlap).                                                                                                                                                                                                            |
 | `enabledByDefault`                   | No       | `true`                       | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                                                                                                                                                                                                   |
 | `enabledByDefaultOnPlatforms`        | No       | `string[]`                   | Marks a bundled plugin as enabled by default only on the listed Node.js platforms, for example `["darwin"]`. Explicit config still wins.                                                                                                                                                                                                                                                       |
 | `legacyPluginIds`                    | No       | `string[]`                   | Legacy ids that normalize to this primary plugin id.                                                                                                                                                                                                                                                                                                                                           |

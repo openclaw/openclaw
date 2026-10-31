@@ -10,6 +10,7 @@ import {
 } from "../infra/sqlite-clean-close-seal.js";
 import {
   readSqliteDatabaseCleanClose,
+  readSqliteDatabaseIntegrityVerification,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
@@ -26,6 +27,7 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -38,6 +40,7 @@ import {
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -66,12 +69,76 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("certifies idle handles after grace and borrowed handles only after their final release", async () => {
+it.each([false, true])("defers seal-less Doctor reopens (pinned WAL: %s)", async (pinned) => {
+  const options = {
+    agentId: "doctor",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-doctor-reopen-") },
+  };
+  const seeded = openOpenClawAgentDatabase(options);
+  closeOpenClawAgentDatabasesForTest();
+  retireSqliteDatabaseAdmissionForPath(seeded.path);
+  fs.unlinkSync(`${seeded.path}.seal`);
+  const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
+  const diagnostics: SqliteIntegrityDiagnostics[] = [];
+  let checks = 0;
+  vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
+    ...args
+  ) {
+    for (const check of gate(...args)) {
+      checks += 1;
+      yield check;
+    }
+    diagnostics.push({ ...args[3] });
+    return false;
+  });
+  const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "quick" });
+  let reader: ReturnType<typeof sqlite.openNodeSqliteDatabase> | undefined;
+  try {
+    await maintenance.run(async () => {
+      const first = openOpenClawAgentDatabase(options);
+      if (pinned) {
+        reader = sqlite.openNodeSqliteDatabase(first.path, { readOnly: true });
+        reader.exec("BEGIN");
+        reader.prepare("SELECT * FROM auth_profile_state").all();
+        first.db.exec("INSERT INTO auth_profile_state VALUES ('pinned', '{}', 1)");
+      }
+      closeCachedOpenClawAgentDatabase(first);
+      expect(readSqliteDatabaseCleanClose(first.path)).toBe(false);
+      expect(readSqliteDatabaseIntegrityVerification(first.path)).toBeUndefined();
+      await withOpenClawAgentDatabaseAdmission(
+        options,
+        (run) => Promise.resolve(run(() => {})),
+        (second) => expect(second.db.isOpen).toBe(true),
+      );
+      expect(checks).toBe(0);
+      expect(diagnostics).toEqual([
+        expect.objectContaining({ integrityGateMode: "deferred", integrityGateOutcome: "pending" }),
+        expect.objectContaining({ integrityGateOutcome: "cached" }),
+      ]);
+      expect(diagnostics.every((record) => record.integrityCheckSyncMs === undefined)).toBe(true);
+      expect(logger.info).toHaveBeenCalledWith(
+        `agent database clean-close receipt: ${pinned ? "checkpoint-incomplete" : "verification-missing"}; agent=doctor`,
+        expect.anything(),
+      );
+    });
+  } finally {
+    reader?.close();
+    await maintenance.close();
+  }
+});
+
+it("certifies shutdown handles after dependent readers and final borrowers release", async () => {
   vi.useFakeTimers();
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-cleanup-idle-") };
   const options = { agentId: "idle", env };
   const heldOptions = { agentId: "held", env };
   const idle = openOpenClawAgentDatabase(options);
+  const reader = openOpenClawAgentDatabaseReadOnly(options, { lifecycle: "agent" });
+  if (!reader.found) {
+    throw new Error("Missing synthetic agent reader");
+  }
+  reader.database.db.prepare("SELECT state_key FROM auth_profile_state").all();
+  idle.db.exec("INSERT INTO auth_profile_state VALUES ('shutdown-proof', '{}', 1)");
   const held = openOpenClawAgentDatabase(heldOptions);
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -87,7 +154,10 @@ it("certifies idle handles after grace and borrowed handles only after their fin
     expect(idle.db.isOpen).toBe(true);
     beginGatewayShutdownCleanup();
     await vi.advanceTimersByTimeAsync(0);
-    expect(idle.db.isOpen).toBe(false);
+    expect(idle.db.isOpen).toBe(true);
+    reader.database.close();
+    await vi.waitFor(() => expect(idle.db.isOpen).toBe(false));
+    expect(reader.database.db.isOpen).toBe(false);
     expect(readSqliteDatabaseCleanClose(idle.path)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
       "agent database clean-close receipt: written; agent=idle",
@@ -233,8 +303,8 @@ it.each([
       expect.objectContaining({
         agentId: "receipt-agent",
         integrityGateReason: outcome === "malformed-identity" ? "malformed-proof" : outcome,
-        integrityGateMode: "full",
-        integrityGateOutcome: "healthy",
+        integrityGateMode: outcome === "no-proof" ? "deferred" : "full",
+        integrityGateOutcome: outcome === "no-proof" ? "pending" : "healthy",
       }),
     );
   }
@@ -429,7 +499,7 @@ it("rechecks the media version guard after a validated handle is replaced by a p
 });
 
 it.each(["invalid seal", "foreign lease"] as const)(
-  "retains admitted physical proof despite an %s",
+  "reuses physical proof only without a foreign lease (%s)",
   (change) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-policy-") };
     const options = { agentId: "policy", env };
@@ -467,8 +537,7 @@ it.each(["invalid seal", "foreign lease"] as const)(
           .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
           .get(),
       ).toEqual({ state_json: '{"ok":true}' });
-      expect(diagnostics?.integrityGateOutcome).toBe("cached");
-      expect(logger.info).not.toHaveBeenCalled();
+      expect(diagnostics?.integrityGateOutcome).toBe(lease ? "healthy" : "cached");
       reopened.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='preserved'");
       expect(readSqliteDatabaseCleanClose(original.path)).toBe(false);
     } finally {

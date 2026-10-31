@@ -8,12 +8,18 @@ import {
   isPending,
   latest,
   Loading,
+  Show,
   omit,
   type Accessor,
 } from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
-import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsRow,
+  SettingsSection,
+  SettingsPage,
+  SettingsLoadingSkeleton,
+} from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
@@ -32,7 +38,8 @@ export function DevicesView(props: DevicesProps) {
   );
   return (
     <SettingsPage wide={true}>
-      <>
+      {/* Inventory belongs above policy; wait for its first snapshot before painting either. */}
+      <Show when={props.initialInventoryReady} fallback={<SettingsLoadingSkeleton />}>
         {props.connected && (!props.canManagePairing || !props.canAdmin) ? (
           <div class="callout info" role="note">
             {t(
@@ -73,7 +80,7 @@ export function DevicesView(props: DevicesProps) {
             />
           )}
         </PolicyRead>
-      </>
+      </Show>
     </SettingsPage>
   );
 }

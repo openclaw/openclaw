@@ -575,7 +575,11 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     readPage,
     // Capture consumed endpoints before display filters erase hidden rows. Cursors
     // must still advance an empty page, without retaining another raw-message array.
-    oldestMessageId: readChatHistoryMessageId(rawMessages[0]),
+    oldestMessageId: readChatHistoryMessageId(
+      result.projected.length < result.projection.messages.length
+        ? result.projected[0]
+        : rawMessages[0],
+    ),
     newestMessageId: readChatHistoryMessageId(rawMessages.at(-1)),
     hasOlder:
       rawPageMessages < availableMessages ||

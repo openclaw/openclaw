@@ -1,13 +1,13 @@
-import type {
-  AcquireConfiguredProviderLocalService,
-  EmbeddingProvider,
-  EmbeddingProviderCallOptions,
+import {
+  EMBEDDING_DEADLINE_CONTROL,
+  type AcquireConfiguredProviderLocalService,
+  type EmbeddingProvider,
+  type EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
   sanitizeAndNormalizeEmbedding,
   type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -308,7 +308,7 @@ export async function createOllamaEmbeddingProvider(
     callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> => {
     const signal = callOptions?.signal;
-    const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+    const deadlineControl = callOptions?.[EMBEDDING_DEADLINE_CONTROL];
     const localServiceLease =
       client.localServiceTarget && client.acquireLocalService
         ? await client.acquireLocalService(

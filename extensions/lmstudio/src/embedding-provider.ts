@@ -1,4 +1,8 @@
 import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
+import {
+  EMBEDDING_DEADLINE_CONTROL,
+  type EmbeddingDeadlineControl,
+} from "openclaw/plugin-sdk/embedding-providers";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -10,10 +14,6 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
   type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  MEMORY_SEARCH_DEADLINE_CONTROL,
-  type MemorySearchDeadlineControl,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -193,7 +193,7 @@ export async function createLmstudioEmbeddingProvider(
   const withLocalServiceLease = async <T>(
     signal: AbortSignal | undefined,
     action: () => Promise<T>,
-    deadlineControl?: MemorySearchDeadlineControl,
+    deadlineControl?: EmbeddingDeadlineControl,
   ): Promise<T> => {
     signal?.throwIfAborted();
     const lease =
@@ -328,7 +328,7 @@ export async function createLmstudioEmbeddingProvider(
         callOptions?.signal?.throwIfAborted();
         return await resolveRequestProvider(prepared).embed(input, callOptions);
       },
-      callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+      callOptions?.[EMBEDDING_DEADLINE_CONTROL],
     );
   const embedBatch: MemoryEmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
     if (inputs.length === 0) {
@@ -345,7 +345,7 @@ export async function createLmstudioEmbeddingProvider(
         callOptions?.signal?.throwIfAborted();
         return await resolveRequestProvider(prepared).embedBatch(inputs, callOptions);
       },
-      callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+      callOptions?.[EMBEDDING_DEADLINE_CONTROL],
     );
   };
   const provider: MemoryEmbeddingProvider = {

@@ -886,8 +886,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   flex: 1 1 auto;
 }
 
-.chat-pane__header--mobile
-  :is(.chat-pane__nav-toggle, .chat-header-session-menu__trigger, .chat-pane__layout-trigger) {
+.chat-pane__header--mobile :is(.chat-header-session-menu__trigger, .chat-pane__layout-trigger) {
   display: inline-flex;
   flex: 0 0 44px;
   align-items: center;
@@ -902,9 +901,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   box-shadow: none;
 }
 
-.chat-pane__header--mobile
-  :is(.chat-pane__nav-toggle, .chat-header-session-menu__trigger, .chat-pane__layout-trigger)
-  svg {
+.chat-pane__header--mobile :is(.chat-header-session-menu__trigger, .chat-pane__layout-trigger) svg {
   width: 20px;
   height: 20px;
 }

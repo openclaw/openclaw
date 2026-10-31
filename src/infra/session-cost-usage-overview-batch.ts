@@ -1,4 +1,4 @@
-import type { UsageOverviewSessionSummary } from "../shared/usage-types.js";
+import type { UsageOverviewOptions, UsageOverviewSessionSummary } from "../shared/usage-types.js";
 import type {
   CostUsageTotals,
   SessionDailyLatency,
@@ -175,14 +175,45 @@ function readTotals(values: Float64Array, offset: number): CostUsageTotals {
 
 const optional = (value: number) => (Number.isNaN(value) ? undefined : value);
 
+/** Table metrics are already present in each packed row's fixed header. */
+export function readUsageOverviewSortValue(
+  batch: UsageOverviewBatch,
+  row: number,
+  sort: UsageOverviewOptions["sort"],
+): number | undefined {
+  if (sort === undefined || sort === "recent") {
+    return undefined;
+  }
+  const base = batch.offsets[row]!;
+  if (base < 0) {
+    return 0;
+  }
+  switch (sort) {
+    case "tokens":
+      return batch.values[base + TOTALS + 4]!;
+    case "cost":
+      return batch.values[base + TOTALS + 5]!;
+    case "messages":
+      return batch.values[base + MESSAGES]!;
+    case "errors":
+      return batch.values[base + MESSAGES + 5]!;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Expand packed rows into overview summaries. `refreshing` marks stale rows whose
- * refresh the loader already scheduled.
+ * refresh the loader already scheduled. Selected indices return in caller order.
  */
 export function readUsageOverviewBatch(
   batch: UsageOverviewBatch,
   refreshing = false,
+  indices?: readonly number[],
 ): Array<UsageOverviewSessionSummary | null> {
+  if (indices?.length === 0) {
+    return [];
+  }
   const { strings, values } = batch;
   const name = (id: number) => (id < 0 ? undefined : strings[id]);
   const missing = new Map<number, Map<string, Record<string, number>>>();
@@ -204,7 +235,7 @@ export function readUsageOverviewBatch(
     }
     return totals;
   };
-  return Array.from(batch.offsets, (base, row) => {
+  const decode = (base: number, row: number): UsageOverviewSessionSummary | null => {
     if (base < 0) {
       return null;
     }
@@ -327,5 +358,8 @@ export function readUsageOverviewBatch(
         : {}),
     };
     return summary;
-  });
+  };
+  return indices
+    ? indices.map((row) => decode(batch.offsets[row]!, row))
+    : Array.from(batch.offsets, decode);
 }

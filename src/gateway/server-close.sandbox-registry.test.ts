@@ -14,6 +14,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { readClosedDatabase } from "./server-close.lifecycle.test-support.js";
 import { createGatewayCloseRace } from "./server-close.race.test-support.js";
+import * as restartResume from "./session-restart-resume.js";
 
 // mock-isolation: Upstream polling is independent of sandbox removal settlement.
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
@@ -27,9 +28,10 @@ it("joins accepted sandbox removal across scheduler cancellation after database 
   const { fixture, kernel } = race;
   const removeRuntime = vi.fn(async () => {});
   let removing: Promise<void> | undefined;
-  race.onCleanup(async () => {
-    await Promise.allSettled([removing]);
-  });
+  const markers = vi
+    .spyOn(restartResume, "persistRunningSessionsForRestart")
+    .mockImplementation(() => race.block());
+  race.onCleanup(() => markers.mockRestore());
   try {
     await closeOpenClawStateDatabaseAsync();
     const backendId = "sandbox-close-fixture";
@@ -89,6 +91,7 @@ it("joins accepted sandbox removal across scheduler cancellation after database 
     await expect(removeSandboxContainer(containerName)).rejects.toThrow(
       "Sandbox registry admission is closed",
     );
+    expect([markers.mock.calls.length, removeRuntime.mock.calls.length]).toEqual([1, 0]);
     await race.finish(removing);
     expect(removeRuntime).toHaveBeenCalledOnce();
     expect(shared.isOpen).toBe(false);

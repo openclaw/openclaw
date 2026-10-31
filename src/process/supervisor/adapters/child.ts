@@ -133,6 +133,7 @@ export async function createChildAdapter(
 ): Promise<ProcessAdapterStartup<WorkerChildAdapter>> {
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
+      executionIntent: params.executionIntent,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       initiateSpawn: params.initiateSpawn,
@@ -175,6 +176,7 @@ export async function createChildAdapter(
     (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
     return await createServiceChildRelayAdapter({
+      executionIntent: params.executionIntent,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       initiateSpawn: params.initiateSpawn,
@@ -277,7 +279,7 @@ export async function createChildAdapter(
       },
       initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
-      gatewayWorker: params.ownedWorker,
+      executionIntent: params.executionIntent,
       options,
     });
 

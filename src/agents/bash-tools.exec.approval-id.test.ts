@@ -297,14 +297,13 @@ it.each([
     const result = await run();
     expect(result.details.status).toBe("completed");
     if (route === "node") {
-      expect(result.details).toMatchObject({ nodeId: "node-1" });
+      const warning =
+        "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session.";
+      expect(result.details).toMatchObject({ nodeId: "node-1", warningText: warning });
       expect(getResultText(result)).toContain("node-ok");
       expect(fixture.runs).toHaveLength(1);
       expect(fixture.runs[0]?.cwd).toBe("/Users/vv");
-      expectText(
-        result,
-        "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session.",
-      );
+      expectText(result, warning);
       expect(localSpawn).not.toHaveBeenCalled();
     } else {
       expect(result.details).not.toHaveProperty("nodeId");

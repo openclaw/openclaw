@@ -63,6 +63,7 @@ export async function integrateManagedWorkspaceSource(
       commit: string;
       githubHost: string;
       review: { repository: string; commit: string };
+      projectBase?: { repository: string; branch: string };
       initial: boolean;
       reviewOnly: boolean;
       emptySource: boolean;
@@ -301,7 +302,7 @@ export async function integrateManagedWorkspaceSource(
               throw new Error(pristineError);
             }
             // A projection may first be captured after unrelated commits already exist.
-            // Only verified PR/base history or the immutable empty source is disposable.
+            // Only verified published history or the immutable empty source is disposable.
             if (source.emptySource) {
               if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
                 throw new Error(pristineError);
@@ -333,7 +334,40 @@ export async function integrateManagedWorkspaceSource(
                 baseCommit,
               ]);
               if (fromBase.code !== 0 && fromHead.code !== 0) {
-                throw new Error(pristineError);
+                // The selected project source may be newer than, or differ from, the PR base.
+                // Verify its recorded branch on the original repository, including forks.
+                if (!source.projectBase) {
+                  throw new Error(pristineError);
+                }
+                const publishedBase = await readGitHubPublicationBaseSha(
+                  run,
+                  source.projectBase.repository,
+                  source.projectBase.branch,
+                  target.githubHost,
+                  identity.env,
+                );
+                await requireGitHubPublicationCommit(
+                  run,
+                  source.projectBase.repository,
+                  publishedBase,
+                  target.githubHost,
+                  cwd,
+                  {
+                    ...identity.env,
+                    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+                    GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+                  },
+                  `The current repository base ancestry could not be fetched; retry ${action}.`,
+                );
+                const fromPublishedBase = await probe([
+                  "merge-base",
+                  "--is-ancestor",
+                  initialHead,
+                  publishedBase,
+                ]);
+                if (fromPublishedBase.code !== 0) {
+                  throw new Error(pristineError);
+                }
               }
             }
             const buildCacheInputs = new Set(await state.buildCacheInputs());

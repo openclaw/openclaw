@@ -1,0 +1,2 @@
+# Explicit PR metadata: requester authority, target identity, unchanged workspace, and uncertain writes.
+230

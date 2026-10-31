@@ -208,13 +208,15 @@ async function executeAgentRun(
             abortSignal: abortController.signal,
           },
           async () =>
-            withPreparedModelRuntimePluginGenerationScope(
-              replyDispatchRuntime.pluginGeneration,
-              () => {
-                dispatched = true;
-                return dispatchAgentRunWithMedia(dispatch, params);
-              },
-              () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
+            preparedModelRuntimeLease.run(() =>
+              withPreparedModelRuntimePluginGenerationScope(
+                replyDispatchRuntime.pluginGeneration,
+                () => {
+                  dispatched = true;
+                  return dispatchAgentRunWithMedia(dispatch, params);
+                },
+                () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
+              ),
             ),
         ),
       );
@@ -571,7 +573,6 @@ async function executeAgentRun(
               context: params.context,
               isIncognito: diagnostics.incognito,
               followupCompletion: prepared.followupCompletion,
-              canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
             },
             executionIdentitySpawnFacts,
           ),

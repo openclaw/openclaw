@@ -73,10 +73,12 @@ const controlUiPerformanceBudgets = {
   // iOS-style mobile sheet motion (#188162) adds 279 B to a main that already measured
   // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
   // Retain 64 B build variance.
-  totalCssGzipBytes: 309_265,
-  // Logs windowing adds 38 B raw / 11 B gzip for 17% lower first-render task CPU
-  // and 42% lower filter task CPU at 4x. Measured raw total plus 64 B variance.
-  totalCssRawBytes: 1_597_676,
+  // Reserving the mobile toolbar adds 146 B CSS gzip while Chat sheds 337 B overall.
+  // Keep 64 B build variance above the measured 309,302 B.
+  totalCssGzipBytes: 309_366,
+  // Mobile focus keeps stable geometry at 1,599,219 B raw CSS, with fewer Chat bytes.
+  // Keep the existing 64 B variance for the measured rendering and layout-stability wins.
+  totalCssRawBytes: 1_599_283,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

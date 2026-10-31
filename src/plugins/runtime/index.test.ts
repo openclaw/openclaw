@@ -4,6 +4,8 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
@@ -12,6 +14,10 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
 }));
 // mock-isolation: Exercise the lazy runtime facade without loading credential-backed model auth.
 vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+// mock-isolation: Gateway presence must not initialize server orchestration.
+vi.mock("../../gateway/server-plugins.js", () => {
+  throw new Error("Gateway availability must not load server plugin orchestration");
+});
 
 import { createPluginRuntime } from "./index.js";
 
@@ -93,9 +99,22 @@ describe("plugin runtime command execution", () => {
     ).toThrow("Plugin runtime subagent methods are only available during a gateway request.");
   });
 
-  it("exposes a node duplex capability even when Gateway access is unavailable", () => {
-    const nodes = createPluginRuntime().nodes;
-    expect(() => nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
+  it("reads Gateway availability from the request scope without loading server orchestration", async () => {
+    const runtime = createPluginRuntime();
+    await expect(runtime.gateway.isAvailable()).resolves.toBe(false);
+    const context = createContext();
+    await withPluginRuntimeGatewayRequestScope(
+      { context, isWebchatConnect: () => false },
+      async () => {
+        await expect(runtime.gateway.isAvailable()).resolves.toBe(true);
+        await withPluginRuntimeGatewayRequestScope(
+          { context, resolveGatewayContext: () => undefined, isWebchatConnect: () => false },
+          async () => expect(await runtime.gateway.isAvailable()).toBe(false),
+        );
+      },
+    );
+    await expect(runtime.gateway.isAvailable()).resolves.toBe(false);
+    expect(() => runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
       "only available inside the Gateway",
     );
   });

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { retainSqliteDatabaseAdmissionForPath } from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -147,22 +148,19 @@ export function captureSessionEntrySourceAssertion(params: {
         databaseIdentity: identity.key.slice("file:".length),
         databaseBirthtime: identity.birthtime,
       };
-      const assertCaptured = () => {
-        params.assertHostCurrent?.();
-        if (
-          typeof source.databaseIdentity !== "string" ||
-          source.path !== physicalPath ||
-          ![locator, ...candidates].every(isSessionStoreReadCandidateCurrent)
-        ) {
-          params.refuse();
-        }
-        assertExistingDatabaseIdentity(
-          source.path,
-          `file:${source.databaseIdentity}`,
-          source.databaseBirthtime,
-        );
-      };
-      assertCaptured();
+      params.assertHostCurrent?.();
+      if (
+        typeof source.databaseIdentity !== "string" ||
+        source.path !== physicalPath ||
+        ![locator, ...candidates].every(isSessionStoreReadCandidateCurrent)
+      ) {
+        params.refuse();
+      }
+      assertExistingDatabaseIdentity(
+        source.path,
+        `file:${source.databaseIdentity}`,
+        source.databaseBirthtime,
+      );
       const database = { agentId: source.agentId, path: source.path, env };
       const retained = retainSessionHistoryWorkerDatabase(database);
       // Join receipt publication before dispatch so a newer write cannot certify an older read.
@@ -177,19 +175,21 @@ export function captureSessionEntrySourceAssertion(params: {
             fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field])),
         });
       const revision = predicate.captureRevision();
+      let admission: ReturnType<typeof retainSqliteDatabaseAdmissionForPath>;
       let active = true;
       let conversations:
         | Awaited<ReturnType<NonNullable<typeof params.prepareConversations>>>
         | undefined;
       const assertCurrent = () => {
-        assertCaptured();
+        params.assertHostCurrent?.();
         retained.owner.assertCurrent();
         conversations?.assertCurrent();
-        if (!active || !predicate.isCurrent()) {
+        if (!active || !admission?.isCurrent() || !predicate.isCurrent()) {
           params.refuse();
         }
       };
       try {
+        admission = retainSqliteDatabaseAdmissionForPath(source.path);
         if (!params.preparedEntry) {
           const result = await retained.owner.readExactEntries({
             sessionKeys: [scope.sessionKey],
@@ -226,6 +226,7 @@ export function captureSessionEntrySourceAssertion(params: {
           ],
           release: () => {
             active = false;
+            admission?.release();
             if (!params.preparedEntry) {
               predicate.release();
             }
@@ -234,6 +235,7 @@ export function captureSessionEntrySourceAssertion(params: {
         };
       } catch (error) {
         active = false;
+        admission?.release();
         if (!params.preparedEntry) {
           predicate.release();
         }

@@ -4,11 +4,12 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { expect, it, afterAll } from "vitest";
 import type { JsonTestResults } from "vitest/node";
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { writePrivateUpdateHandoffChildGuard } from "../../test/helpers/private-update-handoff-child-guard.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
+import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
 import { assertTestHomeSelection } from "../../test/test-home-policy.mts";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
@@ -37,7 +38,19 @@ if (databasePath) {
   process.stderr.write("RELOAD_PRODUCT_STAGE scenarios-imported\n");
 } else {
   const lifetime = createFixtureLifetime();
-  afterAll(() => lifetime.cleanup());
+  // Compilation is module preparation; the prebound child still owns every product effect.
+  const nodeExecPath = resolveTestNodeExecPath();
+  const fixtureWorkers = createVitestWorkerRun(process.env, undefined, "full", nodeExecPath);
+  afterAll(async () => {
+    await lifetime.cleanup();
+    await fixtureWorkers.dispose();
+  });
+  try {
+    await fixtureWorkers.prepare();
+  } catch (error) {
+    await fixtureWorkers.dispose();
+    throw error;
+  }
   it("runs all three real reload continuations in a prebound owned process", async ({ signal }) =>
     lifetime.run(async () => {
       const root = lifetime.createTempDir("reload-send-product-");
@@ -75,9 +88,10 @@ if (databasePath) {
       }
       let output = "";
       let childPid: number | undefined;
-      const code = await lifetime.track(
-        runManagedCommand({
-          bin: resolveTestNodeExecPath(),
+      const { code } = await lifetime.track(
+        runVitestShutdownCommand({
+          bin: nodeExecPath,
+          workerRun: fixtureWorkers,
           args: [
             "scripts/run-vitest.mjs",
             "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
@@ -87,9 +101,6 @@ if (databasePath) {
           signal,
           cwd: process.cwd(),
           env,
-          stdio: ["ignore", "pipe", "pipe"],
-          // Windows Job ownership is automatic; the POSIX-only strict flag rejects Windows.
-          requireProcessTreeExit: process.platform !== "win32",
           onReady(child) {
             childPid = child.pid;
             child.stdout?.on("data", (chunk) => {

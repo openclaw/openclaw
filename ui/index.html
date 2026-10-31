@@ -339,6 +339,7 @@
         position: relative;
         container-type: inline-size;
         min-width: 0;
+        min-height: 0;
         height: 100%;
         background: var(--bg-content, var(--boot-content-bg));
       }
@@ -491,8 +492,8 @@
 
       /* Chat frames hold the live boot composer; status text stays above it.
          First-paint tokens only, so every loading frame paints identical pixels.
-         Sizes mirror the chat composer (one editor line plus its action row,
-         growing to six lines) so the handoff keeps text and frame still. */
+         Sizes mirror the chat composer's desktop stack and mobile writing row,
+         growing to six lines, so the handoff keeps text and frame still. */
       html:not([data-openclaw-boot-chat]) #openclaw-boot-composer {
         display: none;
       }
@@ -563,8 +564,38 @@
 
       @media (max-width: 900px) {
         :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
-          .loading-skeleton:has(#openclaw-boot-composer:focus) {
+          .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
           padding-bottom: 6px;
+        }
+      }
+
+      @media (max-width: 900px),
+        (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        /* Merged web chrome uses the mobile composer; native shells retain its base gap. */
+        html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer) {
+          padding-bottom: 10px;
+        }
+      }
+
+      @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer) {
+          padding-inline: 16px;
+        }
+
+        html[data-openclaw-boot-chat]:not(
+            .openclaw-native-macos,
+            .openclaw-native-nav,
+            .openclaw-native-web-chrome
+          )
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer)
+          > .loading-skeleton__messages:not(.loading-skeleton__content) {
+          min-height: 0;
+          overflow: hidden;
         }
       }
 
@@ -584,7 +615,10 @@
           border-radius: 20px;
         }
 
-        #openclaw-boot-composer:focus {
+        /* Recovery controls must not move between pointer down and click when
+           the editor loses focus. Keep its editing space while recovery is shown. */
+        #openclaw-boot-composer:focus,
+        .loading-skeleton:has(.loading-skeleton__content) #openclaw-boot-composer {
           min-height: 90px;
           max-height: 192px;
           padding: 12px 14px 54px;
@@ -621,6 +655,68 @@
                 var(--chat-composer-send-size, 32px) + 4px + 2px
             )
           );
+        }
+      }
+
+      @media (max-width: 900px),
+        (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        html[data-openclaw-boot-chat]:not(
+            .openclaw-native-macos,
+            .openclaw-native-nav,
+            .openclaw-native-web-chrome
+          )
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton__composer:has(> #openclaw-boot-composer) {
+          /* Mirror the permanent mobile writing row and its external toolbar band. */
+          display: grid;
+          grid-template-columns: 32px minmax(0, 1fr) 76px;
+          grid-template-rows: max-content minmax(36px, max-content);
+          align-content: start;
+          align-items: center;
+          gap: 0 2px;
+          min-height: 52px;
+          height: auto;
+          margin-block-start: 48px;
+          padding: 7px 8px;
+          border-radius: calc(28px * var(--openclaw-corner-radius-scale, 1));
+        }
+
+        html[data-openclaw-boot-chat]:not(
+            .openclaw-native-macos,
+            .openclaw-native-nav,
+            .openclaw-native-web-chrome
+          )
+          #openclaw-boot-composer {
+          grid-column: 2;
+          grid-row: 2;
+          min-width: 0;
+          min-height: 24px;
+          max-height: 144px;
+          padding: 0;
+          border-radius: 0;
+          font-family: var(
+            --font-body,
+            "Instrument Sans",
+            -apple-system,
+            BlinkMacSystemFont,
+            "Segoe UI",
+            Roboto,
+            sans-serif
+          );
+          line-height: 24px;
+          scrollbar-gutter: auto;
+        }
+      }
+
+      @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        html[data-openclaw-boot-chat]:not(
+            .openclaw-native-macos,
+            .openclaw-native-nav,
+            .openclaw-native-web-chrome
+          )
+          #openclaw-boot-composer {
+          max-height: 56px;
+          overflow-y: auto;
         }
       }
 

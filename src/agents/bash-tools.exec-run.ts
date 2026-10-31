@@ -418,18 +418,16 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         const storeEnv = await resolveStoreEnv();
         const subagentExecution = await resolveSubagentExecution();
         assertSourceActive();
-        // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
-        // cannot use its sentinels, so both sides of the contract stay absent.
-        const useSecretEgress = secretEgressEnabled && host === "gateway";
-        const secretEgressBindings = useSecretEgress
-          ? (storeEnv.secretEgressBindings ?? [])
-          : undefined;
-        assertDurableExecAvailable(params, host, allowBackground, secretEgressBindings?.length);
-        if (useSecretEgress) {
-          if (!defaults?.operationalRunInstance) {
-            throw new Error("Secret egress proxy requires an admitted agent run instance");
-          }
-          assertSourceActive();
+        const storeBindings = storeEnv.secretEgressBindings ?? [];
+        const useSecretEgress = secretEgressEnabled && host === "gateway" && !params.durable;
+        const secretEgressBindings = useSecretEgress ? storeBindings : undefined;
+        if (secretEgressEnabled && params.durable && storeBindings.length) {
+          warnings.push(
+            `Durable execution starts without ${storeBindings.length} secret-store credential${storeBindings.length === 1 ? "" : "s"}: secret-egress grants end when the Gateway restarts. Use the managed GitHub identity, the command's own configuration, or non-durable background execution for commands that need them.`,
+          );
+        }
+        if (useSecretEgress && !defaults?.operationalRunInstance) {
+          throw new Error("Secret egress proxy requires an admitted agent run instance");
         }
         const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
           execParams: params,

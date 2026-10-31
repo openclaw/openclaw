@@ -9,6 +9,7 @@ import {
   GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
   GATEWAY_SUSPEND_UNAVAILABLE_REASON,
 } from "../../packages/gateway-protocol/src/restart-unavailable.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -130,8 +131,16 @@ export async function runWithGatewayObservationScope<T>(
   run: (retainRoot: () => void) => T | Promise<T>,
   requestSignals: (AbortSignal | undefined)[],
   cancelled: (error: ErrorShape) => T | Promise<T>,
+  timeoutMs?: number,
 ): Promise<T> {
   const work = new AsyncWorkScope();
+  const timeoutError =
+    timeoutMs === undefined ? undefined : new Error(`${method} timed out. Retry the request.`);
+  const timer =
+    timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => work.beginClose(timeoutError), timeoutMs);
+  timer?.unref?.();
   const rootHold: { release: (() => void) | null } = { release: null };
   // Authorization precedes admission; the envelope hands off its root before invoking work.
   const retainRoot = () => {
@@ -150,7 +159,9 @@ export async function runWithGatewayObservationScope<T>(
   }
   try {
     work.signal.throwIfAborted();
-    const result = await work.track(() => run(retainRoot));
+    const pending = work.track(() => run(retainRoot));
+    // Respond on the read deadline; retain custody below until accepted work settles.
+    const result = await (timer ? racePromiseWithAbortSignal(pending, work.signal) : pending);
     work.signal.throwIfAborted();
     return result;
   } catch (error) {
@@ -160,11 +171,18 @@ export async function runWithGatewayObservationScope<T>(
     return await cancelled(
       getGatewayRestartDrainSignal().aborted
         ? workAdmissionUnavailableError(method)
-        : errorShape(ErrorCodes.UNAVAILABLE, `${method} observation cancelled`, {
-            retryable: true,
-          }),
+        : errorShape(
+            ErrorCodes.UNAVAILABLE,
+            timeoutError && work.signal.reason === timeoutError
+              ? timeoutError.message
+              : `${method} observation cancelled`,
+            {
+              retryable: true,
+            },
+          ),
     );
   } finally {
+    clearTimeout(timer);
     signal.removeEventListener("abort", close);
     try {
       await work.drain();

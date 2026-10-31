@@ -96,10 +96,6 @@ function BoardWidgetCellContent(
   let actionInFlight = false;
   let menu: MenuHandle | undefined;
   let connected = true;
-  // Retain the MCP renderer until its teardown acknowledgement releases it.
-  const [renderedMcp, setRenderedMcp] = createSignal(
-    (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
-  );
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
   const canGrant = () => props.canGrant !== false;
@@ -152,6 +148,10 @@ function BoardWidgetCellContent(
       if (!needsResources()) {
         return undefined;
       }
+      // Retain the MCP renderer until its teardown acknowledgement releases it.
+      const [renderedMcp, setRenderedMcp] = createSignal(
+        (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
+      );
       const appView = createBoardMcpAppLifecycle({
         active,
         connected: () => connected,
@@ -172,7 +172,13 @@ function BoardWidgetCellContent(
         widget: () => props.widget,
       });
       disconnectFrame = () => frame.disconnect();
-      return { appView, frame, frameState: projectOwner(frame, (owner) => owner) };
+      return {
+        appView,
+        frame,
+        frameState: projectOwner(frame, (owner) => owner),
+        renderedMcp,
+        setRenderedMcp,
+      };
     },
     { lazy: false },
   );
@@ -185,8 +191,10 @@ function BoardWidgetCellContent(
   const fixedReport = () =>
     props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
   const [reportEntered, setReportEntered] = createSignal(false);
-  // Fixed reports already reserve their full height. Build nearby bodies once,
-  // then let the existing core-widget latch retain them across tab switches.
+  const needsGrantNotice = () =>
+    props.widget?.grantState === "pending" || props.widget?.grantState === "rejected";
+  // Fixed reports reserve their full height. Keep their shells ready for scroll,
+  // but admit heavy report content only nearby and retain it across tab switches.
   // Observe the card because the display:contents host has no intersection box.
   createIntersectionObserver(
     () => (fixedReport() && !reportEntered() && widgetRoot() ? [widgetRoot()!] : []),
@@ -252,8 +260,7 @@ function BoardWidgetCellContent(
   }
   const presentationReady = () =>
     !props.widget?.viewTicket ||
-    props.widget.grantState === "pending" ||
-    props.widget.grantState === "rejected" ||
+    needsGrantNotice() ||
     bodyErrored() ||
     (resources()?.frame.presentationReady ?? false);
   cells.set(host, {
@@ -262,19 +269,16 @@ function BoardWidgetCellContent(
     },
     focusWidget: () => widgetRoot()?.focus(),
     selectMenuItem,
-    async teardown() {
-      await mcpElement?.teardown();
-    },
-    restartAfterTeardown() {
-      mcpElement?.restartAfterTeardown();
-    },
+    teardown: async () => mcpElement?.teardown(),
+    restartAfterTeardown: () => mcpElement?.restartAfterTeardown(),
   });
   createEffect(
-    () => [props.widget, props.boardRevision, active(), gatewayBinding(), resources()] as const,
-    // Owner callbacks intentionally read the current binding captured above.
-    (next, previous) => {
-      const widget = next[0];
-      const current = next[4];
+    // Native widgets retain identity history without subscribing to frame activity.
+    () =>
+      resources()
+        ? ([props.widget, resources(), props.boardRevision, active(), gatewayBinding()] as const)
+        : ([props.widget, undefined] as const),
+    ([widget, current], previous) => {
       const previousWidget = previous?.[0];
       if (previousWidget && previousWidget !== widget) {
         current?.frame.widgetChanged(previousWidget, widget);
@@ -284,22 +288,28 @@ function BoardWidgetCellContent(
   );
   createEffect(
     () =>
-      [
-        widgetRoot(),
-        resources(),
-        resources()?.frameState.revision(),
-        props.widget,
-        props.boardRevision,
-        props.callbacks,
-        props.sessionKey,
-        gatewayBinding(),
-        active(),
-        props.loadingCovered,
-        props.bridgeEnabled,
-        props.widgetFrameUrl,
-        bodyErrored(),
-      ] as const,
-    ([root, current]) => {
+      resources() || props.loadingCovered
+        ? ([
+            widgetRoot(),
+            resources(),
+            resources()?.frameState.revision(),
+            props.widget,
+            props.boardRevision,
+            props.callbacks,
+            props.sessionKey,
+            gatewayBinding(),
+            active(),
+            props.loadingCovered,
+            props.bridgeEnabled,
+            props.widgetFrameUrl,
+            bodyErrored(),
+          ] as const)
+        : undefined,
+    (next) => {
+      if (!next) {
+        return;
+      }
+      const [root, current] = next;
       current?.appView.synchronize(props.callbacks, root ?? null);
       current?.frame.update();
       if (props.loadingCovered && presentationReady()) {
@@ -392,9 +402,6 @@ function BoardWidgetCellContent(
             ?.read()
             ?.errors.find((entry) => entry.pluginId === pluginId() || entry.pluginId === "host")
         : undefined;
-    const Loading = () => (
-      <p class="board-widget__plugin-loading">{t("board.widget.pluginLoading")}</p>
-    );
     return (
       <Switch
         fallback={
@@ -440,7 +447,7 @@ function BoardWidgetCellContent(
             plugins?.read().isLoading(pluginId())
           }
         >
-          <Loading />
+          <p class="board-widget__plugin-loading">{t("board.widget.pluginLoading")}</p>
         </Match>
         <Match when={runtimeError()}>
           <BoardWidgetError
@@ -464,7 +471,7 @@ function BoardWidgetCellContent(
       <Match when={resources()?.frameState.read().error}>
         <BoardWidgetError error={resources()?.frameState.read().error} />
       </Match>
-      <Match when={renderedMcp() && resources()}>
+      <Match when={resources()?.renderedMcp() && resources()}>
         {(current) => (
           <BoardMcpAppContent
             accessNotice={<AccessNotice />}
@@ -483,15 +490,13 @@ function BoardWidgetCellContent(
             }}
             retired={() => {
               if (props.widget?.contentKind !== "mcp-app") {
-                setRenderedMcp(false);
+                current().setRenderedMcp(false);
               }
             }}
           />
         )}
       </Match>
-      <Match
-        when={props.widget?.grantState === "pending" || props.widget?.grantState === "rejected"}
-      >
+      <Match when={needsGrantNotice()}>
         <AccessNotice />
       </Match>
       <Match when={props.widget?.contentKind === "plugin" && !props.widget.frameUrl}>
@@ -523,14 +528,13 @@ function BoardWidgetCellContent(
   const scrollable = () =>
     bodyErrored() ||
     actionFailed() ||
-    props.widget?.grantState === "pending" ||
-    props.widget?.grantState === "rejected" ||
+    needsGrantNotice() ||
     props.widget?.contentKind === "mcp-app" ||
     (props.widget?.contentKind === "plugin" && !props.widget.frameUrl);
   const style = (): SolidJSX.CSSProperties => {
     const rect = props.rect!;
     const height =
-      props.dragging || props.pageChrome
+      props.dragging || props.pageChrome || props.widget!.contentKind !== "html"
         ? undefined
         : exactBoardWidgetHeightPx(
             props.widget!,
@@ -583,6 +587,7 @@ function BoardWidgetCellContent(
           {
             "board-widget--page-chrome": props.pageChrome,
             "board-widget--dragging": props.dragging,
+            "board-widget--fixed-report": fixedReport(),
           },
           presentation() && `board-widget--${presentation()}`,
         ]}
@@ -708,9 +713,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
     methods: {
       focusWidget: (host) => cells.get(host)?.focusWidget(),
       selectMenuItem: (host, value) => cells.get(host)?.selectMenuItem(value),
-      teardown: async (host) => {
-        await cells.get(host)?.teardown();
-      },
+      teardown: async (host) => cells.get(host)?.teardown(),
       restartAfterTeardown: (host) => cells.get(host)?.restartAfterTeardown(),
     },
   },

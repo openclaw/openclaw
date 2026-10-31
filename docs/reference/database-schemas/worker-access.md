@@ -13,6 +13,12 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Retained session-generation and prepared entry-source guards keep the SQLite
+admission owner's lifetime and check its recorded generation without filesystem
+polling. Database retirement or a replacement observed at admission invalidates
+that generation. Source preparation and writer admission retain their physical
+identity checks; session publications and live caller authority still gate effects.
+
 Prepared agent-deletion checks observe native transaction state without refreshing
 the cached handle's idle deadline. Database acquisitions, active transactions, and
 retained borrows keep their existing idle protection; deletion checks retain their
@@ -47,6 +53,15 @@ Released session sharing, entry-predicate, and generation authorities drop their
 decoded rows even when a caller retains the inactive handle. Predicate comparison
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
+
+Host file writes prepare retained session-generation authority at their final
+effect boundary, after overwrite rollback capture. The existing session worker
+validates physical sources and refreshes facts after committed native mutations;
+the final host assertion checks the retained generation, native handle and revision,
+and live owner. Lifecycle adapters preserve that preparation through indirect
+settings reads. Ordinary synchronous assertions, opaque callback sources, and
+uncommitted native transactions retain their existing checks; an async wrapper
+alone does not move those callbacks off the main thread.
 
 Finished worker admissions release publication observers and request callbacks.
 Committed facts remain available for lost-reply recovery, which runs
@@ -914,9 +929,13 @@ or cold projections remain incomplete and are not marked as successfully backfil
 Usage-cost refresh holds the exclusive refresh lease while reading a stale rollup
 body and its monthly partitions by key, without revalidating their metadata.
 Discovery still reads only metadata, and body reads retain their payload bounds.
-Full refresh transfers stale row snapshots in batches of up to 64 rows or 1 MiB
-of JSON and key data, with oversized rows sent alone. A final prune request uses
-the existing worker transaction and checkpoint and timestamp comparisons.
+Full refresh prunes stale row snapshots in batches of up to 1,024 rows or 1 MiB
+of JSON and key data, with oversized rows sent alone. Each batch waits outside
+the existing writer FIFO until it drains, then commits through its ordinary
+transaction and checkpoint and timestamp comparisons. A row and its partitions
+remain atomic; a later failed batch leaves earlier batches committed. Restart
+or the next refresh rediscovers remaining obsolete rows, making partial cleanup
+safe to retry without retaining the whole inventory on the host.
 Targeted refreshes do not prune other keys. Selected month deletion uses bounded
 key batches within the rollup write transaction. Transcript statistics use
 the existing batched read directly, without registering per-session write scopes
@@ -3353,7 +3372,9 @@ discovery. These changes preserve current-row predicates and final effect checks
 
 Initial manager hydration, persisted-user replay, and bootstrap message presence
 share one fresh history cohort. A context window starting at active position zero
-has no preceding cache-TTL prefix and skips that query. A message in the bounded payload proves physical
+has no preceding cache-TTL prefix and skips that query. Imported prefixes use the
+existing session/sequence identity index for each cache-TTL candidate, avoiding
+a repeated whole-session identity scan. A message in the bounded payload proves physical
 message presence in that snapshot; a window without messages still uses the
 physical-history probe because resets can hide retained messages. After hooks or compaction, replay acquires its
 next cohort at synchronous prompt admission. Bounded model context retains its separate
@@ -6354,7 +6375,10 @@ Request aliases still follow current configuration; preparing history never
 rekeys an existing row or redirects its stored lineage.
 
 Spawn preparation discovers durable session stores and reads selected listing
-rows through the existing read workers. Candidate selection retains physical
+rows through the existing read workers. Worker and synchronous listings share
+the selected-row query: only requested entries load saved prompt snapshots,
+while pending sibling metadata still undergoes canonical-key validation.
+Candidate selection retains physical
 reader custody and preserves stored-row sibling validation, aliases, and deleted
 main owners. Requester generations are captured before child admission, and live
 caller authority is rechecked after awaited preparation. Contributor inheritance

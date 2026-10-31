@@ -23,7 +23,7 @@ import {
 const sessionKey = "agent:main:stop-long-turn";
 const prompt = "Walk through every fixture step, then wait for my instruction.";
 // Two transcript rows per step put the opening prompt outside the 80-row history tail.
-const toolSteps = 48;
+const toolSteps = 42;
 
 function execCall(step: number) {
   const item = {

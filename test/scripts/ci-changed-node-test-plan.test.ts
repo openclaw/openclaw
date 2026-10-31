@@ -53,6 +53,26 @@ import {
   writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
+it.each([
+  [".github/workflows/pr-tooling-darwin.yml"],
+  ["scripts/lib/ci-node-test-plan.mts"],
+  ["test/vitest/vitest.tooling.config.ts"],
+  ["test/non-isolated-runner.ts"],
+])("selects Darwin admission guards for %s", (file) => {
+  const targets = resolvePolicyTestTargets([file]);
+  const closureGuard = "test/scripts/pr-wrapper-source-closure.test.ts";
+  expect(targets).toContain(closureGuard);
+  expect(
+    isRuntimeTestFileIncluded(closureGuard, {
+      changedPaths: [file],
+      includePrExemptRuntimeTests: false,
+    }),
+  ).toBe(true);
+  if (!file.startsWith("scripts/lib/ci-")) {
+    expect(targets).toContain("test/scripts/ci-workflow-cost.test.ts");
+  }
+});
+
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function toolingShard(
@@ -150,7 +170,13 @@ it.each([
 ] as const)(
   "selects real-Gateway tests through their source, fixture, and protocol owners: %s",
   (file, expected) => {
-    expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
+    try {
+      expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+      expect(timings).not.toHaveBeenCalled();
+    } finally {
+      timings.mockRestore();
+    }
   },
 );
 

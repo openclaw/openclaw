@@ -116,6 +116,7 @@ restore and update-recovery behavior.
 - Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
 - `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
+- Existing FIFOs and other unsupported special files are skipped. If a regular source becomes a FIFO during capture, backup fails rather than waiting for a writer; rerun after the workspace stops changing.
 
 Verification normally reads and decompresses the archive once, retaining database
 candidates in private temporary storage for the same integrity and ownership

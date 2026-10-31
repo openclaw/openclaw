@@ -36,7 +36,7 @@ Behavior:
 - Native Windows command shells retain `SystemRoot` when launched with a replacement environment, including on ARM64. Other omitted variables stay absent, and an explicitly supplied `SystemRoot` takes precedence.
 - Managed sandbox workspace finalization bounds each container inspection, pause, and resume command to 30 seconds. A failed or timed-out operation preserves its recovery receipt rather than treating an uncertain pause or resume as successful.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
-- With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
+- With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each non-durable Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
 - Returning a background session ID does not stop the process timeout. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
 - Output stays in memory up to the per-session aggregate cap until the session is polled or cleared.
 - Finished sessions expire after their configured TTL, measured from completion. Each exec captures its agent's retention setting when admitted; using another agent's process tool does not change existing results' lifetimes. The registry also retains at most 50 finished sessions and 2,000,000 total retained output characters, evicting the oldest records first. The newest completed session retains its capped per-session aggregate even when that record alone exceeds the global limit.
@@ -142,10 +142,12 @@ instead of the sampled watchdog. Durable processes do not block safe Gateway
 restart or cooperative suspension. Ordinary background processes retain their
 existing restart and suspension behavior.
 
-Commands that would receive [secret-egress proxy](/gateway/secrets#secret-egress-proxy)
-grants cannot use durable mode because those grants end with the Gateway. Use
-non-durable background execution or a directly provided credential. A
-[managed GitHub identity](/gateway/config-tools/github-identity) remains allowed:
+Durable commands launch without [secret-egress proxy](/gateway/secrets#secret-egress-proxy)
+grants, secret-store sentinels, or proxy environment because those grants end with
+the Gateway. The exec result reports how many credentials were omitted; no grant
+or binding is persisted. For commands that need credentials, use the managed
+GitHub identity, the command's own configuration, or non-durable background
+execution. A [managed GitHub identity](/gateway/config-tools/github-identity) remains available:
 its direct credential and Git author environment are bound at launch. Running
 commands retain that token without refresh, so a very long process can outlive a
 short-lived credential.
@@ -341,7 +343,7 @@ Actions:
 Notes:
 
 - Only backgrounded sessions are listed. Ordinary records stay in memory and are lost on process restart; durable records are adopted from SQLite. New handles include an opaque boot suffix so old handles cannot select a different process after restart. A durable process keeps its original handle when adopted. Looking up a lost ordinary handle advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
-- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
+- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
 - A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable units do not block either operation.
 - `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.

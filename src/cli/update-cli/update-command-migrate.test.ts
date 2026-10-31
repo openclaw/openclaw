@@ -7,9 +7,11 @@ import * as databaseEngine from "../../commands/doctor-database-engine.js";
 import * as doctorUi from "../../commands/doctor-ui.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import * as coldNavigation from "../../infra/state-migrations.cold-navigation.js";
 import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-doctor-result.js";
 import * as updateHistory from "../../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
+import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -29,6 +31,62 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const readText = (file: string) => fs.readFile(file, "utf8");
+
+it("preserves a recoverable cold-navigation deadline in native update receipts", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      const warning =
+        "Cold transcript navigation: migrated 2, pending 3; resumes on the next doctor run. Pending archives keep the existing cold-restore path.";
+      const migrate = vi.spyOn(coldNavigation, "migrateSessionColdNavigation").mockResolvedValue({
+        changes: [],
+        warnings: [warning],
+        warningDisposition: "recoverable",
+      });
+      const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const backupRoot = state.path("cold-navigation-recovery", "native");
+      await updateMigrateCommand(backupRoot);
+      expect(note).toHaveBeenCalledWith(expect.stringContaining(warning), "Doctor warnings");
+      expect(JSON.parse(await readText(`${backupRoot}.receipt.json`))).toMatchObject({
+        status: "migrated",
+        warnings: expect.arrayContaining([warning]),
+      });
+      expect(output).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "migrated",
+          warnings: expect.arrayContaining([warning]),
+        }),
+      );
+      await updateMigrateCommand(state.path("next-deploy", "native"));
+      expect(migrate).toHaveBeenCalledTimes(2);
+      vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
+        healthz: null,
+        readyz: null,
+        coreReady: false,
+      });
+      await updateFinishCommand(backupRoot);
+      expect(listUpdateRuns({}, { env: state.env })).toContainEqual(
+        expect.objectContaining({
+          status: "succeeded",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: expect.stringMatching(/^warning:doctor:/u),
+              detail: warning,
+            }),
+          ]),
+        }),
+      );
+      expect(output).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "finished", warning: expect.stringContaining(warning) }),
+      );
+    },
+  );
+});
 
 it("migrates the Claws preference through candidate Doctor with a rollback original", async () => {
   await withOpenClawTestState(

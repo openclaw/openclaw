@@ -87,6 +87,8 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/pages/apps/apps-page.browser.test.tsx",
+  "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/usage/view-details.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
@@ -107,6 +109,7 @@ const webkitTestFiles = [
   "src/pages/new-session/project-chip.registration.browser.test.tsx",
   "src/pages/agents/agent-file-preview.browser.test.ts",
   "src/pages/skills/reader-shell.browser.test.tsx",
+  "src/pages/skills/view.clawhub.browser.test.ts",
   "src/lib/toast.browser.test.ts",
   "src/components/session-menu.browser.test.ts",
   "src/components/session-people-search.browser.test.ts",
@@ -122,6 +125,7 @@ const webkitTestFiles = [
   "src/components/hub-tabs.browser.test.tsx",
   "src/components/tooltip-title.browser.test.ts",
   "src/pages/chat/chat-composer-mobile.browser.test.tsx",
+  "src/pages/chat/chat-composer-height.browser.test.tsx",
   "src/pages/chat/chat-composer-context.browser.test.ts",
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",

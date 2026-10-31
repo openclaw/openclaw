@@ -46,6 +46,7 @@ import type { WebInboundCallbackMessage } from "./types.js";
 
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
 const WHATSAPP_INGRESS_DRAIN_INTERVAL_MS = 1_000;
+export const WHATSAPP_APPEND_REPLY_MAX_AGE_MS = 20 * 60_000;
 
 function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
   if (value == null) {
@@ -66,12 +67,6 @@ function recordAcceptedInboundActivity(accountId: string): void {
   });
 }
 
-type WhatsAppAppendReplyWindow = {
-  afterMs: number;
-  untilMs: number;
-  maxAgeMs: number;
-};
-
 type WhatsAppMessageDeliveryOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -86,8 +81,8 @@ type WhatsAppMessageDeliveryOptions = {
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
-  /** Bounded reconnect window for offline append auto-replies. */
-  appendReplyWindow?: WhatsAppAppendReplyWindow;
+  /** Maximum offline append age for established sessions. */
+  appendReplyMaxAgeMs?: number;
   shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
@@ -193,6 +188,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     },
   });
 
+  const appendReplyMaxAgeMs = socketSession.hasSyncedHistory
+    ? (options.appendReplyMaxAgeMs ?? WHATSAPP_APPEND_REPLY_MAX_AGE_MS)
+    : undefined;
   const shouldSkipStaleAppend = (msg: WAMessage, upsertType: string | undefined): boolean => {
     if (upsertType !== "append") {
       return false;
@@ -200,12 +198,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     const APPEND_RECENT_GRACE_MS = 60_000;
     const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
     const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
-    // Reconnect catch-up is temporary; after it expires, preserve steady-state
-    // handling for fresh appends instead of rejecting every later append.
-    const nowMs = Date.now();
     const appendAfterMs =
-      options.appendReplyWindow && nowMs <= options.appendReplyWindow.untilMs
-        ? Math.max(options.appendReplyWindow.afterMs, nowMs - options.appendReplyWindow.maxAgeMs)
+      appendReplyMaxAgeMs !== undefined
+        ? Date.now() - appendReplyMaxAgeMs
         : connectedAtMs - APPEND_RECENT_GRACE_MS;
     return msgTsMs < appendAfterMs;
   };

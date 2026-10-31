@@ -227,7 +227,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             if (preview.preparedCsp) {
               return preview.preparedCsp.status === "ready"
                 ? prepareHtmlPreviewLinks(preview.preparedCsp.html, allowScripts)
-                : preview.binding.html;
+                : prepareHtmlPreviewLinks(preview.binding.html, allowScripts);
             }
             let content = prepareHtmlPreviewLinks(preview.document.html, allowScripts);
             if (source) {

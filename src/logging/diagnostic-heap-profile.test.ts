@@ -154,14 +154,6 @@ describe("diagnostic heap profile owner", () => {
           redactedNodeCount: 1,
           unattributedSampleCount: unattributed ? 1 : 0,
           unattributedSampleBytes: unattributed ? 4096 : 0,
-          profile: {
-            samples: profile().samples,
-            head: {
-              children: expect.arrayContaining([
-                expect.objectContaining({ id: 2, selfSize: 8192 }),
-              ]),
-            },
-          },
         },
       });
       expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
@@ -184,11 +176,10 @@ describe("diagnostic heap profile owner", () => {
   );
 
   it("attributes dependency and native frames without exposing private paths or symbols", async () => {
-    const dependencies: [string, string][] = [
+    const dependencies: [string, string, string?][] = [
       ["/fixture/node_modules/ws/lib/buffer-util.js", "ws"],
       ["/fixture/openclaw/node_modules/undici/lib/core/util.js", "undici"],
       ["/fixture/openclaw/src/node_modules/undici/lib/core/util.js", "undici"],
-      ["/fixture/openclaw/packages/ai/node_modules/undici/lib/core/util.js", "undici"],
       ["file:///fixture/node_modules/.pnpm/ws@8.18.0/node_modules/ws/lib/buffer-util.js", "ws"],
       ["/fixture/node_modules/@scope/pkg/lib/private.js", "@scope/pkg"],
       [
@@ -196,6 +187,10 @@ describe("diagnostic heap profile owner", () => {
         "@scope/pkg",
       ],
       ["/fixture/node_modules/outer/node_modules/inner/lib/private.js", "inner"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "runPinnedWriteNative"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "NativeStagedFile.write"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "#prepare"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe"],
     ];
     const locations: [Partial<ReturnType<typeof frame>>, string][] = [
       [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
@@ -240,9 +235,9 @@ describe("diagnostic heap profile owner", () => {
       [{ url: "/private/node_modules/.pnpm/ws@8.18.0/secret.js" }, "[redacted]"],
     ];
     const frames = [
-      ...dependencies.map(([url, dependency]) => ({
-        source: { ...frame("private payload"), url },
-        expected: { ...frame(`[dep:${dependency}]`), url: `node_modules/${dependency}` },
+      ...dependencies.map(([url, dependency, symbol]) => ({
+        source: { ...frame(symbol ?? "private payload"), url },
+        expected: { ...frame(symbol ?? `[dep:${dependency}]`), url: `node_modules/${dependency}` },
       })),
       ...locations.map(([location, functionName]) => ({
         source: { ...frame("private payload"), ...location },

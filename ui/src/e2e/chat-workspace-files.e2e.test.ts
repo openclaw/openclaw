@@ -35,12 +35,16 @@ suite.define(() => {
                 type: "attachment",
                 attachment: {
                   kind: "document",
-                  label: "Cafe\u0301-checklist.txt",
+                  label: "Cafe\u0301-ΕΛΕΓΧΟΣ-checklist.txt",
                   mimeType: "text/plain",
                   url: "https://example.com/release-checklist.txt",
                 },
               },
-              { type: "image", url: "https://example.com/layout.png", alt: "Cafe\u0301.png" },
+              {
+                type: "image",
+                url: "https://example.com/layout.png",
+                alt: "Cafe\u0301-ΕΛΕΓΧΟΣ-layout.png",
+              },
             ],
           },
         ],
@@ -107,7 +111,11 @@ suite.define(() => {
         expect((await projectFile.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 48 : 32);
       }
       await page.getByRole("searchbox", { name: "Search files", exact: true }).fill("CAFÉ");
-      await page.getByText("Cafe\u0301-checklist", { exact: true }).waitFor();
+      await page.getByText("Cafe\u0301-ΕΛΕΓΧΟΣ-checklist", { exact: true }).waitFor();
+      for (const query of ["Σ", "σ", "ς"]) {
+        await page.getByRole("searchbox", { name: "Search files", exact: true }).fill(query);
+        await page.getByText("Cafe\u0301-ΕΛΕΓΧΟΣ-checklist", { exact: true }).waitFor();
+      }
     });
   });
 

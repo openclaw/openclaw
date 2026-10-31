@@ -41,6 +41,8 @@ const loaders = {
       (m) => m.templateInstallSchemaOperations,
     ),
   backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
+  quarantine: () =>
+    import("./openclaw-quarantine-store.worker.js").then((m) => m.quarantineOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
   localOnboarding: () =>

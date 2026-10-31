@@ -10,6 +10,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { commitVerifiedUpdatePluginCohort } from "./update-command-cohort.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
@@ -20,7 +21,7 @@ import {
   completePostUpdateMaintenance,
   parkPostUpdateService,
   preparePostUpdateService,
-  recordPostUpdateWindowsAutoStartFailure,
+  settlePostUpdateWindowsAutoStartFailure,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -147,7 +148,9 @@ async function finishSettledUpdate(
       params.opts.run,
       (failure) =>
         terminal.prepareSettledUpdateCommandResult(params, reportingState(failure), assertCurrent),
-      () => pendingResult,
+      (cause) =>
+        terminal.createPostUpdateExceptionResult({ ...params, result: pendingResult }, cause)
+          .result,
     ) || deferUpdateCommandTerminalResult(params.opts.run, publishFinalResult);
   const recoverFailedResult = async (
     initialResult: UpdateRunResult,
@@ -233,10 +236,7 @@ async function finishSettledUpdate(
     if (recoverService) {
       params.rollbackBlockedReason = undefined;
     }
-    if (isUpdateGatewayReadinessPending(result)) {
-      return { result, recoverService: false };
-    }
-    return { result, recoverService };
+    return { result, recoverService: !isUpdateGatewayReadinessPending(result) && recoverService };
   };
   const reportResult = async (
     initialResult: UpdateRunResult,
@@ -247,6 +247,7 @@ async function finishSettledUpdate(
     const input = captured.interruptedResult(initialResult);
     const { result, recoverService } = await recoverFailedResult(input, initialRecoverService);
     assertCurrent();
+    await commitVerifiedUpdatePluginCohort(params, result, activationVerified, assertCurrent);
     let restoreFailure = initialRestoreFailure;
     let finalResult = terminal.completeUpdateCommandResult(params, result, currentServiceStop());
     const serviceVerdict = currentServiceStop()?.serviceUpdateVerdict;
@@ -277,17 +278,13 @@ async function finishSettledUpdate(
     }
     if (restoreFailure) {
       rolledBack = false;
-      try {
-        await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
-      } catch (cause) {
-        restoreFailure = {
-          cause: new AggregateError(
-            [restoreFailure.cause, cause],
-            `Windows task restoration and compensation failed: ${formatErrorMessage(restoreFailure.cause)}; ${formatErrorMessage(cause)}`,
-          ),
-        };
-      }
-      recordPostUpdateWindowsAutoStartFailure(params, finalResult, result, restoreFailure.cause);
+      restoreFailure = await settlePostUpdateWindowsAutoStartFailure(
+        params,
+        finalResult,
+        result,
+        restoreFailure.cause,
+        currentServiceStop,
+      );
     }
     const completedBeforeCleanup = deferredTerminal
       ? await captureUpdateCommandTerminalRecord(params, finalResult, assertCurrent)
@@ -454,6 +451,7 @@ async function finishSettledUpdate(
           beforeRuntimePublication: parkForegroundOrigin,
           assertCurrent,
           candidateRuntime,
+          adoptedFinalization,
           deferPostActivationInspections: runsPostActivationInspections,
         };
         const convergence = await forward(() => convergeUpdatePlugins(pluginParams));

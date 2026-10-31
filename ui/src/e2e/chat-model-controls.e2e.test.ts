@@ -513,7 +513,9 @@ suite.define(() => {
                   effortBox.width >= 44 &&
                   modelBox.x >= composerBox.x &&
                   modelBox.x + modelBox.width <= effortBox.x + 1 &&
-                  effortBox.x + effortBox.width <= actionsBox.x + 1 &&
+                  (effortBox.x + effortBox.width <= actionsBox.x + 1 ||
+                    effortBox.y + effortBox.height <= actionsBox.y + 1) &&
+                  effortBox.x + effortBox.width <= composerBox.x + composerBox.width + 1 &&
                   actionsBox.x + actionsBox.width <= composerBox.x + composerBox.width + 1,
                 );
               },
@@ -552,8 +554,8 @@ suite.define(() => {
             .toBe(true);
         }
         await page.setViewportSize({ width: 393, height: 852 });
-        await composer.locator("textarea").click();
         await page.emulateMedia({ reducedMotion: "no-preference" });
+        await composer.locator("textarea").click();
         const needle = effort.locator(".chat-controls__effort-gauge-needle");
         const needleAngle = () =>
           needle.evaluate((node) => {
@@ -735,7 +737,10 @@ suite.define(() => {
         expect(effortBox).not.toBeNull();
         expect(actionsBox).not.toBeNull();
         expect(modelBox!.x + modelBox!.width).toBeLessThanOrEqual(effortBox!.x + 1);
-        expect(effortBox!.x + effortBox!.width).toBeLessThanOrEqual(actionsBox!.x + 1);
+        expect(
+          effortBox!.x + effortBox!.width <= actionsBox!.x + 1 ||
+            effortBox!.y + effortBox!.height <= actionsBox!.y + 1,
+        ).toBe(true);
         expect(effortBox!.width).toBeGreaterThanOrEqual(44);
         await effort.click();
         expect(await composer.locator("[data-chat-thinking-slider]").count()).toBe(0);

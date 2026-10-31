@@ -3,6 +3,17 @@ import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
 } from "../../../gateway/operator-tool-gateway-authority.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
+import {
+  getPluginRegistryForContext,
+  withPluginRuntimeRegistryScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   reserveSessionControllerSource,
@@ -23,6 +34,72 @@ beforeEach(() => {
 });
 const announce = (overrides: Partial<Parameters<typeof runAnnounceAgentCall>[0]> = {}) =>
   runAnnounceAgentCall({ agentParams: {}, isExecutionAllowed: () => true, ...overrides });
+
+it("admits a requester continuation on the current generation after its producer releases", async () => {
+  const predecessor = createOwnedTestInstance("announce-predecessor");
+  const successor = createOwnedTestInstance("announce-successor");
+  const shared = createOwnedTestInstance("announce-shared");
+  const previousRegistry = predecessor.owner!.registry!;
+  const currentRegistry = successor.owner!.registry!;
+  const invocations = new PluginInvocationScope(previousRegistry, [predecessor, shared], {
+    retained: true,
+  });
+  const oldCallback = invocations.wrap(predecessor.wrap((): string => "previous"));
+  const currentCallback = successor.wrap((): string => "current");
+  const sharedCallback = shared.wrap(() => "shared");
+  const callbacks = new Map([
+    [previousRegistry, oldCallback],
+    [currentRegistry, currentCallback],
+  ]);
+  const original = captureActivePluginRegistrySnapshot();
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const input = reserveSessionControllerSource("agent:main:generation-continuation", {
+    target: captureSessionTarget({
+      storeScope: "/synthetic/generation-continuation",
+      sessionKey: "agent:main:generation-continuation",
+      incarnation: "generation-continuation-session",
+    }),
+    reservationId: "subagent-settle:generation-continuation",
+    policy: { mode: "followup" },
+    continuationCaller: {
+      run: (run) => withPluginRuntimeRegistryScope(previousRegistry, run),
+    },
+  });
+  dispatch.mockImplementation(async () => {
+    expect(sharedCallback()).toBe("shared");
+    const registry = getPluginRegistryForContext();
+    const callback = registry && callbacks.get(registry);
+    expect(callback?.()).toBe("current");
+    return { status: "ok" };
+  });
+  let delivery: Promise<unknown> | undefined;
+  try {
+    setActivePluginRegistry(currentRegistry);
+    delivery = invocations.run(() =>
+      announce({
+        controllerInput: input,
+        onBeforeDispatch: async () => {
+          entered.resolve();
+          await resume.promise;
+        },
+      }),
+    );
+    await entered.promise;
+    invocations.release();
+    expect(() => oldCallback()).toThrow("Plugin announce-predecessor consumer is closed");
+    resume.resolve();
+    await expect(delivery).resolves.toEqual({ status: "ok" });
+    expect(dispatch).toHaveBeenCalledOnce();
+  } finally {
+    invocations.release();
+    resume.resolve();
+    await Promise.allSettled([delivery]);
+    retireSessionControllerInput(input);
+    await input.settlement.promise;
+    restoreActivePluginRegistrySnapshot(original);
+  }
+});
 
 it("does not dispatch a private handoff after its caller has already cancelled", async () => {
   const caller = new AbortController();

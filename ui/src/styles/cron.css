@@ -8,6 +8,17 @@
   min-width: 0;
 }
 
+@media (forced-colors: active) {
+  .cron-page .session-css-icon {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  .cron-page :is(:disabled, [aria-disabled="true"]) .session-css-icon {
+    background: GrayText;
+  }
+}
+
 /* Popover menus (row actions, filters) must escape the group surface;
    .settings-group clips overflow by default. */
 .cron-page .settings-group:has(> .cron-table),
@@ -980,25 +991,18 @@
   width: 100%;
 }
 
-.cron-run-entry__body.chat-text pre,
-.cron-run-entry__body.chat-text blockquote {
+.cron-run-entry__body.chat-text :is(pre, blockquote) {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
 }
 
-.cron-run-entry__body.chat-text pre + p,
-.cron-run-entry__body.chat-text blockquote + p,
-.cron-run-entry__body.chat-text table + p,
-.cron-run-entry__body.chat-text p + pre,
-.cron-run-entry__body.chat-text p + blockquote,
-.cron-run-entry__body.chat-text p + table {
+.cron-run-entry__body.chat-text :is(pre, blockquote, table) + p,
+.cron-run-entry__body.chat-text p + :is(pre, blockquote, table) {
   margin-top: 0.75em;
 }
 
-.cron-run-entry__body.chat-text pre,
-.cron-run-entry__body.chat-text blockquote,
-.cron-run-entry__body.chat-text table {
+.cron-run-entry__body.chat-text :is(pre, blockquote, table) {
   margin-bottom: 0.75em;
 }
 

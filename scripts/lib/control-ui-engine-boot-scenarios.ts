@@ -4,18 +4,20 @@ import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-col
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createStreamingReplyProbeInitScript } from "../../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionEvidence,
   InteractionScenario,
 } from "./control-ui-interaction-scenarios.ts";
+import { createStreamingReplyProbeInitScript } from "./control-ui-streaming-reply.ts";
 
 const sessionKey = "agent:main:interaction-a";
 const activePane = ".chat-pane-cache__pane--active";
 const composerSelector = `${activePane} .agent-chat__composer-combobox textarea`;
 
 export type EngineScenario = Omit<InteractionScenario, "run"> & {
+  /** Some actions (such as creating a split pane) are desktop-only product controls. */
+  viewports?: readonly ("desktop" | "mobile")[];
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */
@@ -229,6 +231,93 @@ export function createEngineBootScenarios(
   const url = new URL(route, baseUrl).href;
   const bootScript = engineProbeInitScript(false, gatewayLatencyMs);
   return [
+    ...(["paste", "typing"] as const).map((input): EngineScenario => ({
+      id: `native-input-${input}`,
+      route: `/__native-input-${input}`,
+      explicitOnly: true,
+      diagnostic: "Native search-input automation without application code, not a latency floor.",
+      expected: "An empty, unfocused native search input receives the complete automation query.",
+      navigation: "measured",
+      prepare: async (page) => {
+        const controlUrl = new URL(`/__native-input-${input}`, baseUrl).href;
+        await page.route(controlUrl, (request) =>
+          request.fulfill({
+            contentType: "text/html",
+            body: `<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Native input control</title>
+<input type="search" aria-label="Search automations" style="font-size: 16px">`,
+          }),
+        );
+        await page.goto(controlUrl);
+      },
+      run: async (page) => {
+        const query = "Warm automation 0499";
+        const search = page.getByRole("searchbox", { name: "Search automations" });
+        if (input === "paste") {
+          await search.fill(query);
+        } else {
+          await search.pressSequentially(query);
+        }
+        if ((await search.inputValue()) !== query) {
+          throw new Error("Native input control lost query text");
+        }
+        return { inputCharacters: query.length };
+      },
+    })),
+    {
+      id: "blank-frame-cadence",
+      route: "/__frame-cadence-control",
+      explicitOnly: true,
+      diagnostic: "Blank-document frame cadence, not application latency.",
+      expected: "A visible blank document reports its native animation-frame cadence.",
+      navigation: "measured",
+      prepare: async (page) => {
+        const controlUrl = new URL("/__frame-cadence-control", baseUrl).href;
+        await page.route(controlUrl, (request) =>
+          request.fulfill({
+            contentType: "text/html",
+            body: "<!doctype html><title>Frame cadence control</title>",
+          }),
+        );
+        await page.goto(controlUrl);
+      },
+      run: (page) =>
+        page.evaluate(
+          () =>
+            new Promise<InteractionEvidence>((resolve, reject) => {
+              if (document.visibilityState !== "visible") {
+                reject(new Error("Blank-document cadence requires a visible document"));
+                return;
+              }
+              const times: number[] = [];
+              let frame = 0;
+              const timeout = setTimeout(() => {
+                cancelAnimationFrame(frame);
+                reject(new Error("Blank-document animation frames did not finish within 10 s"));
+              }, 10_000);
+              const sample = (time: number) => {
+                times.push(time);
+                if (times.length < 61) {
+                  frame = requestAnimationFrame(sample);
+                  return;
+                }
+                clearTimeout(timeout);
+                const gaps = times.slice(1).map((value, index) => value - times[index]!);
+                gaps.sort((left, right) => left - right);
+                resolve({
+                  frameSamples: gaps.length,
+                  frameGapMedianMs: (gaps[29]! + gaps[30]!) / 2,
+                  frameGapP95Ms: gaps[56]!,
+                  frameGapMinMs: gaps[0]!,
+                  frameGapMaxMs: gaps.at(-1)!,
+                  documentVisible: document.visibilityState === "visible",
+                });
+              };
+              frame = requestAnimationFrame(sample);
+            }),
+        ),
+    },
     {
       id: "cold-boot",
       route,

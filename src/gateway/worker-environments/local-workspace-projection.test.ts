@@ -48,6 +48,15 @@ import {
   proveWorkerOwnedIncrementalWorkspace,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import {
+  proveConcurrentWorkspacePreparation,
+  provePreparationObservationBoundary,
+  provePreparationWaiterAuthority,
+  proveWorkspaceIncarnationRecovery,
+  proveWarmWorkspaceConflictRecovery,
+  proveWarmWorkspaceReuse,
+  proveWarmWorkspaceReuseFailure,
+} from "./local-workspace-reuse.test-support.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
   observeLocalWorkspaceStoreSql,
@@ -167,6 +176,33 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
+it("keeps unchanged sandbox turns running and reconciles later guest and host edits", () =>
+  proveWarmWorkspaceReuse(owner));
+
+it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
+  proveConcurrentWorkspacePreparation(owner));
+
+it("observes edits made before a later preparation while an earlier scan is in flight", () =>
+  provePreparationObservationBoundary(owner));
+
+it.each([
+  "cancel waiter",
+  "revoke waiter",
+  "cancel producer",
+  "failed producer",
+  "other session",
+] as const)("retains independent preparation authority: %s", (mode) =>
+  provePreparationWaiterAuthority(owner, mode),
+);
+
+it.each(["read", "authority", "observation", "cancel"] as const)(
+  "retries only read failures during warm reuse (%s)",
+  (failure) =>
+    proveWarmWorkspaceReuseFailure(owner, failure, () => {
+      revoked = true;
+    }),
+);
+
 it("avoids lease requests for absent projections and checkpoints a later projection", () =>
   proveAbsentProjectionCheckpoints(owner));
 
@@ -203,6 +239,26 @@ it("recovers an aggregate payload of individually valid artifacts without losing
     await import("./local-workspace-recovery.test-support.js");
   await proveAggregateWorkspaceRecovery({ owner, canonical, stateRoot });
 });
+
+it.skipIf(process.platform === "win32")(
+  "lets a fresh turn correct an unstaged filename without replacing accepted canonical edits",
+  async () => {
+    const { proveUnsafePathWorkspaceRecovery } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveUnsafePathWorkspaceRecovery(owner, (value) => {
+      revoked = value;
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "retains a canonical destination collision after an explicit filename correction",
+  async () => {
+    const { proveUnsafePathWorkspaceCollision } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveUnsafePathWorkspaceCollision(owner);
+  },
+);
 
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
@@ -510,19 +566,8 @@ it.each(["archive", "interrupted eviction"] as const)(
   },
 );
 
-it("retains both sides and a durable pending result when edits conflict", async () => {
-  const projection = await prepare();
-  await writeText(projection, "source.txt", "guest conflict\n");
-  await writeText(canonical, "source.txt", "human conflict\n");
-  await expect(synchronize()).rejects.toThrow("conflict");
-  expect((await readProjection())?.pending_ref).toBeTruthy();
-  await expectText(projection, "source.txt", "guest conflict\n");
-  await expectText(canonical, "source.txt", "human conflict\n");
-  await writeText(canonical, "source.txt", "original\n");
-  await settleProjection();
-  await expectText(canonical, "source.txt", "guest conflict\n");
-  expect((await readProjection())?.pending_ref).toBeNull();
-});
+it("retains both sides and a durable pending result when edits conflict", () =>
+  proveWarmWorkspaceConflictRecovery(owner));
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();
@@ -750,6 +795,9 @@ it.for([false, true])(
         execution.abort(stop);
         projection[Symbol.dispose]();
       }
+      // This fixture proves ordering and authority, not elapsed interrupt time.
+      // Keep its deadline under the test clock instead of racing a busy host.
+      vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
       commands.push(cleanup.terminate(), cleanup.interrupt(1000));
       const outcomes = Promise.allSettled(commands);
       settle.resolve();
@@ -995,25 +1043,17 @@ it("preserves later inputs from an older archive without admitting new caches", 
 
 it.each(["lifecycle reset", "replacement session"] as const)(
   "preserves pending bytes across a %s without transferring session authority",
-  async (change) => {
-    const projection = await prepare();
-    await writeText(projection, "source.txt", "unaccepted edit\n");
-    if (change === "lifecycle reset") {
-      const resumed = { ...owner, lifecycleRevision: randomUUID() };
-      expect(await withLocalWorkspaceProjection(resumed, (state) => state.prepare())).toBe(
-        projection,
-      );
-      await expectText(canonical, "source.txt", "unaccepted edit\n");
-      expect((await readProjection())?.lifecycle_revision).toBe(resumed.lifecycleRevision);
-    } else {
-      await expect(
-        withLocalWorkspaceProjection({ ...owner, sessionId: randomUUID() }, (state) =>
-          state.prepare(),
-        ),
-      ).rejects.toThrow("different session incarnation");
-      await expectText(projection, "source.txt", "unaccepted edit\n");
+  (change) =>
+    proveWorkspaceIncarnationRecovery(owner, change, () => {
       revoked = true;
-      await expect(prepare()).rejects.toThrow("revoked");
-    }
+    }),
+);
+
+it.for(["prepare-release", "prepare-cancel"] as const)(
+  "settles attempt preparation behind a reconciliation holder (%s)",
+  async (ending, { signal }) => {
+    const { proveStoppedSandboxAuthority } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedSandboxAuthority(owner, ending, signal);
   },
 );

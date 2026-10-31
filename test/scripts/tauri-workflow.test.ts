@@ -1,7 +1,10 @@
-import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { minimatch } from "minimatch";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
 const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
 const release = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
@@ -14,6 +17,50 @@ const windowsJob = workflow.jobs["test-windows-power"];
 const windowsBuild = buildStep(windowsJob.steps);
 const override = (step: Step) =>
   JSON.parse(step.run!.match(/--config (['"])(.+)\1/)![2]!.replaceAll('\\"', '"'));
+
+it("removes uploaded Linux bundles while preserving Cargo inputs and compiler output", async () => {
+  const steps = workflow.jobs.build.steps;
+  const cleanup = steps.at(-1);
+  expect(cleanup.name).toBe("Remove uploaded Linux bundles before caching");
+  expect(cleanup.if).toBeUndefined();
+  expect(cleanup["working-directory"]).toBe("apps/linux/src-tauri");
+  expect(steps.at(-2).name).toBe("Upload bundles");
+  const cache = steps.find((step: Step) => step.name === "Cache Cargo").with;
+  expect(cache.key).toBe(
+    "linux-app-v2-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}",
+  );
+  expect(cache["restore-keys"].trim()).toBe("linux-app-v2-${{ runner.os }}-");
+
+  await withTempDir("openclaw-linux-cargo-cache-", async (root) => {
+    const removed = ["target/release/bundle/appimage/desktop.AppImage"];
+    const retained = [
+      "target/desktop-runtime/manifest.json",
+      "target/desktop-runtime/package/openclaw.mjs",
+      "target/debug/desktop-runtime/manifest.json",
+      "target/debug/deps/compiled",
+      "target/debug/build/build-script",
+      "target/debug/.fingerprint/compiled",
+      "target/debug/incremental/compiled",
+      "target/release/deps/compiled",
+      "target/release/openclaw-desktop",
+      "target/release/desktop-runtime/manifest.json",
+      "target/installers/install-cli.sh",
+    ];
+    const cwd = join(root, cleanup["working-directory"]);
+    for (const file of [...removed, ...retained]) {
+      const target = join(cwd, file);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, "cached payload");
+    }
+    execSync(cleanup.run, { cwd });
+    for (const file of removed) {
+      expect(existsSync(join(cwd, file)), file).toBe(false);
+    }
+    for (const file of retained) {
+      expect(readFileSync(join(cwd, file), "utf8"), file).toBe("cached payload");
+    }
+  });
+});
 
 it("stops Windows boundary checks when the Node fixtures fail", () => {
   const boundary = windowsJob.steps.find(

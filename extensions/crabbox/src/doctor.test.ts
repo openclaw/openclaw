@@ -101,7 +101,7 @@ describe("Crabbox worker doctor", () => {
               target: "sandbox",
               ocPath: "plugins.entries.crabbox.config.sandbox.binary",
               message: expect.stringContaining("Crabbox sandbox uses outdated Crabbox 0.76.0"),
-              requirement: "Crabbox 0.79.2 or newer",
+              requirement: outdated.requirement,
             }
           : kind === "wsl2"
             ? { ...outdated, target: "worker" }

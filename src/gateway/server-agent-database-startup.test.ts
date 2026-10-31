@@ -256,6 +256,9 @@ it.for([
           raw.exec(
             "PRAGMA foreign_keys=OFF; CREATE TABLE broken_parent(id INTEGER PRIMARY KEY); CREATE TABLE broken_child(parent_id REFERENCES broken_parent(id)); INSERT INTO broken_child VALUES (42)",
           );
+        } else if (outcome === "shutdown-preparation") {
+          // Repair keeps full verification before writes; exact-schema verification is background.
+          raw.exec("DROP INDEX idx_agent_session_nodes_active");
         }
       } finally {
         raw.close();
@@ -543,7 +546,7 @@ it.for([
         }
         expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
-        expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
+        expect(fs.readFileSync(agentPath).equals(agentBytes), agentPath).toBe(true);
       } else if (outcome === "recover" || outcome === "superseded") {
         if (outcome === "recover") {
           chatClient = await connectWebchatClient({ port });
@@ -843,7 +846,7 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
       `Skipped ${leftover} (agent unowned): database is not a configured target; run openclaw doctor to inspect retained data.`,
     );
     for (const [index, pathname] of stalePaths.entries()) {
-      expect(fs.readFileSync(pathname)).toEqual(staleBytes[index]);
+      expect(fs.readFileSync(pathname).equals(staleBytes[index]!), pathname).toBe(true);
       expect(warnings).toHaveBeenCalledWith(
         `Skipped ${pathname} (agent ${agentIds[index]}): database is not a configured target; run openclaw doctor to inspect retained data.`,
       );

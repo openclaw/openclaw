@@ -89,7 +89,7 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
   if (!values || values.length === 0) {
     return undefined;
   }
-  return Array.from(new Set(values), (value) => (typeof value === "string" ? value.trim() : ""))
+  return Array.from(new Set(values), (value) => value.trim())
     .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -226,9 +226,7 @@ function buildSkillsCapture(
     return undefined;
   }
   const filteredResolvedSkills =
-    skillsSnapshot.resolvedSkills?.filter(
-      (skill) => typeof skill.name === "string" && skill.name.length > 0,
-    ) ?? [];
+    skillsSnapshot.resolvedSkills?.filter((skill) => skill.name.length > 0) ?? [];
   // Support redaction uses built-in rules plus live exact secrets. Relative paths
   // also depend on cwd; retain separate bounded scopes for interleaved callers.
   const revision = getSecretRedactionRegistryRevision();
@@ -279,7 +277,7 @@ function buildSkillsCapture(
           return capture;
         })
       : skillsSnapshot.skills
-          .filter((skill) => typeof skill.name === "string" && skill.name.length > 0)
+          .filter((skill) => skill.name.length > 0)
           .map((skill) => ({
             id: skill.name,
             name: skill.name,
@@ -290,7 +288,7 @@ function buildSkillsCapture(
   return {
     snapshotVersion: skillsSnapshot.version,
     skillFilter: toSortedUniqueStrings(skillsSnapshot.skillFilter),
-    entries: entries.toSorted((left, right) => (left.name ?? "").localeCompare(right.name ?? "")),
+    entries: entries.toSorted((left, right) => left.name.localeCompare(right.name)),
   };
 }
 

@@ -6,7 +6,14 @@ import {
   retainPluginCache,
   waitForPluginCacheRetirement,
 } from "../plugins/plugin-cache.js";
-import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import {
+  pluginInvocationContext,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "../plugins/plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryLifetime,
@@ -17,6 +24,7 @@ import {
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   isPluginRegistryRetired,
+  isPluginRegistryRecordSetAdmitting,
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -41,11 +49,16 @@ import {
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
-type Lifetime = ReturnType<typeof createLifetime>;
+const runUnscoped = <T>(run: () => T): T => run();
+type Lifetime = ReturnType<typeof createLifetime> & {
+  overlapInstances?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
+};
 type PreparedPluginGenerationResources = Pick<
   PreparedModelRuntimePluginGeneration,
   "pluginMetadataSnapshot" | "pluginRegistry" | "inboundPluginRegistry"
@@ -147,7 +160,7 @@ export function retainPreparedPluginRegistry(
     if (capturePluginRegistryLifecycleEpoch(registry)) {
       return undefined;
     }
-    if (isPluginRegistryRetired(registry)) {
+    if (isPluginRegistryRetired(registry) || !isPluginRegistryRecordSetAdmitting(registry)) {
       throw new PreparedModelRuntimePluginGenerationRetiredError(
         "Prepared plugin registry has retired",
       );
@@ -188,6 +201,14 @@ export function ownPreparedPluginGeneration(
       (registry) => registry !== undefined,
     ),
   );
+  let overlapInstances: Map<PluginInstanceHandle, PluginRegistry> | undefined;
+  for (const registry of selectedRegistries) {
+    for (const instance of collectRegistryInvocationInstances(registry, true)) {
+      if (!overlapInstances?.has(instance)) {
+        (overlapInstances ??= new Map()).set(instance, registry);
+      }
+    }
+  }
   const acquisitionFailures: unknown[] = [];
   const lifetime = createLifetime(
     async () => {
@@ -223,6 +244,8 @@ export function ownPreparedPluginGeneration(
     void lifetime.close().catch(() => {});
     throw error;
   }
+  // The immutable generation owns this selection; ordinary leases need no callable scope.
+  Object.assign(lifetime, { overlapInstances });
   generations.set(generation, lifetime);
   return lifetime;
 }
@@ -233,6 +256,61 @@ export function retainPreparedPluginGeneration(
   const release = ownPreparedPluginGeneration(generation).retain(true);
   return async () => {
     await release();
+  };
+}
+
+/** Each admitted lease owns callable authority independently of its parent's lifetime. */
+export function createPreparedModelRuntimeLease(
+  snapshot: PreparedModelRuntimeSnapshot,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  onRelease?: () => void,
+): PreparedModelRuntimeLease {
+  const registryByInstance = ownPreparedPluginGeneration(pluginGeneration).overlapInstances;
+  const registry = registryByInstance?.values().next().value;
+  const scope =
+    registryByInstance && registry
+      ? new PluginInvocationScope(registry, registryByInstance.keys(), {
+          retained: true,
+          parent: pluginInvocationContext.getStore(),
+          registryByInstance,
+        })
+      : undefined;
+  let releaseGeneration: () => Promise<void>;
+  try {
+    releaseGeneration = retainPreparedPluginGeneration(pluginGeneration);
+  } catch (error) {
+    scope?.release();
+    throw error;
+  }
+  if (!scope && !onRelease) {
+    return {
+      snapshot,
+      pluginGeneration,
+      run: runUnscoped,
+      [Symbol.asyncDispose]: releaseGeneration,
+    };
+  }
+  let closed = false;
+  let disposal: Promise<void> | undefined;
+  return {
+    snapshot,
+    pluginGeneration,
+    run: scope ? <T>(run: () => T): T => scope.run(run) : runUnscoped,
+    [Symbol.asyncDispose]() {
+      if (!closed) {
+        closed = true;
+        // Generation cleanup can await these consumers; revoke them before joining cleanup.
+        scope?.release();
+        disposal = (async () => {
+          try {
+            onRelease?.();
+          } finally {
+            await releaseGeneration();
+          }
+        })();
+      }
+      return disposal!;
+    },
   };
 }
 

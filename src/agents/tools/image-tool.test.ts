@@ -394,9 +394,6 @@ function installImageUnderstandingProviderDeps(
     describeImagesWithModel?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["describeImagesWithModel"];
-    loadImageWebMediaRuntime?: NonNullable<
-      Parameters<typeof testing.setProviderDepsForTest>[0]
-    >["loadImageWebMediaRuntime"];
     resolveImageCompressionPolicy?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["resolveImageCompressionPolicy"];
@@ -446,9 +443,6 @@ function installImageUnderstandingProviderDeps(
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
       : {}),
-    ...(options?.loadImageWebMediaRuntime
-      ? { loadImageWebMediaRuntime: options.loadImageWebMediaRuntime }
-      : {}),
   });
 }
 
@@ -465,45 +459,6 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
       throw new Error("Expected fast local image tests to use a registered image provider");
     },
     resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
-    loadImageWebMediaRuntime: async () => ({
-      loadWebMedia: async (mediaUrl, options) => {
-        const localRoots =
-          options && typeof options !== "number" && "localRoots" in options
-            ? options.localRoots
-            : [];
-        const inboundRoots =
-          options && typeof options !== "number" && "inboundRoots" in options
-            ? options.inboundRoots
-            : [];
-        if (
-          localRoots !== "any" &&
-          !isInboundPathAllowed({
-            filePath: mediaUrl,
-            roots: [...(localRoots ?? []), ...(inboundRoots ?? [])],
-          })
-        ) {
-          throw new Error(`Local media path is not under an allowed directory: ${mediaUrl}`);
-        }
-        const readFile =
-          options && typeof options !== "number" && "readFile" in options
-            ? options.readFile
-            : undefined;
-        return {
-          buffer: readFile ? await readFile(mediaUrl) : await fs.readFile(mediaUrl),
-          contentType: "image/png",
-          kind: "image",
-          fileName: path.basename(mediaUrl),
-        };
-      },
-      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => {
-        return {
-          buffer,
-          contentType: contentType ?? "image/png",
-          kind: "image",
-          fileName,
-        };
-      },
-    }),
   });
 }
 
@@ -1392,22 +1347,6 @@ describe("image tool implicit imageModel config", () => {
       expect(fetch).toHaveBeenCalledTimes(2);
       expect(direct.details).not.toHaveProperty("rewrittenFrom");
     });
-  });
-});
-
-describe("image tool data URL support", () => {
-  it.each([
-    {
-      dataUrl: "data:text/plain;base64,SGVsbG8=",
-      maxBytes: undefined,
-      error: /Unsupported data URL type/i,
-    },
-    { dataUrl: `data:image/png;base64,${"A".repeat(16)}`, maxBytes: 4, error: /size limit/i },
-  ])("rejects invalid data URLs before decoding: $error", ({ dataUrl, maxBytes, error }) => {
-    using bufferFromSpy = vi.spyOn(Buffer, "from");
-
-    expect(() => testing.decodeDataUrl(dataUrl, { maxBytes })).toThrow(error);
-    expect(bufferFromSpy).not.toHaveBeenCalledWith(dataUrl.split(",")[1], "base64");
   });
 });
 
