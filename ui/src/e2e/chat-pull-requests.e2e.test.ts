@@ -423,29 +423,47 @@ suite.define(() => {
         await openDetailsPullRequests(page);
         await pollCount(chips).toBe(count);
         await page.locator(".chat").evaluate(finishElementAnimations);
-        const bounds = await stack.evaluate((element) => {
+        const bounds = await stack.evaluate((element, narrow) => {
           const detailsBounds = element
             .closest(".chat-mobile-host, .chat-details")!
             .getBoundingClientRect();
           const stackBounds = element.getBoundingClientRect();
+          const scrollPort = narrow ? element : element.closest(".chat-details-desktop-body")!;
+          const scrollBounds = scrollPort.getBoundingClientRect();
           return {
             detailsBottom: detailsBounds.bottom,
             stackLeft: stackBounds.left,
             stackWidth: stackBounds.width,
-            fitsHorizontally: element.scrollWidth <= element.clientWidth + 1,
+            scrollLeft: scrollBounds.left,
+            scrollRight: scrollBounds.right,
+            fitsHorizontally: scrollPort.scrollWidth <= scrollPort.clientWidth + 1,
             rows: [...element.children].map((row) => {
               const rect = row.getBoundingClientRect();
-              return { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width };
+              return {
+                top: rect.top,
+                bottom: rect.bottom,
+                left: rect.left,
+                right: rect.right,
+                width: rect.width,
+                contentLeft: row.querySelector(".chat-pr__link")?.getBoundingClientRect().left,
+              };
             }),
           };
-        });
+        }, mobile);
         expect(bounds.fitsHorizontally).toBe(true);
         let previousBottom = 0;
+        // Desktop hover surfaces extend 4px past the shared content axis on each side.
+        const rowOutset = mobile ? 0 : 4;
         for (const row of bounds.rows) {
           expect(row.top).toBeGreaterThanOrEqual(previousBottom);
           expect(row.bottom).toBeLessThanOrEqual(bounds.detailsBottom);
-          expect(row.left).toBeCloseTo(bounds.stackLeft, 1);
-          expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
+          expect(row.left).toBeCloseTo(bounds.stackLeft - rowOutset, 1);
+          expect(row.width).toBeCloseTo(bounds.stackWidth + 2 * rowOutset, 1);
+          if (!mobile) {
+            expect(row.left).toBeGreaterThanOrEqual(bounds.scrollLeft);
+            expect(row.right).toBeLessThanOrEqual(bounds.scrollRight);
+            expect(row.contentLeft).toBeCloseTo(bounds.stackLeft, 1);
+          }
           previousBottom = row.bottom;
         }
       }
@@ -575,7 +593,10 @@ suite.define(() => {
             rowBox.x + rowBox.width <= detailsBox.x + detailsBox.width &&
             detailsBox.x >= 0 &&
             detailsBox.x + detailsBox.width <= viewport.width &&
-            (await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)),
+            (await row.evaluate((element, narrow) => {
+              const scrollPort = narrow ? element : element.closest(".chat-details-desktop-body")!;
+              return scrollPort.scrollWidth <= scrollPort.clientWidth + 1;
+            }, mobile)),
           );
         })
         .toBe(true);
