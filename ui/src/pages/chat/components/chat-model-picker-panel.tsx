@@ -75,6 +75,15 @@ function prepareChatModelPickerPanel(
       group.more = group.lead.splice(9);
     }
   }
+  // A single leftover model does not deserve its own fold: the extra "All models (1)"
+  // click was the whole cost of collapsing it. Keep lone remainders inline.
+  for (const group of providerGroups.values()) {
+    const loneLeftover = group.more.length === 1 ? group.more[0] : undefined;
+    if (loneLeftover) {
+      group.more = [];
+      group.lead.push(loneLeftover);
+    }
+  }
   const orderedProviderGroups = [...providerGroups];
   const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
   const activeProvider = activeModelOption && groupProvider(activeModelOption);
