@@ -37,6 +37,32 @@ describe("encoded transcript archive publication", () => {
     },
   );
 
+  it.each(["EACCES", "EPERM", "EXDEV"] as const)(
+    "publishes the staged archive when link is refused with %s",
+    (code) => {
+      const input = archiveInput();
+      vi.spyOn(fs, "linkSync").mockImplementation(() => {
+        throw Object.assign(new Error(`${code}: link refused`), { code });
+      });
+
+      const archivePath = publishEncodedSessionTranscriptArchive(input);
+
+      expect(fs.readFileSync(archivePath)).toEqual(input.bytes);
+      expect(fs.readdirSync(input.archiveDirectory)).toEqual([input.archiveName]);
+    },
+  );
+
+  it("removes the staging file when link fails for another reason", () => {
+    const input = archiveInput();
+    const failure = Object.assign(new Error("archive storage is full"), { code: "ENOSPC" });
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw failure;
+    });
+
+    expect(() => publishEncodedSessionTranscriptArchive(input)).toThrow(failure);
+    expect(fs.readdirSync(input.archiveDirectory)).toEqual([]);
+  });
+
   it("preserves a colliding temporary file that it did not create", () => {
     const input = archiveInput();
     const originalOpen = fs.openSync;

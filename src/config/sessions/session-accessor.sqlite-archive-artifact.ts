@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
+import {
+  isHardlinkFallbackError,
+  syncDirectoryBestEffortSync,
+} from "../../infra/directory-durability.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   encodeSessionArchiveContent,
@@ -212,7 +215,12 @@ export function publishEncodedSessionTranscriptArchive(params: {
   try {
     fs.linkSync(tempPath, archivePath);
   } catch (error) {
-    if (!hasErrnoCode(error, "EEXIST")) {
+    const hardLinkDenied = isHardlinkFallbackError(error);
+    if (hardLinkDenied && !fs.existsSync(archivePath)) {
+      // Staging is already in this directory. Android app storage rejects link(2)
+      // after that write; rename publishes the same file without a second copy.
+      fs.renameSync(tempPath, archivePath);
+    } else if (!hasErrnoCode(error, "EEXIST") && !hardLinkDenied) {
       throw error;
     }
   } finally {
