@@ -25,6 +25,10 @@ function isOwnedByCurrentProcessSync(candidate: string): boolean {
 }
 
 function isMutableByCurrentProcessSync(candidate: string): boolean {
+  // Owned operands already require mutable binding; avoid macOS App Management probes.
+  if (isOwnedByCurrentProcessSync(candidate)) {
+    return true;
+  }
   try {
     fs.accessSync(candidate, fs.constants.W_OK);
     return true;
