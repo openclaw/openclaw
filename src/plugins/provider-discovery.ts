@@ -1,5 +1,6 @@
 /** Control-plane provider discovery helpers that keep runtime imports lazy until catalog hooks run. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { runProviderIsolated } from "../agents/provider-failure-isolation.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -20,6 +21,8 @@ const providerRuntimeLoader = createLazyImportLoader(
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
+  /** The static run failed: its providers are unavailable, not empty. */
+  failed?: true;
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
@@ -203,15 +206,28 @@ export async function prepareProviderStaticCatalog(params: {
       if (!provider.staticCatalog) {
         continue;
       }
-      const result = await runProviderStaticCatalog({
-        provider,
-        signal: params.signal,
-        providerIds: params.providerIds,
-      });
+      let failed = false;
+      const result = await runProviderIsolated(
+        {
+          providerIds: [provider.id],
+          stage: "static catalog",
+          signal: params.signal,
+          reportCatalogOutcome: () => {
+            failed = true;
+          },
+        },
+        async () =>
+          await runProviderStaticCatalog({
+            provider,
+            signal: params.signal,
+            providerIds: params.providerIds,
+          }),
+      );
       params.signal?.throwIfAborted();
       entries.push({
         provider,
         providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
+        ...(failed ? { failed: true as const } : {}),
       });
     }
   }

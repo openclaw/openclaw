@@ -1646,6 +1646,53 @@ describe("FRV same-parent recovery", () => {
     },
   );
 
+  it("returns an accepted targeted-job receipt without following the new attempt", async () => {
+    const selected = child("normalCi", "101");
+    const childRuns = new Map([["101", { attempt: 1, conclusion: "failure" }]]);
+    const parent = { attempt: 1, conclusion: "failure" };
+    const client = {
+      ...controllerClient([selected], childRuns, parent),
+      getAttemptJobs: async (_runId: string, attempt: number) => [
+        {
+          ...job("selected", "failure"),
+          id: 11,
+          run_id: 101,
+          run_attempt: attempt,
+        },
+      ],
+      rerunJob: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "failure" });
+      }),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(),
+      verify: vi.fn(),
+    };
+
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        job: "normalCi:selected",
+        noFollow: true,
+      }),
+    ).resolves.toMatchObject({
+      action: "rerun-accepted",
+      continueCommand: "pnpm frv continue --failed --run 77",
+      nextCommand: "pnpm frv watch --run 77",
+      receipt: {
+        acceptedRunAttempt: 1,
+        child: "normalCi",
+        jobId: 11,
+        jobName: "selected",
+        parentRunId: "77",
+        runAttempt: 2,
+        runId: "101",
+        sourceRunAttempt: 1,
+      },
+    });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(11);
+    expect(client.rerunParent).not.toHaveBeenCalled();
+    expect(client.verify).not.toHaveBeenCalled();
+  });
+
   it("waits only for the selected child before sending a targeted job rerun and reseals afterward", async () => {
     const selected = child("normalCi", "101");
     const sibling = child("pluginPrerelease", "202");

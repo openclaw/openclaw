@@ -854,6 +854,11 @@ openclaw-plugins-page
   padding-left: calc(var(--space-3) + 24px);
 }
 
+.plugins-settings-row {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 40px;
+}
+
 .plugins-settings-row__link {
   min-width: 0;
   padding: 0;

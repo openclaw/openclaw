@@ -1062,10 +1062,17 @@ def sh(command, *arguments, **options)
   elsif args == ["xcrun", "simctl", "runtime", "list", "-j"]
     return "{}" if @scenario == "unavailable-empty" && !$watch_restored
     watch_image = @runtime_scanned ? "watch-image-rescanned" : "watch-image"
-    return JSON.generate({
+    images = {
       watch_image => { "identifier" => watch_image, "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime") },
       "phone-image" => { "identifier" => "phone-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "phone-runtime") }
-    })
+    }
+    if %w[unavailable-deleting unavailable-ambiguous].include?(@scenario)
+      images["watch-other"] = {
+        "identifier" => "watch-other", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
+        "state" => @scenario == "unavailable-deleting" ? "Deleting" : "Ready"
+      }
+    end
+    return JSON.generate(images)
   elsif args[0, 4] == ["xcrun", "simctl", "runtime", "delete"]
     raise "wrong runtime image deleted" unless args[4] == (@runtime_scanned ? "watch-image-rescanned" : "watch-image")
     @runtime_deletes += 1
@@ -1105,7 +1112,7 @@ def sh(command, *arguments, **options)
   end
 end
 
-results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
@@ -1456,6 +1463,14 @@ puts JSON.generate(results)
       ).toHaveLength(1);
     }
     expect(row("unavailable-empty").repairCommands.some((args) => args[3] === "delete")).toBe(
+      false,
+    );
+    expect(row("unavailable-deleting")).toMatchObject({ error: null, pngs: 9, watchCreates: 1 });
+    expect(row("unavailable-ambiguous")).toMatchObject({ pngs: 8, watchCreates: 0 });
+    expect(row("unavailable-ambiguous").error).toContain(
+      "expected at most one registered disk image, found 2",
+    );
+    expect(row("unavailable-ambiguous").repairCommands.some((args) => args[3] === "delete")).toBe(
       false,
     );
     expect(row("unavailable-download-failure")).toMatchObject({

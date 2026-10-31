@@ -162,7 +162,6 @@ extensions/deepseek/provider-policy-api.ts	2
 extensions/device-pair/index.ts	5
 extensions/diagnostics-otel/src/service-exporter.ts	1
 extensions/diagnostics-otel/src/service-logs.ts	8
-extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
 extensions/diffs/src/config.ts	2
 extensions/diffs/src/language-hints.ts	6
@@ -1244,7 +1243,6 @@ src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry.ts	1
-src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
 src/agents/subagents/swarm/swarm-output-schema.ts	1
 src/agents/subagents/swarm/swarm-scheduler.ts	1
@@ -1285,7 +1283,6 @@ src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/mobile-ui-tool.ts	2
 src/agents/tools/nodes-tool.ts	1
 src/agents/tools/openclaw-delegate-tool.ts	1
-src/agents/tools/pdf-native-providers.ts	2
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	5
@@ -1648,7 +1645,6 @@ src/cron/isolated-agent/job-fixtures.ts	3
 src/cron/isolated-agent/model-preflight.runtime.ts	1
 src/cron/isolated-agent/run-config.ts	1
 src/cron/isolated-agent/run-current-context.ts	1
-src/cron/isolated-agent/session-cleanup.ts	2
 src/cron/job-session-bindings.ts	1
 src/cron/normalize.ts	2
 src/cron/persisted-shape.ts	3
@@ -2069,7 +2065,6 @@ src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	1
 src/plugins/capability-provider-runtime.ts	8
-src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/clawhub.ts	3
 src/plugins/cli-gateway-nodes-runtime.ts	2
@@ -2136,7 +2131,6 @@ src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/registry-registrars-host.ts	1
-src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-runtime-binding.ts	1
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1

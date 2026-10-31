@@ -26,6 +26,26 @@ function acceptsPaths(patterns: string[], files: readonly string[]) {
   );
 }
 
+describe("Darwin tooling event scope", () => {
+  it.each([
+    [["scripts/lib/ci-node-test-plan.mts"], false],
+    [["scripts/lib/ci-extension-test-shards.mts"], false],
+    [["scripts/lib/ci-native-generated-scope.mjs"], false],
+    [["test/scripts/pr-ci-sweeper.test.ts"], false],
+    [["scripts/lib/ci-test-timings.mts"], true],
+    [["scripts/lib/ci-test-timings-schema.mts"], true],
+    [["scripts/lib/ci-test-timings-refit.mts"], true],
+    [["scripts/lib/ci-node-test-groups-codec.mts"], true],
+    [["scripts/lib/ci-static-check-evidence.mjs"], true],
+    [["scripts/lib/new-native-input.mts"], true],
+    [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
+    [[".github/workflows/pr-tooling-darwin.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+    expect(acceptsPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+  });
+});
+
 describe("native locale refresh event scope", () => {
   it.each([
     [["apps/ios/README.md"], false],

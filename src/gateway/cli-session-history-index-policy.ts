@@ -176,7 +176,7 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
   };
 }
 
-export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata">;
+export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata" | "role">;
 export type HistoryTextMatch = {
   role: string;
   text: string;
@@ -194,6 +194,11 @@ export type CliHistoryMergeStore = {
   minimumOrder: (role: string | null, text: string) => number;
   advanceOrderFloor: (floor: { role: string; text: string; minimumOrder: number }) => void;
   consume: (row: Pick<HistoryRow, "id" | "metadata" | "external_key">) => void;
+  onMatch?: (
+    imported: Omit<HistoryRow, "payload">,
+    matched: HistoryMatch,
+    byIdentity: boolean,
+  ) => void;
 };
 
 export function mergeCliHistoryRow(
@@ -213,6 +218,7 @@ export function mergeCliHistoryRow(
   };
   let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
   if (duplicate) {
+    store.onMatch?.(imported, duplicate, true);
     advance(duplicate);
     return true;
   }
@@ -241,6 +247,7 @@ export function mergeCliHistoryRow(
     }
   }
   if (duplicate) {
+    store.onMatch?.(imported, duplicate, Boolean(imported.image_mentions));
     const meta: Record<string, unknown> = duplicate.metadata ? JSON.parse(duplicate.metadata) : {};
     const importedMeta: Record<string, unknown> = imported.metadata
       ? JSON.parse(imported.metadata)
