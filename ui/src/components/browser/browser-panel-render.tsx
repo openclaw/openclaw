@@ -253,13 +253,19 @@ function ViewportContent(
               onInput={(event) => props.controller.input.handleTextInput(event)}
               onCompositionStart={() => props.controller.input.handleCompositionStart()}
               onCompositionEnd={(event) => props.controller.input.handleCompositionEnd(event)}
-              onPointerDown={(event) => props.controller.input.handleTouchPointerDown(event)}
+              onPointerDown={(event) => props.controller.input.handlePointerDown(event)}
               onPointerMove={(event) => props.controller.input.handleTouchPointerMove(event)}
               onPointerUp={(event) => props.controller.input.handleTouchPointerEnd(event)}
               onPointerCancel={(event) => props.controller.input.handleTouchPointerEnd(event)}
               onLostPointerCapture={(event) => props.controller.input.handleTouchPointerEnd(event)}
             />
           ) : null}
+          <span class="bp-press-clip" aria-hidden="true">
+            <span
+              ref={(element) => (props.controller.input.elements.press = element)}
+              class="bp-press"
+            />
+          </span>
           <InspectTooltip controller={props.controller} />
         </div>
       </Match>
