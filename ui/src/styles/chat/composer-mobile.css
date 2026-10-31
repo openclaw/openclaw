@@ -221,7 +221,10 @@
   margin-inline-start: 0;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+/* A typed draft keeps the toolbar it was written with after the editor blurs. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]:not(
+    [data-composer-draft="true"]
+  )
   :is(
     .agent-chat__composer-lead > :not(:first-child),
     .agent-chat__composer-context,

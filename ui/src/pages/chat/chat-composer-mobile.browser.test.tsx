@@ -221,27 +221,21 @@ it.each([
         assertStable();
       }
       expect(shell.dataset.composerEditing).toBe(String(focus));
-      if (focus) {
-        await expect.element(page.elementLocator(permission)).toBeVisible();
-        await expect.element(page.elementLocator(model)).toBeVisible();
-        expect(permission.getBoundingClientRect().bottom).toBeLessThan(
-          input.getBoundingClientRect().top,
-        );
-        expect(model.getBoundingClientRect().bottom).toBeLessThan(
-          input.getBoundingClientRect().top,
-        );
-        expect(permission.getBoundingClientRect().right).toBeLessThanOrEqual(
-          model.getBoundingClientRect().left,
-        );
-        for (const control of [permission, model]) {
-          const box = control.getBoundingClientRect();
-          expect(box.top).toBeGreaterThanOrEqual(shell.getBoundingClientRect().top);
-          const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-          expect(target === control || (target !== null && control.contains(target))).toBe(true);
-        }
-      } else {
-        await expect.element(page.elementLocator(permission)).not.toBeVisible();
-        await expect.element(page.elementLocator(model)).not.toBeVisible();
+      // Every sample holds a draft, so blurring keeps the toolbar it was written with.
+      await expect.element(page.elementLocator(permission)).toBeVisible();
+      await expect.element(page.elementLocator(model)).toBeVisible();
+      expect(permission.getBoundingClientRect().bottom).toBeLessThan(
+        input.getBoundingClientRect().top,
+      );
+      expect(model.getBoundingClientRect().bottom).toBeLessThan(input.getBoundingClientRect().top);
+      expect(permission.getBoundingClientRect().right).toBeLessThanOrEqual(
+        model.getBoundingClientRect().left,
+      );
+      for (const control of [permission, model]) {
+        const box = control.getBoundingClientRect();
+        expect(box.top).toBeGreaterThanOrEqual(shell.getBoundingClientRect().top);
+        const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        expect(target === control || (target !== null && control.contains(target))).toBe(true);
       }
     }
     expect(container.querySelector("textarea")).toBe(textarea);

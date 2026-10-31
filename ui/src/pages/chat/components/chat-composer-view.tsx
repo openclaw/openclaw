@@ -288,6 +288,9 @@ export function renderChatComposerView(
       ref={[footerControl, (element) => (shell = element), elementRef(props.onComposerShellRef)]}
       data-mobile-composer={props.mobileComposer ? "true" : undefined}
       data-composer-editing={mobileEditing() ? "true" : "false"}
+      data-composer-draft={
+        props.mobileComposer && context().visibleDraft.trim() ? "true" : undefined
+      }
       data-composer-keyboard={props.mobileKeyboardVisible ? "true" : undefined}
       data-composer-keyboard-navigation={keyboardNavigation() ? "true" : undefined}
       onPointerEnter={() => void prepareComposerWidthEdge()}

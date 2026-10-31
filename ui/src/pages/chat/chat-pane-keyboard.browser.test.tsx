@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import { connectShellViewport, shellViewport } from "../../app/shell-viewport.ts";
@@ -60,4 +61,48 @@ it("publishes keyboard transitions to the mobile composer without transcript geo
   await expect.poll(() => shell.dataset.composerKeyboard).toBeUndefined();
   await expect.poll(() => shell.dataset.composerEditing).toBe("false");
   expect(runtime.mobilePresentation.suspended).toBe(true);
+});
+
+it("keeps the mobile composer toolbar open while a typed draft waits", async () => {
+  const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+  const runtime = getPaneTestRuntime(pane);
+  runtime.mergedChrome = true;
+  pane.style.cssText = "display: block; width: 430px; height: 600px";
+  const outside = document.body.appendChild(document.createElement("button"));
+  outside.textContent = "Outside composer";
+  onTestFinished(() => {
+    pane.element.remove();
+    outside.remove();
+  });
+  connectPaneTestView(pane);
+  document.body.append(pane.element);
+  await pane.updateComplete;
+  await expect.poll(() => pane.querySelector("textarea")).not.toBeNull();
+  const textarea = expectDefined(pane.querySelector("textarea"), "mobile composer input");
+  const shell = expectDefined(
+    pane.querySelector<HTMLElement>(".agent-chat__composer-shell"),
+    "mobile composer shell",
+  );
+  const toolbar = expectDefined(
+    shell.querySelector<HTMLElement>(".agent-chat__composer-controls"),
+    "mobile composer toolbar",
+  );
+  const toolbarVisibility = () => getComputedStyle(toolbar).visibility;
+  expect(shell.dataset.mobileComposer).toBe("true");
+  expect(toolbarVisibility()).toBe("hidden");
+
+  textarea.focus();
+  await userEvent.keyboard("Finish this later");
+  await expect.poll(() => shell.dataset.composerEditing).toBe("true");
+  expect(toolbarVisibility()).toBe("visible");
+  outside.focus();
+  await expect.poll(() => shell.dataset.composerEditing).toBe("false");
+  expect(textarea.value).toBe("Finish this later");
+  expect(toolbarVisibility()).toBe("visible");
+
+  textarea.focus();
+  await userEvent.clear(textarea);
+  outside.focus();
+  await expect.poll(() => shell.dataset.composerEditing).toBe("false");
+  await expect.poll(toolbarVisibility).toBe("hidden");
 });
