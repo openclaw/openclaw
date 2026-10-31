@@ -106,7 +106,10 @@ Noninteractive setup saves replacement credentials and prints a
 `openclaw models auth activate <profileId> --agent <id>` command to test and activate
 the saved sign-in. Model Setup offers the same operation. Interactive setup defaults
 to activation after a successful test. Reusing an existing credential
-and first-run noninteractive setup retain their existing behavior.
+and first-run noninteractive setup retain their existing behavior. When noninteractive
+setup has no model to test a replacement key with, it saves nothing and prints
+`openclaw models auth paste-api-key --provider <id> --agent <id>`, which replaces the current
+inline key without a test; a key kept in a secret reference is updated at its source.
 
 ## Agent copy portability
 
