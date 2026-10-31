@@ -76,10 +76,12 @@ it("registered plugins list/info/inspect retain disabled cold CLI capabilities",
     plugins: [expect.objectContaining(plugin)],
   });
   for (const command of ["info", "inspect"]) {
-    expect(await runPluginsCommand([command, pluginId])).toMatchObject({
+    const inspected = await runPluginsCommand([command, pluginId]);
+    expect(inspected).toMatchObject({
       plugin: { ...plugin, imported: false },
       capabilities: [{ kind: "cli-backend", ids: cliBackendIds }],
     });
+    expect(inspected).not.toHaveProperty("inspectionScope");
   }
   expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
 });
@@ -90,6 +92,7 @@ it.each([false, true])("runtime inspect preserves activation (enabled=%s)", asyn
   expect(await runPluginsCommand(["inspect", pluginId, "--runtime"])).toMatchObject({
     plugin: { ...plugin, imported: enabled, cliBackendIds: [] },
     capabilities: [],
+    inspectionScope: "cli",
   });
   expect(isColdPluginRuntimeLoaded(fixture)).toBe(enabled);
 });
@@ -122,10 +125,21 @@ it.each([false, true])("isolates incompatible plugins (runtime=%s)", async (runt
       imported: false,
     }),
   });
-  expect(await runPluginsCommand(["inspect", "codex", ...runtimeArgs])).toEqual(incompatibleReport);
-  expect(await runPluginsCommand(["inspect", pluginId, ...runtimeArgs])).toMatchObject({
+  const codexReport = await runPluginsCommand(["inspect", "codex", ...runtimeArgs]);
+  expect(codexReport).toEqual(incompatibleReport);
+  if (runtime) {
+    expect(codexReport).toMatchObject({ inspectionScope: "cli" });
+  } else {
+    expect(codexReport).not.toHaveProperty("inspectionScope");
+  }
+  const healthyReport = await runPluginsCommand(["inspect", pluginId, ...runtimeArgs]);
+  expect(healthyReport).toMatchObject({
     plugin: { id: pluginId, status: "loaded", imported: runtime },
+    ...(runtime ? { inspectionScope: "cli" } : {}),
   });
+  if (!runtime) {
+    expect(healthyReport).not.toHaveProperty("inspectionScope");
+  }
   expect(await runPluginsCommand(["inspect", "--all", ...runtimeArgs])).toEqual(
     expect.arrayContaining([incompatibleReport]),
   );
