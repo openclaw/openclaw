@@ -50,7 +50,9 @@ export class XaiRealtimeVoiceBridge
   private inputSpeechSequence = 0;
   private inputResponseStarted = false;
   private inputResponseFinished = false;
-  private outputResponse: { id?: string; ended: boolean } | undefined;
+  private outputResponse:
+    | { id?: string; ended: boolean; serverVadInterrupted?: boolean }
+    | undefined;
   private finalizedToolCallItems = new Set<string>();
   private inputTranscriptReplacements = new Map<string, string>();
   private inputSettleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -280,6 +282,25 @@ export class XaiRealtimeVoiceBridge
       return;
     }
     if (event.type === "response.created" && this.acceptsEvent(connection)) {
+      if (
+        this.outputResponse?.serverVadInterrupted &&
+        !this.outputResponse.ended &&
+        this.outputResponse.id &&
+        responseId &&
+        responseId !== this.outputResponse.id
+      ) {
+        // xAI may omit the interrupted terminal. Settle the old Talk turn before
+        // publishing its identified VAD successor; do not admit arbitrary overlap.
+        this.outputResponse.ended = true;
+        this.toolCallBuffers.clear();
+        this.finalizedToolCallItems.clear();
+        this.resetAssistantTranscript();
+        this.config.onResponseDone?.({ status: "cancelled", responseId: this.outputResponse.id });
+        if (!this.acceptsEvent(connection)) {
+          return;
+        }
+        this.responseCancelInFlight = false;
+      }
       // Publish the response owner before observers can interrupt its first PCM.
       this.inputResponseStarted = true;
       this.inputResponseFinished = false;
@@ -387,6 +408,9 @@ export class XaiRealtimeVoiceBridge
         this.inputSpeechSequence += 1;
         this.inputResponseStarted = false;
         this.inputResponseFinished = false;
+        if (this.outputResponse && !this.outputResponse.ended) {
+          this.outputResponse.serverVadInterrupted = true;
+        }
         this.handleServerVadBargeIn();
         return;
       case "response.text.delta":
