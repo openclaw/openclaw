@@ -5,8 +5,9 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { normalizeCapabilities } from "./catalog.test-support.js";
 import { DecisionContractError } from "./contract-error.js";
+import { validateDecisionBatchV2 } from "./input-validation.js";
+import { validateDecisionResultV2 } from "./result-validation.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
-import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-v2.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "synthetic evidence" },

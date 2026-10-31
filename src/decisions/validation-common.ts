@@ -156,3 +156,10 @@ export function exactKeys(left: object, right: object): boolean {
     keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key))
   );
 }
+
+export function hasOnlyDecisionFields(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}

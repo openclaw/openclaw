@@ -28,7 +28,8 @@ export {
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "../decisions/compatibility.js";
-export { validateDecisionBatchV2, validateDecisionResultV2 } from "../decisions/validation-v2.js";
+export { validateDecisionBatchV2 } from "../decisions/input-validation.js";
+export { validateDecisionResultV2 } from "../decisions/result-validation.js";
 export { DecisionContractError } from "../decisions/contract-error.js";
 export type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 export { encodeSystemOneQuestions, decodeSystemOneResponse } from "../decisions/systemone-codec.js";
