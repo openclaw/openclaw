@@ -76,6 +76,8 @@ export type ExecuteJobCoreOptions = {
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates live Gateway admission after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;
+  /** Accepted-request source authority, retained through asynchronous executor preparation. */
+  assertSourceCurrent?: () => void;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.

@@ -156,6 +156,7 @@ export async function sendChatAndWait(
   sessionKey: string,
   message: string,
   timeoutMs = 30_000,
+  expected: { status: "ok" } | { status: "error"; stopReason: string } = { status: "ok" },
 ): Promise<string> {
   const accepted = await client.request<{ runId: string; status: string }>("chat.send", {
     sessionKey,
@@ -169,6 +170,6 @@ export async function sendChatAndWait(
     { runId: accepted.runId, timeoutMs },
     { timeoutMs: timeoutMs + 5_000 },
   );
-  expect(completed.status).toBe("ok");
+  expect(completed).toMatchObject(expected);
   return accepted.runId;
 }

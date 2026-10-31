@@ -10,15 +10,15 @@ import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 
 // Real agent/tool admission, same-session idle handoff and durable cron outcome.
-it(
-  "runs an authorized force request after its tool turn ends",
+it.for([false, true])(
+  "runs an authorized force request after its tool turn ends (caller scoped: %s)",
   { timeout: 120_000 },
-  async ({ signal }) => {
+  async (callerScoped, { signal }) => {
     await withOpenClawTestState(kernelGatewayTestStateOptions("cron-after-turn"), async () => {
       let sessionKey = "";
       let jobId = "";
       let calls = 0;
-      let disabled = false;
+      let disposition = "settled";
       let finished = createDeferredCore<Record<string, unknown>>();
       let notice = createDeferredCore();
       const fixture = createChatFixture("cron-after-turn", {
@@ -26,7 +26,18 @@ it(
           ...config,
           agents: { ...config.agents, ownership: "explicit", entries: { main: {} } },
           plugins: { slots: { memory: "none" } },
-          tools: { profile: "coding", codeMode: false, toolSearch: false },
+          tools: {
+            profile: "coding",
+            codeMode: false,
+            toolSearch: false,
+            gatewayPolicy: callerScoped
+              ? {
+                  allow: ["automations"],
+                  actions: { automations: ["add", "run"] },
+                  automations: { scope: "caller" },
+                }
+              : undefined,
+          },
           cron: { enabled: false, triggers: { enabled: false } },
         }),
         onEvent: ({ event, payload }) => {
@@ -72,8 +83,13 @@ it(
           } else if (calls === 3) {
             expect(body).toContain("enqueued");
             expect(body).toContain("starts after this turn");
-            if (disabled) {
+            if (disposition === "disabled") {
               await fixture.client.request("cron.update", { id: jobId, patch: { enabled: false } });
+            }
+            if (disposition === "cancelled") {
+              await expect(
+                fixture.client.request("chat.abort", { sessionKey }),
+              ).resolves.toMatchObject({ aborted: true });
             }
             return "Queued for after this turn.";
           } else {
@@ -86,7 +102,10 @@ it(
       await runQaGatewayFixture(
         async () => {
           await fixture.start();
-          for (disabled of [false, true]) {
+          for (disposition of callerScoped
+            ? ["settled", "disabled"]
+            : ["settled", "disabled", "cancelled"]) {
+            const skipped = disposition !== "settled";
             calls = 0;
             finished = createDeferredCore<Record<string, unknown>>();
             notice = createDeferredCore();
@@ -98,15 +117,21 @@ it(
               fixture.client,
               sessionKey,
               "Create a daily job, then run it now.",
+              30_000,
+              disposition === "cancelled"
+                ? { status: "error", stopReason: "rpc" }
+                : { status: "ok" },
             );
             const outcome = await withinTest(finished.promise, signal);
             const history = await fixture.client.request("cron.runs", { id: jobId, limit: 1 });
-            expect(outcome, JSON.stringify({ outcome, history, calls })).toMatchObject({
-              status: disabled ? "skipped" : "ok",
-            });
-            expect(calls).toBe(disabled ? 3 : 4);
-            if (disabled) {
-              expect(outcome.error).toContain("disabled");
+            const status = skipped ? "skipped" : "ok";
+            expect(outcome, JSON.stringify({ outcome, history, calls })).toMatchObject({ status });
+            expect(history).toMatchObject({ entries: [{ status }] });
+            expect(calls).toBe(skipped ? 3 : 4);
+            if (skipped) {
+              expect(outcome.error).toContain(disposition === "disabled" ? "disabled" : "grant");
+            }
+            if (disposition === "disabled") {
               await withinTest(notice.promise, signal);
             }
             const transcript = await fixture.client.request<{ messages: unknown[] }>(
@@ -117,8 +142,8 @@ it(
               transcript.messages.filter((message) =>
                 JSON.stringify(message).includes("did not start:"),
               ),
-            ).toHaveLength(disabled ? 1 : 0);
-            if (!disabled) {
+            ).toHaveLength(disposition === "disabled" ? 1 : 0);
+            if (!skipped) {
               expect(JSON.stringify(transcript)).toContain('"text":"AFTER_TURN_STARTED"');
             }
           }

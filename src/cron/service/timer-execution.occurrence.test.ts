@@ -77,7 +77,7 @@ const SESSION_TARGETS: readonly CronStoredJob["sessionTarget"][] = [
   "main",
 ];
 
-function harness() {
+function harness(onAdmission?: () => void) {
   const admitted: ScheduledOccurrence[] = [];
   const release = vi.fn();
   const seen: Array<{ executor: string; occurrence: unknown }> = [];
@@ -92,6 +92,7 @@ function harness() {
     admitScheduledOccurrence: vi.fn(async () => {
       const occurrence = { ...unadmittedScheduledOccurrence("matrix"), release };
       admitted.push(occurrence);
+      onAdmission?.();
       return occurrence;
     }),
     evaluateCronTrigger: record("evaluateCronTrigger", { kind: "evaluated", fire: true }),
@@ -127,40 +128,45 @@ describe("scheduled occurrence admission", () => {
     `);
   });
 
-  it.each(MATRIX)(
-    "$kind on $sessionTarget (trigger: $withTrigger) runs every executor with one admitted occurrence",
-    async ({ kind, sessionTarget, withTrigger }) => {
-      const { state, admitted, release, seen } = harness();
-      const job: CronStoredJob = {
-        ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
-        ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
-      };
-
-      await executeJobCore(state, job);
-
-      expect(admitted).toHaveLength(1);
-      for (const call of seen) {
-        expect(call, call.executor).toEqual({ executor: call.executor, occurrence: admitted[0] });
-      }
-      // The occurrence outlives every executor it admitted and is released once.
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("reaches every admitted executor across the matrix", async () => {
+  it("passes one occurrence to every executor across targets and triggers", async () => {
     const reached = new Set<string>();
     for (const { kind, sessionTarget, withTrigger } of MATRIX) {
-      const { state, seen } = harness();
+      const label = `${kind} on ${sessionTarget} (trigger: ${withTrigger})`;
+      const { state, admitted, release, seen } = harness();
       await executeJobCore(state, {
         ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
         ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
       });
+      expect(admitted, label).toHaveLength(1);
       for (const call of seen) {
         reached.add(call.executor);
+        expect(call, label).toEqual({ executor: call.executor, occurrence: admitted[0] });
       }
+      // The occurrence outlives every executor it admitted and is released once.
+      expect(release, label).toHaveBeenCalledOnce();
     }
     expect([...reached].toSorted()).toEqual(Object.keys(executorsRequireOccurrence).toSorted());
   });
+
+  it.each(PAYLOAD_KINDS)(
+    "revokes a %s source during awaited occurrence admission",
+    async (kind) => {
+      let current = true;
+      const { state, seen } = harness(() => {
+        current = false;
+      });
+      await expect(
+        executeJobCore(state, makeCronJob({ payload: payloadFor(kind) }), undefined, {
+          assertSourceCurrent: () => {
+            if (!current) {
+              throw new Error("accepted source revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("accepted source revoked");
+      expect(seen).toEqual([]);
+    },
+  );
 
   it("admits before trigger evaluation, so a trigger that does not fire still consumes it", async () => {
     const { state, admitted, release } = harness();

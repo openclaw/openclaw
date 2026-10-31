@@ -46,6 +46,7 @@ import { resolveDeliveryState } from "./timer-trigger.js";
 type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   migrationPending?: boolean;
+  acceptedRunGuard?: () => void;
   idleAdmission?: CronIdleAdmissionSource;
   runId?: string;
   activeJobMarker?: CronActiveJobMarker;
@@ -67,6 +68,7 @@ async function deliverPrimaryWebhook(
   assertRunCurrent?: () => Promise<void>,
   activeJobMarker?: CronActiveJobMarker,
   deliveryAttemptFence?: CronCompletionDeliveryFence,
+  assertSourceCurrent?: () => void,
 ): Promise<CronCoreRunOutcome> {
   const settle = (settledResult: CronCoreRunOutcome) => {
     // Publish the terminal delivery fact before this async function resolves;
@@ -149,9 +151,13 @@ async function deliverPrimaryWebhook(
   try {
     await deliveryAttemptFence?.beforeAttempt();
     deliveryAttemptFence?.assertCurrent();
+    assertSourceCurrent?.();
     webhookAdapterEntered = true;
     const outcome = await state.deps.sendCronWebhook({
-      assertCurrent: deliveryAttemptFence?.assertCurrent,
+      assertCurrent: () => {
+        deliveryAttemptFence?.assertCurrent();
+        assertSourceCurrent?.();
+      },
       job,
       abortSignal,
       onDeliveryState: (delivery) => {
@@ -240,6 +246,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
   const assertRunCurrent = async () => {
     runAbortController.signal.throwIfAborted();
     opts?.runReceiptContext?.admission.assertCurrent();
+    opts?.acceptedRunGuard?.();
     if (!isCronActiveJobMarkerCurrent(opts?.activeJobMarker)) {
       throw new Error("Gateway restarting.");
     }
@@ -397,6 +404,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       assertRunCurrent,
+      assertSourceCurrent: opts?.acceptedRunGuard,
       executionIdentity: executionIdentity && {
         ...executionIdentity,
         onPostAdmission: (context) => {
@@ -421,6 +429,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         assertRunCurrent,
         opts?.activeJobMarker,
         deliveryAttemptFence,
+        opts?.acceptedRunGuard,
       );
     });
     // Abort-ignoring work remains tracked by the task owner for shutdown cleanup.

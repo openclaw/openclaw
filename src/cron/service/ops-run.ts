@@ -106,10 +106,13 @@ export async function enqueueRun(
   state: CronServiceState,
   id: string,
   mode?: CronRunMode,
-  opts?: Pick<ManualRunOptions, "commitGuard" | "event" | "onEventTransferred" | "runId">,
+  opts?: Pick<
+    ManualRunOptions,
+    "commitGuard" | "acceptedRunGuard" | "event" | "onEventTransferred" | "runId"
+  >,
 ) {
   const runId = opts?.runId ?? `cron-request.${randomUUID()}`;
-  const releaseCaller = opts?.event ? retainGatewayDeviceRevocation(opts.commitGuard) : undefined;
+  const releaseCaller = retainGatewayDeviceRevocation(opts?.acceptedRunGuard ?? opts?.commitGuard);
   const trackAdmission = captureCronRunAdmissionTracker();
   return runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayIndependentRootWorkContinuation(async () => {

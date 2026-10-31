@@ -53,6 +53,7 @@ export type CronRunExecutionParams = Pick<
     | "admissionSource"
     | "deliveryAttemptFence"
     | "occurrence"
+    | "assertCurrent"
   > & {
     runId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;

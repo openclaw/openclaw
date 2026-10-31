@@ -212,6 +212,7 @@ export async function runPluginCommandScheduledTurn(params: {
         throw new Error("Scheduled plugin command occurrence closed.");
       }
       request.abortSignal?.throwIfAborted();
+      request.assertCurrent?.();
       assertOccurrence();
       fence.assertCurrent();
       const current: CronStoredJob | undefined = context.cron.getJob(job.id);

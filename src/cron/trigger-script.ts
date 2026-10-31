@@ -516,6 +516,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         sessionKey: runtime.context.sessionKey,
         jobId: params.job.id,
         deliveryAttemptFence: params.deliveryAttemptFence,
+        assertSourceCurrent: params.assertCurrent,
         toolsAllow: request.toolsAllow,
         scheduledToolPolicy: runtime.scheduledToolPolicy,
         channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
@@ -526,6 +527,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       const admitted = await admission.preparedRunAdmission.admit("gateway");
       const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, evaluationScope.signal);
       function assertActive() {
+        params.assertCurrent?.();
         if (
           !assertAdmitted ||
           !caller ||

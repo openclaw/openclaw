@@ -44,6 +44,7 @@ import {
   resolveCronCreatorAuthorityCapture,
   resolveCronStreamExecPolicy,
   resolveCronMutationCommitGuard,
+  resolveCronRunRequestGuards,
   resolveCronRequesterProvenanceForJob,
   resolveCronScheduledToolPolicyForCaller,
 } from "./cron-caller-scope.js";
@@ -519,14 +520,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     "cron.run",
     validateCronRunParams,
     async (options, { jobId, callerScope, job }) => {
-      const {
-        params: p,
-        respond,
-        context,
-        client,
-        sessionMutationCommitGuard,
-        hasCurrentClientAuthority,
-      } = options;
+      const { params: p, respond, context, client } = options;
       if (
         p.expectedProcessInstanceId &&
         p.expectedProcessInstanceId !== getGatewayProcessInstanceId()
@@ -538,18 +532,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       try {
         assertCronModelJobAllowed(client, cfg, job);
-        const commitGuard = resolveCronMutationCommitGuard(
-          client,
-          context,
-          { callerScope, jobId },
-          {
-            sessionMutationCommitGuard,
-            hasCurrentClientAuthority,
-            modelJobPolicy: { config: cfg, jobId },
-          },
-        );
-        result = commitGuard
-          ? await context.cron.enqueueRun(jobId, p.mode ?? "force", { commitGuard })
+        const guards = resolveCronRunRequestGuards(options, job, callerScope);
+        result = guards.commitGuard
+          ? await context.cron.enqueueRun(jobId, p.mode ?? "force", guards)
           : await context.cron.enqueueRun(jobId, p.mode ?? "force");
       } catch (error) {
         if (error instanceof TypeError) {

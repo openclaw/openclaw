@@ -31,9 +31,7 @@ function fixture(
   return createCronRunFixture(opsRegressionFixtures.makeStorePath().storePath, job, overrides);
 }
 
-type ActivationTrigger = "scheduled" | "startup";
-
-async function activationFixture(trigger: ActivationTrigger, priorFailure = true) {
+async function activationFixture(trigger: "scheduled" | "startup", priorFailure = true) {
   const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
   const job = makeJob(`activation-${trigger}`, dueAt);
   if (priorFailure) {
@@ -241,7 +239,6 @@ describe("cron service run admission cleanup", () => {
         !terminal,
       );
       let activationPersisted = false;
-      let failureInjected = false;
       const errorText = terminal ? "terminal cleanup persist failed" : "activation persist failed";
       const database = openOpenClawStateDatabase().db;
       database.exec(`
@@ -263,13 +260,7 @@ describe("cron service run admission cleanup", () => {
         }
       });
       try {
-        await expect(
-          execute().catch((error: unknown) => {
-            failureInjected = true;
-            throw error;
-          }),
-        ).rejects.toThrow(errorText);
-        expect(failureInjected).toBe(true);
+        await expect(execute()).rejects.toThrow(errorText);
         expect(activationPersisted).toBe(terminal);
         // The stop observer runs before launch registration; join the later cleanup too.
         await state.schedulerDrain;

@@ -378,11 +378,11 @@ export function runWithCronCreatorAuthorityCapability<T>(
     if (isPromiseLike(result)) {
       return Promise.resolve(result).finally(() => {
         signal?.removeEventListener("abort", revoke);
-        revoke();
+        revokeCronCreatorAuthorityRunScope(scope, "settled");
       }) as T;
     }
     signal?.removeEventListener("abort", revoke);
-    revoke();
+    revokeCronCreatorAuthorityRunScope(scope, "settled");
     return result;
   } catch (error) {
     signal?.removeEventListener("abort", revoke);

@@ -64,6 +64,7 @@ export async function executeJobCore(
   }
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();
+    options?.assertSourceCurrent?.();
     options?.deliveryAttemptFence?.assertCurrent();
     if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
       throw new Error("Gateway restarting.");
@@ -266,6 +267,7 @@ export async function executeJobCore(
       }
       const evaluation = await evaluator({
         occurrence,
+        assertCurrent: options?.assertSourceCurrent,
         deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
         job,
         script: job.trigger.script,
@@ -404,6 +406,7 @@ async function executeMainSessionCronJob(
   }
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();
+    options?.assertSourceCurrent?.();
     options?.deliveryAttemptFence?.assertCurrent();
     if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
       throw new Error("Gateway restarting.");
@@ -469,6 +472,7 @@ async function executeDetachedCronJob(
     options?.onExecutionStarted?.();
     const res = await state.deps.runCommandJob({
       occurrence,
+      assertCurrent: options?.assertSourceCurrent,
       deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
       job,
       abortSignal,
@@ -518,6 +522,7 @@ async function executeDetachedCronJob(
 
   const res = await state.deps.runIsolatedAgentJob({
     occurrence,
+    assertCurrent: options?.assertSourceCurrent,
     waitForIdle: options?.waitForIdle,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,

@@ -60,7 +60,6 @@ export async function launchCronRun(
   }
   await ensureLoaded(state);
   pending.context.admission.assertCurrent();
-  // Request authority ends at enqueue; occurrences restore the job's scheduled authority.
   // On-exit watchers still own their source until execution consumes the exit.
   options.onExit?.commitGuard();
   const current = state.store?.jobs.find((job) => job.id === entry.job.id);
@@ -104,6 +103,8 @@ export async function launchCronRun(
     );
     return;
   }
+  // Admission ended at enqueue; this occurrence still owns its original source guard.
+  options.acceptedRunGuard?.();
   const manual = options.source === "manual" || options.source === "event";
   const admittedJob = structuredClone(continuationSession ? current : entry.job);
   if (options.onExit) {
@@ -171,6 +172,7 @@ export async function launchCronRun(
   try {
     result = await executeJobCoreWithTimeout(state, executionJob, {
       runId: taskRunId,
+      acceptedRunGuard: options.acceptedRunGuard,
       migrationPending: entry.migrationPending,
       activeJobMarker,
       streamBatch: options.streamBatch,

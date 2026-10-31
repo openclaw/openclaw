@@ -18,6 +18,8 @@ export type ManualRunOptions = {
   runId?: string;
   /** Revalidates the caller before preflight effects and the durable request. */
   commitGuard?: () => void;
+  /** Installed only after this exact request is durably accepted. */
+  acceptedRunGuard?: () => void;
   scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   delivery?: CronServiceRunOptions["delivery"];

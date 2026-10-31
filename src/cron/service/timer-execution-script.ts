@@ -38,6 +38,7 @@ export async function executeScriptCronJob(
   await options?.assertRunCurrent?.();
   const result = await state.deps.runScriptJob({
     occurrence,
+    assertCurrent: options?.assertSourceCurrent,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
     streamBatch: options?.streamBatch,
@@ -131,6 +132,7 @@ export async function executeScriptCronJob(
         expectedTarget,
         commitGuard: () => {
           abortSignal?.throwIfAborted();
+          options?.assertSourceCurrent?.();
           options?.deliveryAttemptFence?.assertCurrent();
           if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
             throw new Error("Gateway restarting.");

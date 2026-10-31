@@ -31,6 +31,7 @@ import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-pl
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
@@ -95,6 +96,7 @@ export function createCronPromptExecutor(
     onPromptCompleted: (run: CronCompletedPromptRun) => void;
   },
 ) {
+  const { childParent } = params.occurrence;
   const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
     params.modelFallbacksOverride ??
@@ -210,10 +212,11 @@ export function createCronPromptExecutor(
       scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
-      // A child running in its parent's workspace loses every effect once that parent resets.
-      ...(params.occurrence.childParent?.binding
-        ? { assertSourceCurrent: params.occurrence.childParent.assertCurrent }
-        : {}),
+      // Retain accepted-request revocation alongside the child's existing parent authority.
+      assertSourceCurrent: composeSessionSourceAssertion([
+        params.assertCurrent,
+        childParent?.binding ? childParent.assertCurrent : undefined,
+      ]),
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
@@ -387,7 +390,7 @@ export function createCronPromptExecutor(
           agentId: params.agentId,
           sessionKey: params.runSessionKey,
           preparedSessionEntry: params.cronSession.sessionEntry,
-          inheritedSandbox: params.occurrence.childParent?.sandbox,
+          inheritedSandbox: childParent?.sandbox,
         });
         assertCronCandidateSandboxPlacement({
           ...sandboxPlacement,
@@ -499,10 +502,7 @@ export function createCronPromptExecutor(
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionFile: params.runSessionKey,
-            abortSignal: resolveCliChildAbortSignal(
-              params.abortSignal,
-              params.occurrence.childParent?.signal,
-            ),
+            abortSignal: resolveCliChildAbortSignal(params.abortSignal, childParent?.signal),
           });
           try {
             const cliAbortSignal = deferredLifecycle.signal;

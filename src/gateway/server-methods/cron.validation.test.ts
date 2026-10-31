@@ -42,11 +42,13 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
-import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
 import { registerCronCreatorSessionTests } from "./cron-creator-session.test-support.js";
-import { registerCronRunWaitTests } from "./cron-run-wait.test-support.js";
+import {
+  cronRunEnqueueAck as ack,
+  registerCronRunWaitTests,
+} from "./cron-run-wait.test-support.js";
 import { loadGatewaySessionEntry } from "./cron-session-reader.test-support.js";
 import {
   createCronTestContext,
@@ -570,12 +572,7 @@ describe("cron method validation", () => {
     const { respond } = await invokeCron("cron.run", { id: " cron-1 " }, { context });
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
     expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force");
-    expectCronReply(respond, {
-      ok: true,
-      enqueued: true,
-      runId: "run-1",
-      processInstanceId: getGatewayProcessInstanceId(),
-    });
+    expectCronReply(respond, ack);
   });
 
   it.each([
@@ -2389,12 +2386,6 @@ describe("cron method validation", () => {
       { context, client: callerClient("ops"), hasCurrentClientAuthority: () => authorized },
     );
 
-    const ack = {
-      ok: true,
-      enqueued: true,
-      runId: "run-1",
-      processInstanceId: getGatewayProcessInstanceId(),
-    };
     expectCronReply(
       respond,
       releasesOutcome

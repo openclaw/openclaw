@@ -47,6 +47,11 @@ export type CronServiceRunOptions = {
   commitGuard?: () => void;
 };
 
+/** One accepted request keeps its source guard separately from the caller turn. */
+export type CronEnqueueRunOptions = CronCommitGuardOptions & {
+  acceptedRunGuard?: () => void;
+};
+
 /** Public cron service facade used by gateway, plugin SDK, and tests. */
 export interface CronServiceContract {
   readEventSources(source: string): Promise<CronEventSourceSnapshot[]>;
@@ -73,7 +78,7 @@ export interface CronServiceContract {
   enqueueRun(
     id: string,
     mode?: CronRunMode,
-    opts?: CronCommitGuardOptions,
+    opts?: CronEnqueueRunOptions,
   ): Promise<CronServiceRunResult>;
   getJob(id: string): CronStoredJob | undefined;
   readJob(id: string): Promise<CronStoredJob | undefined>;

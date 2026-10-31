@@ -393,7 +393,8 @@ export function buildGatewayCronService(params: {
       resolveGatewayContext: scheduledGatewayContextResolver,
       resolvePluginRegistry: params.resolvePluginRegistry,
     }),
-    runCommandJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
+    runCommandJob: async ({ job, abortSignal, deliveryAttemptFence, assertCurrent }) => {
+      assertCurrent?.();
       const result = await runCronCommandJob({
         job,
         abortSignal,

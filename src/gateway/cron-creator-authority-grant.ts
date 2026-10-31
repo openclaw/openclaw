@@ -19,6 +19,10 @@ import type {
   CronAuthenticatedChannelRequester,
   CronCreatorAuthorityGrant,
 } from "./cron-creator-authority-grant.types.js";
+import {
+  bindGatewayDeviceRevocation,
+  readGatewayDeviceSourceAuthority,
+} from "./device-revocation.js";
 
 /** Resolve the deployment's automation scope when binding model tools or admitting RPCs. */
 export function isCronModelManagementAllowed(
@@ -43,6 +47,7 @@ type CronManagementCaller = {
 const activeManagement = new AsyncLocalStorage<{
   identity: CronManagementCaller;
   assertActive: () => void;
+  runSourceCurrent?: () => void;
   callerOrigin?: CronScheduledToolCallerOrigin;
   channelRequester?: CronAuthenticatedChannelRequester;
   execPolicy?: CronStreamExecPolicy;
@@ -72,7 +77,9 @@ export type CronCreatorAuthorityRunScope = {
   readonly controlUiAdmin?: true;
   readonly isCurrent?: () => boolean;
   active: boolean;
-  abort: () => void;
+  /** Explicit cancellation survives normal run settlement for accepted scheduler work. */
+  cancelled?: true;
+  abort: (reason?: "cancelled" | "settled") => void;
 };
 
 type CronCreatorAuthorityGrantEntry = {
@@ -126,7 +133,10 @@ export function createCronCreatorAuthorityRunScope(
     },
     ...(isCurrent ? { isCurrent } : {}),
     active: true,
-    abort: () => {
+    abort: (closure = "cancelled") => {
+      if (closure === "cancelled") {
+        scope.cancelled = true;
+      }
       const reason = expiredAuthorityError();
       materializeErrorStack(reason);
       abortController.abort(reason);
@@ -301,12 +311,18 @@ function revokeCronCreatorAuthorityGrant(token: string): void {
   }
 }
 
-export function revokeCronCreatorAuthorityRunScope(scope: CronCreatorAuthorityRunScope): void {
+export function revokeCronCreatorAuthorityRunScope(
+  scope: CronCreatorAuthorityRunScope,
+  reason: "cancelled" | "settled" = "cancelled",
+): void {
+  if (reason === "cancelled") {
+    scope.cancelled = true;
+  }
   if (!scope.active) {
     return;
   }
   scope.active = false;
-  scope.abort();
+  scope.abort(reason);
   channelRequestersByScope.delete(scope);
   for (const token of scope.grantTokens) {
     revokeCronCreatorAuthorityGrant(token);
@@ -480,12 +496,28 @@ export async function withCronManagementGrant<T>(
     assertCronGrantCurrent(entry, management.authority.operationalRunInstance.runId);
   };
   assertActive();
-  // Queue acknowledgement precedes reservation. Its retained guard still
-  // belongs to this exact live run, signal, and expiry after the RPC returns.
+  const { scope } = entry;
+  const sourceCurrent = readGatewayDeviceSourceAuthority(scope.isCurrent) ?? scope.isCurrent;
+  // Only cron.run can transfer a durable request. This is live source authority,
+  // never a reusable management grant or an extension of the model run's lifetime.
+  const runSourceCurrent =
+    management.method === "cron.run"
+      ? bindGatewayDeviceRevocation(() => {
+          if (
+            scope.cancelled ||
+            sourceCurrent?.() === false ||
+            (scope.managementEntitlement?.source === "channel-owner" &&
+              !scope.managementEntitlement.isCurrent())
+          ) {
+            throw expiredManagementError();
+          }
+        }, scope.isCurrent)
+      : undefined;
   return await activeManagement.run(
     {
       identity,
       assertActive,
+      runSourceCurrent,
       ...(entry.scope.callerOrigin.kind === "local"
         ? { callerOrigin: { kind: "local" as const } }
         : {}),
@@ -501,6 +533,18 @@ export function getCronManagementAuthority(
 ): (() => void) | undefined {
   const management = activeManagement.getStore();
   return management?.identity === identity ? management.assertActive : undefined;
+}
+
+/** Captured before acceptance; only the scheduler's committed request may consume it. */
+export function getCronManagementRunSource(
+  identity: CronManagementCaller,
+): (() => void) | undefined {
+  const management = activeManagement.getStore();
+  if (management?.identity !== identity) {
+    return undefined;
+  }
+  management.assertActive();
+  return management.runSourceCurrent;
 }
 
 export function getCronManagementStreamExecPolicy(
