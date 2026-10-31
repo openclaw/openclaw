@@ -55,6 +55,30 @@ export function resolveLaunchAgentPlistPathForLabel(
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
+/**
+ * Removes a plist whose service is already booted out, keeping a copy in Trash when allowed.
+ * macOS privacy protection denies ~/.Trash to app-launched helpers without Full Disk Access,
+ * while the user's LaunchAgents directory stays writable; stopping halfway would leave the
+ * Gateway unloaded with its definition still in place.
+ */
+export async function removeBootedOutLaunchAgentPlist(
+  plistPath: string,
+  trashPath: string,
+): Promise<{ trashed: boolean }> {
+  try {
+    await fs.mkdir(path.dirname(trashPath), { recursive: true });
+    await fs.rename(plistPath, trashPath);
+    return { trashed: true };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EPERM" && code !== "EACCES") {
+      throw error;
+    }
+  }
+  await fs.unlink(plistPath);
+  return { trashed: false };
+}
+
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
   return path.join(resolveGatewayStateDir(env), LAUNCH_AGENT_ENV_DIR_NAME);
 }
