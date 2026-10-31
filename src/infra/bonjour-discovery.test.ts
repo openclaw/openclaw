@@ -165,7 +165,7 @@ describe("bonjour-discovery", () => {
 
   it("decodes a ShowTXTRecord backslash once and keeps control bytes", async () => {
     // Four backslashes are one literal "\" (ShowTXTRecord). A second decode
-    // would read the leftover "\032" as a space. "\x0A" is a byte below 0x20.
+    // would read the leftover "\032" as a space. Bytes below 0x20 are "\\xHH".
     mockCommands("darwin", (argv) => {
       const domain = argv[3] ?? "";
       if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
@@ -174,7 +174,7 @@ describe("bonjour-discovery", () => {
       if (argv[0] === "dns-sd" && argv[1] === "-L") {
         return [
           "Literal Gateway._openclaw-gw._tcp.local. can be reached at literal.local.:18789 (interface 14)",
-          String.raw` displayName=\\\\032 role=a\x0Ab`,
+          String.raw` displayName=\\\\032 role=a\\x0Ab`,
           "",
         ].join("\n");
       }

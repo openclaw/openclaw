@@ -97,8 +97,8 @@ function decodeDnsSdEscapes(value: string): string {
 }
 
 // ShowTXTRecord (mDNSResponder Clients/dns-sd.c) writes "\<char>" for spaces and
-// shell metacharacters, four backslashes for one "\", and "\xHH" for bytes < 0x20.
-// Decode that once. A second pass reads a literal "\032" as a space.
+// shell metacharacters, four backslashes for one "\", and two backslashes plus
+// "xHH" for bytes < 0x20. Decode that once. A second pass reads "\032" as a space.
 const SHOW_TXT_ESCAPED_BACKSLASH = "\\".repeat(4);
 
 function splitShowTxtRecord(line: string): string[] {
@@ -156,13 +156,14 @@ function decodeShowTxtValue(value: string): string {
       i += 3;
       continue;
     }
-    if (value.charAt(i + 1) === "x") {
-      const hex = value.slice(i + 2, i + 4);
+    // printf("\\\\x%02X") emits two backslashes, then x and two hex digits.
+    if (value.startsWith(`${"\\".repeat(2)}x`, i)) {
+      const hex = value.slice(i + 3, i + 5);
       if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
         flush();
         bytes.push(Number.parseInt(hex, 16));
         decoded = true;
-        i += 3;
+        i += 4;
         continue;
       }
     }
