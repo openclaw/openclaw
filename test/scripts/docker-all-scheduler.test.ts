@@ -49,7 +49,11 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
+import {
+  copyDockerSchedulerHarness,
+  packageArchiveBytes,
+  writePackageTarball,
+} from "./docker-all-harness.test-support.js";
 import { isProcessPresent } from "./run-process.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
@@ -158,21 +162,6 @@ function sha256(file: string) {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-function writePackageTarball(
-  root: string,
-  name: string,
-  version: string,
-  fileName = "openclaw.tgz",
-) {
-  const packageRoot = path.join(root, `package-${fileName}`);
-  const packageDir = path.join(packageRoot, "package");
-  mkdirSync(packageDir, { recursive: true });
-  writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ name, version }));
-  const tarball = path.join(root, fileName);
-  execFileSync("tar", ["-czf", tarball, "-C", packageRoot, "package"]);
-  return tarball;
-}
-
 function candidateFixture(packageName = "openclaw", packageVersion = "2026.8.1") {
   const root = tempDirs.make("openclaw-docker-candidate-");
   const version = "2026.8.1";
@@ -263,7 +252,7 @@ function frozenSweepFixture(packagedIds: string[]) {
     ].join("\n"),
   );
   const packagePath = path.join(root, "frozen.tgz");
-  execFileSync("tar", ["-czf", packagePath, "-C", staging, "package"]);
+  writeFileSync(packagePath, packageArchiveBytes(packaged));
   execFileSync("git", ["init", "-q"], { cwd: target });
   execFileSync("git", ["add", "."], { cwd: target });
   execFileSync(
