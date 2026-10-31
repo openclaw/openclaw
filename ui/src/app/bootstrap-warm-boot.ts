@@ -1,13 +1,4 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import type { RouteLocation } from "@openclaw/uirouter";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import {
-  buildAgentMainSessionKey,
-  isDashboardSessionKey,
-  parseAgentSessionKey,
-} from "../lib/sessions/session-key.ts";
-import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import {
   clearBootRecords,
   retirePendingBootRecord,
@@ -22,51 +13,6 @@ import {
 import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { clearWarmBootState } from "./warm-boot-retirement.ts";
-
-export function prewarmBootChat(
-  record: BootRecord,
-  lastSessionKey: string,
-  location: RouteLocation,
-  basePath: string,
-): void {
-  const target = sessionRefFromPath(location.pathname, basePath, record.agents.mainKey);
-  const path = location.pathname.slice(basePath.length).replace(/\/$/u, "");
-  if (!target && path !== "" && path !== "/chat") {
-    return;
-  }
-  // Dashboard names are ambiguous until the roster resolves them. Warm one
-  // same-agent last-viewed candidate; only the route's exact key can consume it.
-  const savedDashboardCandidate =
-    target?.namespace === "dashboard" &&
-    target.kind === "literal" &&
-    target.slugCandidate &&
-    isDashboardSessionKey(lastSessionKey) &&
-    parseAgentSessionKey(lastSessionKey)?.agentId === target.agentId;
-  const sessionKey = savedDashboardCandidate
-    ? lastSessionKey
-    : target?.kind === "main"
-      ? buildAgentMainSessionKey({ agentId: target.agentId, mainKey: record.agents.mainKey })
-      : target?.kind === "literal"
-        ? target.sessionKey
-        : lastSessionKey;
-  if (target?.kind === "short" && parseAgentSessionKey(sessionKey)?.agentId !== target.agentId) {
-    return;
-  }
-  if (parseAgentSessionKey(sessionKey)) {
-    void prewarmChatSnapshot(
-      resolveChatSnapshotKey(
-        {
-          agentsList: record.agents,
-          hello: null,
-          assistantAgentId: null,
-          settings: { gatewayUrl: record.scope },
-          client: { offlineRecoveryScope: record.recoveryScope },
-        },
-        { sessionKey },
-      ),
-    );
-  }
-}
 
 export function subscribeWarmBootConnection(
   gateway: ApplicationGateway,
