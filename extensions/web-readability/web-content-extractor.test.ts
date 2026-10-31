@@ -27,10 +27,19 @@ async function extractArticle(html: string, extractMode: "text" | "markdown" = "
 
 describe("web readability extractor", () => {
   it.each([
-    ["", "https://example.com/next"],
-    ['<base target="_blank" />', "https://example.com/next"],
-    ['<base href="/docs/guide/" />', "https://example.com/docs/next"],
-  ])("extracts readable markdown with absolute links (head %j)", async (base, link) => {
+    ["", "https://example.com/next", "https://example.com/article#top"],
+    ['<base target="_blank" />', "https://example.com/next", "https://example.com/article#top"],
+    [
+      '<base href="/docs/guide/" />',
+      "https://example.com/docs/next",
+      "https://example.com/docs/guide/#top",
+    ],
+    [
+      '<base href="https://example.com/manual.html" />',
+      "https://example.com/next",
+      "https://example.com/manual.html#top",
+    ],
+  ])("extracts readable markdown with absolute links (head %j)", async (base, link, top) => {
     const html = SAMPLE_HTML.replace("</head>", `${base}</head>`).replace(
       "Continue reading</a>",
       'Continue reading</a> <a href="#top">Top</a>',
@@ -38,7 +47,7 @@ describe("web readability extractor", () => {
     const extracted = await extractArticle(html, "markdown");
     expect(extracted.text).toContain("Main content starts here");
     expect(extracted.text).toContain(`[Continue reading](${link})`);
-    expect(extracted.text).toContain("[Top](https://example.com/article#top)");
+    expect(extracted.text).toContain(`[Top](${top})`);
     expect(extracted.title).toBe("Example Article");
   });
 

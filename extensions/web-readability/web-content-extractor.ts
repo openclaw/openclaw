@@ -120,14 +120,6 @@ function resolveDocumentBase(document: Document, pageUrl: string): void {
       element.remove();
     }
   }
-  if (!href) {
-    return;
-  }
-  // In-page anchors keep pointing at the fetched page, as they do on pages without a <base>;
-  // `<base href="/">` would otherwise send every table-of-contents link to the site root.
-  for (const anchor of document.querySelectorAll('a[href^="#"]')) {
-    anchor.setAttribute("href", new URL(anchor.getAttribute("href") ?? "", pageUrl).href);
-  }
 }
 
 export function createReadabilityWebContentExtractor(): WebContentExtractorPlugin {
