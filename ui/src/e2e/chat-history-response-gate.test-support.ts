@@ -422,17 +422,21 @@ export function createHistoryAdmissionRecorder(read: () => HistoryPacketMetric[]
         expect(Number.isFinite(reply.sentMs)).toBe(true);
         expect(Number.isFinite(reply.receivedMs)).toBe(true);
         expect(reply.receivedMs!).toBeGreaterThanOrEqual(reply.sentMs!);
+        expect(Number.isInteger(reply.limit)).toBe(true);
+        expect(Number.isInteger(reply.maxBytes)).toBe(true);
       }
       expect(next.sentMs!).toBeGreaterThanOrEqual(metric.receivedMs!);
-      expect(Number.isInteger(metric.limit)).toBe(true);
-      expect(Number.isInteger(metric.maxBytes)).toBe(true);
       // Broad-issued replies can still be certified small packets and refine to
-      // one source. Broad rejection may first return to the canonical envelope.
+      // one source. Changed custody may instead require a smaller adaptive read.
       const broad =
         metric.limit! > CHAT_HISTORY_REQUEST_LIMIT ||
         metric.maxBytes! > CHAT_HISTORY_REQUEST_MAX_BYTES;
-      expect(next.limit === 1 || (broad && next.limit === CHAT_HISTORY_REQUEST_LIMIT)).toBe(true);
-      expect(next.maxBytes).toBe(CHAT_HISTORY_REQUEST_MAX_BYTES);
+      const canonical =
+        (next.limit === 1 || (broad && next.limit === CHAT_HISTORY_REQUEST_LIMIT)) &&
+        next.maxBytes === CHAT_HISTORY_REQUEST_MAX_BYTES;
+      const adaptive =
+        next.limit! > CHAT_HISTORY_REQUEST_LIMIT && next.maxBytes! > CHAT_HISTORY_REQUEST_MAX_BYTES;
+      expect(canonical || adaptive).toBe(true);
       expect(next.limit!).toBeLessThanOrEqual(metric.limit!);
       expect(next.maxBytes!).toBeLessThanOrEqual(metric.maxBytes!);
       expect(next.limit! < metric.limit! || next.maxBytes! < metric.maxBytes!).toBe(true);

@@ -187,4 +187,71 @@ describe("history admission recorder", () => {
 
     expect(() => recorder.record("newer", [1, 2])).toThrow();
   });
+
+  it.each([
+    { name: "both axes", direction: "older", limit: 354, maxBytes: 2_900_000 },
+    { name: "entry axis only", direction: "newer", limit: 354, maxBytes: 3 * 1024 * 1024 },
+    { name: "byte axis only", direction: "newer", limit: 400, maxBytes: 2_900_000 },
+  ])("records strict adaptive narrowing of $name", ({ direction, limit, maxBytes }) => {
+    const broad = packet(0, "edge", sourceRange(10, 400), {
+      limit: 400,
+      maxBytes: 3 * 1024 * 1024,
+    });
+    const retry = packet(1, "edge", sourceRange(10, 354), { limit, maxBytes });
+    const recorder = createHistoryAdmissionRecorder(() => [broad, retry]);
+
+    recorder.record(direction, sourceRange(10, 354));
+
+    expect(recorder.receipts).toEqual([
+      {
+        direction,
+        admitted: ["packet-1"],
+        refined: ["packet-0"],
+        staged: [],
+        retired: [],
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "unchanged adaptive bounds", first: {}, retry: {} },
+    { name: "growing adaptive entries", first: {}, retry: { limit: 401, maxBytes: 2_900_000 } },
+    {
+      name: "growing adaptive bytes",
+      first: {},
+      retry: { limit: 354, maxBytes: 3 * 1024 * 1024 + 1 },
+    },
+    {
+      name: "fractional issued entries",
+      first: { limit: 400.5 },
+      retry: { limit: 354, maxBytes: 2_900_000 },
+    },
+    {
+      name: "fractional issued bytes",
+      first: { maxBytes: 3 * 1024 * 1024 - 0.5 },
+      retry: { limit: 354, maxBytes: 2_900_000 },
+    },
+    { name: "fractional retry entries", first: {}, retry: { limit: 354.5, maxBytes: 2_900_000 } },
+    { name: "fractional retry bytes", first: {}, retry: { limit: 354, maxBytes: 2_900_000.5 } },
+    {
+      name: "adaptive entries with small bytes",
+      first: {},
+      retry: { limit: 354, maxBytes: smallBytes },
+    },
+    {
+      name: "small entries with adaptive bytes",
+      first: {},
+      retry: { limit: 80, maxBytes: 2_900_000 },
+    },
+  ] satisfies Array<{ name: string; first: Partial<RpcMetric>; retry: Partial<RpcMetric> }>)(
+    "rejects $name",
+    ({ first, retry }) => {
+      const recorder = createHistoryAdmissionRecorder(() => [
+        packet(0, "edge", [10, 11], { limit: 400, maxBytes: 3 * 1024 * 1024, ...first }),
+        packet(1, "edge", [10], { limit: 400, maxBytes: 3 * 1024 * 1024, ...retry }),
+      ]);
+
+      expect(() => recorder.record("newer", [10])).toThrow();
+    },
+  );
 });

@@ -4,6 +4,7 @@ import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
 import {
   CHAT_HISTORY_REQUEST_LIMIT,
   CHAT_HISTORY_REQUEST_MAX_BYTES,
+  type ChatHistoryRequestBudget,
 } from "./chat-history-request-params.ts";
 import {
   createChatHistoryPageRead,
@@ -193,10 +194,29 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
           // Release the rejected merged array before any narrower await.
           prepared = undefined;
           if (large(page)) {
-            // Broad overflow never occupies the small speculative slot. Reissue
-            // at the same edge; the existing small/refinement path owns progress.
-            smallOnly = true;
-            budget = undefined;
+            // Reader/pin custody can change during the reply. Refit the accepted
+            // prefix; only a strictly smaller numeric envelope crosses the await.
+            const issued = page.result.requestBudget;
+            const narrower: ChatHistoryRequestBudget | undefined =
+              readerIntent && !smallOnly
+                ? readChatHistoryRequestBudget(
+                    state,
+                    prepareChatHistoryPages(
+                      state,
+                      packets.map((entry) => entry.result),
+                      direction,
+                    ),
+                  )
+                : undefined;
+            budget =
+              issued &&
+              narrower &&
+              narrower.limit <= issued.limit &&
+              narrower.maxBytes <= issued.maxBytes &&
+              (narrower.limit < issued.limit || narrower.maxBytes < issued.maxBytes)
+                ? narrower
+                : undefined;
+            smallOnly ||= !budget;
             selector = { cursor: requestedCursor };
             result = undefined;
             page = null;
@@ -261,7 +281,9 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
         failure = new Error(t("chat.thread.historyCapacity"));
       }
     }
-    if (!packets.length && !failure && overflow) {
+    // Exhausting bounded retries without admission or a reopened edge still
+    // needs a visible outcome, even when every broad body was discarded.
+    if (!packets.length && !failure && (overflow || !coverageAdvanced)) {
       capacityBlocked = true;
       failure = new Error(t("chat.thread.historyCapacity"));
     }
