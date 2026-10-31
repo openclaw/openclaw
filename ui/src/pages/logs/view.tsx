@@ -417,7 +417,15 @@ export function LogsView(props: LogsProps) {
               <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
             }
           >
-            <div role="list" style={{ position: "relative", height: `${window().height}px` }}>
+            {/* Rows must not extend the native scroll range before their spacer commits. */}
+            <div
+              role="list"
+              style={{
+                position: "relative",
+                height: `${windowHeight()}px`,
+                overflow: windowHeight() > 0 ? "clip" : undefined,
+              }}
+            >
               <For
                 each={rendered()}
                 keyed={(item) => item.row.id}

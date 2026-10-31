@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
+  buildCapabilityProviderDefaultRefs,
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -207,14 +208,14 @@ async function resolveCapabilityModelCandidatesForTool(params: {
   authStore?: AuthProfileStore;
   providers: readonly CapabilityProvider[];
 }): Promise<string[]> {
-  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
+  const configuredProviders = new Map<string, CapabilityProvider>();
   for (const provider of params.providers) {
     const providerId = provider.id.trim();
     const modelId = provider.defaultModel?.trim();
     if (
       !providerId ||
       !modelId ||
-      providerDefaults.has(providerId) ||
+      configuredProviders.has(providerId) ||
       !(await isCapabilityProviderConfiguredAsync({
         ...params,
         provider,
@@ -222,24 +223,16 @@ async function resolveCapabilityModelCandidatesForTool(params: {
     ) {
       continue;
     }
-    const aliases = (provider.aliases ?? []).flatMap((alias) => {
-      const normalized = normalizeProviderId(alias);
-      return normalized ? [normalized] : [];
-    });
-    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
+    configuredProviders.set(providerId, provider);
   }
 
-  const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
-  const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
-  const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesPrimaryProvider = (providerId: string): boolean =>
-    normalizeProviderId(providerId) === normalizedPrimaryProvider ||
-    providerDefaults.get(providerId)!.aliases.includes(normalizedPrimaryProvider);
-  const orderedProviders = [
-    ...providerIds.filter(matchesPrimaryProvider),
-    ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
-  ];
-  return uniqueStrings(orderedProviders.map((id) => providerDefaults.get(id)!.ref));
+  return uniqueStrings(
+    buildCapabilityProviderDefaultRefs({
+      providers: [...configuredProviders.values()],
+      preferredProvider: resolveDefaultModelRef(params.cfg).provider,
+      normalizeProviderId,
+    }),
+  );
 }
 
 /**

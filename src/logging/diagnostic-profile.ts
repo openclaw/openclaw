@@ -204,16 +204,20 @@ export function sanitizeDiagnosticProfileFrame(
   );
   const url = codeUrl(frame.url, packageRoot);
   const engine = frame.url === "" && ENGINE_NAMES.has(frame.functionName);
-  const attribution = url?.startsWith("node_modules/")
-    ? `[dep:${url.slice(13)}]`
-    : frame.scriptId === "0" && frame.url === "" && frame.lineNumber < 0 && !engine
-      ? "[native]"
-      : undefined;
   const safeName =
     engine ||
     (url !== undefined &&
       frame.functionName.length <= 256 &&
-      /^(?:(?:(?:get|set) )?[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)?$/.test(frame.functionName));
+      /^(?:(?:(?:get|set) )?#?[$A-Z_a-z][$\w]*(?:\.#?[$A-Z_a-z][$\w]*)*)?$/.test(
+        frame.functionName,
+      ));
+  // First-party package symbols identify native work without exposing dependency paths.
+  const attribution =
+    url?.startsWith("node_modules/") && !(url.startsWith("node_modules/@openclaw/") && safeName)
+      ? `[dep:${url.slice(13)}]`
+      : frame.scriptId === "0" && frame.url === "" && frame.lineNumber < 0 && !engine
+        ? "[native]"
+        : undefined;
   return {
     redacted: !safeName && !attribution,
     callFrame: {

@@ -790,6 +790,7 @@ src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
+src/config/sessions/transcript-payload-navigation.ts
 src/config/sessions/transcript-payload-read.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
@@ -1319,6 +1320,7 @@ src/infra/tmp-openclaw-dir.ts
 src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
+src/infra/update-database-path.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
@@ -1679,6 +1681,7 @@ src/plugins/plugin-scope.ts
 src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
+src/plugins/plugin-shared-state-admission.ts
 src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission-context.ts
 src/plugins/plugin-source-admission.types.ts
@@ -1926,6 +1929,7 @@ src/state/openclaw-agent-board-schema.ts
 src/state/openclaw-agent-canonical-validation-migration.ts
 src/state/openclaw-agent-canonical-validation-receipt.ts
 src/state/openclaw-agent-canonical-validation-schema.ts
+src/state/openclaw-agent-cold-navigation-schema.ts
 src/state/openclaw-agent-cold-archive-chunks-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts

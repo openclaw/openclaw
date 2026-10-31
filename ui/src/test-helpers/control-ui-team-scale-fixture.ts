@@ -362,6 +362,10 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     ...(options.rowFacts ? { sessionInfo: pinnedRows[0]! } : {}),
     sessions,
     presenceUsers: people,
+    bootstrapPreferences: {
+      profileId: people.find((person) => person.self)?.id,
+      entries: { "ui.railShortcuts": sidebarEntries },
+    },
     models,
     historyMessages,
     sessionReactions: {
@@ -420,11 +424,6 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
         })),
       },
       "users.list": { profiles },
-      "users.prefs.get": {
-        status: "ok",
-        entries: { "ui.railShortcuts": sidebarEntries },
-      },
-      "users.prefs.set": { status: "ok" },
       "cron.status": {
         enabled: true,
         triggersEnabled: true,
