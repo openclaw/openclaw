@@ -44,6 +44,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ApprovalErrorNotice } from "./approval-error-notice.tsx";
+import { ApprovalHistorySeverity } from "./approval-history-severity.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -537,7 +538,12 @@ export function ApprovalsPage() {
         />
         <Cell
           labelKey="approvalHistory.columns.kind"
-          value={t(APPROVAL_KIND_LABELS[props.item.presentation.kind])}
+          value={
+            <>
+              {t(APPROVAL_KIND_LABELS[props.item.presentation.kind])}{" "}
+              <ApprovalHistorySeverity item={props.item} />
+            </>
+          }
         />
         <Cell labelKey="approvalHistory.columns.request" value={requestLabel(props.item)} mono />
         <Cell

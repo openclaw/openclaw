@@ -2276,6 +2276,31 @@ td.data-table-key-col {
   cursor: not-allowed;
 }
 
+.approval-history__severity {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  border: 1px solid color-mix(in srgb, var(--severity-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--severity-accent) 12%, transparent);
+  color: var(--severity-accent);
+}
+
+.approval-history__severity--info {
+  --severity-accent: var(--info);
+}
+
+.approval-history__severity--warning {
+  --severity-accent: var(--warn);
+}
+
+.approval-history__severity--critical {
+  --severity-accent: var(--danger);
+}
+
 .shell--chat .chat {
   flex: 1;
 }

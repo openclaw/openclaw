@@ -143,6 +143,11 @@ const enApprovals = {
       plugin: "Plugin",
       systemAgent: "System agent",
     },
+    severities: {
+      info: "Info",
+      warning: "Warning",
+      critical: "Critical",
+    },
     statuses: {
       allowed: "Allowed",
       denied: "Denied",
