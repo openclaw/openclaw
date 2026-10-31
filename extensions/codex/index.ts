@@ -9,7 +9,6 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import {
   createCodexAppServerAgentHarness,
@@ -281,14 +280,12 @@ export default definePluginEntry({
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES], workspaceAccess: "execute" },
       );
     }
-    const readSelectionConfig = createRuntimeConfigReader(api.config);
     const agentHarnessOptions = {
       pluginConfig: registrationConfig,
       bindingStore,
       sessionCatalogControlFactory,
       resolveConfig: resolveCurrentConfig,
       resolvePluginConfig: resolveCurrentPluginConfig,
-      resolveSupportPluginConfig: () => resolvePluginConfig(readSelectionConfig),
       runtime: api.runtime,
     };
     api.registerAgentHarness(createCodexAppServerAgentHarness(agentHarnessOptions), {

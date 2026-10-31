@@ -68,9 +68,17 @@ export async function publishConfiguredModelRuntimeSnapshots(params: {
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
     ...(params.startupTrace
       ? {
-          onBuildStats: ({ sourceConcurrencyLimit, fullCatalogConcurrencyLimit, ...metrics }) =>
+          onBuildStats: ({
+            sourceConcurrencyLimit,
+            fullCatalogConcurrencyLimit,
+            pluginPreparation,
+            ...metrics
+          }) =>
             params.startupTrace?.detail("sidecars.model-runtime-build", [
               ...Object.entries(metrics),
+              ...Object.entries(pluginPreparation ?? {}).map(
+                ([key, value]) => [`pluginPreparation.${key}`, value] as const,
+              ),
               ["sourceConcurrencyLimitCount", sourceConcurrencyLimit],
               ["fullCatalogConcurrencyLimitCount", fullCatalogConcurrencyLimit],
             ]),
