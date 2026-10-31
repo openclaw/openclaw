@@ -25,7 +25,7 @@ export function formatTimeAgo(
   }
 
   const totalSeconds = Math.round(durationMs / 1000);
-  const minutes = Math.round(totalSeconds / 60);
+  const minutes = Math.round(durationMs / 60_000);
 
   if (minutes < 1) {
     return suffix ? "just now" : `${totalSeconds}s`;
