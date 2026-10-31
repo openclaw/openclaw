@@ -4,7 +4,10 @@ import type {
   ProviderResolveModelRoutesContext,
 } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeGoogleProviderConfig } from "./provider-policy.js";
-import { isOfficialGoogleAiStudioBaseUrl } from "./src/google-api-base-url.js";
+import {
+  DEFAULT_GOOGLE_API_BASE_URL,
+  isOfficialGoogleAiStudioBaseUrl,
+} from "./src/google-api-base-url.js";
 
 export { resolveGoogleThinkingProfile as resolveThinkingProfile } from "./provider-policy.js";
 
@@ -16,11 +19,14 @@ export function resolveModelRoutes(
   context: ProviderResolveModelRoutesContext,
 ): ProviderModelRouteResolution | null {
   const api = context.configuredModel?.api ?? context.configuredProvider?.api;
-  const baseUrl = context.configuredModel?.baseUrl ?? context.configuredProvider?.baseUrl;
+  // No configured base URL means the catalog's AI Studio endpoint.
+  const baseUrl =
+    context.configuredModel?.baseUrl ??
+    context.configuredProvider?.baseUrl ??
+    DEFAULT_GOOGLE_API_BASE_URL;
   if (
     context.provider !== "google" ||
     (api !== "google-generative-ai" && api !== "google-interactions") ||
-    typeof baseUrl !== "string" ||
     !isOfficialGoogleAiStudioBaseUrl(baseUrl)
   ) {
     return null;
