@@ -86,7 +86,7 @@
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--muted);
 }
@@ -138,7 +138,7 @@
 
 .session-move__list {
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 

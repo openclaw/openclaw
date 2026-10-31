@@ -30,7 +30,7 @@ openclaw-chat-subagents-panel {
 .chat-subagents__item {
   margin-bottom: 4px;
   padding: 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--card);
 }
 

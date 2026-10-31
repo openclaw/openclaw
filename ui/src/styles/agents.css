@@ -312,7 +312,7 @@
   width: 36px;
   height: 36px;
   padding: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border-color: color-mix(in srgb, var(--border) 78%, white 10%);
   background: linear-gradient(
     180deg,

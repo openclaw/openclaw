@@ -460,7 +460,7 @@ a.activity-current-work__row:hover {
 .activity-feed__viewing-list {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .activity-feed__session {

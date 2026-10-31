@@ -751,7 +751,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   min-height: 30px;
   padding: 4px 6px 4px 5px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   corner-shape: superellipse(1.5);
   background: transparent;
   font-weight: 600;

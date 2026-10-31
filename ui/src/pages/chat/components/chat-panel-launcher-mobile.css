@@ -40,7 +40,7 @@
   min-height: 52px;
   padding: 12px;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface-selected);
   color: inherit;
   font: inherit;

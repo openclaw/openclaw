@@ -525,7 +525,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--oc-border-subtle) 85%, transparent);
-  border-radius: var(--oc-radius-surface);
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
   background: var(--oc-bg-surface);
   box-shadow: none;
 }

@@ -36,7 +36,7 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .installed-plugins-card__art {
@@ -385,7 +385,7 @@
 .plugin-catalog-card__skeleton-art {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .plugin-catalog-card__skeleton-title,
@@ -948,7 +948,7 @@ openclaw-plugins-page
   width: 112px;
   height: 112px;
   overflow: hidden;
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
   color: var(--accent);
 }
@@ -1197,7 +1197,7 @@ openclaw-plugins-page
   width: 100%;
   padding: 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -1256,7 +1256,7 @@ openclaw-plugins-page
   width: 36px;
   height: 36px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--accent);
 }
 .plugin-capability svg {

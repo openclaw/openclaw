@@ -267,7 +267,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: color-mix(in oklab, var(--panel) 70%, transparent);
   border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
 }
@@ -487,7 +487,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
   background: color-mix(in oklab, var(--panel) 86%, transparent);
   overflow: hidden;
@@ -796,7 +796,7 @@
 .dreams-diary__insight-card {
   border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
   background: color-mix(in oklab, var(--panel) 86%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 14px;
 }
 
