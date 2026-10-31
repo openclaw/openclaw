@@ -122,3 +122,49 @@ it.each(["rename", "copy-fallback"])(
     ).toEqual({ writeSync: 0, writeFileSync: 0, fsyncSync: 0, renameSync: 0 });
   },
 );
+
+it("stops permission-error fallback after its removal loses authority", async () => {
+  const workspaceDir = tempDirs.make("clawhub-store-fallback-authority-");
+  await recordClawHubSkillInstall({
+    workspaceDir,
+    skillDir: path.join(workspaceDir, "skills", "canary"),
+    origin: {
+      version: 1,
+      registry: "https://clawhub.ai",
+      slug: "canary",
+      installedVersion: "1.0.0",
+      installedAt: 1,
+    },
+    beforePersistentApply: () => undefined,
+  });
+  const lockPath = path.join(workspaceDir, ".clawhub/lock.json");
+  let current = true;
+  const destinationOpens: boolean[] = [];
+  const open = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+    if (String(target) === lockPath) {
+      destinationOpens.push(current);
+    }
+    return await open(target, flags, mode);
+  });
+  const rm = fs.rm.bind(fs);
+  vi.spyOn(fs, "rename").mockRejectedValueOnce(
+    Object.assign(new Error("rename refused"), { code: "EPERM" }),
+  );
+  vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+    await rm(target, options);
+    if (String(target) === lockPath) {
+      current = false;
+    }
+  });
+  await expect(
+    untrackClawHubSkill(workspaceDir, "canary", () => {
+      if (!current) {
+        throw new Error("Skill write authority retired.");
+      }
+    }),
+  ).rejects.toThrow("Skill write authority retired.");
+  expect(current).toBe(false);
+  expect(destinationOpens).not.toContain(false);
+  await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+});
