@@ -221,6 +221,10 @@ Additional source-only closure (runtime remains pending unless stated):
 | Diagnostics Prometheus                         | Seven suites, 55 declarations                    | Retain all declarations, three supports and two documented benchmark workloads; host admission, exporter authorization and store contracts differ.                                                   |
 | Reply admission/payload and memory/readmission | 40 suites, 220 declaration sites                 | Retain 219; qualify one setup-failure declaration absorbed by the existing shared null-context row. Exact cumulative reply coverage: 286 of 429 suites, with 143 unread.                             |
 
+IMAP and A2A: all 13 suites retain 103 declarations; protocol fixtures, controlled
+storage and packaged-service/Gateway proof protect different boundaries. All local
+support remains live. Source/history/static CI review only; no runtime claim.
+
 The CLI batch merged in [PR #189259](https://github.com/openclaw/openclaw/pull/189259):
 exact published-head native proof passed 54 tests across five suites. Unused-file
 checks were clean; four production/two full-tree export findings remain attributed
@@ -231,7 +235,10 @@ registered outbound sanitizer case with the exact input and empty output while
 retiring the unused shared table. Remove three voice-call assertions on fixed
 surrogate setup and Node-generated JWK shape; retain the exact fragmented-error
 and real signed-request verification assertions. All active declarations and
-production code remain. Baseline, candidate checks and landing are pending.
+production code remain. Untouched baseline `074b6248dd4`: 124 tests passed across
+eight suites, including all six Nostr fixture consumers and the two voice-call
+suites. The patch removes 34 test/support lines and no production code or test
+declarations. Candidate checks, removal scans and independent review are pending.
 
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
