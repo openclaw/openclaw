@@ -432,7 +432,9 @@ export async function prepareReplyAgentPayloads(state: {
       ? normalizeChatType(sessionCtx.ChatType)
       : undefined;
   const shouldDeliverFallbackNotice =
-    fallbackNoticeChatType !== "group" && fallbackNoticeChatType !== "channel";
+    cfg.messages?.modelFallbackNotices !== false &&
+    fallbackNoticeChatType !== "group" &&
+    fallbackNoticeChatType !== "channel";
   let fallbackNoticeText: string | null = successfulProviderPolicyRetry
     ? buildProviderPolicyRetryNotice({
         provider: successfulProviderPolicyRetry.provider,

@@ -101,6 +101,7 @@ Batching is a bounded timing heuristic, not a guarantee that every part of a lon
 ### Other message keys
 
 - `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this current value is unset.
+- `messages.modelFallbackNotices`: defaults to `true`. Set `false` to suppress generic model fallback and recovery banners in direct chats. Group/channel banners stay suppressed; fallback state, logs, lifecycle events, `/status`, terminal errors, and successful provider-policy retry notices are unaffected.
 - `messages.visibleReplies`: controls visible source replies across direct, group, and channel conversations (`"message_tool"` requires `message(action=send)` for visible output; `"automatic"` posts normal replies as before).
 - `messages.usageTemplate` / `messages.responseUsage`: custom `/usage` footer template and default per-reply usage mode (`off | tokens | full`, plus legacy `on` alias for `tokens`).
 - `messages.groupChat.mentionPatterns` / `historyLimit`: group-message mention triggers and history window sizing.

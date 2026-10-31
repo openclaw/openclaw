@@ -228,9 +228,11 @@ test("preserves exact non-empty cert and key path bytes", () => {
 });
 
 test.each([
+  [{ modelFallbackNotices: true }, { modelFallbackNotices: true }],
+  [{ modelFallbackNotices: false }, { modelFallbackNotices: false }],
   [{ visibleReplies: true }, { visibleReplies: "automatic" }],
   [{ groupChat: { visibleReplies: false } }, { groupChat: { visibleReplies: "message_tool" } }],
-])("normalizes boolean visible replies %#", (messages, expected) => {
+])("normalizes and preserves message settings %#", (messages, expected) => {
   expect(validateConfigObjectRaw({ messages })).toMatchObject({
     ok: true,
     config: { messages: expected },
@@ -239,6 +241,7 @@ test.each([
 
 test.each([
   [{ visibleReplies: "visible" }, "messages.visibleReplies"],
+  [{ modelFallbackNotices: "false" }, "messages.modelFallbackNotices"],
   [{ groupChat: { unmentionedInbound: true } }, "messages.groupChat.unmentionedInbound"],
 ])("rejects unsupported messages %j at %s", (messages, path) => {
   expect(validateConfigObjectRaw({ messages })).toMatchObject({

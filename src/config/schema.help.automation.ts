@@ -270,6 +270,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Additional directories searched for internal hook modules beyond default load paths. Keep this minimal and controlled to reduce accidental module shadowing.",
   messages:
     "Message infrastructure and cross-agent defaults. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
+  "messages.modelFallbackNotices":
+    "Show generic model fallback and recovery notices in direct chats (default: true). Set false to suppress these notices while retaining fallback state, lifecycle events, logs, and /status. Group and channel notices remain suppressed. Does not affect successful provider-policy retry notices or terminal errors.",
   "messages.visibleReplies":
     'Controls model-authored source replies across direct, group, and channel conversations. "message_tool" requires message(action=send) for normal assistant output and generic tool media; explicitly host-owned runtime output remains deliverable except for ambient room events. "automatic" posts normal replies as before.',
   "messages.usageTemplate":
