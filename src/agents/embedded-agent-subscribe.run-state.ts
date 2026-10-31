@@ -77,6 +77,8 @@ export type StreamBlockState = {
   finalFence?: FenceScanState;
   pendingFenceFragment?: string;
   pendingTagFragment?: string;
+  /** The last scan ended on an orphan reasoning close that non-blank text would turn into a drop. */
+  trailingOrphanReasoningClose?: boolean;
 };
 
 /** A response-ending answer and the message index its reply payload belongs to. */
@@ -158,6 +160,8 @@ export class EmbeddedAgentSubscribeState {
   assistantStream?: {
     raw: string;
     text: string;
+    /** Set while the block-reply source is verbatim, so markup-free text appends to it unchanged. */
+    blockVerbatim?: { endsOnBlankLine: boolean };
     projection?: {
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;

@@ -49,6 +49,14 @@ export function hasOrphanReasoningCloseBoundary(params: {
   return params.before.trim().length > 0 && params.after.trim().length > 0;
 }
 
+/** Detects an orphan reasoning close whose later text would still drop the visible text before it. */
+export function hasPendingOrphanReasoningCloseBoundary(params: {
+  before: string;
+  after: string;
+}): boolean {
+  return params.before.trim().length > 0 && params.after.trim().length === 0;
+}
+
 /** Strips model reasoning/final tags from visible text while preserving literal code examples. */
 export function stripReasoningTagsFromText(
   text: string,
