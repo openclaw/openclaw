@@ -87,11 +87,27 @@ transcript or wait for writer admission. Branch, reset, visibility, and cursor
 rules remain with the existing history owner.
 
 Doctor backfills existing archives independently under maintenance custody,
-preserving a verified backup first. Each archive's navigation commits atomically;
-an interrupted or failed archive remains pending for the next Doctor pass while
-other archives can finish. An archive awaiting qualification retains its existing
-restore behavior. The update-time Doctor runs the same repair. Direct package
-replacements should run `openclaw doctor --fix` before ordinary startup.
+preserving one verified backup per database it changes in each invocation. Archive
+work shares a ten-minute budget across databases; backup time is separate. The
+deadline is checked between archives, so an in-flight archive finishes atomically
+even if it exceeds the budget. Interrupted or failed archives remain pending.
+Doctor and the update receipt report migrated and pending counts when the budget
+is exhausted, with a recoverable warning that navigation resumes on the next
+Doctor run. Pending archives keep their existing cold-restore behavior; this
+warning does not fail or roll back an update.
+
+Every update-time Doctor pass runs this repair even after the schema is current,
+skipping already-qualified archives, so subsequent updates continue the backfill.
+Run `openclaw doctor --fix` to continue sooner. Ordinary Gateway restarts do not
+schedule it; direct package replacements should run Doctor before startup.
+Resumed invocations keep the verified backup: the existing backup owner does not
+persist a verifiable association between a previous snapshot and this migration
+crossing, so finding an old backup directory alone is insufficient to reuse it.
+
+Backfill writes navigation directly without recompressing archived event bodies.
+Its maintenance connection reuses bounded prepared statements. Older archives
+with incomplete indexes still rebuild those indexes from their verified bodies
+within the same archive transaction.
 
 Retained navigation increases the working database's storage cost. Headers and
 exceptional imported envelopes whose native interpretation cannot be represented

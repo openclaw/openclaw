@@ -41,7 +41,7 @@ import {
   listWholeConfigFiles,
 } from "./ci-node-test-inventory.mts";
 import {
-  createUiRealGatewayTestShards,
+  UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
   packNodeTestGroups,
@@ -179,14 +179,7 @@ export function hasUiE2eAffectingChange(
       ) ||
       hasImportGraphImpactOnTargets(
         relevantPaths,
-        [
-          ...uiE2eRealGatewayTestFiles,
-          ...new Set(
-            createUiRealGatewayTestShards([]).flatMap((shard) =>
-              shard.groups.flatMap((group) => group.configs),
-            ),
-          ),
-        ],
+        [...uiE2eRealGatewayTestFiles, UI_REAL_GATEWAY_TEST_CONFIG],
         cwd,
         { tooling: true, resolveAliases: true },
       )

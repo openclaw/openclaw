@@ -1,7 +1,6 @@
 import { lazy, Repeat, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { MAX_HUMAN_MENTIONS } from "../../../lib/chat/human-mentions.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import type { HumanMentionMenu, HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
@@ -12,7 +11,6 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 const HumanMentionMenuOptions = lazy(() => import("./chat-composer-mention-menu-options.tsx"), {
   export: "HumanMentionMenuOptions",
 });
-warmWhenIdle(HumanMentionMenuOptions.preload);
 
 registerEnglishCatalog(registerChatComposerEnglish);
 

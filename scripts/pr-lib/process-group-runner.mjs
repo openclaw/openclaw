@@ -174,6 +174,7 @@ let cleanupGraceMs = SIGNAL_GRACE_MS;
 let killDeadline;
 const operationGroup = { pid: undefined };
 let operationGroupGone = false;
+let groupObservationReported = false;
 let hadLingeringGroup = false;
 let lingeringGroupProcesses = [];
 let drainFailure;
@@ -206,6 +207,13 @@ function processGroupStatus() {
   const state = inspectManagedProcessGroup(child, {
     deadlineAt: killDeadline,
     errorPolicy: "indeterminate",
+    onIndeterminate(observation) {
+      // Preserve the first failed kernel/census facts before another probe races reaping.
+      if (!groupObservationReported) {
+        groupObservationReported = true;
+        console.error("scripts/pr process-group observation: " + JSON.stringify(observation));
+      }
+    },
   });
   if (state === "dead") {
     // Never let later PGID reuse redirect a delayed signal or liveness probe.

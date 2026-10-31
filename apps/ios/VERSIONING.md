@@ -181,6 +181,10 @@ runtime availability, image state, and mounted-path existence without filesystem
 paths. Local runs leave runtime installation to the operator. Boot and capture
 failures still stop the lane without retrying screenshots.
 
+Registrations already marked `Deleting` are left to CoreSimulator and excluded
+from repair candidates. More than one remaining registration still stops the
+repair before it deletes anything.
+
 If Apple removes the Watch runtime registration but cannot reclaim its MobileAsset,
 CI follows Apple's recovery instruction once: scan and mount orphaned runtimes,
 resolve the selected Watch image again, and retry its deletion before downloading.

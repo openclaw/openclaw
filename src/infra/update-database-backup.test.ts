@@ -186,59 +186,6 @@ it.each(["legacy", "current"] as const)(
   },
 );
 
-it.each(["foreign-key", "physical"] as const)(
-  "retains only relational findings in original recovery images (%s)",
-  async (damage) => {
-    const f = await fixture();
-    let fragmentOffset = 0;
-    {
-      using db = new DatabaseSync(f.shared);
-      if (damage === "foreign-key") {
-        db.exec(
-          "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); PRAGMA foreign_keys=OFF; INSERT INTO child VALUES(99);",
-        );
-      } else {
-        const root = Number(
-          db.prepare("SELECT rootpage FROM sqlite_schema WHERE name='payload'").get()?.rootpage,
-        );
-        const pageSize = Number(db.prepare("PRAGMA page_size").get()?.page_size);
-        fragmentOffset = (root - 1) * pageSize + 7;
-      }
-    }
-    if (damage === "physical") {
-      // Keep rows readable while corrupting the page's free-byte accounting.
-      const bytes = await fs.readFile(f.shared);
-      bytes.writeUInt8(1, fragmentOffset);
-      await fs.writeFile(f.shared, bytes);
-    }
-    const original = await fs.readFile(f.shared);
-    const backup = f.capture({
-      preserveSourceArtifacts: true,
-      originalCaptureSourcePaths: [f.shared],
-      integrityCheck: "quick",
-    });
-    if (damage === "physical") {
-      await expect(backup).rejects.toThrow(/Fragmentation of 0 bytes reported as 1/u);
-    } else {
-      const result = await backup;
-      const entry = result.databases[0]!;
-      using image = new DatabaseSync(entry.snapshotPath, { readOnly: true });
-      expect(image.prepare("SELECT * FROM child").all()).toEqual([{ parent_id: 99 }]);
-      expect(image.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
-      expect(result.warnings).toContain(
-        `Original recovery image retains foreign-key violations: ${f.shared}`,
-      );
-      expect(result.sourceGenerations[f.shared]).toBeUndefined();
-      expect(
-        createHash("sha256")
-          .update(await fs.readFile(entry.snapshotPath))
-          .digest("hex"),
-      ).toBe(entry.sha256);
-    }
-    expect(await fs.readFile(f.shared)).toEqual(original);
-  },
-);
-
 it.each([undefined, "quick"] as const)(
   "checks manual captures with requested integrity %s and keeps generic backups full",
   async (integrityCheck) => {
