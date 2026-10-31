@@ -68,6 +68,131 @@ describe("gateway server chat", () => {
       8_000,
     );
 
+  test("activates managed-media filtering after tool output before later Gateway deltas", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "gateway-managed-media-live-projection";
+      const continueStream = createDeferred();
+      const continueWhitespaceLine = createDeferred();
+      const continueMediaLine = createDeferred();
+      const finishStream = createDeferred();
+      const managedMediaUrl = "chart.png";
+      const managedDirective = `MEDIA:${managedMediaUrl}`;
+      const managedMediaUrls = [managedMediaUrl];
+      mockGetReplyFromConfigOnce(async (_ctx, replyOptions) => {
+        replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: `Intro\n${managedDirective}\nDone ` },
+        });
+        await continueStream.promise;
+        // Model the post-tool agent event shape after media trust resolution.
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: { phase: "start", name: "fixture_media", toolCallId: "managed-media-proof" },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: "fixture_media",
+            toolCallId: "managed-media-proof",
+            result: {
+              content: [{ type: "text", text: "managed relative media is ready" }],
+              details: { media: { mediaUrl: managedMediaUrl, trustedLocalMedia: true } },
+            },
+          },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { delta: "again", managedMediaUrls },
+        });
+        await continueWhitespaceLine.promise;
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { delta: "\n  \nNext", managedMediaUrls },
+        });
+        await continueMediaLine.promise;
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { delta: '\nMEDIA: "/tmp/a.png"', managedMediaUrls },
+        });
+        await finishStream.promise;
+        return undefined;
+      });
+
+      const readText = (event: Awaited<ReturnType<typeof waitForChatEvent>>, previous = "") => {
+        const message = event.payload?.message;
+        if (isRecord(message) && Array.isArray(message.content)) {
+          return message.content
+            .flatMap((block) =>
+              isRecord(block) && typeof block.text === "string" ? [block.text] : [],
+            )
+            .join("\n");
+        }
+        const delta = event.payload?.deltaText;
+        return typeof delta === "string"
+          ? event.payload?.replace === true
+            ? delta
+            : previous + delta
+          : previous;
+      };
+
+      try {
+        const firstPending = waitForChatEvent(runId, "delta");
+        await sendChatAndExpectStarted(runId, "Stream a media-bearing reply");
+        const first = await firstPending;
+        const firstText = readText(first);
+        expect(firstText).toContain(managedDirective);
+
+        const resumedPending = waitForChatEvent(runId, "delta");
+        continueStream.resolve();
+        const resumed = await resumedPending;
+        const resumedText = readText(resumed, firstText);
+        expect(resumedText).toBe("Intro\nDone again");
+        expect(resumed.payload?.replace).toBe(true);
+        expect(firstText).toContain(managedDirective);
+        expect(resumedText).not.toContain(managedDirective);
+
+        const canonicalLinePending = waitForChatEvent(runId, "delta");
+        continueWhitespaceLine.resolve();
+        const canonicalLine = await canonicalLinePending;
+        const canonicalLineText = readText(canonicalLine, resumedText);
+        expect(canonicalLineText).toBe("Intro\nDone again\n\nNext");
+
+        const normalizedPending = waitForChatEvent(runId, "delta");
+        continueMediaLine.resolve();
+        const normalized = await normalizedPending;
+        const normalizedText = readText(normalized, canonicalLineText);
+        expect(normalizedText).toBe("Intro\nDone again\n\nNext\nMEDIA:/tmp/a.png");
+        expect(canonicalLine.payload?.replace).not.toBe(true);
+        expect(normalized.payload?.replace).not.toBe(true);
+
+        if (process.env.OPENCLAW_GATEWAY_STREAM_PROOF === "1") {
+          const frames = [first, resumed, canonicalLine, normalized].map((event) => ({
+            state: event.payload?.state,
+            deltaText: event.payload?.deltaText,
+            replace: event.payload?.replace,
+          }));
+          console.log(
+            `[gateway-stream-proof] assistantDirective=${managedDirective} toolResultMediaUrl=${managedMediaUrl} toolResultBeforeActivation=true replacementBeforeContinuedDeltas=${resumed.payload?.replace === true && canonicalLine.payload?.replace !== true} frames=${JSON.stringify(frames)} visible=${JSON.stringify([firstText, resumedText, canonicalLineText, normalizedText])}`,
+          );
+        }
+      } finally {
+        continueStream.resolve();
+        continueWhitespaceLine.resolve();
+        continueMediaLine.resolve();
+        finishStream.resolve();
+      }
+      await waitForAgentRunDrained(runId);
+    });
+  });
+
   test("chat.send rejects archived sessions before dispatch", async () => {
     await withMainSessionStore(
       async () => {
