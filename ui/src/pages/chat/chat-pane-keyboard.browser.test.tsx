@@ -63,7 +63,7 @@ it("publishes keyboard transitions to the mobile composer without transcript geo
   expect(runtime.mobilePresentation.suspended).toBe(true);
 });
 
-it("keeps the mobile composer toolbar open while a typed draft waits", async () => {
+it("keeps the mobile composer open while a typed draft waits", async () => {
   const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const runtime = getPaneTestRuntime(pane);
   runtime.mergedChrome = true;
@@ -83,26 +83,36 @@ it("keeps the mobile composer toolbar open while a typed draft waits", async () 
     pane.querySelector<HTMLElement>(".agent-chat__composer-shell"),
     "mobile composer shell",
   );
+  const input = expectDefined(
+    shell.querySelector<HTMLElement>(".agent-chat__input"),
+    "mobile composer surface",
+  );
   const toolbar = expectDefined(
     shell.querySelector<HTMLElement>(".agent-chat__composer-controls"),
     "mobile composer toolbar",
   );
-  const toolbarVisibility = () => getComputedStyle(toolbar).visibility;
+  const toolbarShown = () => getComputedStyle(toolbar).display !== "none";
   expect(shell.dataset.mobileComposer).toBe("true");
-  expect(toolbarVisibility()).toBe("hidden");
+  expect(input.dataset.composerLayout).toBe("single-line");
+  expect(toolbarShown()).toBe(false);
 
   textarea.focus();
   await userEvent.keyboard("Finish this later");
   await expect.poll(() => shell.dataset.composerEditing).toBe("true");
-  expect(toolbarVisibility()).toBe("visible");
   outside.focus();
   await expect.poll(() => shell.dataset.composerEditing).toBe("false");
   expect(textarea.value).toBe("Finish this later");
-  expect(toolbarVisibility()).toBe("visible");
+  expect(input.dataset.composerLayout).toBeUndefined();
+  expect(toolbarShown()).toBe(true);
+  // The open toolbar stays inside the writing surface, not above it.
+  const surface = input.getBoundingClientRect();
+  const controls = toolbar.getBoundingClientRect();
+  expect(controls.top).toBeGreaterThanOrEqual(surface.top);
+  expect(controls.bottom).toBeLessThanOrEqual(surface.bottom);
 
   textarea.focus();
   await userEvent.clear(textarea);
   outside.focus();
-  await expect.poll(() => shell.dataset.composerEditing).toBe("false");
-  await expect.poll(toolbarVisibility).toBe("hidden");
+  await expect.poll(() => input.dataset.composerLayout).toBe("single-line");
+  expect(toolbarShown()).toBe(false);
 });

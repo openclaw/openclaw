@@ -74,12 +74,15 @@ export function renderChatComposerView(
     renderComposerTextarea(context, props, state, view);
   const inputHandle = createChatAttachmentInputHandle();
   let shell: HTMLDivElement | undefined;
-  const { mobileEditing, keyboardNavigation, lifecycle } = createComposerMobileInteraction(
-    context,
-    props,
-    state,
-    () => shell,
-  );
+  let placeholderElement: HTMLSpanElement | undefined;
+  const { mobileEditing, mobileResting, keyboardNavigation, lifecycle } =
+    createComposerMobileInteraction(
+      context,
+      props,
+      state,
+      () => shell,
+      () => placeholderElement,
+    );
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -288,9 +291,7 @@ export function renderChatComposerView(
       ref={[footerControl, (element) => (shell = element), elementRef(props.onComposerShellRef)]}
       data-mobile-composer={props.mobileComposer ? "true" : undefined}
       data-composer-editing={mobileEditing() ? "true" : "false"}
-      data-composer-draft={
-        props.mobileComposer && context().visibleDraft.trim() ? "true" : undefined
-      }
+      data-composer-resting={mobileResting() ? "true" : undefined}
       data-composer-keyboard={props.mobileKeyboardVisible ? "true" : undefined}
       data-composer-keyboard-navigation={keyboardNavigation() ? "true" : undefined}
       onPointerEnter={() => void prepareComposerWidthEdge()}
@@ -404,6 +405,7 @@ export function renderChatComposerView(
               },
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
+            data-composer-layout={mobileResting() ? "single-line" : undefined}
             data-incognito={props.selectedSession?.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
@@ -571,7 +573,20 @@ export function renderChatComposerView(
                     />
                   )}
                 </Show>
-                <span class="agent-chat__composer-placeholder" aria-hidden="true">
+                <span
+                  class="agent-chat__composer-placeholder"
+                  aria-hidden="true"
+                  ref={[
+                    elementRef<HTMLSpanElement>((element) => {
+                      placeholderElement = element;
+                      return () => {
+                        if (placeholderElement === element) {
+                          placeholderElement = undefined;
+                        }
+                      };
+                    }),
+                  ]}
+                >
                   {context().dictation?.active || context().predictionText ? "" : placeholder()}
                 </span>
                 <Show when={context().predictionText}>

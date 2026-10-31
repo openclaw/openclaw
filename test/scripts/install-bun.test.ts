@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const installer = readStandaloneInstaller(process.cwd(), "install.sh");
@@ -68,12 +69,11 @@ case "$1" in
 esac
 `,
   );
-  const zip = join(root, "bun.zip");
-  const zipped = spawnSync("/usr/bin/zip", ["-q", zip, "bun-linux-x64/bun"], { cwd: root });
-  expect(zipped.status).toBe(0);
+  const archiveBytes = makeStoredZip({ "bun-linux-x64/bun": readFileSync(bun, "utf8") });
+  writeFileSync(join(root, "bun.zip"), archiveBytes);
   const artifact = {
     asset: "bun.zip",
-    sha256: sha(readFileSync(zip)),
+    sha256: sha(archiveBytes),
     executable: "bun-linux-x64/bun",
     executableSha256: sha(readFileSync(bun)),
   };

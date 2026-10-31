@@ -71,6 +71,14 @@ uncertain cleanup leaves a warning and retains the stage. Activation recovery
 and backups remain with their existing recovery owners. These changes must be
 present in the installed updater; a newer candidate cannot repair an old launcher.
 
+If an update driver disappears after the candidate was recorded as installed and
+serving, reconciliation records success with a driver-loss warning. It preserves
+plugin warnings and does not invent command exit codes or a current health check.
+Unverified candidates and recorded failures or recovery keep their failure path.
+The reconciling candidate must contain this change; it uses observations older
+updaters already record. A first update from an older release still uses that
+release's handoff launcher, and previously terminal history is not rewritten.
+
 Managed systemd stops bound the native command by the selected unit's effective
 stop timeout plus five seconds. Unavailable or infinite policy uses the finite
 Gateway stop budget with a warning; a command timeout retains its reason code

@@ -436,7 +436,7 @@ describe("plugin command native capabilities through channel ingress", () => {
           subagents: true,
           userInputs: ["/review-panel"],
         });
-        return { continueAgent: true };
+        return { continueAgent: true, suppressReply: true };
       });
       let continuation:
         | { runId?: string; receiptSessionId?: string; inputsAtRun: unknown[] }

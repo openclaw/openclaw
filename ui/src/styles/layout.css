@@ -361,17 +361,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
    (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
    shell stays in charge and the settings sidebar rides inside the drawer. */
 
-/* stylelint-disable-next-line no-duplicate-selectors -- settings navigation variable belongs with the takeover rules below */
-.shell {
-  --shell-settings-nav-width: 288px;
-}
-
 .shell--settings:not(.shell--mobile-nav) {
   --settings-content-block-start-padding: 44px;
   --settings-content-inline-padding: clamp(28px, 5vw, 72px);
-  grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
   grid-template-rows: 0 auto minmax(0, 1fr);
-  --shell-nav-width: var(--shell-settings-nav-width);
 }
 
 .shell--settings:not(.shell--mobile-nav) .content {
