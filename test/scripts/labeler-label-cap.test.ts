@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { compileFunction, constants } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { withEnvAsync } from "../../src/test-utils/env.js";
@@ -98,9 +99,7 @@ it.each(["size: XS", "size: S"])("replaces %s within the label cap", async (size
     expect(fixture.issues.addLabels).not.toHaveBeenCalled();
     expect(fixture.issues.removeLabel).not.toHaveBeenCalled();
   } else {
-    expect(fixture.issues.removeLabel.mock.invocationCallOrder[0]).toBeLessThan(
-      fixture.issues.addLabels.mock.invocationCallOrder[0],
-    );
+    expect(fixture.issues.removeLabel).toHaveBeenCalledBefore(fixture.issues.addLabels);
   }
 });
 it.each([executeMaintainerLabel, executeIssueMaintainerLabel])(
@@ -127,7 +126,7 @@ it.each<[number, string]>([
 ])("labels %i changed lines as %s in live and backfill steps", async (lines, size) => {
   for (const execute of [executeSizeLabel, executeBackfill]) {
     const fixture = labelFixture([], undefined, execute);
-    fixture.files[0].additions = lines;
+    expectDefined(fixture.files[0], "source file fixture").additions = lines;
     await fixture.run();
     expect(fixture.labels).toContain(size);
   }
@@ -153,9 +152,7 @@ it("backfills size before maintainer labels and provisions sizes once", async ()
   await fixture.run();
   expect(fixture.labels).toEqual(new Set([...areaLabels(98), "size: S", "maintainer"]));
   expect(fixture.issues.getLabel).toHaveBeenCalledTimes(6);
-  expect(fixture.issues.removeLabel.mock.invocationCallOrder[0]).toBeLessThan(
-    fixture.issues.addLabels.mock.invocationCallOrder[0],
-  );
+  expect(fixture.issues.removeLabel).toHaveBeenCalledBefore(fixture.issues.addLabels);
   expect(fixture.issues.addLabels.mock.calls.map(([params]) => params.labels)).toEqual([
     ["size: S"],
     ["maintainer"],
