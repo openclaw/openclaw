@@ -32,6 +32,21 @@ Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belong
 to a native harness. Model Setup applies that runtime to the selected agent's
 model entry, not to global model defaults.
 
+## Keep provider transports within their scope
+
+`normalizeTransport` may receive another provider's transport. Return nothing
+unless the context names your provider or already targets its endpoint. Core
+ignores another plugin's change that moves the transport to a different origin;
+same-origin path and API cleanup remain supported. The provider's own hook and
+an explicit `models.providers` entry retain control of the destination.
+
+`augmentModelCatalog` and `resolveExternalAuthProfiles` run as global discovery.
+Return only catalog rows and auth profiles for providers your plugin owns.
+
+When verifying a provider, enable the bundled plugins users run alongside it,
+save credentials through the normal provider setup flow, and confirm the
+request targets the intended provider endpoint.
+
 ## Import an existing credential during sign-in
 
 An auth method can declare `credentialImport` with a `migrationProviderId`,
