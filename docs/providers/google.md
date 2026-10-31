@@ -566,7 +566,10 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 <AccordionGroup>
   <Accordion title="Gemini Interactions API (stateless)">
     Gemini Flash text models use the Interactions API by default on the API-key
-    `google` provider. This includes Flash-Lite, `gemini-flash-latest`, and
+    `google` provider when the effective base URL is the official Google AI Studio
+    endpoint. Custom proxy URLs default to `google-generative-ai` (GenerateContent),
+    even when the model comes from the catalog rather than a configured model row.
+    The official-endpoint default includes Flash-Lite, `gemini-flash-latest`, and
     forward-compatible Flash model IDs. Pro and other non-Flash models, including
     the default `google/gemini-4-argon`, keep `google-generative-ai` (GenerateContent).
     Vertex AI, Gemini CLI, image generation, speech, Live, embeddings, media
@@ -607,8 +610,9 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
     ```
 
     A model-level `api` overrides the provider-level value; either explicit
-    setting wins over the catalog default. To use Interactions on another Gemini
-    text model, set `api: "google-interactions"` instead.
+    setting wins over the endpoint and catalog defaults. To use Interactions on
+    another Gemini text model or a compatible proxy, set `api: "google-interactions"`
+    instead.
 
     Interactions supports tool calling, thinking levels, image and native video
     inputs, and streamed replies. Native video remains available on supported

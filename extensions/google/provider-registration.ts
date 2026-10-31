@@ -1,5 +1,6 @@
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
@@ -11,6 +12,7 @@ import {
   isGoogleNativeVideoModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
+  resolveGoogleModelApi,
 } from "./provider-models.js";
 import {
   isOfficialGoogleAiStudioBaseUrl,
@@ -94,6 +96,13 @@ export function buildGoogleProvider(): ProviderPlugin {
         isGoogleNativeVideoModelId(ctx.modelId);
       return {
         ...ctx.model,
+        api: resolveGoogleModelApi({
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          api: ctx.model.api,
+          baseUrl: ctx.model.baseUrl,
+          providerConfig: resolveMergedModelProviderConfig(ctx.config, ctx.provider),
+        }),
         input: supportsVideo ? [...input, "video"] : input,
       } as typeof ctx.model;
     },

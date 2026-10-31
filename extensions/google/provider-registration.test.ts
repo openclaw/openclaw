@@ -1,5 +1,9 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { assert, describe, expect, it, vi } from "vitest";
+import { applyConfiguredProviderOverrides } from "../../src/agents/embedded-agent-runner/model.configured-overrides.js";
+import { normalizeResolvedModel } from "../../src/agents/embedded-agent-runner/model.provider-hooks.js";
+import { createProviderRuntimeTestMock } from "../../src/agents/embedded-agent-runner/model.provider-runtime.test-support.js";
+import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 import { buildGoogleProvider } from "./provider-registration.js";
 
 const streamFns = vi.hoisted(() => ({ moduleLoads: 0, generativeAi: vi.fn(), vertex: vi.fn() }));
@@ -128,5 +132,75 @@ describe("buildGoogleProvider createStreamFn", () => {
       }),
     ).resolves.toBeNull();
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
+  });
+});
+
+describe("Google catalog transport defaults", () => {
+  const catalog = buildGoogleStaticCatalogProvider();
+  const flash = catalog.models.find((entry) => entry.id === "gemini-3.8-flash");
+  assert(flash, "Google catalog must publish Flash");
+  const discoveredModel = model({
+    ...flash,
+    provider: "google",
+    baseUrl: catalog.baseUrl,
+    input: ["text", "image"],
+  });
+  const apis = ["google-generative-ai", "google-interactions"] as const;
+  const endpoints = [
+    "https://generativelanguage.googleapis.com/v1beta",
+    "https://proxy.example.test/v1beta",
+  ] as const;
+
+  it.each(
+    endpoints.flatMap((baseUrl) => [
+      { baseUrl, scope: "default", api: undefined },
+      { baseUrl, scope: "model-endpoint", api: undefined },
+      ...apis.flatMap((api) => ["provider", "model"].map((scope) => ({ baseUrl, scope, api }))),
+    ]),
+  )("resolves $scope API $api on $baseUrl from the catalog", ({ baseUrl, scope, api }) => {
+    const providerConfig = {
+      baseUrl:
+        scope === "model-endpoint"
+          ? baseUrl === endpoints[0]
+            ? endpoints[1]
+            : endpoints[0]
+          : baseUrl,
+      ...(scope === "provider"
+        ? { api }
+        : scope === "model"
+          ? { api: apis.find((candidate) => candidate !== api) }
+          : {}),
+      models:
+        scope === "model" || scope === "model-endpoint"
+          ? [{ ...flash, api, baseUrl, id: "gemini-3.8-flash" }]
+          : [],
+    };
+    const config = { models: { providers: { google: providerConfig } } };
+    const runtimeHooks = {
+      ...createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
+      normalizeProviderResolvedModelWithPlugin: ({ context }) =>
+        provider.normalizeResolvedModel?.(context) ?? undefined,
+    } satisfies Parameters<typeof normalizeResolvedModel>[0]["runtimeHooks"];
+    const overridden = applyConfiguredProviderOverrides({
+      provider: "google",
+      modelId: discoveredModel.id,
+      discoveredModel,
+      providerConfig,
+      cfg: config,
+      manifestAlias: { provider: "google" },
+      runtimeHooks,
+    });
+    assert(overridden, "Configured catalog route must resolve");
+    const resolved = normalizeResolvedModel({
+      provider: "google",
+      model: overridden as Model,
+      cfg: config,
+      runtimeHooks,
+    });
+    expect(resolved).toMatchObject({
+      id: discoveredModel.id,
+      baseUrl,
+      api: api ?? (baseUrl === endpoints[0] ? "google-interactions" : "google-generative-ai"),
+    });
   });
 });

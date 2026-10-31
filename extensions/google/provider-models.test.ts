@@ -199,7 +199,12 @@ it("keeps custom Google endpoints and CLI fallback templates on GenerateContent"
   expectResolution(
     google,
     "gemini-3.9-flash",
-    [template(google, flash, { baseUrl: "https://proxy.example/v1beta" })],
+    [
+      template(google, flash, {
+        api: "google-interactions",
+        baseUrl: "https://proxy.example/v1beta",
+      }),
+    ],
     { api: directApi },
   );
   expectResolution(
@@ -209,6 +214,24 @@ it("keeps custom Google endpoints and CLI fallback templates on GenerateContent"
     { api: directApi },
   );
 });
+
+it.each([undefined, "google-generative-ai", "google-interactions"] as const)(
+  "uses the configured endpoint and explicit API %s for forward-compatible Flash",
+  (api) => {
+    const resolved = resolveGoogleGeminiForwardCompatModel({
+      providerId: google,
+      ctx: {
+        ...createContext({
+          provider: google,
+          modelId: "gemini-3.9-flash",
+          models: [template(google, flash, { api: "google-interactions" })],
+        }),
+        providerConfig: { baseUrl: "https://proxy.example/v1beta", api, models: [] },
+      },
+    });
+    expect(resolved?.api).toBe(api ?? directApi);
+  },
+);
 
 it("resolves Antigravity Gemini 3.1 flash variants from the flash template", () => {
   const models = [

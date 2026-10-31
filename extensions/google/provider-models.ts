@@ -2,12 +2,13 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveFamilyForwardCompatModel } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeOptionalLowercaseString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeGoogleModelId } from "./model-id.js";
+import { normalizeGoogleModelId, stripGoogleProviderPrefix } from "./model-id.js";
 import { isOfficialGoogleAiStudioBaseUrl } from "./src/google-api-base-url.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
@@ -69,6 +70,39 @@ export function isGoogleFlashTextModelId(id: string): boolean {
   return (
     isGoogleTextGenerationModelId(lower) && /^gemini-(?:\d+(?:\.\d+)?-)?flash(?:-|$)/.test(lower)
   );
+}
+
+export function resolveGoogleModelApi(params: {
+  provider: string;
+  modelId: string;
+  api: string;
+  baseUrl?: string;
+  providerConfig?: ProviderResolveDynamicModelContext["providerConfig"];
+}): string {
+  if (params.provider !== "google") {
+    return params.api;
+  }
+  const models = params.providerConfig?.models;
+  const model =
+    models?.find((entry) => entry.id === params.modelId) ??
+    models?.find(
+      (entry) =>
+        normalizeGoogleModelId(stripGoogleProviderPrefix(entry.id)) ===
+        normalizeGoogleModelId(stripGoogleProviderPrefix(params.modelId)),
+    );
+  // Only authored config is an explicit API choice; a catalog donor's API
+  // describes its endpoint, not an operator's replacement endpoint.
+  const explicitApi = model?.api ?? params.providerConfig?.api;
+  if (explicitApi) {
+    return explicitApi;
+  }
+  if (params.api !== "google-generative-ai" && params.api !== "google-interactions") {
+    return params.api;
+  }
+  const baseUrl = model?.baseUrl ?? params.providerConfig?.baseUrl ?? params.baseUrl;
+  return isOfficialGoogleAiStudioBaseUrl(baseUrl) && isGoogleFlashTextModelId(params.modelId)
+    ? "google-interactions"
+    : "google-generative-ai";
 }
 
 export function isGoogleNativeVideoModelId(id: string): boolean {
@@ -228,12 +262,19 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       },
       patch: (context) => ({
         ...(typeof patch === "function" ? patch(context) : patch),
-        ...(params.providerId === "google" &&
-        isOfficialGoogleAiStudioBaseUrl(context.template?.baseUrl)
+        ...(params.providerId === "google"
           ? {
-              api: isGoogleFlashTextModelId(lower) ? "google-interactions" : "google-generative-ai",
+              api: resolveGoogleModelApi({
+                provider: params.providerId,
+                modelId: trimmed,
+                api: "google-generative-ai",
+                baseUrl: context.template?.baseUrl,
+                providerConfig:
+                  params.ctx.providerConfig ??
+                  resolveMergedModelProviderConfig(params.ctx.config, params.providerId),
+              }),
             }
-          : params.providerId !== "google" && context.template?.api === "google-interactions"
+          : context.template?.api === "google-interactions"
             ? { api: "google-generative-ai" }
             : {}),
       }),
