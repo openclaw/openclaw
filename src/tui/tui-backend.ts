@@ -186,6 +186,10 @@ export type TuiBackend = {
     reason?: "new" | "reset",
     opts?: { agentId?: string },
   ) => Promise<TuiSessionMutationResult>;
+  deleteSession?: (
+    key: string,
+    opts?: { agentId?: string; expectedSessionId?: string; deleteTranscript?: boolean },
+  ) => Promise<{ deleted: boolean; key: string }>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: (opts?: TuiModelCatalogScope) => Promise<TuiModelChoice[]>;
   getKnownModels?: (opts?: TuiModelCatalogScope) => TuiModelChoice[] | undefined;

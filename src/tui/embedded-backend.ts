@@ -62,6 +62,8 @@ import {
 } from "../gateway/live-chat-projector.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
+import { deleteGatewaySession } from "../gateway/server-methods/sessions-delete.js";
+import { getInProcessGatewayRequestContext } from "../gateway/server-plugin-in-process-dispatch.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import {
@@ -641,6 +643,48 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return { ok: true as const, key: result.key, deleted: true as const };
     }
     return { ok: true as const, key: result.key, entry: result.entry, resolved: result.resolved };
+  }
+
+  async deleteSession(
+    key: string,
+    opts?: { agentId?: string; expectedSessionId?: string; deleteTranscript?: boolean },
+  ): Promise<{ deleted: boolean; key: string }> {
+    await this.ready;
+    const loadOptions = opts?.agentId ? { agentId: opts.agentId } : void 0;
+    const { canonicalKey } = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key,
+      ...loadOptions,
+    });
+    const context =
+      getInProcessGatewayRequestContext() ?? (await this.resolveLocalGatewayContext());
+    const result = await deleteGatewaySession({
+      params: {
+        key: canonicalKey,
+        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+        ...(opts?.expectedSessionId ? { expectedSessionId: opts.expectedSessionId } : {}),
+        deleteTranscript: opts?.deleteTranscript !== false,
+      },
+      client: null,
+      context,
+    });
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    return { deleted: result.result.deleted, key: result.result.key };
+  }
+
+  /** Builds the minimal local Gateway context required by session lifecycle mutations. */
+  async resolveLocalGatewayContext() {
+    const { createLocalGatewayRequestContext } =
+      await import("../gateway/local-request-context.js");
+    const context = await createLocalGatewayRequestContext({
+      deps: this.deps,
+      getRuntimeConfig,
+    });
+    const resolveGatewayContext = () => context;
+    context.resolveGatewayContext = resolveGatewayContext;
+    return context;
   }
 
   async createSession(opts: TuiSessionCreateOptions) {
