@@ -341,12 +341,16 @@ export async function restoreDatabaseMigrationCapture(
         await fs.chmod(target, 0o600);
       }
     }
-    if (manifest.sourceSharedFile) {
+    const sourceLocalPath = path.join(manifest.sourceStateDir, "client/credentials.sqlite");
+    if (
+      manifest.sourceSharedFile &&
+      manifest.databases.some((entry) => entry.sourcePath === sourceLocalPath)
+    ) {
       rebindRehearsalClientCredentials({
         sourceStateRoot: manifest.sourceStateDir,
         sourceSharedFile: manifest.sourceSharedFile,
         sharedPath: staged(manifest.sourceSharedFile.path),
-        localPath: staged(path.join(manifest.sourceStateDir, "client/credentials.sqlite")),
+        localPath: staged(sourceLocalPath),
       });
     }
     return {
