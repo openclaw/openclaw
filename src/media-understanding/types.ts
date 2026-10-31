@@ -137,6 +137,22 @@ export type ImageDescriptionResult = MediaUnderstandingTextResult;
 
 export type ImagesDescriptionResult = ImageDescriptionResult;
 
+/** Native document input, admitted by the caller's full-document upload policy. */
+export type PdfAnalysisRequest = {
+  pdfs: readonly Buffer[];
+  model: string;
+  api: string;
+  apiKey: string;
+  prompt: string;
+  maxTokens?: number;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  request?: ModelProviderRequestTransportOverrides;
+  signal?: AbortSignal;
+};
+
+export type PdfAnalysisResult = { text: string };
+
 export type StructuredExtractionTextInput = {
   type: "text";
   text: string;
@@ -216,5 +232,7 @@ export type MediaUnderstandingProvider = {
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
+  /** Undefined means unsupported before upload. After submission, failures must throw. */
+  analyzePdf?: (req: PdfAnalysisRequest) => Promise<PdfAnalysisResult | undefined>;
   extractStructured?: (req: StructuredExtractionRequest) => Promise<StructuredExtractionResult>;
 };

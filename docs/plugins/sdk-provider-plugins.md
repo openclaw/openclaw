@@ -878,3 +878,7 @@ A rejected or lost deletion reply retains cleanup custody. The host can retry
 that exact deletion after restart even when live inspection labels are gone.
 Legacy providers and persisted rows with no receipt keep their existing contract;
 receipt-bearing rows refuse providers that no longer advertise this capability.
+
+## Optional native PDF analysis
+
+A media-understanding provider can implement `analyzePdf(request)` using the `PdfAnalysisRequest` and `PdfAnalysisResult` types from `openclaw/plugin-sdk/media-understanding`. The caller owns full-document consent, document access and page constraints; the provider owns supported API/endpoint and upload-size checks. Return `undefined` only when rejecting eligibility before upload, so the caller can keep extraction. After submission, failures must throw rather than silently select a second request. Keep request headers, cancellation and provider HTTP guards through `openclaw/plugin-sdk/provider-http`. This hook does not change native capability metadata or automatic provider ranking. Existing Anthropic and Google PDF dispatch is unchanged.

@@ -1,5 +1,6 @@
 import { expect, type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
@@ -76,6 +77,9 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       provider?: string;
       input?: string[];
       api?: string;
+      baseUrl?: string;
+      headers?: Record<string, string | null>;
+      mediaUnderstandingProviders?: MediaUnderstandingProvider[];
     } = {},
   ) {
     const { provider = "anthropic", input: modalities = ["text", "document"] } = params;
@@ -89,22 +93,32 @@ export function createPdfToolInfraStub(completeMock: Mock) {
 
     const authStorage = { setRuntimeApiKey: vi.fn() };
     const model = {
-      baseUrl: "https://pdf-fixture.invalid/v1",
+      baseUrl: params.baseUrl ?? "https://pdf-fixture.invalid/v1",
       provider,
       api: params.api ?? (provider === "openai" ? "openai-responses" : "anthropic-messages"),
       maxTokens: 8192,
       input: modalities,
+      ...(params.headers ? { headers: params.headers } : {}),
     };
     const modelRegistry = createPdfModelRegistry((_provider, id) => ({ id, name: id, ...model }));
     vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
       async ({ agentDir: capturedAgentDir, config, workspaceDir }) =>
         ({
-          snapshot: withPreparedRuntimeFacts({
-            agentDir: capturedAgentDir,
-            config,
-            workspaceDir,
-            createStores: () => ({ authStorage, modelRegistry }),
-          }),
+          snapshot: {
+            ...withPreparedRuntimeFacts({
+              agentDir: capturedAgentDir,
+              config,
+              workspaceDir,
+              createStores: () => ({ authStorage, modelRegistry }),
+            }),
+            ...(params.mediaUnderstandingProviders
+              ? {
+                  mediaCapabilityProviders: {
+                    mediaUnderstandingProviders: params.mediaUnderstandingProviders,
+                  },
+                }
+              : {}),
+          },
           run: <T>(run: () => T): T => run(),
           [Symbol.asyncDispose]: async () => {},
         }) as never,

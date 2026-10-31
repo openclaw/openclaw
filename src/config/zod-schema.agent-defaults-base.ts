@@ -59,6 +59,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
     .optional(),
   voiceModel: AgentToolModelSchema.optional(),
   pdfModel: AgentToolModelSchema.optional(),
+  pdfNativeOpenai: z.boolean().optional(),
   pdfMaxMb: z.number().positive().optional(),
   pdfMaxPages: z.number().int().positive().optional(),
   models: AgentModelMapSchema.optional(),
