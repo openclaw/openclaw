@@ -230,12 +230,8 @@
 }
 
 .model-setup-provider-select > .model-setup-provider-select__menu {
-  --oc-overlay-distance: 0px;
   width: min(620px, calc(100vw - 32px));
   max-height: min(420px, 58dvh);
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .model-setup-provider-select__trigger {

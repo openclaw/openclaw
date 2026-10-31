@@ -76,26 +76,28 @@ function resolveChatHistoryMessageGroup(
   messageCost: (message: unknown) => number,
   messageSequences?: MessageSequences,
 ): { start: number; end: number; cost: number } {
-  const sequence = (message: unknown) => readPageMessageSequence(message, messageSequences);
-  const seq = sequence(messages[index]);
+  const seq = readPageMessageSequence(messages[index], messageSequences);
   let start = index;
   let end = index + 1;
   let cost = messageCost(messages[index]);
   if (seq === undefined) {
     return { start, end, cost };
   }
-  while (start > 0 && sequence(messages[start - 1]) === seq) {
+  while (start > 0 && readPageMessageSequence(messages[start - 1], messageSequences) === seq) {
     start -= 1;
     cost += messageCost(messages[start]);
   }
-  while (end < messages.length && sequence(messages[end]) === seq) {
+  while (
+    end < messages.length &&
+    readPageMessageSequence(messages[end], messageSequences) === seq
+  ) {
     cost += messageCost(messages[end]);
     end += 1;
   }
   return { start, end, cost };
 }
 
-export function prepareChatHistoryResponsePage(
+function selectChatHistoryResponsePage(
   historyPage: ChatHistoryPage,
   {
     entry: historyEntry,
@@ -110,7 +112,7 @@ export function prepareChatHistoryResponsePage(
   messageSequences: MessageSequences | undefined = historyPage.pagination?.messageSequences ??
     historyPage.anchor?.messageSequences,
   measureJsonBytes = jsonUtf8Bytes,
-): ChatHistoryResponsePage {
+) {
   const normalized = enrichChatHistoryCompactionMarkers(
     historyPage.messages,
     historyEntry,
@@ -212,6 +214,27 @@ export function prepareChatHistoryResponsePage(
           : messageId,
       )
     : capChatHistoryTail();
+  return { normalized, activity, byteCounter, messages, capped, responseHistoryBytes };
+}
+
+/** Scanning consumes the selection decision without composing a discarded wire response. */
+export function isChatHistoryResponsePageByteLimited(
+  ...args: Parameters<typeof selectChatHistoryResponsePage>
+): boolean {
+  const { normalized, messages, capped } = selectChatHistoryResponsePage(...args);
+  if (capped.length >= messages.length) {
+    return false;
+  }
+  const survivors = new Set(capped);
+  return normalized.some((message) => !survivors.has(message));
+}
+
+export function prepareChatHistoryResponsePage(
+  ...args: Parameters<typeof selectChatHistoryResponsePage>
+): ChatHistoryResponsePage {
+  const [historyPage] = args;
+  const { normalized, activity, byteCounter, messages, capped, responseHistoryBytes } =
+    selectChatHistoryResponsePage(...args);
   const pagination = historyPage.pagination;
   let candidateNextOffset: number | undefined;
   if (pagination !== undefined) {
@@ -252,7 +275,7 @@ export function prepareChatHistoryResponsePage(
           omission: {
             omittedCount,
             normalizedBytes: byteCounter.messagesBytes(normalized),
-            ...(capped.length < replaced.messages.length ? { byteLimited: true as const } : {}),
+            ...(capped.length < messages.length ? { byteLimited: true as const } : {}),
           },
         }
       : {}),

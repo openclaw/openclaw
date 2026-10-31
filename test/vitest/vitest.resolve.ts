@@ -298,6 +298,7 @@ export function createVitestResolveConfig(repoRoot: string) {
         ),
       },
       sourcePackageAlias("model-catalog-core", "model-catalog-pricing"),
+      sourcePackageAlias("model-catalog-core", "model-inference-capabilities"),
       {
         find: "@openclaw/model-catalog-core/model-catalog-types",
         replacement: path.join(

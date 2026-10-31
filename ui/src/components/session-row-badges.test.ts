@@ -137,11 +137,29 @@ it("keeps the two most urgent badges in reading order and caps counts", () => {
   );
 });
 
-it("shows cloud placement only when it needs attention", () => {
-  expect(badge(renderBadges({ placementState: "active" }), "cloud")).toBeNull();
-  expect(badge(renderBadges({ placementState: "provisioning" }), "cloud")).toBeNull();
+it("shows cloud placement in every worker state", () => {
+  expect(badge(renderBadges({ placementState: "active" }), "cloud")).not.toBeNull();
+  expect(badge(renderBadges({ placementState: "provisioning" }), "cloud")).not.toBeNull();
   expect(badge(renderBadges({ placementState: "failed" }), "cloud")).not.toBeNull();
+  expect(badge(renderBadges({ placementState: "local" }), "cloud")).toBeNull();
+});
+
+it("keeps the pull request over a healthy placement at the badge limit", () => {
+  const container = renderBadges({
+    ...pr("open", 1, 2),
+    placementState: "active",
+    hasComposerDraft: true,
+  });
+  expect(badge(container, "pull-request")).not.toBeNull();
+  expect(badge(container, "draft")).not.toBeNull();
+  expect(badge(container, "cloud")).toBeNull();
   expect(
-    badge(renderBadges({ placementState: "active", diskSpaceStatus: "warning" }), "cloud"),
+    badge(renderBadges({ ...pr("open", 1, 2), placementState: "active" }), "cloud"),
   ).not.toBeNull();
+  expect(
+    badge(
+      renderBadges({ ...pr("open", 1, 2), placementState: "failed", hasComposerDraft: true }),
+      "pull-request",
+    ),
+  ).toBeNull();
 });

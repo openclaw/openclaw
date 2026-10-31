@@ -19,6 +19,7 @@ import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-c
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { capturePostgresBackup, readBackupEngineImage } from "../snapshot/database-backup.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
@@ -99,15 +100,6 @@ function stripSqliteSidecarSuffix(sourcePath: string): string {
   return sidecarSuffix ? sourcePath.slice(0, -sidecarSuffix.length) : sourcePath;
 }
 
-function headerAnswers(inventory: BackupResourceInventory): Map<string, boolean> {
-  let answers = sqliteHeaderAnswers.get(inventory);
-  if (!answers) {
-    answers = new Map();
-    sqliteHeaderAnswers.set(inventory, answers);
-  }
-  return answers;
-}
-
 export function classifyBackupSqliteSource(
   sourcePath: string,
   inventory: BackupResourceInventory,
@@ -128,7 +120,7 @@ export function classifyBackupSqliteSource(
     return nameTrusted ? "excluded" : undefined;
   }
   if (!transient && !nameTrusted) {
-    const answers = headerAnswers(inventory);
+    const answers = getOrCreateWeakOwnerMap(sqliteHeaderAnswers, inventory);
     if (!answers.has(databasePath)) {
       for (const [pathname, sqlite] of probeSqliteDatabaseHeaders([databasePath])) {
         answers.set(pathname, sqlite);
@@ -213,7 +205,7 @@ async function discoverBackupSqliteSources(params: {
 
   // One isolated read batch serves discovery and archive traversal. Include
   // visited directories so traversal never launches a probe for each directory.
-  const answers = headerAnswers(params.inventory);
+  const answers = getOrCreateWeakOwnerMap(sqliteHeaderAnswers, params.inventory);
   const probePaths = [...candidates.map((entry) => entry.path), ...visitedDirectories]
     .map(stripSqliteSidecarSuffix)
     .filter((pathname) => !pathname.endsWith(".sqlite"));

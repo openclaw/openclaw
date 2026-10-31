@@ -354,7 +354,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         Object.assign(rows[recipients]!, candidate.fact);
         continue;
       }
-      const key = recipients.join(",");
+      // All-row recipient sets are identical within this response.
+      const key = recipients.length === sessions.length ? "" : recipients.join(",");
       const group = groups.get(key);
       if (group) {
         Object.assign(group.fact, candidate.fact);

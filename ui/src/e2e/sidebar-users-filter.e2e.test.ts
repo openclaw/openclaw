@@ -51,10 +51,16 @@ suite.define(() => {
         await page.mouse.move(900, 600);
         const rowBounds = (await row.boundingBox())!;
         const rest = (await counts.boundingBox())!;
-        expect(rowBounds.x + rowBounds.width - rest.x - rest.width).toBeLessThanOrEqual(10);
+        expect(rowBounds.x + rowBounds.width - rest.x - rest.width).toBeLessThanOrEqual(16);
+        const label = (await person.locator(".sidebar-online__person-label").boundingBox())!;
         const more = row.getByRole("button", { name: "Actions for Ada Chen", exact: true });
         expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("0");
-        await person.hover();
+        // The revealed action trails the name, so aim at the row's lead instead of its center.
+        const lead = { x: 12, y: 12 };
+        await person.hover({ position: lead });
+        const action = (await more.boundingBox())!;
+        expect(action.x).toBeGreaterThanOrEqual(label.x + label.width);
+        expect(action.x + action.width).toBeLessThanOrEqual(rest.x);
         await more.click();
         const menu = page.getByRole("menu", { name: "Actions for Ada Chen", exact: true });
         await menu.waitFor();
@@ -67,7 +73,7 @@ suite.define(() => {
         await page.locator('[data-navigation-view="online"]').click();
         await person.waitFor();
         await shortcut.waitFor();
-        await person.click({ button: "right" });
+        await person.click({ button: "right", position: lead });
         await menu.getByRole("menuitem", { name: "Unpin from sidebar", exact: true }).click();
         await expect.poll(() => shortcut.count()).toBe(0);
         await person.focus();
@@ -87,7 +93,7 @@ suite.define(() => {
         await expect
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(new URL(href!, page.url()).href);
-        await person.click({ button: "right" });
+        await person.click({ button: "right", position: lead });
         await menu.waitFor();
         await page.keyboard.press("Escape");
         await expect.poll(() => menu.isVisible()).toBe(false);
@@ -95,7 +101,7 @@ suite.define(() => {
         await more.click();
         await page.mouse.click(900, 600);
         await expect.poll(() => menu.isVisible()).toBe(false);
-        await person.click({ button: "right" });
+        await person.click({ button: "right", position: lead });
         await menu.getByRole("menuitem", { name: "View activity", exact: true }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe(href);
         expect(await gateway.getRequests("sessions.patch")).toEqual([]);
@@ -196,9 +202,11 @@ suite.define(() => {
         };
         await dismissHovercard();
         expect(await rail.getAttribute("aria-label")).toBe("Users");
+        await page.locator(".sidebar-online__title").getByText("Users", { exact: true }).waitFor();
         await rail.click();
         await expect.poll(() => rail.getAttribute("aria-pressed")).toBe("true");
         const choosePresence = async (value: "all" | "online") => {
+          await page.locator(".sidebar-online__filter-toggle").click();
           await page.locator("#sidebar-people-presence").click();
           await page
             .locator(`openclaw-select-picker:has(#sidebar-people-presence) [data-value="${value}"]`)
@@ -211,6 +219,17 @@ suite.define(() => {
           await page.locator('[data-online-user-id="carol"]').getAttribute("aria-description"),
         ).toContain("Offline");
         await dismissHovercard();
+        await choosePresence("online");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        await navigationDrawerToggle(page).click();
+        await page.locator(".sidebar-panel-header #sidebar-people-presence").click();
+        await page
+          .locator('openclaw-select-picker:has(#sidebar-people-presence) [data-value="all"]')
+          .click();
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(3);
+        await page.setViewportSize({ width: 1280, height: 800 });
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
       },

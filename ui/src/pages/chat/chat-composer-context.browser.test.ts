@@ -150,7 +150,7 @@ it.each([
         box.width > 0 &&
         box.top >= (panned ? 300 : 0) &&
         (panned
-          ? Math.abs(box.bottom - (composer.getBoundingClientRect().top - 6)) <= 1
+          ? Math.abs(box.bottom - (composer.getBoundingClientRect().top - 4)) <= 1
           : box.left >= 0 &&
             box.right <= width + 1 &&
             box.bottom <= composer.getBoundingClientRect().top + 1),
