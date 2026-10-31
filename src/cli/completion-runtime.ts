@@ -123,6 +123,37 @@ export async function completionCacheExists(
   return pathExists(cachePath);
 }
 
+export type CompletionCacheMode = "core-only" | "full";
+
+const COMPLETION_CACHE_MODE_PREFIX = "# openclaw-completion-cache: ";
+const COMPLETION_CACHE_MODE_PATTERN = /^# openclaw-completion-cache: (core-only|full)$/m;
+
+/** Trailing comment recording which command set built a cached script; `#` is a comment in every supported shell. */
+export function formatCompletionCacheModeLine(mode: CompletionCacheMode): string {
+  return `\n${COMPLETION_CACHE_MODE_PREFIX}${mode}\n`;
+}
+
+/**
+ * Reads the generation mode a cached script records. Missing, unreadable, or unmarked (pre-marker)
+ * caches return undefined so callers regenerate; the generator reports any real write failure.
+ */
+export async function readCompletionCacheMode(
+  shell: CompletionShell,
+  binName = "openclaw",
+): Promise<CompletionCacheMode | undefined> {
+  let script: string;
+  try {
+    script = await fs.readFile(resolveCompletionCachePath(shell, binName), "utf8");
+  } catch {
+    return undefined;
+  }
+  const match = COMPLETION_CACHE_MODE_PATTERN.exec(script);
+  if (!match) {
+    return undefined;
+  }
+  return match[1] === "full" ? "full" : "core-only";
+}
+
 function quoteCompletionPath(shell: CompletionShell, value: string): string {
   if (shell === "powershell") {
     return quotePowerShellArg(value);

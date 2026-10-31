@@ -10,11 +10,13 @@ import {
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
+  readCompletionCacheMode,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
+  type CompletionCacheMode,
   type CompletionShell,
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -30,7 +32,7 @@ type ShellCompletionStatusOptions = {
 };
 
 export type CompletionCacheGenerationOptions = ShellCompletionStatusOptions & {
-  generationMode: "core-only" | "full";
+  generationMode: CompletionCacheMode;
 };
 
 async function installCompletionForDoctor(
@@ -220,13 +222,22 @@ export async function doctorShellCompletion(
   await installCompletionForDoctor(status, status.usesSlowPattern ? "upgraded" : "installed");
 }
 
-/** Ensures the shell completion cache exists without prompting during setup/update flows. */
+/**
+ * Ensures a shell completion cache that satisfies the requested mode, without prompting during
+ * setup/update flows. A full request reuses only a cache recorded as full; core-only accepts any
+ * existing cache. Build and plugin-inventory changes are refreshed by update and
+ * `completion --write-state`, not detected here.
+ */
 export async function ensureCompletionCacheExists(
   binName: string,
   options: CompletionCacheGenerationOptions,
 ): Promise<boolean> {
   const shell = options.shell ?? resolveShellFromEnv();
-  if (await completionCacheExists(shell, binName)) {
+  const reusable =
+    options.generationMode === "full"
+      ? (await readCompletionCacheMode(shell, binName)) === "full"
+      : await completionCacheExists(shell, binName);
+  if (reusable) {
     return true;
   }
 

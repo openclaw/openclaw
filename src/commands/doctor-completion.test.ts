@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { completionInstallError as wrappedFsError } from "../cli/completion-profile.test-support.js";
 import {
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  formatCompletionCacheModeLine,
   formatCompletionReloadCommand,
   resolveCompletionCachePath,
 } from "../cli/completion-runtime.js";
@@ -155,6 +156,31 @@ describe("doctorShellCompletion", () => {
       expect(args.slice(0, entryIndex)).toEqual(runtime === "bun" ? ["--no-install"] : []);
       const spawnOptions = spawnSyncMock.mock.lastCall?.[2];
       expect(spawnOptions?.env?.[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]).toBe(expectedSkipValue);
+    },
+  );
+
+  it.each([
+    ["full", "full", false],
+    ["full", "core-only", true],
+    ["full", "unmarked", true],
+    ["core-only", "core-only", false],
+    ["core-only", "unmarked", false],
+  ] as const)(
+    "%s request over a %s cache regenerates=%s",
+    async (generationMode, cachedMode, regenerates) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-doctor-state-"));
+      const cachePath = resolveCompletionCachePath("bash", "openclaw");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(
+        cachePath,
+        `# cached completion\n${cachedMode === "unmarked" ? "" : formatCompletionCacheModeLine(cachedMode)}`,
+      );
+
+      await expect(
+        ensureCompletionCacheExists("openclaw", { shell: "bash", generationMode }),
+      ).resolves.toBe(true);
+
+      expect(spawnSyncMock).toHaveBeenCalledTimes(regenerates ? 1 : 0);
     },
   );
 

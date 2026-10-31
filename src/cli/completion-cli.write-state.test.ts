@@ -8,8 +8,10 @@ import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { expectInstalledCompletionProfile } from "./completion-profile.test-support.js";
 import {
   COMPLETION_SHELLS,
+  formatCompletionCacheModeLine,
   formatCompletionReloadCommand,
   isCompletionInstalled,
+  readCompletionCacheMode,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
@@ -81,7 +83,7 @@ async function runCompletion(args: string[]): Promise<Command> {
 async function writeCache(shell: CompletionShell): Promise<string> {
   const { getCompletionScript } = await import("./completion-cli.js");
   const program = await runCompletion(["--shell", shell, "--write-state"]);
-  return getCompletionScript(shell, program);
+  return getCompletionScript(shell, program) + formatCompletionCacheModeLine("full");
 }
 
 async function seedCache(shell: CompletionShell = "zsh", contents = "# previous completion\n") {
@@ -318,7 +320,10 @@ describe("completion-cli write-state", () => {
     const program = await runCompletion(["--shell", "zsh", "--write-state", "--install", "--yes"]);
 
     const { getCompletionScript } = await import("./completion-cli.js");
-    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(getCompletionScript("zsh", program));
+    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(
+      getCompletionScript("zsh", program) + formatCompletionCacheModeLine("full"),
+    );
+    await expect(readCompletionCacheMode("zsh")).resolves.toBe("full");
     await expectCacheModes(cachePath, cacheDir);
     await expect(fs.readFile(profilePath, "utf8")).resolves.toContain(cachePath);
     if (process.platform !== "win32") {
@@ -376,6 +381,7 @@ describe("completion-cli write-state", () => {
     await expect(
       fs.readFile(resolveCompletionCachePath("zsh", "openclaw"), "utf8"),
     ).resolves.toContain("#compdef openclaw");
+    await expect(readCompletionCacheMode("zsh")).resolves.toBe("core-only");
     expect(stderrWrites).toHaveBeenCalledWith(
       expect.stringContaining("skipping plugin commands: Invalid config"),
     );

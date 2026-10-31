@@ -16,10 +16,12 @@ import {
 import {
   COMPLETION_SHELLS,
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  formatCompletionCacheModeLine,
   installCompletion,
   isCompletionShell,
   resolveCompletionCachePath,
   resolveShellFromEnv,
+  type CompletionCacheMode,
   type CompletionShell,
 } from "./completion-runtime.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
@@ -111,12 +113,15 @@ export function registerCompletionCli(program: Command) {
         }
       }
 
+      // A cache built without plugin commands records core-only so a later full request regenerates it.
+      let cacheMode: CompletionCacheMode = "core-only";
       if (process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] !== "1") {
         const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
         try {
           await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "eager",
           });
+          cacheMode = "full";
         } catch (error) {
           if (!isInvalidConfigError(error)) {
             throw error;
@@ -130,7 +135,7 @@ export function registerCompletionCli(program: Command) {
         const binName = program.name();
         const generateScript = createCompletionScriptGenerator(program);
         for (const writeShell of writeShells) {
-          const script = generateScript(writeShell);
+          const script = generateScript(writeShell) + formatCompletionCacheModeLine(cacheMode);
           await publishOutputFileAtomically({
             filePath: resolveCompletionCachePath(writeShell, binName),
             tempPrefix: ".openclaw-completion-cache",

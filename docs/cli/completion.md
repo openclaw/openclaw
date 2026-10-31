@@ -72,7 +72,7 @@ profile selected in the table above. It has no profile-file destination option.
 - Zsh completion supports both `--flag value` and `--flag=value`. Commands with hyphens or underscores, nested command paths, and aliases retain their own option completions. Regenerate cached scripts with `openclaw completion --shell zsh --write-state` after upgrading.
 - After an option terminator (`--`), Bash completes command names but does not suggest options or option values.
 - PowerShell completes commands and option values at the cursor, including when later arguments are already present.
-- `openclaw update` refreshes the core completion cache automatically without loading plugin CLI commands. Run `openclaw completion --write-state` to include plugin commands. `openclaw doctor` can repair missing or stale completion setups.
+- `openclaw update` refreshes the core completion cache automatically without loading plugin CLI commands. Run `openclaw completion --write-state` to include plugin commands. Each cached script ends with a `# openclaw-completion-cache: full` or `core-only` comment; setup regenerates a cache that lacks plugin commands instead of installing it as-is. `openclaw doctor` can repair missing or stale completion setups.
 
 ## Related
 
