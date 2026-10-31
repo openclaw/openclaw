@@ -39,7 +39,10 @@ function normalizeAnthropicSetupTokenInput(value: string): string {
   return value.replaceAll(/\s+/g, "");
 }
 
-function resolveAnthropicSetupTokenProfileId(rawProfileId?: unknown): string {
+function resolveAnthropicSetupTokenProfileId(
+  config: ProviderAuthConfig = {},
+  rawProfileId?: unknown,
+): string {
   if (typeof rawProfileId === "string") {
     const trimmed = rawProfileId.trim();
     if (trimmed.length > 0) {
@@ -49,7 +52,22 @@ function resolveAnthropicSetupTokenProfileId(rawProfileId?: unknown): string {
       return buildTokenProfileId({ provider: PROVIDER_ID, name: trimmed });
     }
   }
-  return `${PROVIDER_ID}:default`;
+  let profileId = `${PROVIDER_ID}:default`;
+  for (let suffix = 1; ; suffix += 1) {
+    const configured = config.auth?.profiles?.[profileId];
+    if (
+      !configured ||
+      (configured.provider === PROVIDER_ID &&
+        (configured.mode === "token" || configured.mode === "oauth"))
+    ) {
+      return profileId;
+    }
+    // Profile declarations are global; preserve other agents' API-key profiles.
+    profileId = buildTokenProfileId({
+      provider: PROVIDER_ID,
+      name: suffix === 1 ? "setup-token" : `setup-token-${suffix}`,
+    });
+  }
 }
 
 function resolveAnthropicSetupTokenExpiry(rawExpiresIn?: unknown): number | undefined {
@@ -82,7 +100,7 @@ export async function runAnthropicSetupTokenAuth(
     throw new Error(tokenError);
   }
 
-  const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts?.tokenProfileId);
+  const profileId = resolveAnthropicSetupTokenProfileId(ctx.config, ctx.opts?.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts?.tokenExpiresIn);
 
   return {
@@ -137,7 +155,7 @@ export async function runAnthropicSetupTokenNonInteractive(
 ): Promise<ProviderAuthConfig | null> {
   const rawToken = validateAnthropicSetupTokenNonInteractive(ctx);
 
-  const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts.tokenProfileId);
+  const profileId = resolveAnthropicSetupTokenProfileId(ctx.config, ctx.opts.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
   await upsertAuthProfileWithLockOrThrow({
     profileId,
@@ -156,7 +174,7 @@ export async function runAnthropicSetupTokenNonInteractive(
   const withProfile = applyAuthProfileConfig(ctx.config, {
     profileId,
     provider: PROVIDER_ID,
-    mode: "token",
+    mode: ctx.config.auth?.profiles?.[profileId]?.mode === "oauth" ? "oauth" : "token",
   });
   const existingModelConfig =
     withProfile.agents?.defaults?.model && typeof withProfile.agents.defaults.model === "object"
