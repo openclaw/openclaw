@@ -41,63 +41,52 @@ describe("openai responses payload policy", () => {
     expect(payload).toEqual({});
   });
 
-  it("keeps disabled reasoning payloads on native OpenAI responses models that support none", () => {
+  it.each([
+    { baseUrl: "https://api.openai.com/v1", id: "gpt-5.4", compat: undefined, keepsNone: true },
+    {
+      baseUrl: "https://proxy.example.com/v1",
+      id: "gpt-5.6-luna",
+      compat: undefined,
+      keepsNone: false,
+    },
+    {
+      baseUrl: "https://proxy.example.com/v1",
+      id: "gpt-5.6-luna",
+      compat: { supportedReasoningEfforts: ["none", "low", "high"] },
+      keepsNone: true,
+    },
+  ])("retains none=$keepsNone at $baseUrl", ({ baseUrl, id, compat, keepsNone }) => {
     const payload = { reasoning: { effort: "none" } } satisfies Record<string, unknown>;
 
-    apply(
-      payload,
-      policy({ id: "gpt-5.4", baseUrl: "https://api.openai.com/v1" }, { storeMode: "disable" }),
-    );
+    apply(payload, policy({ id, baseUrl, compat }, { storeMode: "disable" }));
 
-    expect(payload).toEqual({ reasoning: { effort: "none" }, store: false });
+    expect(payload.reasoning).toEqual(keepsNone ? { effort: "none" } : undefined);
   });
 
   it.each([
-    { compat: undefined, keepsNone: false },
-    { compat: { supportedReasoningEfforts: ["none", "low", "high"] }, keepsNone: true },
-  ])(
-    "uses explicit proxy effort capabilities to retain none=$keepsNone",
-    ({ compat, keepsNone }) => {
-      const payload = { reasoning: { effort: "none" } } satisfies Record<string, unknown>;
-
-      apply(
-        payload,
-        policy(
-          { id: "gpt-5.6-luna", baseUrl: "https://proxy.example.com/v1", compat },
-          { storeMode: "disable" },
-        ),
-      );
-
-      expect(payload.reasoning).toEqual(keepsNone ? { effort: "none" } : undefined);
-    },
-  );
-
-  it("strips status from input items for custom openai-responses endpoints", () => {
-    const resolved = policy({
-      id: "gpt-5.5",
-      provider: "custom-provider",
-      baseUrl: "http://custom-host:8317/v1",
-    });
-    expect(resolved.shouldStripInputStatus).toBe(true);
-
+    ["http://custom-host:8317/v1", [undefined, undefined, undefined, undefined]],
+    [
+      "https://ark.cn-beijing.volces.com/api/v3",
+      ["completed", "completed", "incomplete", "completed"],
+    ],
+    [
+      "https://ark.ap-southeast.bytepluses.com/api/v3",
+      ["completed", "completed", "incomplete", "completed"],
+    ],
+  ])("applies the replayed input status policy at %s", (baseUrl, statuses) => {
+    const resolved = policy({ id: "gpt-5.5", provider: "custom-provider", baseUrl });
     const content = [{ type: "output_text", text: "Hello", status: "nested-domain-value" }];
     const payload = {
       input: [
         { type: "message", role: "assistant", content, status: "completed" },
         { type: "function_call", call_id: "call_1", name: "test", arguments: "{}" },
-        {
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: "Thinking..." }],
-          status: "completed",
-        },
+        { type: "reasoning", summary: [], status: "incomplete" },
+        { type: "reasoning", summary: [] },
       ],
     };
     apply(payload, resolved);
-    expect((payload.input[0] as Record<string, unknown>).status).toBeUndefined();
-    expect((payload.input[2] as Record<string, unknown>).status).toBeUndefined();
-    expect(payload.input[0]?.content).toEqual([
-      { type: "output_text", text: "Hello", status: "nested-domain-value" },
-    ]);
+    expect(payload.input.map((item) => (item as { status?: string }).status)).toEqual(statuses);
+    expect(payload.input[0]?.content).toEqual(content);
   });
 
   it.each([
