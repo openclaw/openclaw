@@ -11,7 +11,11 @@ const desktop = { width: 1280, height: 900 };
 const mobileViewport = { width: 390, height: 844 };
 const attachmentFile = (name: string, content: string | number) => ({
   name,
-  mimeType: name.endsWith(".jpg") ? "image/jpeg" : "text/plain",
+  mimeType: name.endsWith(".jpg")
+    ? "image/jpeg"
+    : name.endsWith(".gif")
+      ? "image/gif"
+      : "text/plain",
   buffer: typeof content === "number" ? Buffer.alloc(content) : Buffer.from(content),
 });
 async function expectToastPosition(toast: Locator, viewport: { width: number; height: number }) {
@@ -37,6 +41,9 @@ suite.define(() => {
           isMobile: viewport.width === 390,
           hasTouch: viewport.width === 390,
           colorScheme: mode,
+          // English labels and toast copy are asserted below; pin the locale
+          // so the suite passes on hosts whose system language is not English.
+          locale: "en-US",
         },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
@@ -55,7 +62,9 @@ suite.define(() => {
           }
           const composer = page.locator(".agent-chat__composer-combobox textarea").first();
           const input = page.locator(".agent-chat__file-input").first();
-          const oversized = attachmentFile("holiday-photo.jpg", 2048);
+          // Oversized JPEGs now opt into resize preparation, so an oversized
+          // image that still rejects at intake must use a non-resizable format.
+          const oversized = attachmentFile("holiday-photo.gif", 2048);
           await input.setInputFiles(oversized);
           const toast = page.locator(".app-toast");
           await toast.waitFor();
@@ -87,7 +96,7 @@ suite.define(() => {
           ).toBe(1);
           expect(
             await page
-              .getByRole("button", { name: "Remove holiday-photo.jpg", exact: true })
+              .getByRole("button", { name: "Remove holiday-photo.gif", exact: true })
               .count(),
           ).toBe(0);
           expect(await page.locator(".chat-attachment-failures").count()).toBe(0);
@@ -108,7 +117,7 @@ suite.define(() => {
     { device: "mobile", viewport: mobileViewport, mobile: true },
   ])("reports a read failure only in a toast on $device", ({ viewport, mobile }) =>
     suite.withPage(
-      { viewport, isMobile: mobile, hasTouch: mobile, colorScheme: "dark" },
+      { viewport, isMobile: mobile, hasTouch: mobile, colorScheme: "dark", locale: "en-US" },
       async ({ page }) => {
         await page.addInitScript(() => {
           const NativeFileReader = FileReader;
@@ -148,7 +157,7 @@ suite.define(() => {
   );
   it("downloads the original only on request when a preview is unavailable", () =>
     suite.withPage(
-      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" },
       async ({ page }) => {
         const id = crypto.randomUUID();
         const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${id}/full`;
