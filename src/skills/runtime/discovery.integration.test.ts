@@ -282,8 +282,8 @@ it("republishes a read whose registration a config refresh retired mid-scan", as
   const release = createDeferred();
   const run = vi.spyOn(WorkerTaskPool.prototype, "run");
   run.mockImplementationOnce(async function (
-    this: WorkerTaskPool,
-    ...args: Parameters<WorkerTaskPool["run"]>
+    this: WorkerTaskPool<unknown, unknown>,
+    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
   ) {
     scanning.resolve();
     await release.promise;
