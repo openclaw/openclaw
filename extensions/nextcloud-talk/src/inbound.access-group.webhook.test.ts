@@ -59,7 +59,10 @@ describe.skipIf(!isMainThread || process.env.OPENCLAW_TALK_WEBHOOK_PROOF !== "1"
             stateDir,
           }),
           legacyReplayStore: null,
-          runtime: { error: (message) => deliveries.push(`error:${message}`), log: vi.fn() },
+          runtime: {
+            error: (message) => deliveries.push(`error:${String(message)}`),
+            log: vi.fn(),
+          },
           abortSignal: abort.signal,
           adoptionStallTimeoutMs: 60_000,
           deliver: async (message, lifecycle) => {
