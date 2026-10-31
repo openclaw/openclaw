@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -40,6 +41,42 @@ function catalogScenario(ids = ["alpha", "bravo"]) {
 }
 
 suite.define(() => {
+  it("shares the startup catalog across notifications, picker opens, and settings navigation", async () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        ...catalogScenario(["alpha"]),
+        connectCapabilities: [],
+      });
+      await page.goto(`${suite.server.baseUrl}new?agent=alpha`);
+      await gateway.waitForRequest("models.list", { match: { agentId: "alpha" } });
+      const count = async () => (await gateway.getRequests("models.list")).length;
+      expect(await count()).toBe(1);
+      for (let index = 0; index < 4; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {
+          agentId: "alpha",
+          modelCatalogChanged: true,
+          commandsChanged: false,
+          authChanged: false,
+        });
+      }
+      expect.soft(await count(), "notifications join the startup read").toBe(1);
+      await gateway.resolveDeferred("models.list", { models: [current] });
+      await page.locator("[data-chat-model-select]").click();
+      await reveal(page);
+      expect(await count()).toBe(1);
+      for (const [pathname, routeId] of [
+        ["/settings/model-providers", "model-providers"],
+        ["/new", "new-session"],
+      ] as const) {
+        await page.evaluate((path) => {
+          history.pushState(null, "", path);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }, pathname);
+        await waitForControlUiRoute(page, { pathname, routeId });
+        expect(await count(), pathname).toBe(1);
+      }
+    }));
+
   it.each([
     { route: "new?agent=alpha", agentId: "alpha", hint: "alpha" },
     { route: "new?agent=bravo", agentId: "bravo", hint: "bravo" },

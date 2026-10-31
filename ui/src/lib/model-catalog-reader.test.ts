@@ -175,6 +175,27 @@ it("observes each admitted read while preserving the non-throwing request contra
   expect(onRead).toHaveBeenCalledTimes(3);
 });
 
+it("replaces a pending catalog when model selection policy retires its receipt", async () => {
+  const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
+  const { reader, client, current } = fixture({ onRead });
+  current().request.mockClear();
+  const old = createDeferred<ModelCatalogResult>();
+  current().request.mockReturnValueOnce(old.promise).mockResolvedValueOnce(second);
+  const retired = reader.read();
+  clearModelCatalogCache(client, { requireSnapshot: true });
+  current().testOptions.onEvent?.({
+    type: "event",
+    event: "chat.metadata.changed",
+    payload: { modelSelectionChanged: true },
+  });
+  expect(current().request).toHaveBeenCalledTimes(2);
+  await expect(retired).resolves.toBeUndefined();
+  await expect(onRead.mock.calls[1]![0]).resolves.toEqual(second);
+  old.resolve(first);
+  await old.promise;
+  expect(reader.snapshot.models).toEqual(second.models);
+});
+
 it.each(["document", "presentation"] as const)(
   "defers hidden %s catalog changes and catches up once on reveal",
   async (hiddenBy) => {
