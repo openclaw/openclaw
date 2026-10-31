@@ -1,4 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { existsSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
 import {
@@ -16,6 +17,11 @@ import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -40,6 +46,7 @@ import {
 import { createProcessTool } from "./bash-tools.process.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
 import { isToolResultError } from "./tool-result-error.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 // mock-isolation: Only model inference is synthetic; process and session-event custody are real.
 vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -455,6 +462,144 @@ test.skipIf(process.platform === "win32").for([
       expect(model).not.toHaveBeenCalled();
     }
   },
+);
+
+test.skipIf(process.platform === "win32")(
+  "delivers the idle-session completion wake after the starting turn's operator authority ended",
+  async ({ signal }) => {
+    const scopeKey = "agent:main:process-idle-wake-ended-authority";
+    await seedOrigin(scopeKey);
+    const client = createOperatorClient({
+      profileName: "exec-wake-owner",
+      scopes: ["operator.write"],
+    });
+    const context = createContext();
+    const source = expectDefined(
+      await captureGatewayOperatorRunAuthority({ client, context }),
+      "operator source",
+    );
+    const tool = createGatewayExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      sessionKey: scopeKey,
+      scopeKey,
+    });
+    const identity = {
+      agentId: "main",
+      sessionKey: scopeKey,
+      operatorAuthority: source.authority,
+    };
+    const started = await withGatewayToolCallerIdentity(identity, () =>
+      tool.execute("start", {
+        command: currentNodeEvalCommand(
+          'setTimeout(() => { process.stdout.write("IDLE_WAKE_DONE"); process.exit(0); }, 400)',
+        ),
+        background: true,
+      }),
+    );
+    const { sessionId } = runningSession(started.details);
+    // The gateway request that admitted this turn settles before the process exits.
+    source.release();
+    await waitForExecScope(scopeKey);
+    expect(getFinishedSession(sessionId)).toBeDefined();
+    const notification = await completionPrompt(scopeKey, signal);
+    expect(notification).toContain("IDLE_WAKE_DONE");
+  },
+  20_000,
+);
+
+test.skipIf(process.platform === "win32")(
+  "drains a completion queued behind another active turn after that turn settles",
+  async ({ signal }) => {
+    const scopeKey = "agent:main:process-wake-queued-behind-turn";
+    await seedOrigin(scopeKey);
+    // The first completion wake stays admitted while its model call is held, like an
+    // ordinary user turn that is still running when a background process exits.
+    const releaseFirstTurn = createDeferredCore();
+    const currentModel = expectDefined(model.getMockImplementation(), "current model fixture");
+    model.mockImplementation(async (params) => {
+      const reply = await currentModel(params);
+      if (model.mock.calls.length === 1) {
+        await withinTest(releaseFirstTurn.promise, signal);
+      }
+      return reply;
+    });
+    const first = await startBackground(
+      scopeKey,
+      'process.stdout.write("QUEUED_A"); process.exit(7);',
+    );
+    // Wait until the first wake turn is holding its model call, so the second
+    // completion necessarily exits while that turn is still active.
+    await expect
+      .poll(async () => model.mock.calls.length, { timeout: 5_000, interval: 25 })
+      .toBeGreaterThanOrEqual(1);
+    const firstReceipt = expectDefined(receipts[0], "first completion receipt");
+    expect(await withinTest(firstReceipt.accepted, signal)).toEqual({ ok: true });
+    const second = await startBackground(
+      scopeKey,
+      'setTimeout(() => { process.stdout.write("QUEUED_B"); process.exit(0); }, 50);',
+    );
+    await waitForExecScope(scopeKey);
+    expect(getFinishedSession(first.sessionId)).toBeDefined();
+    expect(getFinishedSession(second.sessionId)).toBeDefined();
+    const secondReceipt = expectDefined(receipts[1], "queued completion receipt");
+    // The queued wake executes only after the turn ahead of it settles.
+    expect(model).toHaveBeenCalledOnce();
+    releaseFirstTurn.resolve();
+    expect(await withinTest(secondReceipt.accepted, signal)).toEqual({ ok: true });
+    expect(await withinTest(secondReceipt.settled, signal)).toMatchObject({
+      status: "completed",
+      executionStarted: true,
+    });
+    expect(model).toHaveBeenCalledTimes(2);
+    const secondTurn = expectDefined(model.mock.calls.at(-1)?.[0], "queued completion turn");
+    expect(secondTurn.prompt).toContain("QUEUED_B");
+  },
+  20_000,
+);
+
+test.skipIf(process.platform === "win32")(
+  "delivers the idle-session completion wake for a detached compound command",
+  async ({ signal }) => {
+    const scopeKey = "agent:main:process-idle-wake-detached";
+    await seedOrigin(scopeKey);
+    const tool = createGatewayExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      sessionKey: scopeKey,
+      scopeKey,
+    });
+    // The wrapper shell backgrounds a detached grandchild (own session, no inherited
+    // stdio) and exits immediately, like the reported `setsid nohup ... & echo` shape.
+    const detachedMarker = `${state.workspaceDir}/detached-exit-marker`;
+    const wrapper = [
+      "const { spawn } = require('node:child_process');",
+      "const child = spawn(process.execPath, [",
+      `  '-e', 'setTimeout(() => { require("node:fs").writeFileSync(${JSON.stringify(detachedMarker)}, "done"); process.exit(0); }, 700)',`,
+      "], { detached: true, stdio: 'ignore' });",
+      "child.unref();",
+      'process.stdout.write("DETACHED_STARTED");',
+      "process.exit(7);",
+    ].join(" ");
+    const started = await tool.execute("start", {
+      command: `${currentNodeEvalCommand(wrapper)} & echo "started"`,
+      background: true,
+    });
+    const { sessionId } = runningSession(started.details);
+    // The conversation is idle while the detached descendant finishes on its own.
+    await waitForExecScope(scopeKey);
+    expect(getFinishedSession(sessionId)).toBeDefined();
+    const notification = await completionPrompt(scopeKey, signal);
+    expect(notification).toContain("DETACHED_STARTED");
+    // The detached descendant proves its own exit independently of the wake.
+    await withinTest(
+      expect
+        .poll(async () => existsSync(detachedMarker), { timeout: 5_000, interval: 50 })
+        .toBe(true),
+      signal,
+    );
+  },
+  20_000,
 );
 
 test.skipIf(process.platform === "win32")(
