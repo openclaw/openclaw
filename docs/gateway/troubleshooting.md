@@ -32,14 +32,14 @@ Healthy signals:
 This page is an index. The runbook sections are documented on six pages,
 grouped by symptom area. Open the page that matches what you are seeing.
 
-| Page                                                                                  | Read it when                                                                                 |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| [Updates and rollbacks](/gateway/troubleshooting/updates-and-rollbacks)               | An update, downgrade, or split-brain install left the Gateway down or mismatched.            |
-| [Skills and model providers](/gateway/troubleshooting/skills-and-model-providers)     | A skill root is skipped, or provider calls fail with 429, 403, or silent agent-run errors.   |
-| [Agent replies and Control UI](/gateway/troubleshooting/agent-replies-and-control-ui) | A run fails with a storage error, no reply arrives, or the Control UI will not connect.      |
-| [Gateway service and process](/gateway/troubleshooting/gateway-service-and-process)   | The service will not run or stay up, macOS supervision misbehaves, or memory forces an exit. |
-| [Config validation and checks](/gateway/troubleshooting/config-validation-and-probes) | The Gateway rejected a config, or check warnings appear in status and doctor output.         |
-| [Channel delivery and tools](/gateway/troubleshooting/channel-delivery-and-tools)     | A channel connects but does not deliver, or a node or browser tool call fails.               |
+| Page                                                                                  | Read it when                                                                                                             |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| [Updates and rollbacks](/gateway/troubleshooting/updates-and-rollbacks)               | An update, downgrade, or split-brain install left the Gateway down or mismatched.                                        |
+| [Skills and model providers](/gateway/troubleshooting/skills-and-model-providers)     | A skill root is skipped, or provider calls fail with 429, 403, or silent agent-run errors.                               |
+| [Agent replies and Control UI](/gateway/troubleshooting/agent-replies-and-control-ui) | A run fails with a storage error, no reply arrives, or the Control UI will not connect.                                  |
+| [Gateway service and process](/gateway/troubleshooting/gateway-service-and-process)   | The service will not run or stay up, macOS supervision misbehaves, memory forces an exit, or a SQLite WAL keeps growing. |
+| [Config validation and checks](/gateway/troubleshooting/config-validation-and-probes) | The Gateway rejected a config, or check warnings appear in status and doctor output.                                     |
+| [Channel delivery and tools](/gateway/troubleshooting/channel-delivery-and-tools)     | A channel connects but does not deliver, or a node or browser tool call fails.                                           |
 
 ## Where each section moved
 

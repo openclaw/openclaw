@@ -53,6 +53,14 @@ The **SQLite WAL-reset corruption bug** requires a safe loaded library: SQLite *
 
 Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 silently truncates values at embedded NUL characters. The first fixed releases are Node 24.16.0 and 26.1.0; a WAL-safe SQLite library does not fix this decoder. Node 23 was excluded earlier for incompatible `node:sqlite` behavior.
 
+## Known Node 24 issues
+
+OpenClaw releases with a lower Node 24 floor, such as `>=24.16.0`, accept the builds below. If you run one of those releases, compare this table with `node -v`.
+
+| Node                                                              | Issue                                                                                                                                                                                                        | Fixed in                                                                                             | Symptom                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 24.x before 24.18.1 (reproduced on 24.16.0, 24.17.0, and 24.18.0) | `node:sqlite` iterator leak: `next()` on a `StatementSync` iterator that already returned `done` restarts the statement and leaves it stepped, holding a WAL read snapshot while `isTransaction` is `false`. | 24.18.1 ([nodejs/node@af9ff0490c](https://github.com/nodejs/node/commit/af9ff0490c), CVE-2026-58041) | WAL checkpoints stay blocked and the `-wal` file grows until the Gateway restarts. See [SQLite WAL grows and checkpoints stay blocked](/gateway/troubleshooting/gateway-service-and-process#sqlite-wal-grows-and-checkpoints-stay-blocked). |
+
 ## V8 compiler settings
 
 OpenClaw keeps Node's default V8 compiler settings, including Maglev and concurrent Sparkplug. Its executable entrypoints close their owned resources, await accepted work, and record `process.exitCode` before returning. They do not force normal termination with `process.exit()`.

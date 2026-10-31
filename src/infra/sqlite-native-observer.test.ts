@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { hasPendingSqliteNativeExecution } from "./sqlite-native-observer.js";
@@ -74,6 +74,45 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   expect(hasPendingSqliteNativeExecution(db)).toBe(true);
   last.return?.();
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+});
+
+it("answers next() and return() after done without touching the native iterator again", () => {
+  // Node 24.16.0 through 24.18.0 restart a finished statement on next() and pin a WAL
+  // snapshot (fixed in 24.18.1, #143524); a second native return() would finalize it twice.
+  using native = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  const prototype = Object.getPrototypeOf(native.prepare("SELECT 1").iterate()) as {
+    next: () => unknown;
+    return: () => unknown;
+  };
+  const nativeNext = vi.spyOn(prototype, "next");
+  const nativeReturn = vi.spyOn(prototype, "return");
+  try {
+    using db = open();
+    const statement = db.prepare("SELECT 1 AS value UNION ALL SELECT 2");
+    for (const returned of [false, true]) {
+      nativeNext.mockClear();
+      nativeReturn.mockClear();
+      const rows = statement.iterate();
+      const steps = returned
+        ? [rows.next(), rows.return?.()]
+        : Array.from({ length: 3 }, () => rows.next());
+      const nextCalls = nativeNext.mock.calls.length;
+      const returnCalls = returned ? 1 : 0;
+      const terminal = steps.at(-1);
+      expect(terminal?.done).toBe(true);
+      expect(nativeReturn).toHaveBeenCalledTimes(returnCalls);
+      expect([rows.next(), rows.return?.(), rows.next(), rows.return?.()]).toEqual(
+        Array.from({ length: 4 }, () => terminal),
+      );
+      expect(nativeNext).toHaveBeenCalledTimes(nextCalls);
+      expect(nativeReturn).toHaveBeenCalledTimes(returnCalls);
+      expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+    }
+    expect(statement.all()).toEqual([{ value: 1 }, { value: 2 }]);
+  } finally {
+    nativeNext.mockRestore();
+    nativeReturn.mockRestore();
+  }
 });
 
 it.each(["all", "close"] as const)("settles RETURNING cursors on %s", (method) => {

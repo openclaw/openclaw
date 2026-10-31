@@ -326,14 +326,21 @@ export function observeSqliteNativeOperations(
         "bind",
       );
       const reference = new WeakRef(rows);
-      let done = false;
       const lifetime = createIteratorLifetime(active, activeIterators);
       // oxlint-disable-next-line typescript/unbound-method -- Wrappers pass the native receiver unchanged.
       const nativeNext = rows.next;
       // oxlint-disable-next-line typescript/unbound-method -- Wrappers pass the native receiver unchanged.
       const nativeReturn = rows.return;
+      // Once done, the wrapper answers next() and return() itself. Node 24.16.0 through 24.18.0
+      // restart a finished statement on next() and leave it stepped, holding a WAL read snapshot
+      // that blocks checkpoints (fixed in 24.18.1, #143524). A second native return() would
+      // reset a statement that a newer iterator may own.
+      let terminal: ReturnType<typeof nativeNext> | undefined;
       rows.next = function (this: typeof rows, ...args) {
-        if (this !== reference.deref() || lifetime.invalidated || done || !database.isOpen) {
+        if (terminal && this === reference.deref() && database.isOpen) {
+          return { ...terminal };
+        }
+        if (this !== reference.deref() || lifetime.invalidated || !database.isOpen) {
           return nativeNext.apply(this, args);
         }
         if (lifetime.finished) {
@@ -344,12 +351,8 @@ export function observeSqliteNativeOperations(
         activeIterators.add(lifetime);
         const result = nativeNext.apply(this, args);
         if (result.done) {
-          done = native.iteratorBehavior.nextAfterDoneIsTerminal;
-          if (done) {
-            lifetime.finish(true);
-          } else {
-            lifetime.stopObservation(true);
-          }
+          terminal = result;
+          lifetime.finish(true);
         } else {
           lifetime.observed?.stepped?.();
         }
@@ -357,11 +360,10 @@ export function observeSqliteNativeOperations(
       };
       if (nativeReturn) {
         rows.return = function (this: typeof rows, ...args) {
-          if (
-            this !== reference.deref() ||
-            (done && native.iteratorBehavior.returnAfterDoneIsInert) ||
-            !database.isOpen
-          ) {
+          if (terminal && this === reference.deref() && database.isOpen) {
+            return { ...terminal };
+          }
+          if (this !== reference.deref() || !database.isOpen) {
             return nativeReturn.apply(this, args);
           }
           const result = execute(
@@ -372,7 +374,9 @@ export function observeSqliteNativeOperations(
             bindingMutation,
             "bind",
           );
-          done = result.done === true;
+          if (result.done === true) {
+            terminal = result;
+          }
           lifetime.finish();
           return result;
         };

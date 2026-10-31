@@ -1,11 +1,12 @@
 ---
-summary: "The managed gateway service not running, macOS launchd faults, and high-memory exits"
+summary: "The managed gateway service not running, macOS launchd faults, high-memory exits, and a SQLite WAL that keeps growing"
 title: "Gateway service and process"
 sidebarTitle: "Gateway service and process"
 read_when:
   - The gateway service is not running or will not stay up
   - A macOS Gateway stalls until you touch the dashboard, or duplicate LaunchAgents fight each other
   - The Gateway exits under high memory use and you need heap sizing guidance
+  - A SQLite `-wal` file keeps growing and checkpoints report a blocking reader
 ---
 
 ## Gateway service not running
@@ -313,3 +314,32 @@ Related:
 - [Gateway health](/gateway/health)
 - [Diagnostics export](/gateway/diagnostics)
 - [Sessions](/cli/sessions)
+
+## SQLite WAL grows and checkpoints stay blocked
+
+Use when the `-wal` file next to the shared-state database (`~/.openclaw/state/openclaw.sqlite-wal`) or an agent database keeps growing until the Gateway restarts. This has been seen to start within minutes of Gateway start.
+
+```bash
+node -v
+node -p "process.versions.sqlite"
+openclaw logs --follow
+```
+
+Look for:
+
+- `WAL checkpoint PASSIVE blocked by a reader` repeating (or `TRUNCATE remained busy`), with `consecutiveBlocked` climbing and `lastCompletedAtMs` frozen a few minutes after the Gateway became ready.
+- `"activeReaders":[]` and `"blockingOwner":"unknown"` in the same line: no tracked reader is open, yet a reader blocks the checkpoint. The connection details name a worker connection with `"transactionOpen":false` and `"trackedReaders":0`.
+- `checkpointedFrames` (the WAL index's `nBackfill`) stuck at a small number while `logFrames` (`mxFrame`) keeps rising, and the main database file no longer being written.
+- `runtimeVersion` in the log metadata is 24.16.0 through 24.18.0.
+
+Cause and fix:
+
+- **Node 24.16.0 through 24.18.0 (fixed in 24.18.1).** `next()` on a finished `node:sqlite` statement iterator restarts the statement and keeps a WAL read snapshot, so no checkpoint can pass it. Upgrade Node to a [supported release](/install/node-compatibility#supported-versions), then restart the Gateway. See [Known Node 24 issues](/install/node-compatibility#known-node-24-issues).
+- **Node 24.18.1 or newer and still blocked.** This is a different cause. Open a new issue and link [#143524](https://github.com/openclaw/openclaw/issues/143524) for background, with the log lines above and the output of both `node` commands.
+
+A clean Gateway restart clears the WAL; an external checkpoint while the Gateway runs does not. Do not delete, copy, or move `-wal` or `-shm` files while the Gateway runs.
+
+Related:
+
+- [Node.js compatibility](/install/node-compatibility)
+- [SQLite maintenance](/cli/doctor/sqlite-maintenance)
