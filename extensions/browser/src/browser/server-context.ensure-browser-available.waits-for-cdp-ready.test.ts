@@ -1,9 +1,12 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
+import { withTimeout } from "../sdk-node-runtime.js";
 import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
+import type { ChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import type { RunningChrome } from "./chrome.js";
 import * as chromeModule from "./chrome.js";
+import { BROWSER_STARTUP_TIMEOUT_MS } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -72,6 +75,27 @@ function diagnosticReady(cdpUrl: string, instance: string) {
     });
     return true;
   };
+}
+
+function cdpReadyAfter(delayMs: number) {
+  const startedAt = performance.now();
+  chrome.ready.mockImplementation(async () => performance.now() - startedAt >= delayMs);
+}
+
+type CdpFailure = Extract<ChromeCdpDiagnostic, { ok: false }>;
+
+function cdpFailsWith(cdpUrl: string, failure: Partial<CdpFailure>) {
+  chrome.ready.mockImplementation(async (...args) => {
+    await args[4]?.onDiagnostic?.({
+      ok: false,
+      code: "http_unreachable",
+      cdpUrl,
+      message: "probe failed",
+      elapsedMs: 1,
+      ...failure,
+    });
+    return false;
+  });
 }
 
 afterEach(() => {
@@ -467,6 +491,99 @@ function createAvailability() {
   chrome.ready.mockImplementation(diagnosticReady(profile.cdpUrl, "synthetic"));
   return { availability, runtime, state };
 }
+
+describe("attachOnly CDP cold start", () => {
+  const cdpUrl = "http://127.0.0.1:9222";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    chrome.reachable.mockResolvedValue(false);
+  });
+
+  it.each([
+    ["CDP discovery", false],
+    ["the WebSocket", true],
+  ])("waits past a short request budget for %s to answer after 4.5s", async (_, discovered) => {
+    const { profile } = createAttachOnlyLoopbackProfile(cdpUrl);
+    chrome.reachable.mockResolvedValue(discovered);
+    cdpReadyAfter(4500);
+
+    const result = withTimeout(() => profile.ensureBrowserAvailable(), 3000);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(result).resolves.toBeUndefined();
+    expectNoProcessChanges();
+  });
+
+  it.each<[string, Partial<CdpFailure>]>([
+    ["nothing listens on the endpoint", { connectionRefused: true }],
+    ["policy blocks the endpoint", { code: "ssrf_blocked" }],
+  ])("fails without waiting when %s", async (_, failure) => {
+    const { profile } = createAttachOnlyLoopbackProfile(cdpUrl);
+    cdpFailsWith(cdpUrl, failure);
+
+    await expect(profile.ensureBrowserAvailable()).rejects.toThrow(
+      'Browser attachOnly is enabled and profile "manual-cdp" is not running.',
+    );
+
+    expect(chrome.ready).toHaveBeenCalledOnce();
+    expectNoProcessChanges();
+  });
+
+  it("gives up at the deadline when a listener never becomes ready", async () => {
+    const { profile, state } = createAttachOnlyLoopbackProfile(cdpUrl);
+    chrome.ready.mockResolvedValue(false);
+    const settled = vi.fn();
+
+    const result = profile.ensureBrowserAvailable();
+    result.catch(settled);
+    await vi.advanceTimersByTimeAsync(state.resolved.localCdpReadyTimeoutMs - 1);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(result).rejects.toThrow(BrowserProfileUnavailableError);
+    expectNoProcessChanges();
+  });
+
+  it("bounds an attach hook that never settles", async () => {
+    const state = makeBrowserServerState({
+      profile: makeBrowserProfile({ name: "manual-cdp", cdpUrl, cdpPort: 9222, attachOnly: true }),
+      resolvedOverrides: { ssrfPolicy: {} },
+    });
+    const ctx = createBrowserRouteContext({
+      getState: () => state,
+      onEnsureAttachTarget: () => new Promise<void>(() => {}),
+    });
+
+    const rejected = expect(ctx.forProfile().ensureBrowserAvailable()).rejects.toThrow(
+      "did not finish",
+    );
+    await vi.advanceTimersByTimeAsync(BROWSER_STARTUP_TIMEOUT_MS);
+
+    await rejected;
+    expectNoProcessChanges();
+  });
+
+  it("releases a cancelled caller and stops polling on a profile transition", async () => {
+    const { profile, state, runtime } = createAttachOnlyLoopbackProfile(cdpUrl);
+    chrome.ready.mockResolvedValue(false);
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled");
+
+    const result = profile.ensureBrowserAvailable({ signal: controller.signal });
+    await vi.advanceTimersByTimeAsync(500);
+    const cancelled = expect(result).rejects.toBe(reason);
+    controller.abort(reason);
+    await cancelled;
+
+    await beginProfileTransition({ state, runtime, reason: "test stop" });
+    const probes = chrome.ready.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(state.resolved.localCdpReadyTimeoutMs);
+
+    expect(chrome.ready).toHaveBeenCalledTimes(probes);
+    expectNoProcessChanges();
+  });
+});
 
 describe("external browser mode availability", () => {
   it("observes the mode again on the next request after an inconclusive inspection", async () => {
