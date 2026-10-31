@@ -88,6 +88,25 @@ describe("cli program (nodes media)", () => {
     }
   });
 
+  it.each([false, true])("lists legacy Windows camera responses (JSON: %s)", async (json) => {
+    mockNodeGateway("camera.list", {
+      cameras: [{ DeviceId: "windows-camera-1", Name: "EasyCamera", IsDefault: true }],
+    });
+
+    await runNodesCommand(cameraArgs("list", ...(json ? ["--json"] : [])));
+
+    if (json) {
+      expect(runtime.writeJson).toHaveBeenCalledWith([
+        { id: "windows-camera-1", name: "EasyCamera", IsDefault: true },
+      ]);
+    } else {
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain("EasyCamera");
+      expect(output).toContain("windows-camera-1");
+      expect(output).not.toContain("No cameras reported.");
+    }
+  });
+
   it("reports no cameras when every returned device record is malformed", async () => {
     mockNodeGateway("camera.list", { devices: malformedDevices });
 
