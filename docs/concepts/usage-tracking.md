@@ -205,7 +205,9 @@ renders the richer footer described below.
 context window, and cost when those fields are available. No template file is
 required for the built-in footer.
 Context windows of one million tokens or more use `m` units, such as `1.0m` or
-`2.0m`; smaller windows keep `k` units, such as `200k`.
+`2.0m`. Smaller windows keep `k` units, such as `200k`, except that a window
+which rounds up to 1000 thousands (`999500` and above) also prints in `m`, so it
+reads `1.0m` rather than `1000k`.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in

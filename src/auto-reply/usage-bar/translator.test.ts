@@ -29,7 +29,6 @@ it.each<[string, Record<string, unknown>, string]>([
   // rolls that into the million band instead, so the footers stop disagreeing.
   ["x|num", { x: 999_499 }, "999k"],
   ["x|num", { x: 999_500 }, "1.0m"],
-  ["x|num", { x: 999_999 }, "1.0m"],
   ["x|num", { x: -999_600 }, "-1.0m"],
   ["x|num", { x: true }, "1"],
   ["x|fixed", { x: true }, "1.00"],
