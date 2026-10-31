@@ -1,10 +1,12 @@
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import { GatewayRetainedWorkTimeoutError } from "../../shared/async-work-scope.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   prepareClientVoiceSessionClose,
   withClientVoiceSessionSettlement,
 } from "../../talk/client-voice-session-lifecycle.js";
+import { GatewayShutdownCleanupRetainedError } from "../server-shutdown.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkConnectionCleanupKind =
@@ -171,9 +173,16 @@ export function prepareTalkConnectionClose(
     async drain() {
       try {
         beginClose();
-        await pending;
-      } finally {
+        // Cleanup is itself retained. Join the bounded owner first so a provider
+        // ignoring abort cannot hide its unsettled custody behind this promise.
         await persistence.drain();
+        await pending;
+      } catch (error) {
+        if (error instanceof GatewayRetainedWorkTimeoutError) {
+          log.warn(error.message);
+          throw new GatewayShutdownCleanupRetainedError([error], error.message);
+        }
+        throw error;
       }
     },
   };
