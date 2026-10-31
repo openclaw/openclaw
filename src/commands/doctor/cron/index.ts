@@ -38,9 +38,24 @@ export {
 // The advisory threshold is independent of the scheduler's transient-retry budget.
 const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
+function formatAlertDeliveryReason(value: unknown): string {
+  if (typeof value !== "string") {
+    return "no reason recorded";
+  }
+  const cleaned = value
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!cleaned) {
+    return "no reason recorded";
+  }
+  return cleaned.length > 200 ? `${cleaned.slice(0, 200)}…` : cleaned;
+}
+
 function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
   let inFlightCount = 0;
   let chronicFailureCount = 0;
+  const undeliveredAlertJobs: Array<{ id: string; name: string; reason: string }> = [];
   const autoDisabledJobs: Array<{
     id: string;
     name: string;
@@ -65,6 +80,17 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
     ) {
       chronicFailureCount += 1;
     }
+    if (
+      isRecord(state) &&
+      typeof job.id === "string" &&
+      state.lastFailureNotificationDeliveryStatus === "not-delivered"
+    ) {
+      undeliveredAlertJobs.push({
+        id: job.id,
+        name: typeof job.name === "string" && job.name.trim() ? job.name.trim() : job.id,
+        reason: formatAlertDeliveryReason(state.lastFailureNotificationDeliveryError),
+      });
+    }
     if (job.enabled !== false || typeof job.id !== "string" || !isRecord(state)) {
       continue;
     }
@@ -84,7 +110,7 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
       consecutiveErrors: autoDisabled.consecutiveErrors,
     });
   }
-  return { inFlightCount, chronicFailureCount, autoDisabledJobs };
+  return { inFlightCount, chronicFailureCount, autoDisabledJobs, undeliveredAlertJobs };
 }
 
 const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
@@ -341,7 +367,8 @@ export async function maybeRepairLegacyCronStore(params: {
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
   noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
 
-  const { inFlightCount, chronicFailureCount, autoDisabledJobs } = inspectCronJobHealth(rawJobs);
+  const { inFlightCount, chronicFailureCount, autoDisabledJobs, undeliveredAlertJobs } =
+    inspectCronJobHealth(rawJobs);
   if (inFlightCount > 0) {
     const subject = inFlightCount === 1 ? "it" : "them";
     note(
@@ -378,6 +405,16 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
 
+  if (undeliveredAlertJobs.length > 0) {
+    note(
+      [
+        `${pluralize(undeliveredAlertJobs.length, "automation")} ${undeliveredAlertJobs.length === 1 ? "has" : "have"} a failure alert that could not be delivered.`,
+        ...undeliveredAlertJobs.map((job) => `- ${job.name} (${job.id}): ${job.reason}`),
+        `- Configure a messaging channel for the gateway or set an explicit delivery target on the job. Review with ${formatCliCommand("openclaw automations show <id>")}.`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
   const normalized = normalizeStoredCronJobs(rawJobs);
   if (normalized.unsupportedDeliveryModeJobs.length > 0) {
     note(

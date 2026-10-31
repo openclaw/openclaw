@@ -84,6 +84,7 @@ An enabled install policy is informational. Static policy configuration errors o
 - Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
 - Doctor reports cron jobs with an explicit `payload.model` override, including provider-namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
 - Doctor reports cron jobs still marked in-flight (`state.runningAtMs`), which can make `openclaw cron list` show them as `running`. This check is read-only: if no Gateway is currently executing a marked job, the next cron service startup records the interrupted run and clears the marker.
+- Doctor reports cron jobs whose failure alert could not be delivered (`state.lastFailureNotificationDeliveryStatus` is `not-delivered`), listing each job with the recorded reason from `state.lastFailureNotificationDeliveryError`, such as no configured messaging channel. This check is read-only: configure a messaging channel for the Gateway or set an explicit delivery target on the job. Alerts that were delivered, not requested, or still unsettled are not reported.
 
 ## Tool and channel policy
 
