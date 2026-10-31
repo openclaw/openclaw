@@ -17,6 +17,7 @@ Enabling browser control gives the model a real browser. If that profile already
 - The standalone loopback browser control API only honors shared-secret auth (gateway token bearer auth or gateway password) - it does not consume trusted-proxy or Tailscale Serve identity headers.
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible.
+- Snapshots replace password, one-time-code, and card number/security code field values with `[redacted]` across managed and Chrome MCP existing-session profiles; other field values stay readable. Masking reduces accidental exposure; it does not replace a dedicated profile.
 - For remote gateways, "browser control" is equivalent to "operator access" to whatever that profile can reach.
 - Keep Gateway and node hosts tailnet-only; avoid exposing browser control ports to LAN or public internet.
 - Disable browser proxy routing when not needed (`gateway.nodes.browser.mode="off"`).
