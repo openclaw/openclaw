@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assert, describe, expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { isReplayableWorkerTranscriptCommitError } from "../gateway/worker-environments/transcript-commit-failure.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
@@ -457,9 +458,18 @@ describe("canonical proof on physical database validation", () => {
         if (race === "schema") {
           assert(original.schema);
           expectFlag(original.schema.valid, 0);
-          expect(() => adoptSchema(database, true, true)).toThrow(
-            "Agent schema admission changed before handle adoption",
-          );
+          let adoptionError: unknown;
+          try {
+            adoptSchema(database, true, true);
+          } catch (error) {
+            adoptionError = error;
+          }
+          // The adoption race must surface as the typed replayable error, not a bare Error (#188935).
+          expect(adoptionError, race).toBeInstanceOf(AdmissionChangedError);
+          expect(adoptionError, race).toMatchObject({
+            message: "Agent schema admission changed before handle adoption; retry the operation",
+          });
+          expect(isReplayableWorkerTranscriptCommitError(adoptionError), race).toBe(true);
         }
         for (const malformed of [
           undefined,
