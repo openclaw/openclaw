@@ -56,10 +56,9 @@ async function withGatewayChatHarness(
         createSessionDir: async (options) => sessionStoreFixture.open(options).sessionDir,
         filePath,
         cliSessionId,
-      }),
+      }).finally(disposeSessionReadContexts),
     );
   } finally {
-    await disposeSessionReadContexts();
     await sessionStoreFixture.reset();
     directories.cleanup();
     resetConfigRuntimeState();
@@ -70,10 +69,6 @@ async function withGatewayChatHarness(
   }
 }
 
-type StoredSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
-async function writeStoredMainSession(entry: StoredSessionEntry) {
-  await writeSessionStore({ entries: { main: entry } });
-}
 type HistoryPage = {
   messages?: Record<string, unknown>[];
   hasMore?: boolean;
@@ -84,12 +79,8 @@ type HistoryPage = {
 function readHistory(ws: WebSocket, params: Record<string, unknown>) {
   return rpcReq<HistoryPage>(ws, "chat.history", { sessionKey: "main", ...params });
 }
-function makeClaudeCliSessionEntry(
-  sessionDir: string,
-  sessionId: string,
-  cliSessionId: string,
-): StoredSessionEntry {
-  return {
+async function writeStoredMainSession(sessionDir: string, sessionId: string, cliSessionId: string) {
+  const entry = {
     sessionId,
     sessionFile: path.join(sessionDir, `${sessionId}.jsonl`),
     updatedAt: Date.now() + 60_000,
@@ -97,6 +88,7 @@ function makeClaudeCliSessionEntry(
     model: "claude-sonnet-4-6",
     cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
   };
+  await writeSessionStore({ entries: { main: entry } });
 }
 
 test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
@@ -113,7 +105,7 @@ test("chat.history deduplicates a structured local Claude delivery with managed 
       ]),
       "utf-8",
     );
-    await writeStoredMainSession(makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId));
+    await writeStoredMainSession(sessionDir, sessionId, cliSessionId);
     await writeMainSessionTranscript(
       [
         createTextTranscriptEvent("assistant", "CLAUDE DELIVERY READY", {
@@ -163,7 +155,7 @@ test("chat.history pages the full local prefix and external-only claude-cli rows
       ]),
       "utf-8",
     );
-    await writeStoredMainSession(makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId));
+    await writeStoredMainSession(sessionDir, sessionId, cliSessionId);
     await writeMainSessionTranscript(
       Array.from({ length: 70 }, (_, index) =>
         createTextTranscriptEvent(
@@ -223,7 +215,7 @@ test("chat.history pages when every older claude-cli import duplicates a local r
       ]),
       "utf-8",
     );
-    await writeStoredMainSession(makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId));
+    await writeStoredMainSession(sessionDir, sessionId, cliSessionId);
     // Both imported copies precede the limit-1 tail window of 40 raw messages.
     await writeMainSessionTranscript(
       [

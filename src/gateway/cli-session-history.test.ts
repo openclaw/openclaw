@@ -321,9 +321,7 @@ describe("cli session history", () => {
       content: secretText,
     } as AgentMessage);
     const redactedContent = readRecord(localMessage).content;
-    if (typeof redactedContent !== "string") {
-      throw new Error("expected redacted local text content");
-    }
+    expect(typeof redactedContent).toBe("string");
     const { messages, sessionId } = await readBoundHistory(
       [
         claudeUser(`${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${secretText}`, {
@@ -614,7 +612,7 @@ it("keeps lone surrogates distinct from replacement characters in SQLite match k
 
 it.each([
   ["covered", [], 1],
-  ["nested", [], 1],
+  ["identity", [], 1],
   ["uuidless", [], 1],
   ["undated", [], 1],
   ["partial", ["covered"], 1],
@@ -639,13 +637,17 @@ it.each([
   const prompt =
     mode === "image"
       ? imageTurn("coverage-image", "question", 1_000, "coverage")
-      : user("question", mode === "identified" ? undefined : at);
+      : user(
+          "question",
+          mode === "identified" ? undefined : at,
+          mode === "identity" ? meta("native-user") : undefined,
+        );
   const aggregate: Record<string, unknown> = {
     ...answer(timestamp(3)),
     content: "Checking. Done.",
     idempotencyKey: "cli-assistant:covered",
   };
-  if (mode === "nested") {
+  if (mode === "identity") {
     aggregate["__openclaw"] = { idempotencyKey: aggregate.idempotencyKey };
     delete aggregate.idempotencyKey;
   }
@@ -673,7 +675,9 @@ it.each([
       ? `Different caption\n\n${imagePrompt("coverage-image")}`
       : mode === "resume"
         ? `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nquestion`
-        : "question";
+        : mode === "identity"
+          ? "rewritten question"
+          : "question";
   const imported: unknown[] = [
     user(nativePrompt, at, meta("native-user")),
     ...["Checking.", "Done."].map((content, index) => ({
