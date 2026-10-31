@@ -446,7 +446,7 @@ describe("full tail after a long live turn", () => {
         newerCursor: "newer:selected",
       });
       expect(state.chatHistoryPagination).not.toHaveProperty("olderCursor");
-      expect(state.chatHistoryPagination.nextOffset).toBeUndefined();
+      expect(state.chatHistoryPagination).not.toHaveProperty("nextOffset");
       expect(state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)).toEqual([
         "id:prompt",
         "id:call-2",

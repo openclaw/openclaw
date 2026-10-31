@@ -119,9 +119,9 @@ type ChatScrollOptions = {
 };
 
 type PendingChatScroll = { manual: boolean; cancel: () => void };
-const pendingChatScrolls = new WeakMap<ChatScrollHost, PendingChatScroll>();
+const pendingChatScrolls = new WeakMap<object, PendingChatScroll>();
 
-export function hasPendingManualChatScroll(host: ChatScrollHost): boolean {
+export function hasPendingManualChatScroll(host: object): boolean {
   return pendingChatScrolls.get(host)?.manual ?? false;
 }
 

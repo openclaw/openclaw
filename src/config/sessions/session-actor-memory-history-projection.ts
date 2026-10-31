@@ -408,7 +408,7 @@ export function readSessionActorMemoryProjection(
               accepted: isTranscriptReadContinuous(options.continuity.cursor, {
                 agentId: scope.agentId,
                 sessionId,
-                generation,
+                generation: generation ?? undefined,
                 frontier: window.events.at(-1)?.rawSeq ?? -1,
                 latestResetRawSeq: navigation.latestResetRawSeq,
                 previousLeafActive:

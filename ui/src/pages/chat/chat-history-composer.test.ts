@@ -154,7 +154,7 @@ describe("rewind composer ownership", () => {
       expect(state.chatMessage).toBe("edit me");
       expect(state.chatHistoryPagination).toMatchObject({ hasMore: false });
       expect(state.chatHistoryPagination.hasNewer).not.toBe(true);
-      expect(state.chatHistoryPagination.olderCursor).toBeUndefined();
+      expect(state.chatHistoryPagination).not.toHaveProperty("olderCursor");
       expect(state.chatHistoryPagination.newerCursor).toBeUndefined();
       expect(
         state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources) ?? [],
