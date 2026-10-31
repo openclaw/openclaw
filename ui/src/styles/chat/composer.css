@@ -1691,7 +1691,6 @@
   flex: 0 0 auto;
   width: 56px;
   height: 56px;
-  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
@@ -2095,7 +2094,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   margin: 0;
   padding: 0;
   border: 0;
-  box-sizing: border-box;
   opacity: 0;
   pointer-events: none;
 }

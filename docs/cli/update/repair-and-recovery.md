@@ -411,6 +411,14 @@ Repair exits nonzero with the original recovery command when an older package
 journal remains pending and the current CLI cannot settle it. It does not report
 successful repair or continue post-update maintenance while that record remains.
 
+After an interrupted npm-to-Git update, the package directory can be a link to
+the new checkout while plugin recovery still names the original package path.
+Run `openclaw update repair` with a CLI containing this fix and the same state
+and configuration paths. Repair claims both the original package path and the
+checkout before settling that recovery. A changed link or occupied path keeps
+recovery intact; this path does not reclaim cancelled update custody through
+the link.
+
 For private retained package trees, recovery ignores widened group/other permission
 bits while verifying the package, then restores owner-only access and reports one
 warning. This includes POSIX ACL access masks introduced by recursive `setfacl`.

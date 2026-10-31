@@ -3,20 +3,20 @@ import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.t
 import { getChatItemsGeneration } from "../chat-thread.ts";
 import { chatItemStartsUserTurn, hasForwardedSource } from "../chat-turn-boundary.ts";
 
-export type TurnVideoMessage = { key: string; message: unknown };
+export type TurnMediaMessage = { key: string; message: unknown };
 
-type CachedTurnVideoMessages = {
+type CachedTurnMediaMessages = {
   generation: number;
-  byMessage: Map<string, readonly TurnVideoMessage[]>;
-  live?: { index: number; turn: TurnVideoMessage[]; slot: number; text: string };
+  byMessage: Map<string, readonly TurnMediaMessage[]>;
+  live?: { index: number; turn: TurnMediaMessage[]; slot: number; text: string };
 };
 
-const turnVideosByItems = new WeakMap<
+const turnMediaByItems = new WeakMap<
   readonly (ChatItem | MessageGroup)[],
-  CachedTurnVideoMessages
+  CachedTurnMediaMessages
 >();
 
-function streamMessage(item: Extract<ChatItem, { kind: "stream" }>): TurnVideoMessage {
+function streamMessage(item: Extract<ChatItem, { kind: "stream" }>): TurnMediaMessage {
   return {
     key: item.key,
     message: { role: "assistant", content: [{ type: "text", text: item.text }] },
@@ -24,9 +24,9 @@ function streamMessage(item: Extract<ChatItem, { kind: "stream" }>): TurnVideoMe
 }
 
 /** Membership is projected before run frames/collapsed work, never from mounted DOM rows. */
-export function projectTurnVideoMessages(items: readonly (ChatItem | MessageGroup)[]) {
+export function projectTurnMediaMessages(items: readonly (ChatItem | MessageGroup)[]) {
   const generation = getChatItemsGeneration(items);
-  const cached = turnVideosByItems.get(items);
+  const cached = turnMediaByItems.get(items);
   if (cached?.generation === generation) {
     const live = cached.live;
     const item = live ? items[live.index] : undefined;
@@ -38,9 +38,9 @@ export function projectTurnVideoMessages(items: readonly (ChatItem | MessageGrou
     }
     return cached.byMessage;
   }
-  const byMessage = new Map<string, readonly TurnVideoMessage[]>();
-  const projection: CachedTurnVideoMessages = { generation, byMessage };
-  let turn: TurnVideoMessage[] = [];
+  const byMessage = new Map<string, readonly TurnMediaMessage[]>();
+  const projection: CachedTurnMediaMessages = { generation, byMessage };
+  let turn: TurnMediaMessage[] = [];
   for (const [index, item] of items.entries()) {
     if (
       item.kind === "divider" ||
@@ -65,6 +65,6 @@ export function projectTurnVideoMessages(items: readonly (ChatItem | MessageGrou
       byMessage.set(item.key, turn);
     }
   }
-  turnVideosByItems.set(items, projection);
+  turnMediaByItems.set(items, projection);
   return byMessage;
 }

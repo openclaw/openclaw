@@ -30,7 +30,6 @@ openclaw-session-progress-hovercard-provider {
   /* Generic lazy views retain their shimmer; the critical connection frame is static. */
   --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
   --skeleton-duration: 2s;
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 32px;
@@ -348,7 +347,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__ring {
   position: absolute;
   inset: -2px;
-  box-sizing: border-box;
   border: 1.5px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
@@ -1639,7 +1637,6 @@ select.settings-select:not([multiple]) {
 
 .code-block-wrapper {
   position: relative;
-  box-sizing: border-box;
   width: 100%;
   margin-block: 1em;
   overflow: hidden;
@@ -2181,7 +2178,6 @@ select.settings-select:not([multiple]) {
   width: var(--data-table-checkbox-col-width);
   min-width: var(--data-table-checkbox-col-width);
   max-width: var(--data-table-checkbox-col-width);
-  box-sizing: border-box;
   padding-left: 12px !important;
   padding-right: 4px !important;
   text-align: center;
@@ -2649,7 +2645,6 @@ td.data-table-key-col {
 
 .cmd-palette__input {
   display: block;
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: 24px;
@@ -3108,7 +3103,6 @@ td.data-table-key-col {
 }
 
 .session-run-spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 12px;
   height: 12px;

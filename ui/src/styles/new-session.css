@@ -133,7 +133,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   width: 100%;
   max-width: none;
   min-height: auto;
-  box-sizing: border-box;
   margin: 0 auto auto;
 }
 
@@ -193,7 +192,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   display: flex;
   align-items: center;
   gap: 8px;
-  box-sizing: border-box;
   width: calc(100% - 36px);
   max-height: 0;
   max-width: var(--chat-thread-max-width, 48rem);
@@ -346,7 +344,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   max-width: var(--chat-thread-max-width);
   margin: 0 auto;
   padding: 0;
-  box-sizing: border-box;
 }
 
 span.new-session-page__select {
@@ -1154,7 +1151,6 @@ span.new-session-page__select {
   max-width: min(48rem, calc(100% - 36px));
   margin: 4px auto 2px;
   padding: 10px 12px;
-  box-sizing: border-box;
   text-align: left;
   box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
 }
@@ -1230,7 +1226,6 @@ span.new-session-page__select {
   .new-session-page .agent-chat__welcome-identity {
     flex-direction: column;
     gap: 12px;
-    box-sizing: border-box;
     width: 100%;
     margin-block: 0;
     padding-inline: var(--chat-mobile-edge-inset);
