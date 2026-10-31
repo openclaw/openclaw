@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { foldSearchCase } from "../shared/search-case.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readUserProfileDirectory } from "../state/user-profile-reads.js";
 import {
@@ -391,13 +392,15 @@ export function createHumanMentionPolicy(params: {
         });
         eligibleDirectory = { key, users, truncated: directory.truncated };
       }
-      const query = input.query?.trim().toLocaleLowerCase() ?? "";
+      const query = foldSearchCase(input.query?.trim().toLocaleLowerCase() ?? "");
       const users = eligibleDirectory.users.filter(
         (candidate) =>
           candidate.profileId !== profile.profileId &&
           (!query ||
-            candidate.displayName.toLocaleLowerCase().includes(query) ||
-            candidate.logins.some((login) => login.toLocaleLowerCase().includes(query))),
+            foldSearchCase(candidate.displayName.toLocaleLowerCase()).includes(query) ||
+            candidate.logins.some((login) =>
+              foldSearchCase(login.toLocaleLowerCase()).includes(query),
+            )),
       );
       const names = new Map<string, number>();
       for (const candidate of users) {

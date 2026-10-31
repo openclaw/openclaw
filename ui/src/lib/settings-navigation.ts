@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import {
   deviceSettingsGroupLabelKey,
   titleForRoute,
@@ -50,8 +51,8 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
+  const candidate = foldSearchCase(normalizeLowercaseStringOrEmpty(value)).normalize("NFC");
+  const normalizedQuery = foldSearchCase(normalizeLowercaseStringOrEmpty(query)).normalize("NFC");
   if (!normalizedQuery) {
     return false;
   }

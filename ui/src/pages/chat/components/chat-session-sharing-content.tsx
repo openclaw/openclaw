@@ -10,6 +10,7 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
@@ -111,12 +112,12 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const creator = () => result()?.owner;
   const people = createMemo(() => projectChatSessionSharingRoster(props));
   const matches = createMemo(() => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = foldSearchCase(query().trim().toLocaleLowerCase()).split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
-        `${identity.label ?? ""} ${identity.id} ${identity.type}`
-          .toLocaleLowerCase()
-          .includes(term),
+        foldSearchCase(
+          `${identity.label ?? ""} ${identity.id} ${identity.type}`.toLocaleLowerCase(),
+        ).includes(term),
       ),
     );
   });

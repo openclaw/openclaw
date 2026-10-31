@@ -39,6 +39,8 @@ it.each([
   ["MCP", "cp", false],
   ["外観設定", "設定", true],
   ["Cámara", "Ca\u0301mara", true],
+  ["ΕΛΕΓΧΟΣ", "χοσ", true],
+  ["Σύνοψη", "ς", true],
 ] as const)("matches setting text %s against %s: %s", (text, query, matches) => {
   expect(settingsSearchTextMatches(text, query)).toBe(matches);
 });

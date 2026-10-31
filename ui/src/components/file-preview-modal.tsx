@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
@@ -69,9 +70,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
       );
   const activeItem = () => ordered("item").find((node) => node.classList.contains("is-active"));
   const filteredFiles = createMemo(() => {
-    const query = props.layout === "files" ? props.query.trim().toLowerCase() : "";
+    const query = props.layout === "files" ? foldSearchCase(props.query.trim()) : "";
     return query
-      ? props.files.filter((file) => `${file.path}\n${file.contents}`.toLowerCase().includes(query))
+      ? props.files.filter((file) =>
+          foldSearchCase(`${file.path}\n${file.contents}`).includes(query),
+        )
       : props.files;
   });
   const activeFile = createMemo(

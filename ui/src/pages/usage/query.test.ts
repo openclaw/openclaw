@@ -59,6 +59,17 @@ it("limits suggestions before matching while preserving raw option spelling", ()
   expect(suggest("has:err")).toEqual([{ label: "has:errors", value: "has:errors" }]);
 });
 
+it("suggests values whose Greek sigma form differs from the query", () => {
+  const options = buildUsageFilterOptions([
+    { key: "session-greek", agentId: "ΕΛΕΓΧΟΣ", usage: null },
+  ]);
+  for (const query of ["agent:Σ", "agent:σ", "agent:ς"]) {
+    expect(
+      buildQuerySuggestions(query, extractQueryTerms(query), options).map((entry) => entry.value),
+    ).toEqual(["agent:ΕΛΕΓΧΟΣ"]);
+  }
+});
+
 it("quotes newly selected multiword values so they parse as one term", () => {
   const query = setQueryTokensForKey("provider:local ", "model", ["Local Model"]);
   expect(query).toBe('provider:local model:"Local Model" ');

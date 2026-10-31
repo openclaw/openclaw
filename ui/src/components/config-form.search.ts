@@ -2,6 +2,7 @@ import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import {
   localizedHintForPath,
@@ -59,7 +60,9 @@ export function resolveConfigFieldMeta(
 }
 
 function defaultTextMatcher(value: string, query: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value).includes(normalizeLowercaseStringOrEmpty(query));
+  return foldSearchCase(normalizeLowercaseStringOrEmpty(value)).includes(
+    foldSearchCase(normalizeLowercaseStringOrEmpty(query)),
+  );
 }
 
 function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
