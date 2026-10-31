@@ -63,39 +63,6 @@ function parseVideoSize(size: string | undefined): { width: number; height: numb
   return { width, height };
 }
 
-function resolveAspectRatio(params: {
-  aspectRatio?: string;
-  size?: string;
-}): "16:9" | "9:16" | undefined {
-  const direct = normalizeOptionalString(params.aspectRatio);
-  if (direct === "16:9" || direct === "9:16") {
-    return direct;
-  }
-  const parsedSize = parseVideoSize(params.size);
-  if (!parsedSize) {
-    return undefined;
-  }
-  return parsedSize.width >= parsedSize.height ? "16:9" : "9:16";
-}
-
-function resolveResolution(params: {
-  resolution?: string;
-  size?: string;
-}): "720p" | "1080p" | undefined {
-  if (params.resolution === "720P") {
-    return "720p";
-  }
-  if (params.resolution === "1080P") {
-    return "1080p";
-  }
-  const parsedSize = parseVideoSize(params.size);
-  if (!parsedSize) {
-    return undefined;
-  }
-  const maxEdge = Math.max(parsedSize.width, parsedSize.height);
-  return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
-}
-
 function resolveGoogleGeneratedVideoFileDownloadUrl(params: {
   file: unknown;
   apiKey: string;
@@ -256,8 +223,21 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
       supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
     });
     const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
-    const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });
-    const resolution = resolveResolution({ resolution: req.resolution, size: req.size });
+    const requestedAspectRatio = normalizeOptionalString(req.aspectRatio);
+    const directAspectRatio =
+      requestedAspectRatio === "16:9" || requestedAspectRatio === "9:16"
+        ? requestedAspectRatio
+        : undefined;
+    const directResolution =
+      req.resolution === "720P" ? "720p" : req.resolution === "1080P" ? "1080p" : undefined;
+    const parsedSize = directAspectRatio && directResolution ? undefined : parseVideoSize(req.size);
+    const aspectRatio =
+      directAspectRatio ??
+      (parsedSize ? (parsedSize.width >= parsedSize.height ? "16:9" : "9:16") : undefined);
+    const maxEdge =
+      parsedSize && !directResolution ? Math.max(parsedSize.width, parsedSize.height) : 0;
+    const resolution =
+      directResolution ?? (maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined);
     const hasReferenceInputs =
       (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
     const deadline = createProviderOperationDeadline({

@@ -38,7 +38,7 @@ const representativeRuntimeSmokeSubpaths = [
   "conversation-runtime",
 ] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS = identifiers(`
-  agent-runtime-test-contracts channel-contract-testing channel-target-testing
+  agent-runtime-test-contracts channel-contract-testing
   channel-test-helpers plugin-test-api plugin-test-contracts plugin-test-runtime
   provider-http-test-mocks provider-test-contracts test-env test-fixtures test-live
   test-live-auth test-media-generation test-media-understanding test-node-mocks
@@ -452,7 +452,6 @@ describe("plugin-sdk subpath exports", () => {
       `,
         "test-node-mocks":
           "mockNodeBuiltinModule mockNodeChildProcessExecFile mockNodeChildProcessSpawnSync",
-        "channel-target-testing": "installCommonResolveTargetErrorCases ResolveTargetFn",
         "provider-http-test-mocks": "getProviderHttpMocks installProviderHttpMockCleanup",
       },
       true,

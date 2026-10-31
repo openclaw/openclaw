@@ -444,6 +444,38 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
+// Keep compensation on its real live owner while replacing only the process adapter.
+vi.mock("./update-cli/update-command-cohort.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-cli/update-command-cohort.js")>();
+  return {
+    ...actual,
+    settleUpdatePluginCohortInCandidate: async (
+      params: Parameters<typeof actual.settleUpdatePluginCohortInCandidate>[0],
+    ) => {
+      const { settleUpdatePluginCohort } = await import("../plugins/update-cohort-recovery.js");
+      const { readUpdateConfigSnapshot } =
+        await import("./update-cli/update-command-config-snapshot.js");
+      params.configRestoration.assertCurrent();
+      const settled = await settleUpdatePluginCohort({
+        runId: params.run.runId,
+        env: params.env,
+        fence: expectDefined(params.run.executorFence, "live fixture update executor"),
+        action: "rollback",
+      });
+      params.configRestoration.assertCurrent();
+      for (const file of params.configRestoration.files) {
+        if (settled.configPaths.includes(file.path)) {
+          const snapshot = await readUpdateConfigSnapshot(file.path);
+          params.configRestoration.assertCurrent();
+          params.configRestoration.expectedHashes.set(file.path, snapshot.hash);
+        }
+      }
+      return settled;
+    },
+  };
+});
+
 vi.mock("../process/exec.js", async (importOriginal) => {
   const transport = await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();

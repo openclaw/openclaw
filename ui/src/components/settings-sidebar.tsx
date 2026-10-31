@@ -514,7 +514,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                   return;
                 }
                 event.preventDefault();
-                if (props.searchQuery) {
+                // Native input can be newer than the committed query projection.
+                if (event.currentTarget.value) {
+                  event.currentTarget.value = "";
                   props.onSearchQueryChange("");
                 } else {
                   props.onExit();

@@ -42,6 +42,7 @@ import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcrip
 import { appendTranscriptEventsInTransaction as appendEvents } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { readSessionEntryList } from "./session-entry-list.worker.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
@@ -131,6 +132,24 @@ function savedPrompts(prompt: string, promptChars = 0) {
     systemPromptReport: promptReport(1, 1, promptChars),
   };
 }
+
+it.each([false, true])(
+  "owns mutable list entries without copying fresh metadata (participants: %s)",
+  async (includeParticipants) => {
+    const worktree = { id: "list-worktree", branch: "main", repoRoot: "/repo" };
+    const scope = await seed("list-ownership", { worktree });
+    const read = () => listSessionEntriesReadOnly({ ...scope, includeParticipants });
+    read();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const [row] = read();
+    expect(row?.entry.worktree).toEqual(worktree);
+    if (!includeParticipants) {
+      expect(clone).not.toHaveBeenCalled();
+    }
+    row!.entry.worktree!.branch = "reader-local";
+    expect(read()[0]?.entry.worktree).toEqual(worktree);
+  },
+);
 
 it("reopens pre-device-folder entries through the codec, full accessor, and list cache", async () => {
   const scope = createSessionScope("pre-device-folder");
@@ -537,6 +556,13 @@ it("validates a folded sibling before selecting or preparing the exact opaque ta
     expect(() => listSessionEntriesReadOnly({ ...listing, projection })).toThrow(
       "non-canonical persisted row",
     );
+    await expect(
+      readSessionEntryList({
+        kind: "session-entry-list",
+        database: { agentId: database.agentId, path: database.path },
+        scope: { ...listing, projection },
+      }),
+    ).rejects.toThrow("non-canonical persisted row");
   }
   const shouldAppend = vi.fn(() => true);
   await expect(

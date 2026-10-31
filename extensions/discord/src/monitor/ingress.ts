@@ -1,5 +1,5 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
-import type { APIMessage } from "discord-api-types/v10";
+import type { GatewayMessageCreateDispatchData } from "discord-api-types/v10";
 import { prepareChannelIngressEvent } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
@@ -23,7 +23,7 @@ const DISCORD_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 type DiscordIngressPayload = {
   version: 1;
   receivedAt: number;
-  rawMessage: APIMessage;
+  rawMessage: GatewayMessageCreateDispatchData;
 };
 
 type DiscordIngressBody = Omit<DiscordIngressPayload, "version">;
@@ -38,7 +38,7 @@ type DiscordIngressDispatch = (
 ) => Promise<DiscordIngressDispatchResult | void> | DiscordIngressDispatchResult | void;
 
 type DiscordIngressMonitor = {
-  accept: (rawMessage: APIMessage) => Promise<void>;
+  accept: (rawMessage: GatewayMessageCreateDispatchData) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
 };
@@ -80,7 +80,7 @@ function decodeDiscordIngressPayload(
     version: candidate.version,
     body: {
       receivedAt: candidate.receivedAt as number,
-      rawMessage: candidate.rawMessage as APIMessage,
+      rawMessage: candidate.rawMessage as GatewayMessageCreateDispatchData,
     },
   };
 }
@@ -101,6 +101,7 @@ function isDiscordAuthenticationFailure(error: unknown): boolean {
 
 export function createDiscordIngressMonitor(params: {
   accountId: string;
+  botUserId?: string;
   client: Client;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
@@ -113,7 +114,7 @@ export function createDiscordIngressMonitor(params: {
       accountId: params.accountId,
     });
   const monitor = createChannelIngressMonitor<
-    APIMessage,
+    GatewayMessageCreateDispatchData,
     DiscordIngressBody,
     DiscordIngressPayload
   >({
@@ -163,6 +164,18 @@ export function createDiscordIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      // Native mentions can overtake recovery chatter; canonical preflight still
+      // decides access and retains every ambient message for pending history.
+      prioritizePending: ({ payload }) => {
+        const raw = payload?.rawMessage;
+        return Boolean(
+          params.botUserId &&
+          raw?.guild_id &&
+          Date.parse(raw.timestamp) >= Date.now() - 15 * 60_000 &&
+          Array.isArray(raw.mentions) &&
+          raw.mentions.some((user) => user?.id === params.botUserId),
+        );
+      },
       deferredLaneOccupancy: "release",
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,

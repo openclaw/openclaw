@@ -20,9 +20,60 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { handoffCompletedSourceReply } from "./queue/drain.js";
 import { clearFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
+
+it.each([
+  {},
+  { originatingChannel: "discord" },
+  { originatingTo: "channel:other" },
+  { originatingAccountId: "other" },
+  { originatingThreadId: "other" },
+  { originatingReplyToId: "other" },
+  { currentInboundEventKind: "room_event" as const },
+])("keeps completed-reply context scoped to the next matching queued input: %j", async (route) => {
+  const key = "completed-reply-route";
+  const source = createRun(
+    {
+      prompt: "answered request",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+      originatingThreadId: "thread",
+    },
+    { sessionKey: key, sourceReplyDeliveryMode: "message_tool_only" },
+  );
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId: source.run.sessionId,
+    resetTriggered: false,
+  });
+  const next = createRun({ ...source, prompt: "fresh request", ...route }, source.run);
+  const later = createRun({ ...source, prompt: "later request" }, source.run);
+  const contexts: Array<string | undefined> = [];
+  const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 10 };
+  try {
+    enqueueFollowupRun(key, next, settings);
+    enqueueFollowupRun(key, later, settings);
+    handoffCompletedSourceReply(operation, source);
+    scheduleFollowupDrain(key, async (run) => {
+      contexts.push(run.currentInboundContext?.text);
+    });
+    operation.complete();
+    await next.controllerInput!.settlement.promise;
+    await later.controllerInput!.settlement.promise;
+    expect(contexts).toEqual([
+      Object.keys(route).length === 0
+        ? expect.stringContaining("preceding turn already delivered")
+        : undefined,
+      undefined,
+    ]);
+  } finally {
+    operation.complete();
+    clearFollowupQueue(key);
+  }
+});
 
 it.each([
   ["S1", true, "S2"],

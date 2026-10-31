@@ -20,11 +20,12 @@ export async function readCommittedSourceReplyContent(params: {
   if (!mirror?.transcriptOwner || !mirror.idempotencyKey) {
     return undefined;
   }
-  const found = await findTranscriptEvent(params.scope, {
-    kind: "idempotency",
-    key: mirror.idempotencyKey,
-    deliveryMirror: true,
-  });
+  const found = await findTranscriptEvent(
+    params.scope,
+    { kind: "idempotency", key: mirror.idempotencyKey, deliveryMirror: true },
+    undefined,
+    "committed-source-reply",
+  );
   params.assertCurrent();
   const messageId = found && readTranscriptEventId(found.event);
   if (!messageId) {

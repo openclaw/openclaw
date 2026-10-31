@@ -7,6 +7,7 @@ import type {
   LegacyConfigUpdatePlan,
   repairLegacyConfigForUpdateChannel,
 } from "../../commands/doctor/legacy-config-repair.js";
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import {
   createConfigIO,
   mutateConfigFileWithRetry,
@@ -23,6 +24,7 @@ import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveConfigPath, resolveIncludeRoots } from "../../config/paths.js";
+import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldWarnOnTouchedVersion } from "../../config/version.js";
 import { composeConfigWriteAssertions } from "../../config/write-authority.js";
@@ -31,11 +33,41 @@ import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/co
 import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** Native ownership binds the updater's config/index journal across its local phases. */
+export async function withUpdatePluginCohortConfigCapture<T>(
+  opts: Pick<UpdateCommandOptions, "run">,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const run = opts.run;
+  const fence = run?.executorFence;
+  if (!run || !fence) {
+    return await operation();
+  }
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  if (!loadPluginCohortRecovery(run.runId, { env, allowNativeRead: true })) {
+    return await operation();
+  }
+  const authority = captureUpdateCommandExecutorAuthority(fence, run.runId);
+  const assertCurrent = () => {
+    if (opts.run !== run || run.executorFence !== fence) {
+      throw new Error("Plugin cohort capture lost its original update executor.");
+    }
+    fence.assertCurrent();
+  };
+  return await withPluginCohortConfigCapture(
+    { runId: run.runId, installKey: authority.installKey, env, assertCurrent },
+    operation,
+  );
+}
 
 /** Update preparation keeps Doctor's retained inputs available until plugin convergence. */
 export async function readUpdateConfigFileSnapshot(

@@ -162,7 +162,6 @@ extensions/deepseek/provider-policy-api.ts	2
 extensions/device-pair/index.ts	5
 extensions/diagnostics-otel/src/service-exporter.ts	1
 extensions/diagnostics-otel/src/service-logs.ts	8
-extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
 extensions/diffs/src/config.ts	2
 extensions/diffs/src/language-hints.ts	6
@@ -1031,7 +1030,6 @@ src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
 src/agents/apply-patch.ts	1
-src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	1
@@ -1244,10 +1242,8 @@ src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry.ts	1
-src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
 src/agents/subagents/swarm/swarm-output-schema.ts	1
-src/agents/subagents/swarm/swarm-scheduler.ts	1
 src/agents/system-prompt-report.ts	1
 src/agents/system-prompt.ts	1
 src/agents/thinking-block.ts	1
@@ -1285,7 +1281,6 @@ src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/mobile-ui-tool.ts	2
 src/agents/tools/nodes-tool.ts	1
 src/agents/tools/openclaw-delegate-tool.ts	1
-src/agents/tools/pdf-native-providers.ts	2
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	5
@@ -1417,13 +1412,6 @@ src/channels/turn/execution.ts	2
 src/channels/turn/history-window.ts	1
 src/channels/turn/lifecycle.ts	2
 src/channels/turn/run-channel-turn.ts	4
-src/templates/cron.ts	9
-src/templates/mcp.ts	1
-src/templates/openclaw-profile.ts	1
-src/templates/project-build.ts	4
-src/templates/project.ts	2
-src/templates/reader.ts	3
-src/templates/schema.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	2
 src/cli/capability-cli/embedding.ts	2
@@ -1434,7 +1422,6 @@ src/cli/capability-cli/video.ts	5
 src/cli/capability-cli/web.ts	3
 src/cli/channel-auth.ts	4
 src/cli/channels-cli.ts	5
-src/cli/templates-cli.runtime.ts	1
 src/cli/command-options.ts	1
 src/cli/completion-runtime.ts	2
 src/cli/config-cli-path.ts	4
@@ -1484,6 +1471,7 @@ src/cli/session-ref.ts	1
 src/cli/skills-cli.ts	2
 src/cli/startup-metadata.ts	1
 src/cli/subprocess-exit-code.ts	1
+src/cli/templates-cli.runtime.ts	1
 src/cli/test-runtime-capture.ts	1
 src/cli/update-cli.ts	2
 src/cli/update-cli/update-command-config.ts	5
@@ -1648,7 +1636,6 @@ src/cron/isolated-agent/job-fixtures.ts	3
 src/cron/isolated-agent/model-preflight.runtime.ts	1
 src/cron/isolated-agent/run-config.ts	1
 src/cron/isolated-agent/run-current-context.ts	1
-src/cron/isolated-agent/session-cleanup.ts	2
 src/cron/job-session-bindings.ts	1
 src/cron/normalize.ts	2
 src/cron/persisted-shape.ts	3
@@ -2069,7 +2056,6 @@ src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	1
 src/plugins/capability-provider-runtime.ts	8
-src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/clawhub.ts	3
 src/plugins/cli-gateway-nodes-runtime.ts	2
@@ -2098,7 +2084,7 @@ src/plugins/host-hook-state.ts	6
 src/plugins/install-managed-npm-state.ts	2
 src/plugins/install-npm-metadata.ts	1
 src/plugins/install-persistence.ts	1
-src/plugins/install-record-commit.ts	3
+src/plugins/install-record-commit.ts	2
 src/plugins/install-transaction.ts	3
 src/plugins/installed-plugin-index-install-owner.ts	2
 src/plugins/installed-plugin-index-policy.ts	1
@@ -2136,7 +2122,6 @@ src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/registry-registrars-host.ts	1
-src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-runtime-binding.ts	1
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1
@@ -2257,6 +2242,13 @@ src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
+src/templates/cron.ts	9
+src/templates/mcp.ts	1
+src/templates/openclaw-profile.ts	1
+src/templates/project-build.ts	4
+src/templates/project.ts	2
+src/templates/reader.ts	3
+src/templates/schema.ts	2
 src/trajectory/export.ts	8
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -560,12 +562,16 @@ describe("Gateway GitHub publication boundaries", () => {
     expect(commands).toEqual([]);
   });
 
-  it("publishes deferred session requests alongside an accepted turn claim", async () => {
-    const { placements, claim: claimTurn } = await cloudFixture();
+  it("captures deferred session requests alongside an accepted turn claim", async () => {
+    const { database, placements, claim: claimTurn } = await cloudFixture();
+    const workspace = await createRealPublicationWorkspace(undefined, REQUEST.sessionKey);
+    const sourceHead = await workspace.git("rev-parse", "HEAD");
+    const sourceIndex = await workspace.git("write-tree");
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
     const deferred = await coordinator.requestForSessionV2(
       cloudRequest("accepted-deferred-session"),
     );
+    const queued = await coordinator.requestForSessionV2(cloudRequest("second-deferred-session"));
     const claim = await claimTurn("run-accepted-deferred", "claim-accepted-deferred");
     const claimed = await coordinator.requestForClaimV2({
       claim,
@@ -575,10 +581,31 @@ describe("Gateway GitHub publication boundaries", () => {
     await coordinator.prepareClaimWorkspace(claim);
     await placements.acceptWorkspaceResult(claim);
 
-    await expect(coordinator.processClaim(claim)).resolves.toEqual([
-      expect.objectContaining({ requestId: claimed.requestId, status: "published" }),
-      expect.objectContaining({ requestId: deferred.requestId, status: "published" }),
-    ]);
+    for (const { requestId } of [deferred, queued, claimed]) {
+      const frozen = receipt(database, requestId)!;
+      expect(frozen).toMatchObject({
+        source_head_commit: sourceHead,
+        source_index_tree: sourceIndex,
+      });
+      expect(await workspace.git("show", `${frozen.workspace_tree}:artifact.txt`)).toBe("accepted");
+    }
+    await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "later edit\n");
+    await coordinator.prepareClaimWorkspace(claim);
+    await coordinator.deferClaimPreparationAsync(claim);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    await coordinator.resumeSessionRequests();
+    const publishedHead = await workspace.git("rev-parse", "HEAD");
+    for (const { requestId } of [deferred, queued, claimed]) {
+      expect(await coordinator.readAsync(requestId)).toMatchObject({
+        status: "published",
+        headCommit: publishedHead,
+      });
+    }
+    expect(await workspace.git("show", "HEAD:artifact.txt")).toBe("accepted");
+    expect(await fs.readFile(path.join(workspace.cwd, "artifact.txt"), "utf8")).toBe(
+      "later edit\n",
+    );
+    expect(workspace.effects).toEqual(["push", "pull_request"]);
   });
 
   it.each(["local", "worker"] as const)(

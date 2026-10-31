@@ -197,6 +197,7 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
   for (const tables of [
     ["schema_meta", "state_leases"],
     ["schema_meta", "state_leases", "agent_database_leases"],
+    ["schema_meta", "migration_runs"],
   ]) {
     add(
       `state-existing-${tables.at(-1)}`,

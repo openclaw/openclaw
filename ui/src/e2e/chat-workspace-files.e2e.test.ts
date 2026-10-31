@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { chatDelta } from "./chat-flow-fixtures.test-support.ts";
@@ -35,12 +35,16 @@ suite.define(() => {
                 type: "attachment",
                 attachment: {
                   kind: "document",
-                  label: "Cafe\u0301-checklist.txt",
+                  label: "Cafe\u0301-ΕΛΕΓΧΟΣ-checklist.txt",
                   mimeType: "text/plain",
                   url: "https://example.com/release-checklist.txt",
                 },
               },
-              { type: "image", url: "https://example.com/layout.png", alt: "Cafe\u0301.png" },
+              {
+                type: "image",
+                url: "https://example.com/layout.png",
+                alt: "Cafe\u0301-ΕΛΕΓΧΟΣ-layout.png",
+              },
             ],
           },
         ],
@@ -66,6 +70,7 @@ suite.define(() => {
           await page.getByRole("separator", { name: "Resize side panel" }).press("End");
         } else if (mobile) {
           await page.setViewportSize({ width: 390, height: 900 });
+          await openChatPanels(page, "mobile");
         }
         const selector = mobile
           ? '.chat-workspace-mobile__group[role="list"] .chat-workspace-mobile__row'
@@ -107,7 +112,11 @@ suite.define(() => {
         expect((await projectFile.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 48 : 32);
       }
       await page.getByRole("searchbox", { name: "Search files", exact: true }).fill("CAFÉ");
-      await page.getByText("Cafe\u0301-checklist", { exact: true }).waitFor();
+      await page.getByText("Cafe\u0301-ΕΛΕΓΧΟΣ-checklist", { exact: true }).waitFor();
+      for (const query of ["Σ", "σ", "ς"]) {
+        await page.getByRole("searchbox", { name: "Search files", exact: true }).fill(query);
+        await page.getByText("Cafe\u0301-ΕΛΕΓΧΟΣ-checklist", { exact: true }).waitFor();
+      }
     });
   });
 
@@ -354,6 +363,7 @@ suite.define(() => {
       await expect.poll(listRequests).toHaveLength(2);
       await waitForFile("AFTER_RUN.md");
       await page.setViewportSize({ height: 900, width: 640 });
+      await openChatPanels(page, "mobile");
       const workspaceRail = page.locator(".chat-workspace-mobile");
       await workspaceRail.waitFor();
       await expect

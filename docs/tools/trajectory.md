@@ -145,6 +145,9 @@ from appends. It selects bounded batches without holding the database writer
 and rechecks the selection before each deletion. Cleanup continues through
 bounded batches; concurrent changes defer a stale selection until a later
 append.
+During a sweep, committed appends mark their session for accounting. The next
+cleanup batch refreshes each changed session once before starting its write
+transaction, rather than summarizing its retained rows after every append.
 
 Runtime export reads the SQLite capture. Pre-July 2026 `.trajectory.jsonl` and
 `.trajectory-path.json` sidecars are no longer read or followed. Existing files

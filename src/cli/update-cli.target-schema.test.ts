@@ -414,7 +414,9 @@ describe("update-cli", () => {
 Failing check node-runtime (node-runtime-preflight); key engines.node: Update install root: ${await fs.realpath(root)}
 Failing check node-runtime (node-runtime-preflight); key engines.node: Update binary: ${path.join(root, "openclaw.mjs")}
 Failing check node-runtime (node-runtime-preflight); key engines.node: Gateway install root: unresolved
-Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
+Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}
+Updater Node ${process.versions.node} at ${process.execPath}.
+PATH Node: not found.`,
     );
     expect(cli.fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
   });

@@ -157,7 +157,6 @@
   "acp-binding-resolve-runtime",
   "lazy-runtime",
   "agent-runtime-test-contracts",
-  "channel-target-testing",
   "channel-test-helpers",
   "compiled-subprocess-testing",
   "plugin-test-api",

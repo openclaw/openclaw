@@ -5,7 +5,7 @@ import type {
   ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
 import {
-  evaluateOpenAICompatibleDecision,
+  executeOpenAIDecision,
   supportsOpenAIDecisionBatch,
 } from "openclaw/plugin-sdk/decisions-openai-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
@@ -20,37 +20,23 @@ import {
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
+import { grantsLuna } from "./decision-catalog.js";
 
-// Only this reviewed native protocol is implemented. Catalog strings cannot select
-// an arbitrary destination, model alias, or another upstream credential owner.
-function grantsLuna(rows: readonly unknown[]): boolean {
-  return rows.some(
-    (provider) =>
-      isRecord(provider) &&
-      provider.id === "openai" &&
-      provider.nativeBaseUrl === "/v1/native/openai" &&
-      Array.isArray(provider.routes) &&
-      provider.routes.some(
-        (route: unknown) =>
-          isRecord(route) &&
-          route.path === "/v1/decisions" &&
-          route.requestFormat === "openai.decisions" &&
-          Array.isArray(route.methods) &&
-          route.methods.includes("POST"),
-      ) &&
-      Array.isArray(provider.models) &&
-      provider.models.some(
-        (model: unknown) =>
-          isRecord(model) &&
-          model.id === "openai/gpt-6-luna" &&
-          model.upstream === "gpt-6-luna" &&
-          Array.isArray(model.capabilities) &&
-          model.capabilities.includes("llm.decisions"),
-      ),
-  );
-}
+type ClawRouterDecisionCatalogOutcome =
+  | { status: "ready"; root: string }
+  | Exclude<ProviderDecisionOutcomeV2, { status: "ok" }>;
+
+type ClawRouterDecisionCatalogExecution = Pick<
+  DecisionProviderContextV2,
+  "signal" | "deadlineMonotonicMs" | "isAdmissible"
+> & {
+  baseUrl: DecisionProviderContextV2["model"]["baseUrl"];
+  prepareRequest: (root: string) => {
+    requestConfig: ReturnType<typeof resolveProviderHttpRequestConfig>;
+    reflectsCredential: ReturnType<typeof createProviderCredentialMatcher>;
+  };
+};
 
 export async function evaluateClawRouterDecision(
   batch: DecisionBatchV2,
@@ -68,62 +54,94 @@ export async function evaluateClawRouterDecision(
   if (context.auth.mode !== "api-key" || !context.auth.apiKey) {
     return { status: "unavailable", reason: "credentials-unavailable" };
   }
-  const timeoutMs = context.deadlineMonotonicMs - performance.now();
+  const grant = await prepareClawRouterDecisionCatalog({
+    baseUrl: context.model.baseUrl,
+    signal: context.signal,
+    deadlineMonotonicMs: context.deadlineMonotonicMs,
+    isAdmissible: context.isAdmissible,
+    prepareRequest: (root) => {
+      const preparedRequest = getModelProviderRequestTransport(context.model);
+      const requestConfig = resolveProviderHttpRequestConfig({
+        provider: "clawrouter",
+        capability: "other",
+        transport: "http",
+        baseUrl: root,
+        defaultBaseUrl: root,
+        headers: context.model.headers,
+        defaultHeaders: {
+          Accept: "application/json",
+          ...(!preparedRequest?.auth || preparedRequest.auth.mode === "provider-default"
+            ? { Authorization: `Bearer ${context.auth.apiKey}` }
+            : {}),
+        },
+        request: preparedRequest
+          ? {
+              proxy: preparedRequest.proxy,
+              tls: preparedRequest.tls,
+              allowPrivateNetwork: preparedRequest.allowPrivateNetwork,
+            }
+          : undefined,
+      });
+      const reflectsCredential = createProviderCredentialMatcher({
+        headers: requestConfig.headers,
+        request: preparedRequest,
+        configuredHeaderNames: Object.keys(context.model.headers ?? {}),
+        defaultAuthHeader: "Authorization",
+        defaultAuthPrefix: "Bearer ",
+      });
+      return { requestConfig, reflectsCredential };
+    },
+  });
+  if (grant.status !== "ready") {
+    return grant;
+  }
+  // The shared executor owns inference error classification, including terminal
+  // authority exceptions. The catalog catch must not turn those into availability.
+  return executeOpenAIDecision(batch, {
+    provider: "clawrouter",
+    baseUrl: grant.root + "/v1/native/openai/v1",
+    modelId: "gpt-6-luna",
+    headers: context.model.headers,
+    auth: context.auth,
+    request: getModelProviderRequestTransport(context.model),
+    signal: context.signal,
+    deadlineMonotonicMs: context.deadlineMonotonicMs,
+    isAdmissible: context.isAdmissible,
+    reasoning: context.reasoning,
+  });
+}
+
+async function prepareClawRouterDecisionCatalog(
+  execution: ClawRouterDecisionCatalogExecution,
+): Promise<ClawRouterDecisionCatalogOutcome> {
+  const timeoutMs = execution.deadlineMonotonicMs - performance.now();
   if (timeoutMs <= 0) {
     return { status: "unavailable", reason: "transport" };
   }
   const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
-    signal: context.signal,
+    signal: execution.signal,
     timeoutMs,
     operation: "ClawRouter decision catalog",
   });
-  const signal = timeoutSignal ?? context.signal;
+  const signal = timeoutSignal ?? execution.signal;
   let admissionError: { error: unknown } | undefined;
   const assertActive = () => {
     signal.throwIfAborted();
     let admitted: boolean;
     try {
-      admitted = context.isAdmissible();
+      admitted = execution.isAdmissible();
     } catch (error) {
       admissionError = { error };
       throw error;
     }
-    if (!admitted || performance.now() >= context.deadlineMonotonicMs) {
+    if (!admitted || performance.now() >= execution.deadlineMonotonicMs) {
       throw new Error("ClawRouter decision is no longer admitted.");
     }
   };
-  const root = normalizeClawRouterRootUrl(context.model.baseUrl);
+  const root = normalizeClawRouterRootUrl(execution.baseUrl);
   try {
-    const preparedRequest = getModelProviderRequestTransport(context.model);
-    const requestConfig = resolveProviderHttpRequestConfig({
-      provider: "clawrouter",
-      capability: "other",
-      transport: "http",
-      baseUrl: root,
-      defaultBaseUrl: root,
-      headers: context.model.headers,
-      defaultHeaders: {
-        Accept: "application/json",
-        ...(!preparedRequest?.auth || preparedRequest.auth.mode === "provider-default"
-          ? { Authorization: `Bearer ${context.auth.apiKey}` }
-          : {}),
-      },
-      request: preparedRequest
-        ? {
-            proxy: preparedRequest.proxy,
-            tls: preparedRequest.tls,
-            allowPrivateNetwork: preparedRequest.allowPrivateNetwork,
-          }
-        : undefined,
-    });
+    const { requestConfig, reflectsCredential } = execution.prepareRequest(root);
     const endpoint = root + "/v1/catalog";
-    const reflectsCredential = createProviderCredentialMatcher({
-      headers: requestConfig.headers,
-      request: preparedRequest,
-      configuredHeaderNames: Object.keys(context.model.headers ?? {}),
-      defaultAuthHeader: "Authorization",
-      defaultAuthPrefix: "Bearer ",
-    });
     // Eligibility is checked with this call's effective key and transport. Do not
     // share grants or in-flight requests across agent authorities or endpoints.
     const request = {
@@ -179,8 +197,9 @@ export async function evaluateClawRouterDecision(
     if (!grantsLuna(rows)) {
       return { status: "unavailable", reason: "unsupported-input" };
     }
+    return { status: "ready", root };
   } catch {
-    context.signal.throwIfAborted();
+    execution.signal.throwIfAborted();
     if (admissionError) {
       throw admissionError.error;
     }
@@ -188,11 +207,4 @@ export async function evaluateClawRouterDecision(
   } finally {
     cleanup();
   }
-  // The shared executor owns inference error classification, including terminal
-  // authority exceptions. The catalog catch must not turn those into availability.
-  return evaluateOpenAICompatibleDecision(batch, context, {
-    provider: "clawrouter",
-    baseUrl: root + "/v1/native/openai/v1",
-    modelId: "gpt-6-luna",
-  });
 }

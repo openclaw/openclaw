@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
-import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,6 +21,7 @@ const EXPERIENCE_REVIEW_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 const EXPERIENCE_REVIEW_MAX_BACKOFF_MS = 60 * 60_000;
 const EXPERIENCE_REVIEW_MAX_PENDING = 32;
 const EXPERIENCE_REVIEW_MAX_COUNTERS = 1024;
+const EXPERIENCE_REVIEW_MAX_SUPPRESSED_RUNS = 1024;
 const EXPERIENCE_REVIEW_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
 const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set(["acp", "cron", "hook", "subagent"]);
 
@@ -69,7 +69,7 @@ export type ExperienceReviewCandidate = {
 
 type ExperienceReviewSchedulerDeps = {
   isSystemActive: () => boolean | Promise<boolean>;
-  runReview: (candidate: ExperienceReviewCandidate) => Promise<void>;
+  runReview: (candidate: ExperienceReviewCandidate, signal: AbortSignal) => Promise<void>;
 };
 
 type PendingExperienceReview = {
@@ -133,7 +133,13 @@ function resolveTurnModelIterations(params: SkillExperienceReviewParams): number
 export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSchedulerDeps) {
   const iterationsBySession = new Map<string, number>();
   const pendingBySession = new Map<string, PendingExperienceReview>();
+  // Explicit stop happens before the stopped turn aborts, and its own agent_end
+  // still arrives as an aborted completion. Suppress that exact run once instead
+  // of keeping a session-level block that would starve later turns.
+  const stoppedRunIds = new Map<string, true>();
   let reviewInFlight = false;
+  let inFlightKey: string | undefined;
+  let inFlightController: AbortController | undefined;
   let cooldownUntil = 0;
   let rateLimitBackoffMs = 0;
   const deferForRateLimit = () => {
@@ -160,6 +166,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       pending.timer = undefined;
+      // The catch below classifies the settled error after this callback's own
+      // finally has run, so retain the controller's abort state here.
+      let reviewSignal: AbortSignal | undefined;
       void (async () => {
         const active = await deps.isSystemActive();
         if (pendingBySession.get(key) !== pending) {
@@ -171,9 +180,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           return;
         }
         reviewInFlight = true;
+        const controller = new AbortController();
+        reviewSignal = controller.signal;
+        inFlightKey = key;
+        inFlightController = controller;
         try {
           pendingBySession.delete(key);
-          await deps.runReview(pending.candidate);
+          await deps.runReview(pending.candidate, controller.signal);
           rateLimitBackoffMs = 0;
         } catch (error) {
           if (resolveFailoverReasonFromError(error) === "rate_limit") {
@@ -182,12 +195,19 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           throw error;
         } finally {
           reviewInFlight = false;
+          if (inFlightController === controller) {
+            inFlightKey = undefined;
+            inFlightController = undefined;
+          }
         }
       })().catch((error: unknown) => {
-        if (
+        const expectedCancellation =
           isExpectedRunCancellation(error) ||
-          (error instanceof Error && error.name === "AbortError")
-        ) {
+          (error instanceof Error && error.name === "AbortError");
+        // An aborted review can still fail its independent cleanup. Keep the existing
+        // classifier protection: that aggregate is a real failure, never a cancellation.
+        const cleanupFailure = error instanceof AggregateError && !expectedCancellation;
+        if (!cleanupFailure && (reviewSignal?.aborted || expectedCancellation)) {
           log.debug(`skill experience review cancelled: ${formatErrorMessage(error)}`);
         } else {
           log.warn(`skill experience review failed: ${formatErrorMessage(error)}`);
@@ -213,6 +233,43 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
     iterationsBySession.delete(key);
   };
 
+  /**
+   * Suppresses one explicit stop's run ids until their own aborted agent_end arrives.
+   * Entries are consumed by that completion, so a later turn for the same session
+   * schedules normally; the bounded map only guards against a completion that never comes.
+   */
+  const suppressRuns = (runIds: Iterable<string>): void => {
+    for (const runId of runIds) {
+      const normalized = runId.trim();
+      if (normalized) {
+        stoppedRunIds.set(normalized, true);
+      }
+    }
+    pruneMapToMaxSize(stoppedRunIds, EXPERIENCE_REVIEW_MAX_SUPPRESSED_RUNS);
+  };
+
+  const consumeSuppressedRun = (runId: string | undefined): boolean => {
+    const normalized = runId?.trim();
+    if (!normalized || !stoppedRunIds.delete(normalized)) {
+      return false;
+    }
+    return true;
+  };
+
+  /**
+   * Drops one session's queued review and aborts its in-flight review after an
+   * explicit stop. Counters reset so a later turn can schedule fresh learning.
+   */
+  const cancelSession = (params: { agentId: string; sessionKey: string }): void => {
+    const key = JSON.stringify([params.agentId, params.sessionKey]);
+    cancel(key);
+    if (inFlightKey === key) {
+      inFlightController?.abort(
+        new DOMException("Skill experience review stopped by the user", "AbortError"),
+      );
+    }
+  };
+
   return {
     schedule(params: SkillExperienceReviewParams): void {
       const sessionKey = params.ctx.sessionKey?.trim();
@@ -225,6 +282,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
       // Unqualified keys such as global still belong to one foreground agent.
       const key = JSON.stringify([params.ctx.foregroundPromptContext.agentId, sessionKey]);
+      // Stop suppression precedes the aborted turn's own agent_end. Drop anything
+      // this session queued, but never arm the stopped run or a later session flag.
+      if (consumeSuppressedRun(params.ctx.runId)) {
+        cancel(key);
+        log.debug(`experience review skipped: reason=stopped-run session=${sessionKey}`);
+        return;
+      }
       const existing = pendingBySession.get(key);
       // Quiet time follows all later foreground work in the session.
       if (existing) {
@@ -260,7 +324,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         pruneMapToMaxSize(iterationsBySession, EXPERIENCE_REVIEW_MAX_COUNTERS);
         return;
       }
-      const workspaceDir = getCanonicalSkillWorkspace() ?? params.ctx.workspaceDir?.trim();
+      const workspaceDir = params.ctx.workspaceDir?.trim();
       const modelProviderId = params.ctx.modelProviderId?.trim();
       const modelId = params.ctx.modelId?.trim();
       const { source } = params;
@@ -296,5 +360,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       pendingBySession.set(key, pending);
       arm(key, pending, EXPERIENCE_REVIEW_IDLE_MS);
     },
+    cancelSession,
+    suppressRuns,
   };
 }

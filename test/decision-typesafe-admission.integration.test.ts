@@ -10,7 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { prepareDecisionProviderReload } from "../src/decisions/runtime.js";
+import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
 import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { runPluginRegisterSyncInRegistry } from "../src/plugins/loader-module-runtime.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";

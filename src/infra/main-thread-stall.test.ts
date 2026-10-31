@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createMainThreadStallMonitor,
@@ -8,6 +10,7 @@ import {
 } from "./main-thread-stall.js";
 
 const monitors: ReturnType<typeof createMainThreadStallMonitor>[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   for (const monitor of monitors.splice(0)) {
     monitor.stop();
@@ -25,6 +28,37 @@ function fixture() {
 }
 
 describe("main-thread stall attribution", () => {
+  // Bun has no V8 Promise continuation hooks.
+  it.skipIf(Boolean(process.versions.bun))(
+    "names a resumed fs-safe write without duplicating nested scopes",
+    async () => {
+      const scoped = await root(tempDirs.make("openclaw-stall-"));
+      const { monitor, elapse } = fixture();
+      monitor.setEventLoopSampling(true);
+      let blocked = false;
+      const writeStalls = await runWithMainThreadTask("schema-store:write", async () => {
+        await Promise.resolve();
+        await scoped.write("synthetic.json", "{}", {
+          assertBeforeMutation: () => {
+            expect(getMainThreadTaskName()).toBe("schema-store:write");
+            if (!blocked) {
+              blocked = true;
+              elapse(1_200);
+            }
+          },
+        });
+        const observed = monitor.drain().stalls;
+        runWithMainThreadTask("schema-store:publish", () => elapse(300));
+        return observed;
+      });
+      expect(getMainThreadTaskName()).toBeUndefined();
+      expect([...writeStalls, ...monitor.drain().stalls]).toMatchObject([
+        { task: "schema-store:write", elapsedMs: 1_200 },
+        { task: "schema-store:publish", elapsedMs: 300 },
+      ]);
+    },
+  );
+
   it("copies the task context only on label changes and preserves nested timing segments", () => {
     const { monitor, elapse } = fixture();
     const enter = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");

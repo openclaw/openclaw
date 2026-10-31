@@ -145,10 +145,7 @@ export async function ensureSkillSnapshot(params: {
       const result = await resolveReusableWorkspaceSkillSnapshot({
         assertCurrent,
         workspaceDir,
-        ...resolveSessionSkillExecutionWorkspace(
-          nextEntry?.worktree?.canonicalWorkspaceDir,
-          params.executionWorkspaceDir,
-        ),
+        ...resolveSessionSkillExecutionWorkspace(nextEntry, params.executionWorkspaceDir),
         config: cfg,
         agentId,
         skillFilter,

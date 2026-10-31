@@ -1,9 +1,12 @@
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
+import type { AttachInput } from "./attachment-contract.js";
+import { attachChunk } from "./attachments.js";
 import { SourceCheckInput, type SourceIdentity } from "./ingestion-contract.js";
 import { releaseSupersessionGuards } from "./lifecycle.js";
 import type { Receipt } from "./mutation-contract.js";
@@ -12,15 +15,43 @@ import { observeWithdrawals } from "./retrieval.js";
 import { appendActivity } from "./session-activity.js";
 import { StorageBase } from "./storage-base.js";
 import type { StorageTables } from "./storage-tables.js";
-import { canonical, scopeKey, type Plan } from "./storage-types.js";
+import { blocked, scopeKey, type Plan } from "./storage-types.js";
 import { checkpointKey } from "./store-manifest.js";
 import { textWindow } from "./text-window.js";
 import { digest } from "./vault.js";
 /** Journal reads and recovery: resume, history, revisions, mutation receipts and source checks. */
 export class StorageJournal extends StorageBase {
+  async attach(input: AttachInput, access: VaultAccess) {
+    access.assertCurrent();
+    if (!this.config.writesEnabled) {
+      throw new Error("Knowledge writes are disabled.");
+    }
+    if (input.expectedVaultId && input.expectedVaultId !== this.config.vaultId) {
+      throw new Error("Connected vault changed; do not upload this file here.");
+    }
+    await this.initialize(access);
+    this.assertReadable();
+    return this.store.withDatabase((db) => {
+      const before = this.identity(db, new PublicationFiles(this.config.root));
+      return attachChunk(
+        db,
+        this.config.root,
+        scopeKey(access.scope),
+        input,
+        () => access.assertCurrent(),
+        this.hook,
+        () => {
+          this.assertCheckpoint(db, before);
+          if (db.prepare("SELECT 1 FROM mutations WHERE state!='published' LIMIT 1").get()) {
+            throw blocked();
+          }
+        },
+      );
+    });
+  }
   resume(access: VaultAccess, requestId: string): Receipt {
     access.assertCurrent();
-    const published = this.transaction("knowledge.resume", (db) => {
+    const published = this.store.withDatabase((db) => {
       const row = this.row(db, scopeKey(access.scope), requestId);
       if (!row) {
         throw new Error("Mutation unavailable in this scope.");
@@ -51,16 +82,7 @@ export class StorageJournal extends StorageBase {
         access.assertCurrent();
         return receipt;
       }
-      const checkpoint = JSON.parse(
-        String(
-          db
-            .prepare("SELECT manifest FROM identities WHERE agent_key=?")
-            .get(checkpointKey(this.config.vaultId))!.manifest,
-        ),
-      );
-      if (canonical(checkpoint) !== canonical(plan.before)) {
-        throw new Error("Stale publisher identity");
-      }
+      this.assertCheckpoint(db, plan.before);
       try {
         // A reused immutable source is not a file change, but is still fenced on replay.
         for (const [p, raw] of Object.entries(plan.descriptors ?? {})) {
@@ -90,36 +112,9 @@ export class StorageJournal extends StorageBase {
             throw new Error("conflict");
           }
         }
-        access.assertCurrent();
-        db.prepare("UPDATE identities SET manifest=? WHERE agent_key=?").run(
-          JSON.stringify(plan.after),
-          checkpointKey(this.config.vaultId),
-        );
         receipt.state = "published";
         receipt.message =
           "Published and available to exact reads; keyword indexing is pending until the next search reconciles this scope.";
-        const records = plan.records ?? [plan.record];
-        observeWithdrawals(db, records, this.retrievalBinding(access));
-        releaseSupersessionGuards(db, plan.restored ?? [], this.retrievalBinding(access));
-        for (const record of records) {
-          this.recordObservation(db, plan.scope, record, plan.actor, plan.agentId);
-        }
-        if (plan.activity && plan.agentId) {
-          appendActivity(db, plan.scope, plan.agentId, plan.activity, "write", records);
-        }
-        const gitFiles = new Map(
-          plan.changes.filter((c) => c.path !== "vault.json").map((c) => [c.path, c.after]),
-        );
-        for (const [p, raw] of Object.entries(plan.descriptors ?? {})) {
-          gitFiles.set(`${plan.scope}/${p}`, raw);
-        }
-        this.enqueueGit(
-          db,
-          plan.scope,
-          [...gitFiles].map(([path, raw]) => ({ path, raw })),
-          plan.actor,
-          this.publicationToken(plan.scope, requestId),
-        );
         receipt.git = { state: "pending", message: "Published; local Git checkpoint pending." };
       } catch (e) {
         // SAFETY: publication failures are Error instances.
@@ -131,14 +126,64 @@ export class StorageJournal extends StorageBase {
           "Concurrent filesystem change preserved. Publication is blocked; retained before/after material requires recovery review. No automatic overwrite or rollback.";
       }
       receipt.at = new Date().toISOString();
-      db.prepare("UPDATE mutations SET state=?,receipt=? WHERE scope=? AND request=?").run(
-        receipt.state,
-        JSON.stringify(receipt),
-        row.scope,
-        row.request,
+      const gitFiles = new Map(
+        plan.changes.filter((c) => c.path !== "vault.json").map((c) => [c.path, c.after]),
       );
-      return receipt;
+      for (const [p, raw] of Object.entries(plan.descriptors ?? {})) {
+        gitFiles.set(`${plan.scope}/${p}`, raw);
+      }
+      const after = JSON.stringify(plan.after),
+        serializedReceipt = JSON.stringify(receipt);
+      const gitChanges = [...gitFiles].map(([path, raw]) => ({ path, raw }));
+      this.hook("before-settlement");
+      access.assertCurrent();
+      // The accepted intent remains durable while files are published. The worker
+      // serializes publication; only receipt settlement needs SQLite's write lock.
+      return runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          const current = db
+            .prepare("SELECT state,receipt FROM mutations WHERE scope=? AND request=?")
+            .get(row.scope, row.request)!;
+          if (current.state !== "accepted") {
+            // SAFETY: only this owner writes serialized Receipt rows.
+            return JSON.parse(String(current.receipt)) as Receipt;
+          }
+          this.assertCheckpoint(db, plan.before);
+          if (receipt.state === "published") {
+            db.prepare("UPDATE identities SET manifest=? WHERE agent_key=?").run(
+              after,
+              checkpointKey(this.config.vaultId),
+            );
+            const records = plan.records ?? [plan.record];
+            observeWithdrawals(db, records, this.retrievalBinding(access));
+            releaseSupersessionGuards(db, plan.restored ?? [], this.retrievalBinding(access));
+            for (const record of records) {
+              this.recordObservation(db, plan.scope, record, plan.actor, plan.agentId);
+            }
+            if (plan.activity && plan.agentId) {
+              appendActivity(db, plan.scope, plan.agentId, plan.activity, "write", records);
+            }
+            this.enqueueGit(
+              db,
+              plan.scope,
+              gitChanges,
+              plan.actor,
+              this.publicationToken(plan.scope, requestId),
+            );
+          }
+          db.prepare("UPDATE mutations SET state=?,receipt=? WHERE scope=? AND request=?").run(
+            receipt.state,
+            serializedReceipt,
+            row.scope,
+            row.request,
+          );
+          return receipt;
+        },
+        { operationLabel: "knowledge.resume" },
+      );
     });
+    this.hook("after-settlement");
     if (published.state === "published") {
       this.flushGit(access);
     }

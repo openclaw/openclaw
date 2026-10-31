@@ -13,6 +13,7 @@ import {
   resolveExtensionTestPlan as resolvePlan,
   splitExtensionTestJobTargets as splitTargets,
 } from "../../scripts/lib/extension-test-plan.mts";
+import { createGatewayServerTestTargetChunks } from "../../scripts/lib/gateway-server-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
   buildFullSuiteVitestRunPlans,
@@ -24,6 +25,29 @@ import { listVitestConfigTestFiles } from "../vitest-projects-config.test-suppor
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it("keeps Gateway and plugin file bounds balanced at the owner boundary", () => {
+  const cwd = tempDirs.make("balanced-test-targets-");
+  const gateway = Array.from(
+    { length: 17 },
+    (_, index) => `src/gateway/server.balance-${String(index).padStart(2, "0")}.test.ts`,
+  );
+  gateway.forEach((file) => writeFixture(cwd, file));
+  expect(createGatewayServerTestTargetChunks(cwd)).toEqual([gateway.slice(0, 9), gateway.slice(9)]);
+  const matrix = Array.from(
+    { length: 41 },
+    (_, index) => `extensions/matrix/src/balance-${String(index).padStart(2, "0")}.test.ts`,
+  );
+  const config = "test/vitest/vitest.extension-matrix.config.ts";
+  expect(
+    extensionTestPlan.splitExtensionTestProcessTargets(config, [
+      ...matrix.toReversed(),
+      matrix[0]!,
+    ]),
+  ).toEqual([matrix.slice(0, 21), matrix.slice(21)]);
+  expect(extensionTestPlan.splitExtensionTestProcessTargets(config, [])).toEqual([]);
+  expect(extensionTestPlan.splitExtensionTestProcessTargets("unbounded", [])).toEqual([[]]);
+});
+
 const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
 const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 const telegramFile = (name: string) => `extensions/telegram/src/${name}.test.ts`;

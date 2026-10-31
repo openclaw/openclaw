@@ -342,8 +342,14 @@ the DSN itself in `openclaw.json`:
 Env, file, and exec [SecretRefs](/gateway/secrets/secretref-contract) are qualified.
 A store-backed SecretRef cannot bootstrap the database that holds that secret.
 The host resolves the connection before passing it to workers. Restart after
-changing the connection, prefix, or engine map; these are fixed for the process.
-An all-SQLite configuration does not resolve an unused PostgreSQL connection.
+changing the connection, its environment variable source, prefix, or engine map;
+these are fixed for the process. An all-SQLite configuration does not resolve an
+unused PostgreSQL connection.
+
+When the connection uses an env SecretRef or a whole-value `${NAME}` substitution,
+the Gateway withholds that environment variable from inherited host exec and
+sandbox environments, including custom variable names. Explicit command overrides
+and operator-configured sandbox environment values remain available.
 
 Offline model credential commands, including `models auth paste-api-key`, use the
 configured engine before the Gateway starts. Supply the same DSN SecretRef to
@@ -1015,6 +1021,11 @@ Memory transcript visibility retains the same 200-candidate ACL postfilter as
 SQLite; it does not promise complete recall beyond that candidate window. The
 separate transcript search API applies its agent/session/role filters before its
 result cap. See [search modes and limits](/reference/database-engines#search-on-postgresql).
+
+Transcript search keeps its agent prefix literal in the prepared query so
+PostgreSQL retains that selectivity estimate when it chooses a generic plan.
+Other query inputs stay parameterized; server-wide plan policy and search
+results are unchanged.
 
 Without pgvector, explicitly select keyword-only memory before opening its store:
 

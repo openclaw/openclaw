@@ -4,6 +4,10 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import {
+  freezeCatalogDirectoryClocks,
+  watchWithControlledEvents,
+} from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
   measureCatalogLists,
@@ -182,6 +186,8 @@ describe("resident Codex catalog", () => {
   });
 
   it("reconciles a new rollout with only bounded reads of that file", async () => {
+    const { notifyRename } = watchWithControlledEvents("linux");
+    freezeCatalogDirectoryClocks();
     const root = localRoot();
     const existing = idleThread({ id: "existing", source: "cli", originator: "codex_cli_rs" });
     existing.path = await writeCatalogRollout(root, existing);
@@ -189,7 +195,7 @@ describe("resident Codex catalog", () => {
     const index = await initializedIndex("currency", readNative, root);
     await vi.advanceTimersByTimeAsync(0);
     await index.reconcile();
-    const stat = vi.spyOn(fs, "lstat");
+    const stat = vi.spyOn(fs, "lstat").mockClear();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(stat).not.toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledOnce();
@@ -197,6 +203,8 @@ describe("resident Codex catalog", () => {
       root,
       idleThread({ id: "new-thread", preview: "New request" }),
     );
+    // Filesystem completion does not acknowledge the scanner's watcher delivery.
+    notifyRename(added);
     const open = vi.spyOn(fs, "open");
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
     await index.reconcile();

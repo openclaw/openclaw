@@ -200,6 +200,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([12, 100])("does not rescan %s unchanged accounts on status publications", async (size) => {
+  const accounts = Array.from({ length: size }, (_, index) => ({
+    ...personal,
+    provider: `provider-${index}`,
+    authProfileId: `provider-${index}:personal`,
+  }));
+  const h = await mount(undefined, { accounts });
+  const find = vi.spyOn(Array.prototype, "find");
+  const some = vi.spyOn(Array.prototype, "some");
+  for (let index = 0; index < 5; index += 1) {
+    h.emit({});
+    flush();
+  }
+  const scanned = [...find.mock.contexts, ...some.mock.contexts].filter(
+    (rows) => Array.isArray(rows) && rows.length === size,
+  );
+  find.mockRestore();
+  some.mockRestore();
+  expect(scanned).toHaveLength(0);
+  expect(h.calls("users.listModelAccounts")).toHaveLength(1);
+  h.showAccounts(accounts.with(0, { ...accounts[0]!, label: "Renamed" }));
+  h.button(auth("accounts-refresh")).click();
+  await waitForSolid(() =>
+    expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain("Renamed"),
+  );
+});
+
 it("refreshes account defaults and appends later pages without losing earlier choices", async () => {
   const updated = { ...work, selected: true };
   const first = { ...personal, selected: false };
@@ -220,15 +247,21 @@ it("refreshes account defaults and appends later pages without losing earlier ch
   expect(h.text()).toContain(later.authProfileId);
   expect(h.query(auth("accounts-more"))).toBeNull();
   h.expectCall("users.listModelAccounts", { cursor: "page-2" });
+  h.showAccounts([first, { ...later, label: "Later workspace" }]);
+  h.button(auth("accounts-refresh")).click();
+  await waitForSolid(() => expect(h.text()).toContain("Later workspace"));
+  expect(h.text()).not.toContain(first.authProfileId);
+  expect(h.text()).not.toContain(later.authProfileId);
   h.unmount();
   h.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-  expect(h.request).toHaveBeenCalledTimes(3);
+  expect(h.request).toHaveBeenCalledTimes(4);
 });
 
 it.each(["select", "link"] as const)(
   "sets and clears an account default through %s",
   async (action) => {
     const saved = action === "select" ? [personal, work] : [work];
+    const unlinkReply = createDeferred<UsersListAuthLinksResult>();
     const method = `users.${action === "select" ? "selectModelAccount" : "linkAuthProfile"}`;
     const h = await mount(
       async (called) => {
@@ -236,7 +269,7 @@ it.each(["select", "link"] as const)(
         const unlink = called === "users.unlinkAuthProfile";
         const accounts = saved.map((entry) => ({ ...entry, selected: !unlink && entry === work }));
         h.showAccounts(accounts);
-        return { links: inventory(accounts).links };
+        return unlink ? unlinkReply.promise : { links: inventory(accounts).links };
       },
       {
         accounts: action === "select" ? saved : [],
@@ -266,8 +299,10 @@ it.each(["select", "link"] as const)(
     expect(h.text()).toContain(copy("notices.selected"));
     h.button(auth("link-unlink")).click();
     await waitForSolid(() => expect(h.queryAll(auth("account-select"))).toHaveLength(saved.length));
-    expect(h.text()).toContain(copy("notices.cleared"));
     expect(h.query(auth("link-unlink"))).toBeNull();
+    expect(h.query(ui.host)?.getAttribute("aria-busy")).toBe("true");
+    unlinkReply.resolve({ links: [] });
+    await waitForSolid(() => expect(h.text()).toContain(copy("notices.cleared")));
     h.expectCall("users.unlinkAuthProfile", { provider: "openai" });
     expect(h.request.mock.calls.some(([called]) => called.startsWith("users.authConnect."))).toBe(
       false,

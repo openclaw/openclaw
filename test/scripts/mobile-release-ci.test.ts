@@ -279,11 +279,18 @@ describe("mobile release CI tools", () => {
   describe.each(releasePlatforms)("$platform release artifact recovery", ({ workflow }) => {
     it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
       const steps = releaseSteps(workflow);
-      expect(steps[0]).toMatchObject({
+      const checkoutIndex = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+      expect(steps[checkoutIndex]).toMatchObject({
         uses: expect.stringMatching(/^actions\/checkout@/u),
         with: { ref: "${{ github.sha }}", "fetch-depth": 1 },
       });
-      const verification = expectDefined(steps[1]?.run, "Release checkout verification");
+      const verification = expectDefined(
+        steps[checkoutIndex + 1]?.run,
+        "Release checkout verification",
+      );
+      expect(steps.findIndex((step) => JSON.stringify(step).includes("secrets."))).toBeGreaterThan(
+        checkoutIndex + 1,
+      );
       const root = tempRoots.make("openclaw-release-dispatch-");
       initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
       writeFile(root, "README.md", "Synthetic release source\n");

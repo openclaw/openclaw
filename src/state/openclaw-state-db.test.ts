@@ -1290,7 +1290,7 @@ describe("openclaw state database", () => {
     insertLegacyAttestation.run("wk-orphan", 3_000, 3_100);
 
     legacy.exec(`
-          DROP TABLE workspace_path_aliases; DROP INDEX idx_worker_session_placements_environment;
+          DROP TABLE workspace_path_aliases;
           PRAGMA user_version = 1;
           UPDATE schema_meta SET schema_version = 1, app_version = '2026.6.35'
            WHERE meta_key = 'primary';

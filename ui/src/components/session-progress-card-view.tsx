@@ -2,11 +2,11 @@ import { createMemo, onSettled, Show } from "solid-js";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import { promoteFirstProgressBar } from "./session-progress-card.ts";
+import { removeProgressBars } from "./session-progress-card.ts";
 
 export function ProgressCardMarkdown(props: {
   markdown?: string;
-  promoteProgress?: boolean;
+  omitProgress?: boolean;
   registerControls?: (read: () => HTMLElement[]) => () => void;
 }) {
   const sanitized = createMemo(() => {
@@ -14,7 +14,7 @@ export function ProgressCardMarkdown(props: {
     const html = props.markdown
       ? toSanitizedMarkdownHtml(props.markdown, { progressBars: true })
       : "";
-    return props.promoteProgress ? promoteFirstProgressBar(html) : html;
+    return props.omitProgress ? removeProgressBars(html) : html;
   });
   const container = document.createElement("div");
   container.className = "session-progress-card__markdown sidebar-markdown";

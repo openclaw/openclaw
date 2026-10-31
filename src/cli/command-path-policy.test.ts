@@ -144,10 +144,20 @@ describe("command-path-policy", () => {
     expectProxy(["tools", "effective"], "bypass");
   });
 
+  it("leaves the gateway auth-token config read to the command", () => {
+    expectResolvedPolicy("gateway auth-token", {
+      ...skip,
+      loadPlugins: "never",
+      // Exec SecretRefs resolve through the CLI PATH.
+      ensureCliPath: true,
+    });
+  });
+
   it("resolves mixed network proxy policies from argv-sensitive catalog entries", () => {
     expectProxy(["gateway"], "default");
     expectProxy(["gateway", "run"], "default");
     expectProxy(["gateway", "health"], "bypass");
+    expectProxy(["gateway", "auth-token", "--show"], "bypass");
     expectProxy(["node", "run"], "default");
     expectProxy(["node", "status"], "bypass");
     expectProxy(["agent", "--local"], "default");

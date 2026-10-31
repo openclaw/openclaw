@@ -1,4 +1,4 @@
-import { onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -409,7 +409,7 @@ export function createSessionsPage(
     if (result !== appliedListResult) {
       appliedListResult = result;
       state.result = filterSessionRows(result, { archivedFilter: state.statusFilter });
-      void application.agentIdentity.ensure(sessionAgentIds(state.result));
+      void application.agentIdentity.ensure(sessionAgentIds(state.result.sessions));
     }
     if (!snapshot.loading && !snapshot.error && state.result && state.selectedSessions.size > 0) {
       state.selectedSessions = reconcileSelectedSessions(
@@ -547,10 +547,7 @@ export function createSessionsPage(
         hello: application.gateway.snapshot.hello,
       }),
       transcriptSearchAvailable: application.gateway.snapshot.phase === "connected",
-      agentIdentityById: sessionAgentIdentityById(
-        state.result,
-        (agentId) => application.agentIdentity.get(agentId) ?? undefined,
-      ),
+      agentIdentityById: agentIdentityById(),
       personGroupingAvailable,
       // Keep the stored Person preference while the owner roster is unavailable.
       groupBy:
@@ -690,11 +687,17 @@ export function createSessionsPage(
     archive: archiveActions.archive,
   };
 
-  const presentationSources = [
-    application.agentIdentity,
-    application.navigation,
-    application.plugins,
-  ].map((owner) => projectOwner(owner, (source) => source));
+  const identities = projectOwner(application.agentIdentity, (source) => source);
+  const identityRows = createMemo(() => observation.read().result?.sessions ?? []);
+  const agentIdentityById = createMemo(() =>
+    sessionAgentIdentityById(
+      identityRows(),
+      (agentId) => identities.read().get(agentId) ?? undefined,
+    ),
+  );
+  const presentationSources = [application.navigation, application.plugins].map((owner) =>
+    projectOwner(owner, (source) => source),
+  );
   const revision = () =>
     presentationSources.reduce((sum, source) => sum + source.revision(), observation.revision());
   onSettled(() => {

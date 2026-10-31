@@ -655,7 +655,15 @@ This includes managed worktree preparation, base refresh and hydration, Git
 status and diff RPCs, and sandbox synchronization helpers. Executable names,
 arguments, and cleanup ownership do not select the cgroup. Descendants inherit
 their command's placement.
-Its CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
+
+On Node, the Gateway's existing spawn broker launches supported child commands
+and PTY helpers without forking the Gateway's large address space. Durable-process
+observation and cron command watchers retain that broker across detached timers
+and queues. This changes the launch process, not execution intent: durable
+`systemctl` helpers remain Gateway work, while durable commands themselves remain
+independent systemd user services.
+
+The `agent-exec` CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
 relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`
 reuses the host exec memory allowance: the smaller of one quarter of available
 host/container memory and half that memory remaining after Gateway RSS.
@@ -663,15 +671,17 @@ Existing per-exec memory limits and child-first OOM policy still apply.
 `memory.high` applies reclaim pressure; it is not a hard memory limit.
 
 An aggregate `io.max` ceiling covers agent-exec IO on each device backing the
-Gateway state directory. Non-rotational devices receive **160 MiB/s in each
+Gateway state directory. Non-rotational devices receive **250 MiB/s in each
 direction and 40,960 read/write operations per second**, independent of RAM or
 device count. Classification uses the logical device's `queue/rotational` value,
 including md/dm devices, rather than separately throttling their members.
 Rotational devices, or devices without that attribute, retain the conservative
 pressure budget: `memory.high / 600 / deviceCount` bytes per second in each
 direction, with that rate divided by `4096` operations per second. These are
-policy ceilings, not measured disk bandwidth. For example, a 4 GiB memory
-allowance on one SSD gives 160 MiB/s per direction; on a rotational device it
+policy ceilings, not measured disk bandwidth. The non-rotational ceiling balances
+agent IO throughput against Gateway WAL commit latency on btrfs, rather than
+device utilization; the IOPS ceiling remains fixed at the measured 40,960.
+For example, a 4 GiB memory allowance on one SSD gives 250 MiB/s per direction; on a rotational device it
 gives about 6.8 MiB/s. Half of any finite ancestor IO limit further caps each
 corresponding rate. Gateway IO remains outside the exec ceiling. The policy is
 applied at Gateway startup.

@@ -1469,6 +1469,11 @@ export function isMcpAuthLoginParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").McpAuthLoginParamsSchema
 >;
+export function isMcpAuthLogoutParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").McpAuthLogoutParamsSchema
+>;
 export function isWizardNextParams(
   value: unknown,
 ): value is import("typebox").Static<

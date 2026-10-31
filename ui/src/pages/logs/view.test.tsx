@@ -72,6 +72,39 @@ afterEach(async () => {
   await i18n.setLocale("en");
 });
 
+it("checks default filters once per batch and keeps the first retained row in order", () => {
+  const levelReads = vi.fn(() => true);
+  const props = createProps({
+    status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+    onExport: vi.fn(),
+  });
+  for (const level of Object.keys(props.levelFilters)) {
+    Object.defineProperty(props.levelFilters, level, { get: levelReads });
+  }
+  const lines = Array.from({ length: 84 }, (_, id) => ({
+    id,
+    raw: `line ${id}`,
+    level: "info" as const,
+  }));
+  const [entries, setEntries] = createSignal(lines.slice(0, 64));
+  const view = mountSolid(() => <LogsView {...props} entries={entries()} />);
+  flush();
+  levelReads.mockClear();
+
+  setEntries(lines.slice(20));
+  flush();
+
+  expect(levelReads).toHaveBeenCalledTimes(6);
+  expect(view.container.querySelector('[aria-posinset="1"] .log-message')?.textContent).toBe(
+    "line 20",
+  );
+  view.getByRole("button", { name: "Export visible" }).click();
+  expect(props.onExport).toHaveBeenCalledWith(
+    Array.from({ length: 64 }, (_, index) => `line ${index + 20}`),
+    "visible",
+  );
+});
+
 it("formats only new rows until the locale or effective timezone changes", async () => {
   const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
   const allTimes = [...validTimes, "not a timestamp", "", null, undefined];
@@ -81,7 +114,7 @@ it("formats only new rows until the locale or effective timezone changes", async
       id: index,
       time,
       raw: "log entry",
-      message: index === 0 ? "keep initial" : "other entry",
+      message: index === 0 ? "A\u0308 Café initial" : "other entry",
     })),
   });
   const [entries, setEntries] = createSignal(props.entries);
@@ -132,21 +165,21 @@ it("formats only new rows until the locale or effective timezone changes", async
   const appendedTime = "2026-09-22T18:10:00Z";
   setEntries((rows) => [
     ...rows,
-    { id: allTimes.length, time: appendedTime, raw: "keep appended" },
+    { id: allTimes.length, time: appendedTime, raw: "A\u0308 Café appended" },
   ]);
   expectTimes([...allTimes, appendedTime], "en", 1);
 
-  filterInput.value = "keep";
+  filterInput.value = "ä";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0], appendedTime], "en", 0);
 
   timeZone = "America/Los_Angeles";
   const nextTime = "2026-09-22T20:00:00Z";
-  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "keep next" }]);
+  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "Ä Café next" }]);
   expectTimes([validTimes[0], appendedTime, nextTime], "en");
 
   timeZone = "Asia/Tokyo";
-  filterInput.value = "initial";
+  filterInput.value = "cafe\u0301 initial";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0]], "en");
 });
@@ -167,10 +200,14 @@ it("keeps the visible export filename suffix stable when labels are localized", 
   expect(onExport).toHaveBeenCalledWith([raw], "visible");
 });
 
-it.each([false, true])(
-  "keeps following appended logs when a row resizes before compensation is read back (queued resize: %s)",
-  (queuedResize) => {
-    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+it.each(["follow", "queued-follow", "reader"] as const)(
+  "preserves scroll intent through row resizes (%s)",
+  (mode) => {
+    const queuedResize = mode === "queued-follow";
+    const reader = mode === "reader";
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+    });
     const observers: Array<{
       callback: ResizeObserverCallback;
       targets: Set<Element>;
@@ -208,6 +245,7 @@ it.each([false, true])(
     const view = mountSolid(() => (
       <LogsView
         {...createProps({
+          autoFollow: !reader,
           status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
           onStreamRef: (element, scroll) => {
             stream = element;
@@ -252,6 +290,13 @@ it.each([false, true])(
       for (let index = 0; index < 4; index++) {
         frame();
       }
+      if (reader) {
+        // The stream's border is outside the viewport; this reader has not reached the end.
+        stream.scrollTop -= 2;
+        stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 1000 }));
+        readBack();
+      }
+      const readerTop = stream.scrollTop;
       const rows = Array.from(stream.querySelectorAll(".log-row"));
       resize(rows[0]!);
       resize(rows[1]!);
@@ -264,6 +309,15 @@ it.each([false, true])(
       flush();
       readBack();
       frame();
+      if (reader) {
+        expect(stream.scrollTop).toBe(readerTop);
+        vi.advanceTimersByTime(200);
+        flush();
+        resize(rows[2]!);
+        frame();
+        expect(stream.scrollTop).toBe(readerTop + 47);
+        return;
+      }
       expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
       const afterCompensation = stream.scrollTop;
       const nextRow = rows[queuedResize ? 3 : 2]!;

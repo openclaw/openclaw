@@ -384,6 +384,33 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("clears the visible search before its projected query commits", () => {
+    const onExit = vi.fn();
+    const onSearchQueryChange = vi.fn((searchQuery: string) => {
+      setProps((current) => ({ ...current, searchQuery }));
+    });
+    const [props, setProps] = createSignal(sidebarProps({ onExit, onSearchQueryChange }));
+    mountSolid(() => <SettingsSidebar {...props()} />, { container });
+    flush();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input")!;
+    input.focus();
+    input.value = "appearance";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onSearchQueryChange).toHaveBeenLastCalledWith("");
+    expect(input.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
+  });
+
   it("renders refreshed settings route titles from the active locale", async () => {
     render({});
 
