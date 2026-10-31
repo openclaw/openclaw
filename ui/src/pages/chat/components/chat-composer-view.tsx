@@ -74,11 +74,13 @@ export function renderChatComposerView(
     renderComposerTextarea(context, props, state, view);
   const inputHandle = createChatAttachmentInputHandle();
   let shell: HTMLDivElement | undefined;
+  let placeholderElement: HTMLSpanElement | undefined;
   const { mobileEditing, keyboardNavigation, lifecycle } = createComposerMobileInteraction(
     context,
     props,
     state,
     () => shell,
+    () => placeholderElement,
   );
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
@@ -401,6 +403,9 @@ export function renderChatComposerView(
               },
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
+            data-composer-layout={
+              props.mobileComposer && !mobileEditing() ? "single-line" : undefined
+            }
             data-incognito={props.selectedSession?.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
@@ -568,7 +573,20 @@ export function renderChatComposerView(
                     />
                   )}
                 </Show>
-                <span class="agent-chat__composer-placeholder" aria-hidden="true">
+                <span
+                  class="agent-chat__composer-placeholder"
+                  aria-hidden="true"
+                  ref={[
+                    elementRef<HTMLSpanElement>((element) => {
+                      placeholderElement = element;
+                      return () => {
+                        if (placeholderElement === element) {
+                          placeholderElement = undefined;
+                        }
+                      };
+                    }),
+                  ]}
+                >
                   {context().dictation?.active || context().predictionText ? "" : placeholder()}
                 </span>
                 <Show when={context().predictionText}>
