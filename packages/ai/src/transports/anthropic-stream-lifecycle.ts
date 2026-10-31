@@ -542,7 +542,8 @@ export async function runAnthropicStreamLifecycle(params: {
                 iteration.model.trim()
                   ? iteration.model
                   : undefined;
-              if (delta.stop_reason === "refusal") {
+              // Z.AI and other compatible endpoints use "sensitive" for content-safety stops.
+              if (delta.stop_reason === "refusal" || delta.stop_reason === "sensitive") {
                 applyAnthropicRefusal(output, delta.stop_details, model.provider);
               } else {
                 output.stopReason = mapAnthropicStopReason(delta.stop_reason);
