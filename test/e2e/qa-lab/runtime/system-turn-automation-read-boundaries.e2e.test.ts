@@ -171,7 +171,7 @@ function isScheduledRun(body: ProviderRequest): boolean {
 }
 
 it(
-  "serves an automation notice turn only its own automation reads at the final effect",
+  "serves a non-admin automation notice only its own reads at the final effect",
   { timeout: 240_000 },
   async ({ signal, onTestFinished }) => {
     const home = tempDirs.make("openclaw-system-turn-read-boundaries-");
@@ -209,7 +209,6 @@ it(
       finished.set(id, entry);
       return entry.promise;
     };
-    const firstNoticeDone = createDeferred();
     const closingNoticeHeld = createDeferred();
     const forgedDone = createDeferred();
     let releaseHold: () => void = () => {};
@@ -224,6 +223,7 @@ it(
     const removalHeld = createDeferred();
     let step = 0;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let requester: GatewayClient | undefined;
     let nonOwner: GatewayClient | undefined;
     let provider: Awaited<ReturnType<typeof startOpenAiResponsesModelServer>> | undefined;
     const proofJob = (name: string, marker: string, delayMs: number) => ({
@@ -291,7 +291,7 @@ it(
                 writeToolCall(response, name, callId, args);
               const owned = () => jobs.owned!.id;
               switch (step++) {
-                // Owner turn in the owned chat creates two one-shot automations.
+                // A scoped, non-admin requester creates two conversation-owned automations.
                 case 0:
                   call("automations", "add_owned", proofJob("Owned proof", "RUN-MARKER-A", 60_000));
                   break;
@@ -307,7 +307,7 @@ it(
                   jobs.closing = JSON.parse(outputs.get("add_closing")!) as CronJob;
                   reply("Scheduled.");
                   break;
-                // Owner turn in another chat creates the foreign automation.
+                // The same requester creates an automation in another conversation.
                 case 3:
                   call(
                     "automations",
@@ -344,10 +344,13 @@ it(
                   call("automations", "update", {
                     action: "update",
                     jobId: owned(),
-                    patch: { enabled: true },
+                    job: { enabled: true },
                   });
                   break;
                 case 11:
+                  expect(outputs.get("update")).toContain(
+                    "Other actions need the owner's authority",
+                  );
                   call("automations", "remove", { action: "remove", jobId: owned() });
                   break;
                 case 12:
@@ -367,9 +370,7 @@ it(
                   call("automations", "runs_removed", { action: "runs", jobId: owned() });
                   break;
                 case 17:
-                  reply("Automation history inspected.");
-                  firstNoticeDone.resolve();
-                  break;
+                  throw new Error("Removed automation disclosed a result to its retired notice");
                 // The second notice turn's read is closed before disclosure.
                 case 18: {
                   expect(JSON.stringify(body.input)).toContain(
@@ -451,20 +452,32 @@ it(
         const runtime = getRuntimeConfigSnapshot();
         assert(runtime);
         withFastReplyConfig(runtime);
-        const ownerTurn = async (sessionKey: string, message: string) => {
-          const { runId } = await live.client.request<{ runId: string }>("chat.send", {
+        // Administrator notices intentionally retain owner authority. Exercise the
+        // read-only contract with a real non-admin source, not an admin fixture.
+        const scopedClient = await connectGatewayClient({
+          url: "ws://127.0.0.1:" + live.port,
+          token,
+          ...controlUi,
+          scopes: ["operator.read", "operator.write"],
+        });
+        requester = scopedClient;
+        const requesterTurn = async (sessionKey: string, message: string) => {
+          const { runId } = await scopedClient.request<{ runId: string }>("chat.send", {
             sessionKey,
             message,
             deliver: false,
             idempotencyKey: randomUUID(),
           });
           await observe(
-            live.client.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 }),
+            scopedClient.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 }),
           );
         };
-        await ownerTurn(ownedSession, "Schedule the owned proofs.");
-        await ownerTurn(foreignSession, "Schedule the foreign proof.");
-        assert(jobs.owned && jobs.closing && jobs.foreign, "Owner turns did not create the jobs");
+        await requesterTurn(ownedSession, "Schedule the owned proofs.");
+        await requesterTurn(foreignSession, "Schedule the foreign proof.");
+        assert(
+          jobs.owned && jobs.closing && jobs.foreign,
+          "Requester turns did not create the jobs",
+        );
 
         const runDue = async (job: CronJob) => {
           assert(job.schedule.kind === "at");
@@ -475,9 +488,13 @@ it(
         expect(await runDue(jobs.owned)).toMatchObject({ status: "error" });
         // The operator removes the automation while the notice turn's awaited history read is in flight.
         await observe(removalHeld.promise);
+        const removed = createDeferred<RunsOutcome>();
+        seams.onRunsOutcome = (outcome) => removed.resolve(outcome);
         await live.client.request("cron.remove", { id: jobs.owned.id });
         releaseHold();
-        await observe(firstNoticeDone.promise);
+        const removedOutcome = await observe(removed.promise);
+        // Removal retires the notice's restored operator source as well as the job.
+        step = 18;
 
         expect(await runDue(jobs.closing)).toMatchObject({ status: "error" });
         // The notice run closes while its awaited history read is in flight.
@@ -540,8 +557,12 @@ it(
           expect(outputs.get(id)).toContain("Other actions need the owner's authority");
         }
         expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
-        // Removed during the awaited read: the disclosure-time recheck withholds history.
-        expect(outputs.get("runs_removed")).toContain(`not found: ${jobs.owned.id}`);
+        // Removal retires the source during the read: no history reaches the model.
+        expect(removedOutcome).toEqual({
+          id: jobs.owned.id,
+          threw: expect.stringContaining("authority is no longer active"),
+        });
+        expect(outputs.has("runs_removed")).toBe(false);
         // Closed during the awaited read: the handler responds with nothing at all.
         expect(closedOutcome).toEqual({
           id: jobs.closing.id,
@@ -559,6 +580,9 @@ it(
         ]);
       } finally {
         try {
+          if (requester) {
+            await disconnectGatewayClient(requester);
+          }
           if (nonOwner) {
             await disconnectGatewayClient(nonOwner);
           }
