@@ -14,6 +14,7 @@ import {
 } from "../../test-helpers/solid-menu.tsx";
 import type { MenuItem } from "./menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
+import sessionMenuCss from "../../styles/session-menu.css?inline";
 import "../../styles/base.css";
 import "../../../public/themes/absolutely.css";
 import "../../../public/themes/phosphor.css";
@@ -160,6 +161,31 @@ describe("native overlay presentation", () => {
       expect(document.activeElement).toBe(item("Action 24"));
       const last = item("Action 24").getBoundingClientRect();
       expect(last.bottom).toBeLessThanOrEqual(surface().getBoundingClientRect().bottom);
+    } finally {
+      style.remove();
+    }
+  });
+
+  it("keeps compact session menu rows when their stylesheet loads before the overlay", async () => {
+    // Production ships session-menu.css at startup and overlay.css in a later boot chunk.
+    const style = document.createElement("style");
+    style.textContent = sessionMenuCss;
+    document.head.prepend(style);
+    try {
+      mountMenu({
+        class: "session-menu",
+        items: [
+          { id: "session", label: "Session", class: "session-menu__item" },
+          { id: "sort", label: "Sort", class: "sidebar-session-sort-menu__item" },
+          { id: "plain", label: "Plain" },
+        ],
+      });
+      await openMenu();
+      expect(getComputedStyle(item("Session")).padding).toBe("0px 8px");
+      expect(getComputedStyle(item("Sort")).padding).toBe("0px 8px");
+      const plain = getComputedStyle(item("Plain"));
+      const em = Number.parseFloat(plain.fontSize);
+      expect(plain.padding).toBe(`${em / 2}px ${em}px`);
     } finally {
       style.remove();
     }

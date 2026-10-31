@@ -258,7 +258,7 @@
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 0.5em 1em;
+  padding: var(--oc-menu-item-padding-block, 0.5em) var(--oc-menu-item-padding-inline, 1em);
   border: 0;
   border-radius: var(--menu-item-radius);
   background: transparent;

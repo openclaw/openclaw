@@ -30,18 +30,17 @@
   gap: 8px;
 }
 
-.session-menu__panel > .session-menu__item {
-  padding: 0 8px;
-}
-
 /* Contributed dropdown rows share the menu typography without renderer-specific classes. */
 :is(.session-menu .oc-menu-item, .session-menu__item, .sidebar-session-sort-menu__item) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
+/* `.oc-menu-item` ties with this rule and loads later, so menu rows take their
+   compact padding through the overlay's variables rather than by load order. */
 .session-menu__item,
 .sidebar-session-sort-menu__item {
+  --oc-menu-item-padding-block: 0;
   --oc-menu-item-padding-inline: 8px;
 
   box-sizing: border-box;
