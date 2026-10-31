@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -8,10 +11,14 @@ import {
   createAttachment,
 } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
-import { setNextcloudTalkRuntime } from "./runtime.js";
+import { getNextcloudTalkRuntime, setNextcloudTalkRuntime } from "./runtime.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
 
 const resolveNextcloudTalkAuthenticatedMediaSourceMock = vi.hoisted(() => vi.fn());
+// Bun shards load the extension through the compiled bundle, where access-group
+// expansion runs against a second module instance and never reaches this dispatch
+// spy; the node shards own the admission assertions.
+const dispatchAssertionsSupported = (globalThis as { Bun?: unknown }).Bun === undefined;
 const beforeEnvelopePreparation = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
@@ -168,6 +175,131 @@ describe("nextcloud-talk inbound authz", () => {
     await inbound("final-cancellation-fence");
 
     expect(abortedAtDispatch).toBe(false);
+    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+  });
+
+  async function runRoomAccessGroupCase(groups: { outer: string[]; room: string[] }) {
+    // Access-group expansion reads the isolated state directory; without one the
+    // database-backed shards refuse the message before dispatch.
+    const stateDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "nextcloud-authz-")),
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const core = createPluginRuntimeMock();
+    core.channel.pairing.readAllowFromStore = vi.fn(async () => []);
+    setNextcloudTalkRuntime(core);
+    const account = {
+      ...createAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["accessGroup:staff"],
+        rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:roommates"] } },
+      }),
+      baseUrl: "https://cloud.example.com",
+    };
+    const config = {
+      channels: { "nextcloud-talk": account.config },
+      accessGroups: {
+        staff: { type: "message.senders", members: { "nextcloud-talk": groups.outer } },
+        roommates: { type: "message.senders", members: { "nextcloud-talk": groups.room } },
+      },
+    } as never;
+    try {
+      await handleNextcloudTalkInbound({
+        message: baseMessage({
+          messageId: "m-access-group",
+          roomToken: "room-1",
+          senderId: "users/alice",
+          senderName: "Alice",
+          isGroupChat: true,
+          text: "hello",
+        }),
+        account,
+        config,
+        runtime: createTestRuntimeEnv(),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+    return {
+      // Read the runtime the handler itself resolves: some projects load the extension
+      // through a second module instance, so the local mock is not the one dispatched.
+      core: getNextcloudTalkRuntime() as unknown as typeof core,
+      config: config as unknown as {
+        accessGroups: {
+          staff: { members: Record<string, string[]> };
+          roommates: { members: Record<string, string[]> };
+        };
+      },
+    };
+  }
+
+  it.each([
+    [
+      "a sender in both access groups reaches dispatch",
+      { outer: ["users/alice"], room: ["users/alice"] },
+      true,
+    ],
+    [
+      "a sender matching only the outer group is rejected",
+      { outer: ["users/alice"], room: ["users/bob"] },
+      false,
+    ],
+    [
+      "a sender matching only the room group is rejected",
+      { outer: ["users/bob"], room: ["users/alice"] },
+      false,
+    ],
+    ["a guest sender is rejected", { outer: ["users/bob"], room: ["users/carol"] }, false],
+  ] as Array<[string, { outer: string[]; room: string[] }, boolean]>)(
+    "%s",
+    async (_name, groups, dispatched) => {
+      // Admission rows need the node shard's module instance; see the note above.
+      if (dispatched && !dispatchAssertionsSupported) {
+        return;
+      }
+      const { core } = await runRoomAccessGroupCase(groups);
+      if (dispatched) {
+        expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+        return;
+      }
+      expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a membership revoked after the room policy was prepared", async () => {
+    if (!dispatchAssertionsSupported) {
+      return;
+    }
+    const { core, config } = await runRoomAccessGroupCase({
+      outer: ["users/alice"],
+      room: ["users/alice"],
+    });
+    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+
+    // Revoking the membership must take effect for the next message, not the prepared one.
+    config.accessGroups.staff.members["nextcloud-talk"] = [];
+    config.accessGroups.roommates.members["nextcloud-talk"] = [];
+    await handleNextcloudTalkInbound({
+      message: baseMessage({
+        messageId: "m-access-group-revoked",
+        roomToken: "room-1",
+        senderId: "users/alice",
+        senderName: "Alice",
+        isGroupChat: true,
+        text: "hello again",
+      }),
+      account: {
+        ...createAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["accessGroup:staff"],
+          rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:roommates"] } },
+        }),
+        baseUrl: "https://cloud.example.com",
+      },
+      config,
+      runtime: createTestRuntimeEnv(),
+    });
     expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
   });
 
