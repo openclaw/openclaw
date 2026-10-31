@@ -55,7 +55,11 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-import { isRequestWideFailure, skipFailedProvider } from "./provider-failure-isolation.js";
+import {
+  isRequestWideFailure,
+  runProviderIsolated,
+  skipFailedProvider,
+} from "./provider-failure-isolation.js";
 
 type ImplicitProviderParams = {
   agentDir: string;
@@ -131,7 +135,7 @@ async function resolvePluginImplicitProviders(
   providers: import("../plugins/types.js").ProviderPlugin[],
   preparedStaticConfigs?: ReadonlyMap<
     string,
-    PreparedProviderStaticCatalog["entries"][number]["providerConfigs"]
+    Pick<PreparedProviderStaticCatalog["entries"][number], "providerConfigs" | "outcomes">
   >,
 ): Promise<Record<string, ProviderConfig>> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
@@ -257,9 +261,18 @@ async function resolvePluginImplicitProviders(
             }
             if (useStaticCatalog || (!result && provider.staticCatalog)) {
               if (preparedStatic) {
-                return preparedStatic;
+                // A failed prepared run keeps its outcome so publication retains prior models.
+                outcomes.push(...(preparedStatic.outcomes ?? []));
+                return preparedStatic.outcomes ? undefined : preparedStatic.providerConfigs;
               }
-              result = await runProviderStaticCatalog({ provider });
+              result = await runProviderIsolated(
+                {
+                  providerIds: [provider.id],
+                  stage: "static catalog",
+                  reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+                },
+                async () => await runProviderStaticCatalog({ provider }),
+              );
             }
             return result ? normalizePluginDiscoveryResult({ provider, result }) : undefined;
           },
@@ -638,9 +651,9 @@ export async function resolveImplicitProviders(
     Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
   }
   const preparedStaticConfigs = new Map(
-    preparedStaticEntries?.map(({ provider, providerConfigs }) => [
+    preparedStaticEntries?.map(({ provider, providerConfigs, outcomes }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
-      providerConfigs,
+      { providerConfigs, outcomes },
     ]) ?? [],
   );
   return resolvePluginImplicitProviders(context, discoveryProviders, preparedStaticConfigs);

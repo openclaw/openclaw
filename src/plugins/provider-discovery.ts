@@ -21,6 +21,8 @@ const providerRuntimeLoader = createLazyImportLoader(
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
+  /** Present when the static run failed: the provider is unavailable, not empty. */
+  outcomes?: readonly ProviderCatalogOutcome[];
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
@@ -204,8 +206,14 @@ export async function prepareProviderStaticCatalog(params: {
       if (!provider.staticCatalog) {
         continue;
       }
+      const outcomes: ProviderCatalogOutcome[] = [];
       const result = await runProviderIsolated(
-        { providerIds: [provider.id], stage: "static catalog", signal: params.signal },
+        {
+          providerIds: [provider.id],
+          stage: "static catalog",
+          signal: params.signal,
+          reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+        },
         async () =>
           await runProviderStaticCatalog({
             provider,
@@ -217,6 +225,7 @@ export async function prepareProviderStaticCatalog(params: {
       entries.push({
         provider,
         providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
+        ...(outcomes.length > 0 ? { outcomes } : {}),
       });
     }
   }
