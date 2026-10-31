@@ -73,6 +73,7 @@ const { values } = parseArgs({
     steps: { type: "string" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
+    "observer-origins": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
   },
@@ -358,6 +359,7 @@ try {
     viewports,
     networkProfiles,
     trace: values.trace,
+    observerOrigins: values["observer-origins"],
     cpuOnly: values["cpu-only"],
     cpuThrottle,
     collection: values.trace
@@ -469,7 +471,7 @@ try {
                   }
                 });
               }
-              if (values.trace) {
+              if (values.trace || values["observer-origins"]) {
                 await page.addInitScript(() => {
                   const deliveries: unknown[] = [];
                   const resizeErrors: unknown[] = [];
@@ -700,7 +702,7 @@ try {
               observation.errorEvents = errors;
               try {
                 await memory?.dispose();
-                if (values.trace) {
+                if (values.trace || values["observer-origins"]) {
                   const resizeErrors: unknown[] = await page.evaluate(() =>
                     Reflect.get(window, "__engineResizeErrors"),
                   );

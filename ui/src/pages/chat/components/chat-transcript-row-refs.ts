@@ -10,7 +10,6 @@ export class TranscriptRowRefs {
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
     private readonly callbacks: {
       isCurrentRow: (element: HTMLElement, key: string) => boolean;
-      beforeMeasure: () => void;
       onMount: (key: string) => void;
     },
   ) {}
@@ -20,7 +19,6 @@ export class TranscriptRowRefs {
   }
 
   observeConnected(): void {
-    let prepared = false;
     for (const [row, key] of this.mountedRows) {
       if (
         row.isConnected &&
@@ -28,10 +26,6 @@ export class TranscriptRowRefs {
         this.callbacks.isCurrentRow(row, key) &&
         this.virtualizer.elementsCache.get(key) !== row
       ) {
-        if (!prepared) {
-          this.callbacks.beforeMeasure();
-          prepared = true;
-        }
         // Detached observer receipts retire the cache, not the retained Solid ref.
         this.virtualizer.measureElement(row);
       }

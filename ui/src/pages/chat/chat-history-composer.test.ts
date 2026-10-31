@@ -50,7 +50,7 @@ function createRewindHost(
 describe("rewind composer ownership", () => {
   it("keeps the committed prefix visible while rewind history reloads, without retaining its removed tail", async () => {
     const history = createDeferred<ChatHistoryResult>();
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const state = createRewindHost(Promise.resolve({ editorText: "edit me" }), undefined, () => {
       started.resolve();
       return history.promise;

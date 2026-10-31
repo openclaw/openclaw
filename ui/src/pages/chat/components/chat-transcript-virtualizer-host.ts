@@ -203,6 +203,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       layout: this.layout,
       invalidate,
     });
+    // Only a changed measurement can compensate native scroll. Registration
+    // reuses the cached estimate and must not force layout for its offset.
+    const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.virtualizer = new Virtualizer({
       onChange: () => {
         invalidate();
@@ -240,7 +243,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           instance,
           callback,
         ),
-      measureElement: this.layout.measureRow,
+      measureElement: this.layout.createRowMeasure(beforeMeasure),
       // Row measurements can resize the range and mount new observed rows.
       // Commit those writes outside native resize delivery to avoid WebKit's loop.
       useAnimationFrameWithResizeObserver: true,
@@ -253,8 +256,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     // Initial placement owns compensation; an estimated end is not a native scroll target.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
-    // A boot re-anchor can precede its native extent; only reader geometry may override it.
-    const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
       () => this.scrollElement,
       this.virtualizer,
@@ -264,7 +265,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.rowRefs = new TranscriptRowRefs(this.virtualizer, {
       isCurrentRow: (element, key) =>
         this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
-      beforeMeasure,
       onMount: () => this.queueLayout(),
     });
     this.scrollRestoreHost = {
@@ -506,7 +506,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             Boolean(
               this.offsetState.pendingScrollOffset ||
               this.offsetState.scrollCommand ||
-              this.offsetState.pendingInteractionAnchor,
+              this.offsetState.pendingInteractionAnchor ||
+              this.callbacks.hasPendingScrollCommand?.(),
             ),
             // A peer append can add attribution above a bubble inside an
             // existing run row. Row-height compensation alone cannot hold it.

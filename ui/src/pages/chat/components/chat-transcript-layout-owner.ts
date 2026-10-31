@@ -122,10 +122,19 @@ export class TranscriptLayoutOwner {
     });
   }
 
-  readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
-    const size = measureTranscriptRow(element, entry, instance);
-    return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
-  };
+  createRowMeasure(beforeResize: () => void): typeof measureTranscriptRow {
+    return (element, entry, instance) => {
+      const index = instance.indexFromElement(element);
+      const size = Math.max(measureTranscriptRow(element, entry, instance), this.rowMinimum(index));
+      const previous =
+        instance.itemSizeCache.get(instance.options.getItemKey(index)) ??
+        instance.options.estimateSize(index);
+      if (size !== previous) {
+        beforeResize();
+      }
+      return size;
+    };
+  }
 
   persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>, positionPending: boolean): void {
     if (positionPending || !this.ready || this.cancelRowWrite || !this.rowLayout) {

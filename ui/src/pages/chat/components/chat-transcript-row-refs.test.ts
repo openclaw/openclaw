@@ -36,7 +36,6 @@ it("reobserves a retained row after its detached observer receipt retires the ca
   virtualizer.getVirtualItems();
   const refs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: (element) => viewport.contains(element),
-    beforeMeasure: () => {},
     onMount: () => {},
   });
   const bind = refs.forKey("retained");
@@ -104,7 +103,6 @@ it.each([
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });
   const refs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: (row) => viewport.contains(row),
-    beforeMeasure: () => {},
     onMount: () => {},
   });
   const mounted = indexes.map((index) => expectDefined(rows[index], "mounted row"));

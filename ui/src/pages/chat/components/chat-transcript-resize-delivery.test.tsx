@@ -16,7 +16,7 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it("defers resized rows while committing viewport geometry in native delivery", async () => {
+it("keeps viewport and row publications outside native resize delivery", async () => {
   const frame = stubAnimationFrames();
   const rows = contentRows(1);
   const onViewportResize = vi.fn();
@@ -26,8 +26,12 @@ it("defers resized rows while committing viewport geometry in native delivery", 
   await flushDeferredRowPrune();
   renderRows(rows);
   emitTranscriptResize(container, 800, 600);
+  frame();
   onViewportResize.mockClear();
   emitTranscriptResize(container, 800, 500);
+  await flushDeferredRowPrune();
+  expect(onViewportResize).not.toHaveBeenCalled();
+  frame();
   expect(onViewportResize).toHaveBeenCalledOnce();
   const row = requireElement(container, ".chat-virtual-row");
   const before = transcriptSize(container);

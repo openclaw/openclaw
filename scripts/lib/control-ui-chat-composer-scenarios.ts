@@ -9,7 +9,7 @@ const composer = `${pane} .agent-chat__composer-combobox textarea`;
 const route = controlUiSessionPath("agent:main:interaction-a");
 
 /** Observe native events in-page: Playwright assertion latency is not input latency. */
-export async function installChatActionObservation(page: Page, attribution = false) {
+export async function installChatActionObservation(page: Page, collectAttribution = false) {
   await page.evaluate((attribution) => {
     const data = {
       inputFramesMs: [] as number[],
@@ -123,7 +123,7 @@ export async function installChatActionObservation(page: Page, attribution = fal
         mutations.disconnect();
       },
     });
-  }, attribution);
+  }, collectAttribution);
 }
 
 export async function readChatActionObservation(page: Page) {
