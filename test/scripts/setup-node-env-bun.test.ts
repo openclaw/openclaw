@@ -1,4 +1,5 @@
-import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import * as childProcess from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -13,8 +14,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { parse } from "yaml";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const helperPath = ".github/actions/setup-node-env/seed-bun-from-image.mjs";
 const pins = {
@@ -73,22 +75,21 @@ fi`,
   shell(join(root, "fallback-bun"), "echo npm-fallback-bun");
   const hashes = new Map<Variant, string>();
   function archive(variant: Variant, version = "1.4.4", member = `bun-${variant}/bun`) {
-    const stage = join(root, `stage-${variant}`);
-    rmSync(stage, { recursive: true, force: true });
-    mkdirSync(join(stage, member, ".."), { recursive: true });
-    shell(
-      join(stage, member),
-      `echo ${variant} >> "$FIXTURE_BUN_LOG"
+    // The consumer extracts authenticated bytes and assigns executable permissions.
+    const bytes = makeStoredZip({
+      [member]: `#!/bin/bash
+set -euo pipefail
+echo ${variant} >> "$FIXTURE_BUN_LOG"
 if [[ "\${1:-}" == "--version" || "\${1:-}" == "-v" ]]; then
   echo ${version}
 else
   echo ${variant}
-fi`,
-    );
+fi
+`,
+    });
     const path = join(image, `bun-v1.4.4-${variant}.zip`);
-    rmSync(path, { force: true });
-    execFileSync("zip", ["-q", path, member], { cwd: stage });
-    hashes.set(variant, createHash("sha256").update(readFileSync(path)).digest("hex"));
+    writeFileSync(path, bytes);
+    hashes.set(variant, createHash("sha256").update(bytes).digest("hex"));
     return path;
   }
   for (const variant of Object.keys(pins) as Variant[]) {
@@ -213,7 +214,10 @@ fi`,
 
 describe("Bun image archive consumer", () => {
   it("creates independent private destinations and never reuses a modified extracted Bun", () => {
+    const archiveCommands = vi.spyOn(childProcess, "execFileSync");
+    onTestFinished(() => archiveCommands.mockRestore());
     const f = fixture();
+    expect(archiveCommands).not.toHaveBeenCalled();
     const bins: string[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = f.run();
