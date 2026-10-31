@@ -33,6 +33,7 @@ describe("security fix", () => {
     configPath: string,
     channelPlugins?: ChannelPlugin[],
     env: NodeJS.ProcessEnv = {},
+    dryRun = false,
   ) =>
     fixSecurityFootguns({
       env: {
@@ -44,6 +45,7 @@ describe("security fix", () => {
       stateDir,
       configPath,
       channelPlugins,
+      dryRun,
     });
 
   const writePublicFile = async (filePath: string, content = "{}\n") => {
@@ -249,6 +251,60 @@ describe("security fix", () => {
       expect.objectContaining({ kind: "chmod", ok: true, path: legacyAuthPath, mode: 0o600 }),
     );
     expectPerms((await fs.stat(legacyAuthPath)).mode & 0o777, 0o600);
+  });
+
+  it("dry-run previews groupPolicy remediations without writing config or modes", async () => {
+    const stateDir = await createStateDir("dry-run-group-policy");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const cfg = {
+      channels: {
+        telegram: { groupPolicy: "open" },
+      },
+    } satisfies OpenClawConfig;
+    await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf-8");
+    await fs.chmod(configPath, 0o644);
+    await fs.chmod(stateDir, 0o755);
+    const beforeStat = await fs.stat(configPath);
+    const beforeMode = beforeStat.mode & 0o777;
+    const beforeMtimeMs = beforeStat.mtimeMs;
+    const beforeBytes = await fs.readFile(configPath);
+
+    const res = await runFix(stateDir, configPath, [], {}, true);
+
+    expect(res.dryRun).toBe(true);
+    expect(res.configWritten).toBe(false);
+    expect(res.wouldWriteConfig).toBe(true);
+    expect(res.ok).toBe(true);
+    expect(res.changes).toContain("channels.telegram.groupPolicy=open -> allowlist");
+    const plannedPermission = res.actions.filter(
+      (action) => action.ok && (isWindows ? action.kind === "icacls" : action.kind === "chmod"),
+    );
+    expect(plannedPermission.length).toBeGreaterThan(0);
+    if (isWindows) {
+      expect(plannedPermission).toContainEqual(
+        expect.objectContaining({ kind: "icacls", ok: true, path: configPath }),
+      );
+    } else {
+      expect(plannedPermission).toContainEqual(
+        expect.objectContaining({ kind: "chmod", ok: true, path: configPath, mode: 0o600 }),
+      );
+    }
+
+    const afterBytes = await fs.readFile(configPath);
+    expect(Buffer.compare(beforeBytes, afterBytes)).toBe(0);
+    const afterStat = await fs.stat(configPath);
+    if (!isWindows) {
+      expect(afterStat.mode & 0o777).toBe(beforeMode);
+      expectPerms((await fs.stat(stateDir)).mode & 0o777, 0o755);
+    }
+    expect(afterStat.mtimeMs).toBe(beforeMtimeMs);
+
+    const applied = await runFix(stateDir, configPath, [], {}, false);
+    expect(applied.dryRun).toBe(false);
+    expect(applied.configWritten).toBe(true);
+    expect(applied.wouldWriteConfig).toBe(true);
+    const written = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+    expect(written.channels?.telegram?.groupPolicy).toBe("allowlist");
   });
 
   it.runIf(process.platform !== "win32").each([
