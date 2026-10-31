@@ -106,6 +106,7 @@ export function createTerminalReleaseHarness(options?: {
     state,
     turnIdRef: { current: "turn-1" },
     noteProgress: vi.fn(),
+    openClawDynamicToolExecutions: { get: async () => undefined },
     deadlines: { beginSettlement: vi.fn() },
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
@@ -166,6 +167,18 @@ export function createTerminalReleaseHarness(options?: {
     sourceReplies,
     completeTurn,
     controller,
+    recordCommittedToolResult: (
+      value: Parameters<typeof controller.recordDynamicToolResult>[0],
+    ) => {
+      controller.recordDynamicToolResult(value);
+      controller.recordModelResponseNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          ...scope,
+          item: { type: "function_call_output", call_id: value.call.callId, output: "recorded" },
+        },
+      });
+    },
     receive: (notification: CodexServerNotification) =>
       notifications.noteNotificationReceived(
         prepareCodexServerNotification(notification),

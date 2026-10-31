@@ -38,6 +38,7 @@ import type {
 import type { NativeParentRegistration } from "./native-subagent-parent-owner.js";
 
 type NativeMonitor = {
+  hasPendingCatalogCustody(parentThreadId: string): boolean;
   readNativeSubagents(request: NativeSubagentsReadRequest): NativeSubagentsSnapshot;
   withDescendantCancellation<T>(
     params: NativeDescendantCancellation,
@@ -268,6 +269,8 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
   return {
     Monitor,
     register: registerMonitor,
+    hasPendingCatalogCustody: (client: CodexAppServerClient, parentThreadId: string): boolean =>
+      monitors.get(client)?.hasPendingCatalogCustody(parentThreadId) ?? false,
     readNativeSubagents: ({
       client,
       ...request

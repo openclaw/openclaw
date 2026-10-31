@@ -64,7 +64,7 @@ describe("Codex steering terminal delivery", () => {
       if (receipt === "before") {
         await consume();
       }
-      h.controller.recordDynamicToolResult(
+      h.recordCommittedToolResult(
         dynamicToolResult("first-answer", {
           success: true,
           terminate: true,
@@ -147,7 +147,7 @@ describe("Codex steering terminal delivery", () => {
         h.pendingOpenClawDynamicToolCompletionIds.add(result.call.callId);
       }
       for (const result of results) {
-        h.controller.recordDynamicToolResult(result);
+        h.recordCommittedToolResult(result);
         h.pendingOpenClawDynamicToolCompletionIds.delete(result.call.callId);
       }
       expect(h.steeringQueue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
@@ -196,11 +196,18 @@ describe("Codex steering terminal delivery", () => {
       for (const result of results) {
         h.pendingOpenClawDynamicToolCompletionIds.add(result.call.callId);
       }
-      h.controller.recordDynamicToolResult(results[0]);
+      h.recordCommittedToolResult(results[0]);
       h.pendingOpenClawDynamicToolCompletionIds.delete(results[0].call.callId);
       expect(h.state.completed).toBe(false);
-      h.controller.recordDynamicToolResult(results[1]);
+      h.recordCommittedToolResult(results[1]);
       h.pendingOpenClawDynamicToolCompletionIds.delete(results[1].call.callId);
+      if (route === "nested") {
+        await h.notifyRawItem({
+          type: "function_call_output",
+          call_id: "code-mode",
+          output: "recorded",
+        });
+      }
       h.controller.scheduleTerminalDynamicToolReleaseCheck();
       await yieldImmediate();
       // Upstream terminal release drains submitted input before interrupting.

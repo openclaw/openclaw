@@ -218,6 +218,40 @@ export class CodexNativeSubagentCompletionDelivery {
     }
   }
 
+  /** Pending delivery retains declarations, not execution authority or a live-work pin. */
+  hasPendingCatalogCustody(parentThreadId: string): boolean {
+    const state = this.dependencies.parents.get(parentThreadId);
+    if (!state) {
+      return false;
+    }
+    for (const child of this.dependencies.children.values()) {
+      if (
+        child.parentThreadId !== parentThreadId ||
+        !child.pendingCompletion ||
+        child.completionDeliveryAbandoned ||
+        !this.isCurrent(state, child) ||
+        (child.completionCustody && !child.completionCustody.isCurrent()) ||
+        !child.deliveryOwnerKey ||
+        completionDeliveryOwners.get(child.deliveryOwnerKey) !== child
+      ) {
+        continue;
+      }
+      try {
+        state.assignmentStore?.assertCurrent();
+        assertHistoryOwnerMatchesRegistration(
+          child.historyOwner,
+          state.historyOwner,
+          child.nativeParentThreadId,
+          state.historyOwner !== undefined,
+        );
+        return true;
+      } catch {
+        // A stale history generation cannot keep declarations attached to its successor.
+      }
+    }
+    return false;
+  }
+
   deliverDetached(state: ParentState): void {
     for (const child of this.dependencies.children.values()) {
       if (child.parentThreadId === state.parentThreadId && child.pendingCompletion) {

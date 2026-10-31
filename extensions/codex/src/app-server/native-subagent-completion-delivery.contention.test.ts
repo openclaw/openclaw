@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNativeSubagentCompletionCustodyFixture } from "./native-subagent-custody.test-support.js";
 import { fixture } from "./native-subagent-inventory.test-support.js";
 import {
   CodexNativeSubagentMonitor,
@@ -165,6 +166,8 @@ describe("native completion settlement", () => {
         await entered.promise;
         // Terminal work releases execution protection while its result still owns delivery.
         expect(releasePin).toHaveBeenCalledOnce();
+        expect(monitor.hasPendingCatalogCustody("parent-thread")).toBe(true);
+        expect(monitor.hasPendingCatalogCustody("other-parent")).toBe(false);
         expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ result }),
         );
@@ -174,6 +177,7 @@ describe("native completion settlement", () => {
         if (change === "retirement") {
           retirement = monitor.retireParent("parent-thread");
           expect(canAdmit?.()).toBe(false);
+          expect(monitor.hasPendingCatalogCustody("parent-thread")).toBe(false);
         } else {
           observer = await registerParent(monitor);
           observer.bindTurn("observer-turn");
@@ -186,6 +190,7 @@ describe("native completion settlement", () => {
           );
           // A receipt cannot revoke admission while its accepted handoff is in flight.
           expect(canAdmit?.()).toBe(true);
+          expect(monitor.hasPendingCatalogCustody("parent-thread")).toBe(true);
           expect(releasePin).toHaveBeenCalledOnce();
         }
         delivery.resolve({ delivered: false, path: "none" });
@@ -205,6 +210,7 @@ describe("native completion settlement", () => {
           );
         }
         expect(canAdmit?.()).toBe(false);
+        expect(monitor.hasPendingCatalogCustody("parent-thread")).toBe(false);
         expect(releasePin).toHaveBeenCalledOnce();
         expect(vi.getTimerCount()).toBe(0);
       } finally {
@@ -219,4 +225,42 @@ describe("native completion settlement", () => {
       }
     },
   );
+});
+
+it("revokes catalog custody when the pending completion's service custody is revoked", async () => {
+  const client = createClient();
+  const runtime = createRuntime();
+  const custody = createNativeSubagentCompletionCustodyFixture();
+  runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(custody.root);
+  const entered = createDeferred<void>();
+  const delivery = createDeferred<void>();
+  runtime.deliverAgentHarnessCompletion.mockImplementation(async () => {
+    entered.resolve();
+    await delivery.promise;
+    return { delivered: true, path: "direct" };
+  });
+  const monitor = new CodexNativeSubagentMonitor(client.client, runtime);
+  const parent = await registerParent(monitor);
+  let completion: Promise<void> | undefined;
+  try {
+    parent.bindTurn("parent-turn");
+    await client.spawn();
+    await parent.unregister();
+    completion = client.notify(completedChild());
+    await entered.promise;
+    expect(monitor.hasPendingCatalogCustody("parent-thread")).toBe(true);
+    for (const hold of custody.holds) {
+      hold.release();
+    }
+    expect(monitor.hasPendingCatalogCustody("parent-thread")).toBe(false);
+    delivery.resolve();
+    await completion;
+  } finally {
+    delivery.resolve();
+    await completion;
+    await monitor.retireParent("parent-thread");
+    await parent.unregister();
+    await monitor.dispose();
+    client.close();
+  }
 });

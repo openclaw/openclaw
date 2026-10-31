@@ -36,7 +36,7 @@ export function createCodexAttemptLifecycleController(
   type TerminalToolRelease = NonNullable<typeof state.pendingTerminalDynamicToolRelease>;
   type ModelResponse = {
     closed: boolean;
-    calls: Map<string, { direct: boolean; result?: TerminalToolRelease }>;
+    calls: Map<string, { direct: boolean; outputPending: boolean; result?: TerminalToolRelease }>;
   };
   // Raw model-call receipts precede dispatch; item/started and request registration
   // can lag. Only rawResponse/completed closes the model's call inventory.
@@ -77,7 +77,7 @@ export function createCodexAttemptLifecycleController(
     ) {
       return;
     }
-    // The JSON-RPC response must flush before the terminal tool interrupts its turn.
+    // Native output receipts, not a JSON-RPC flush, authorize terminal interruption.
     state.terminalDynamicToolReleaseCheckScheduled = true;
     const immediate = setImmediate(() => {
       state.terminalDynamicToolReleaseCheckScheduled = false;
@@ -86,7 +86,9 @@ export function createCodexAttemptLifecycleController(
       if (
         modelResponse &&
         (!modelResponse.closed ||
-          [...modelResponse.calls.values()].some((call) => call.direct && !call.result))
+          [...modelResponse.calls.values()].some(
+            (call) => call.outputPending || (call.direct && !call.result),
+          ))
       ) {
         return;
       }
@@ -259,6 +261,17 @@ export function createCodexAttemptLifecycleController(
     }
     const callId = readRawResponseToolCallId(notification);
     const item = notificationParams.item;
+    if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+      const recordedCall =
+        typeof item.call_id === "string" ? modelResponse?.calls.get(item.call_id) : undefined;
+      if (recordedCall) {
+        // item/completed precedes dispatch return in Codex. Only this receipt
+        // proves the output reached model history and cannot be replaced by abort.
+        recordedCall.outputPending = false;
+        scheduleTerminalDynamicToolReleaseCheck();
+      }
+      return;
+    }
     const startsModelResponse =
       callId !== undefined ||
       item.type === "reasoning" ||
@@ -275,6 +288,7 @@ export function createCodexAttemptLifecycleController(
     if (callId && !modelResponse.calls.has(callId)) {
       modelResponse.calls.set(callId, {
         direct: item.namespace === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        outputPending: item.type === "function_call" || item.type === "custom_tool_call",
       });
     }
   };
