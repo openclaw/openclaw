@@ -116,17 +116,16 @@ export async function beginSessionControllerSteer(
   void acceptance.catch(() => {});
   const outcome = attempt.outcome.then(
     async (nativeOutcome) => {
-      // Native ownership and an indeterminate commit are never replayable.
-      let accepted: boolean;
       try {
-        accepted = await acceptance;
+        await acceptance;
       } catch (error) {
         // The native outcome has now settled; an unknown ACK never permits replay.
         injection.finish(true);
         throw error;
       }
+      // The failure owner already retains ambiguous acceptance and releases proven withdrawal.
       injection.finish(
-        accepted || nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate",
+        nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate",
       );
       return nativeOutcome;
     },

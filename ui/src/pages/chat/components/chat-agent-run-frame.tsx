@@ -233,7 +233,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   );
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
-        groups,
+        // Cited results can sit in an earlier rollup that no visible reply owns.
+        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
         answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,

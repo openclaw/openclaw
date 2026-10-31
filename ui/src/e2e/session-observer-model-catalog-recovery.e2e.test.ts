@@ -24,7 +24,7 @@ const model = (id: string, name: string, provider = "openai") => ({
 suite.define(() => {
   it.each([
     "initial catalog failure",
-    "config.changed",
+    // Generic config changes do not invalidate model catalog receipts.
     "chat.metadata.changed",
     "reconnect",
   ] as const)("refreshes the catalog after %s", async (trigger) => {

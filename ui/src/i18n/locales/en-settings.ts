@@ -30,6 +30,7 @@ const enSettings = {
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
     sv: "Svenska (Swedish)",
+    ca: "Català (Catalan)",
   },
   chat: {
     sendShortcut: "Send shortcut",

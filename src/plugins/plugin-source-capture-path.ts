@@ -6,6 +6,8 @@ import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 
 // Captures must remain recognizable to the native source loader in every scratch location.
 export const PLUGIN_SOURCE_CAPTURE_PREFIX = "openclaw-plugin-build-";
+export const PLUGIN_SOURCE_SNAPSHOT_PREFIX = "snapshot-v1-";
+export const PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX = `${PLUGIN_SOURCE_SNAPSHOT_PREFIX}staging-`;
 
 export function resolvePluginSourceCapturesDirectory(stateDir: string): string {
   return path.join(stateDir, "tmp", "plugin-captures");

@@ -8,17 +8,6 @@
   background: var(--popover);
 }
 
-.people-menu__search input {
-  width: 100%;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
 .people-menu__status {
   padding: 6px 8px;
   color: var(--muted);
