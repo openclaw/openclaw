@@ -116,6 +116,122 @@ function decodeDnsSdEscapes(value: string): string {
   return Buffer.from(bytes).toString("utf8");
 }
 
+// ShowTXTRecord (mDNSResponder Clients/dns-sd.c) writes "\<char>" for spaces and
+// shell metacharacters, four backslashes for one "\", and "\xHH" for bytes < 0x20.
+// Decode that once. A second pass reads a literal "\032" as a space.
+const SHOW_TXT_ESCAPED_BACKSLASH = "\\".repeat(4);
+
+function splitShowTxtRecord(line: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  const pushCurrent = () => {
+    if (!current) {
+      return;
+    }
+    tokens.push(current);
+    current = "";
+  };
+  for (const ch of line) {
+    if (ch === " " || ch === "\t") {
+      let slashCount = 0;
+      for (let j = current.length - 1; j >= 0 && current[j] === "\\"; j -= 1) {
+        slashCount += 1;
+      }
+      if (slashCount % 2 === 1) {
+        current += ch;
+        continue;
+      }
+      pushCurrent();
+      continue;
+    }
+    current += ch;
+  }
+  pushCurrent();
+  return tokens;
+}
+
+function decodeShowTxtValue(value: string): string {
+  let decoded = false;
+  const bytes: number[] = [];
+  let pending = "";
+
+  const flush = () => {
+    if (!pending) {
+      return;
+    }
+    bytes.push(...Buffer.from(pending, "utf8"));
+    pending = "";
+  };
+
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i] ?? "";
+    if (ch !== "\\") {
+      pending += ch;
+      continue;
+    }
+    if (value.startsWith(SHOW_TXT_ESCAPED_BACKSLASH, i)) {
+      flush();
+      bytes.push(0x5c);
+      decoded = true;
+      i += 3;
+      continue;
+    }
+    if (value.charAt(i + 1) === "x") {
+      const hex = value.slice(i + 2, i + 4);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        flush();
+        bytes.push(Number.parseInt(hex, 16));
+        decoded = true;
+        i += 3;
+        continue;
+      }
+    }
+    if (i + 3 < value.length) {
+      const escaped = value.slice(i + 1, i + 4);
+      if (/^[0-9]{3}$/.test(escaped)) {
+        const byte = Number.parseInt(escaped, 10);
+        if (Number.isFinite(byte) && byte >= 0 && byte <= 255) {
+          flush();
+          bytes.push(byte);
+          decoded = true;
+          i += 3;
+          continue;
+        }
+      }
+    }
+    const next = value[i + 1];
+    if (next !== undefined) {
+      pending += next;
+      decoded = true;
+      i += 1;
+      continue;
+    }
+    pending += ch;
+  }
+
+  if (!decoded) {
+    return value;
+  }
+  flush();
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function parseShowTxtRecord(line: string): Record<string, string> {
+  const txt: Record<string, string> = {};
+  for (const token of splitShowTxtRecord(line)) {
+    const idx = token.indexOf("=");
+    if (idx <= 0) {
+      continue;
+    }
+    const key = token.slice(0, idx).trim();
+    if (!key) {
+      continue;
+    }
+    txt[key] = decodeShowTxtValue(token.slice(idx + 1));
+  }
+  return txt;
+}
+
 function parseDigShortLines(stdout: string): string[] {
   return normalizeStringEntries(stdout.split("\n"));
 }
@@ -262,15 +378,17 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
       continue;
     }
 
-    if (line.startsWith("txt") || line.includes("txtvers=")) {
-      const tokens = line.split(/\s+/).filter(Boolean);
-      txt = parseTxtTokens(tokens);
+    // ShowTXTRecord has no "txt" label. Ciao does not add txtvers, so any
+    // key=value line is the record. Keep raw so an escaped trailing space stays.
+    if (line.includes("=")) {
+      const recordLine = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+      txt = parseShowTxtRecord(recordLine);
     }
   }
 
   beacon.txt = Object.keys(txt).length ? txt : undefined;
   if (txt.displayName) {
-    beacon.displayName = decodeDnsSdEscapes(txt.displayName);
+    beacon.displayName = txt.displayName;
   }
   if (txt.lanHost) {
     beacon.lanHost = txt.lanHost;

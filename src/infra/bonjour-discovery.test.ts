@@ -190,6 +190,112 @@ describe("bonjour-discovery", () => {
     expect(beacon.txt?.displayName).toBe("Peter’s Mac Studio");
   });
 
+  it("parses dns-sd -L ShowTXTRecord escapes for names and paths", async () => {
+    // dns-sd -L output. ShowTXTRecord (mDNSResponder Clients/dns-sd.c) escapes
+    // spaces and shell metacharacters as \<char>, prints one backslash as four,
+    // and leaves UTF-8 raw. Ciao TXT has no txtvers key. \032 in the fullname
+    // is DNS-name escaping, not TXT encoding.
+    const instanceName = "Peter’s Mac Studio Gateway";
+    const resolveStdout = [
+      "DATE: ---Sat 31 Oct 2026---",
+      String.raw`15:04:12.184  Peter\226\128\153s\032Mac\032Studio\032Gateway._openclaw-gw._tcp.local. can be reached at Peters-Mac-Studio.local.:18789 (interface 14)`,
+      String.raw` role=gateway gatewayPort=18789 lanHost=Peters-Mac-Studio.local displayName=Peter’s\ Mac\ Studio cliPath=/Users/Peter\'s/Library/Application\ Support/openclaw\\\\bin transport=gateway sshPort=22`,
+      "",
+    ].join("\n");
+
+    const run = vi.fn(async (argv: string[]) => {
+      const domain = argv[3] ?? "";
+      if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
+        return {
+          stdout: [
+            String.raw`Add 2 3 local. _openclaw-gw._tcp. Peter\226\128\153s Mac Studio Gateway`,
+            "",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+      if (argv[0] === "dns-sd" && argv[1] === "-L") {
+        return {
+          stdout: resolveStdout,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    });
+
+    const beacons = await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 800,
+      domains: ["local."],
+      run: run as unknown as typeof runCommandWithTimeout,
+    });
+
+    const beacon = getOnlyBeacon(beacons);
+    expect(beacon).toMatchObject({
+      instanceName,
+      host: "Peters-Mac-Studio.local",
+      port: 18789,
+      displayName: "Peter’s Mac Studio",
+      lanHost: "Peters-Mac-Studio.local",
+      gatewayPort: 18789,
+      sshPort: 22,
+      cliPath: "/Users/Peter's/Library/Application Support/openclaw\\bin",
+      role: "gateway",
+      transport: "gateway",
+      txt: { displayName: "Peter’s Mac Studio" },
+    });
+    expect(beacon.txt?.txtvers).toBeUndefined();
+  });
+
+  it("decodes a ShowTXTRecord backslash once and keeps control bytes", async () => {
+    // Four backslashes are one literal "\" (ShowTXTRecord). A second decode
+    // would read the leftover "\032" as a space. "\x0A" is a byte below 0x20.
+    const run = vi.fn(async (argv: string[]) => {
+      const domain = argv[3] ?? "";
+      if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
+        return {
+          stdout: ["Add 2 3 local. _openclaw-gw._tcp. Literal Gateway", ""].join("\n"),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+      if (argv[0] === "dns-sd" && argv[1] === "-L") {
+        return {
+          stdout: [
+            "Literal Gateway._openclaw-gw._tcp.local. can be reached at literal.local.:18789 (interface 14)",
+            String.raw` displayName=\\\\032 role=a\x0Ab`,
+            "",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    });
+
+    const beacons = await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 800,
+      domains: ["local."],
+      run: run as unknown as typeof runCommandWithTimeout,
+    });
+
+    const beacon = getOnlyBeacon(beacons);
+    expect(beacon.displayName).toBe("\\032");
+    expect(beacon.txt?.displayName).toBe("\\032");
+    expect(beacon.role).toBe("a\nb");
+  });
+
   it("rejects malformed and out-of-range advertised ports", async () => {
     const run = vi.fn(async (argv: string[]) => {
       const domain = argv[3] ?? "";
