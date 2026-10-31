@@ -18,7 +18,10 @@ import {
 import { withEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
-import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+  createGatewayAuthRateLimiter,
+} from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
@@ -157,6 +160,7 @@ async function requestUpgradeRejection(
 }
 
 class PublicWorkerHarness {
+  readonly environment: Pick<WorkerEnvironmentRecord, "state">;
   readonly credential = createWorkerCredentialMaterial().credential;
   readonly workerService: WorkerConnectionService;
   readonly clients = new GatewayClientRegistry();
@@ -185,6 +189,7 @@ class PublicWorkerHarness {
       destroyRequestedAtMs: null,
       bootstrapReceipt: BUILD,
     } as unknown as WorkerEnvironmentRecord;
+    this.environment = environment;
     const credentialRecord: WorkerCredentialRecord = {
       environmentId: environment.environmentId,
       credentialHash: hashWorkerCredential(this.credential),
@@ -367,6 +372,67 @@ it("forces connection kind from the route in both directions", () =>
       scopes: [],
     });
     await expectInvalidRoute(harness.url("/"), workerConnect(harness.credential));
+  }));
+
+it("preserves the worker credential budget through server outages and recovery", () =>
+  withHarness({ rateLimitMaxAttempts: 3 }, async (harness) => {
+    const validateWorker = harness.workerService.validateWorkerConnection.bind(
+      harness.workerService,
+    );
+    let invalidateAfterAdmission = false;
+    using validation = vi.spyOn(harness.workerService, "validateWorkerConnection");
+    validation.mockImplementation((identity) => {
+      if (invalidateAfterAdmission) {
+        harness.environment.state = "provisioning";
+      }
+      return validateWorker(identity);
+    });
+    const rejectWorker = async (params: WorkerConnectParams) => {
+      const ws = new WebSocket(harness.url());
+      await waitForOpen(ws);
+      return await rejectOpenedWorker(ws, params);
+    };
+    for (const phase of ["admission", "ownership"] as const) {
+      harness.environment.state = phase === "admission" ? "provisioning" : "ready";
+      await rejectWorker(workerConnect("invalid-worker-credential"));
+      expect(
+        harness.publicRateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION),
+      ).toMatchObject({ allowed: true, remaining: 2 });
+      invalidateAfterAdmission = phase === "ownership";
+      for (let retry = 0; retry < 3; retry += 1) {
+        harness.environment.state = phase === "admission" ? "provisioning" : "ready";
+        const rejected = await rejectWorker(workerConnect(harness.credential));
+        expect(rejected).toMatchObject({
+          response: {
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: "worker admission rejected",
+              details: { reason: "invalid-handshake" },
+            },
+          },
+          close: { code: 1008, reason: "invalid-handshake" },
+        });
+        expect(
+          harness.publicRateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION),
+        ).toMatchObject({ allowed: true, remaining: 2 });
+      }
+      invalidateAfterAdmission = false;
+      harness.environment.state = "ready";
+      const client = createWorkerConnection({
+        endpoint: { kind: "websocket", url: harness.url() },
+        connectParams: workerConnect(harness.credential),
+      });
+      try {
+        await client.start();
+        expect(client.state.kind).toBe("ready");
+        expect(
+          harness.publicRateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION),
+        ).toMatchObject({ allowed: true, remaining: 3 });
+      } finally {
+        await client.stop();
+      }
+    }
   }));
 
 it("rate-limits parallel invalid admissions before repeated store work", () =>
