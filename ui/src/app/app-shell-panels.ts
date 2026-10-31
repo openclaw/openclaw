@@ -1,54 +1,40 @@
-import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
+import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
 import { desktopPanelLayout } from "../components/desktop/desktop-panel-layout.ts";
-import {
-  assistantPanelLayout,
-  browserPanelLayout,
-  terminalPanelLayout,
-} from "../components/dock-panel-layout.ts";
+import { browserPanelLayout, terminalPanelLayout } from "../components/dock-panel-layout.ts";
+import { resolveLinkReaderTarget } from "../components/link-reader-target.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
-  HOME_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
+import {
+  shellComponentElement,
+  type ShellComponent,
+  type ShellComponentHost,
+} from "./app-shell-components.ts";
 import type { ApplicationContext } from "./context.ts";
-import {
-  isOptionalElementDefined,
-  type LazyCustomElementRequestController,
-  type OptionalCustomElement,
-} from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
-import {
-  isBrowserPanelSurfaceAvailable,
-  isDesktopPanelAvailable,
-  isHomePanelAvailable,
-} from "./panel-availability.ts";
+import { availableLinkReaders } from "./link-reader-routing.ts";
+import { isNativeEmbedHost } from "./native-web-chrome.ts";
+import { isBrowserPanelSurfaceAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 
-export interface ShellPanelHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
-  readonly custodianMinimizeRequestId: number;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
-  readonly terminalPanelElement: OptionalCustomElement;
-  readonly browserPanelElement: OptionalCustomElement;
-  readonly desktopPanelElement: OptionalCustomElement;
-  readonly assistantPanelElement: OptionalCustomElement;
+export interface ShellPanelHost extends Pick<ShellComponentHost, "elements" | "terminalPanel"> {
+  readonly context: ApplicationContext | undefined;
   routeState: ShellRouteState;
 }
 
 export class ShellPanelOwner {
-  private readonly restoredPanels = new Set<OptionalCustomElement>();
+  private readonly restoredPanels = new Set<ShellComponent>();
 
   constructor(
     private readonly host: ShellPanelHost,
-    private readonly requestLazyElement: (
-      element: OptionalCustomElement,
-      event: LazyShellEvent,
-    ) => void,
+    private readonly requestComponent: (component: ShellComponent, event?: LazyShellEvent) => void,
   ) {}
 
   reset(): void {
@@ -63,13 +49,6 @@ export class ShellPanelOwner {
       return;
     }
     const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
-    // Scope-aware: openclaw.chat is operator.admin; advertisement alone would
-    // show read-scoped clients a control the store then refuses to use.
-    const custodianAvailable = canCallGatewayMethod(
-      gatewaySnapshot,
-      "openclaw.chat",
-      "operator.admin",
-    );
     // Only restored open docks load automatically. Explicit actions use the
     // shell's lazy request/replay owner; closed capabilities stay unloaded.
     const sessionRoute = isSessionRouteId(host.routeState.routeId);
@@ -78,12 +57,14 @@ export class ShellPanelOwner {
       context.config.current.terminalEnabled ?? false,
     );
     const browserAvailable = !sessionRoute && isBrowserPanelSurfaceAvailable(gatewaySnapshot);
-    const assistantAvailable = custodianAvailable || isHomePanelAvailable(context.gateway);
     for (const [element, layout, available] of [
-      [host.terminalPanelElement, terminalPanelLayout, terminalAvailable],
-      [host.browserPanelElement, browserPanelLayout, browserAvailable],
-      [host.desktopPanelElement, desktopPanelLayout, !sessionRoute && desktopAvailable],
-      [host.assistantPanelElement, assistantPanelLayout, assistantAvailable],
+      ["terminal", terminalPanelLayout, terminalAvailable],
+      ["browser", browserPanelLayout, browserAvailable],
+      [
+        "desktop",
+        desktopPanelLayout,
+        !sessionRoute && host.routeState.routeId !== "systems" && desktopAvailable,
+      ],
     ] as const) {
       if (!available) {
         continue;
@@ -92,10 +73,8 @@ export class ShellPanelOwner {
       // Consume the attempt even if its import fails: dismissing the error must
       // survive unrelated updates until the context or document lifecycle resets.
       this.restoredPanels.add(element);
-      const minimized =
-        element === host.assistantPanelElement && host.custodianMinimizeRequestId > 0;
-      if (minimized || restored) {
-        host.lazyCustomElements.preload(element, { reportError: true });
+      if (restored) {
+        this.requestComponent(element);
       }
     }
   }
@@ -108,52 +87,88 @@ export class ShellPanelOwner {
     return isSessionRouteId(locationRouteId ?? this.host.routeState.routeId);
   }
 
-  readonly handleDeferredTerminalToggle = (event: Event): void => {
+  private handleDeferredToggle(panel: "terminal" | "browser", event: Event): void {
     const host = this.host;
     if (this.isSessionRoute()) {
-      rememberSessionPanelToggle("terminal", event);
+      rememberSessionPanelToggle(panel, event);
       return;
     }
-    if (isOptionalElementDefined(host.terminalPanelElement)) {
+    if (shellComponentElement(host, panel)) {
       return;
     }
     const context = host.context;
     const snapshot = context?.gateway?.snapshot;
     if (
       !snapshot ||
-      !isTerminalAvailable(snapshot, context.config.current.terminalEnabled ?? false)
+      !(panel === "terminal"
+        ? isTerminalAvailable(snapshot, context.config.current.terminalEnabled ?? false)
+        : isBrowserPanelSurfaceAvailable(snapshot))
     ) {
       event.preventDefault();
       return;
     }
-    this.requestLazyElement(
-      host.terminalPanelElement,
-      lazyShellEvent(TERMINAL_PANEL_TOGGLE_EVENT, event),
+    this.requestComponent(
+      panel,
+      lazyShellEvent(
+        panel === "terminal" ? TERMINAL_PANEL_TOGGLE_EVENT : BROWSER_PANEL_TOGGLE_EVENT,
+        event,
+      ),
     );
+  }
+
+  readonly handleDeferredTerminalToggle = (event: Event): void =>
+    this.handleDeferredToggle("terminal", event);
+
+  readonly handleDeferredTerminalDock = (event: Event): void => {
+    if (shellComponentElement(this.host, "terminal")) {
+      return;
+    }
+    const context = this.host.context;
+    if (
+      context &&
+      isTerminalAvailable(context.gateway.snapshot, context.config.current.terminalEnabled ?? false)
+    ) {
+      this.requestComponent("terminal", lazyShellEvent(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event));
+    }
   };
 
-  readonly handleDeferredBrowserToggle = (event: Event): void => {
+  readonly handleDeferredBrowserToggle = (event: Event): void =>
+    this.handleDeferredToggle("browser", event);
+
+  readonly handleDeferredLinkReaderToggle = (event: Event): void => {
     const host = this.host;
+    const snapshot = host.context?.gateway.snapshot;
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    if (!snapshot || isSettingsTakeover(host.routeState.routeId) || isNativeEmbedHost()) {
+      return;
+    }
+    const readers = availableLinkReaders(snapshot);
+    if (
+      detail?.open !== false &&
+      (!readers.length ||
+        (detail?.url !== undefined && !resolveLinkReaderTarget(detail.url, readers)))
+    ) {
+      return;
+    }
     if (this.isSessionRoute()) {
-      rememberSessionPanelToggle("browser", event);
-      return;
-    }
-    if (isOptionalElementDefined(host.browserPanelElement)) {
-      return;
-    }
-    const snapshot = host.context?.gateway?.snapshot;
-    if (snapshot && isBrowserPanelSurfaceAvailable(snapshot)) {
-      this.requestLazyElement(
-        host.browserPanelElement,
-        lazyShellEvent(BROWSER_PANEL_TOGGLE_EVENT, event),
-      );
-    } else {
+      rememberSessionPanelToggle("link-reader", event);
       event.preventDefault();
+      return;
     }
+    if (shellComponentElement(host, "link-reader")) {
+      return;
+    }
+    // Acceptance belongs to the shell until the lazy panel can consume the replay.
+    event.preventDefault();
+    this.requestComponent("link-reader", lazyShellEvent(LINK_READER_PANEL_TOGGLE_EVENT, event));
   };
 
   readonly handleDeferredDesktopToggle = (event: Event): void => {
     const host = this.host;
+    // Systems owns its embedded viewer; never materialize a second shell dock.
+    if (host.routeState.routeId === "systems") {
+      return;
+    }
     if (this.isSessionRoute()) {
       rememberSessionPanelToggle("desktop", event);
       return;
@@ -164,33 +179,9 @@ export class ShellPanelOwner {
       event.stopImmediatePropagation();
       return;
     }
-    if (isOptionalElementDefined(host.desktopPanelElement)) {
+    if (shellComponentElement(host, "desktop")) {
       return;
     }
-    this.requestLazyElement(
-      host.desktopPanelElement,
-      lazyShellEvent(DESKTOP_PANEL_TOGGLE_EVENT, event),
-    );
-  };
-
-  readonly handleDeferredAssistantToggle = (event: Event): void => {
-    const host = this.host;
-    if (isOptionalElementDefined(host.assistantPanelElement)) {
-      return;
-    }
-    const snapshot = host.context?.gateway?.snapshot;
-    const home = event.type === HOME_PANEL_TOGGLE_EVENT;
-    if (
-      home
-        ? isHomePanelAvailable(host.context?.gateway)
-        : canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")
-    ) {
-      this.requestLazyElement(
-        host.assistantPanelElement,
-        lazyShellEvent(home ? HOME_PANEL_TOGGLE_EVENT : CUSTODIAN_PANEL_TOGGLE_EVENT, event),
-      );
-    } else {
-      event.preventDefault();
-    }
+    this.requestComponent("desktop", lazyShellEvent(DESKTOP_PANEL_TOGGLE_EVENT, event));
   };
 }

@@ -1,4 +1,3 @@
-// Matrix plugin module implements status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -16,15 +15,6 @@ import {
 
 type MatrixMonitorStatusSink = (patch: ChannelAccountSnapshot) => void;
 
-function cloneLastDisconnect(
-  value: ChannelAccountSnapshot["lastDisconnect"],
-): ChannelAccountSnapshot["lastDisconnect"] {
-  if (!value || typeof value === "string") {
-    return value ?? null;
-  }
-  return { ...value };
-}
-
 function formatSyncError(error: unknown): string | null {
   if (!error) {
     return null;
@@ -34,8 +24,6 @@ function formatSyncError(error: unknown): string | null {
   }
   return formatErrorMessage(error);
 }
-
-export type MatrixMonitorStatusController = ReturnType<typeof createMatrixMonitorStatusController>;
 
 export function createMatrixMonitorStatusController(params: {
   accountId: string;
@@ -54,10 +42,7 @@ export function createMatrixMonitorStatusController(params: {
   };
 
   const emit = () => {
-    params.statusSink?.({
-      ...status,
-      lastDisconnect: cloneLastDisconnect(status.lastDisconnect),
-    });
+    params.statusSink?.({ ...status });
   };
 
   const noteConnected = (at = Date.now(), options?: { transportActivity?: boolean }) => {

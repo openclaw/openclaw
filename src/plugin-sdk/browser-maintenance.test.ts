@@ -1,10 +1,8 @@
-/**
- * Tests browser maintenance facade loading and cleanup behavior.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 const closeTrackedBrowserTabsForSessionsImpl = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModule = vi.hoisted(() => vi.fn());
@@ -14,6 +12,25 @@ const realMkdtempSync = fs.mkdtempSync.bind(fs);
 const realRmSync = fs.rmSync.bind(fs);
 const realWriteFileSync = fs.writeFileSync.bind(fs);
 const realRealpathSyncNative = fs.realpathSync.native.bind(fs.realpathSync);
+const realCpSync = fs.cpSync.bind(fs);
+const sessionKeys = ["agent:main:test"];
+const sessionSource = {
+  agentId: "main",
+  path: "/synthetic/agent.sqlite",
+  sessionKey: sessionKeys[0]!,
+  databaseIdentity: "synthetic-source",
+};
+const cleanupSurface = {
+  closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
+};
+
+function trackMoves() {
+  return {
+    renameSync: vi.spyOn(fs, "renameSync"),
+    cpSync: vi.spyOn(fs, "cpSync"),
+    rmSync: vi.spyOn(fs, "rmSync"),
+  };
+}
 
 vi.mock("./facade-runtime.js", () => ({
   tryLoadActivatedBundledPluginPublicSurfaceModule,
@@ -23,23 +40,14 @@ vi.mock("../process/exec.js", () => ({
   runExec,
 }));
 
-function mockTrashContainer(...suffixes: string[]) {
-  let call = 0;
-  return vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => {
-    const suffix = suffixes[call] ?? "secure";
-    call += 1;
-    const container = `${prefix}${suffix}`;
-    realMkdirSync(container, { recursive: true });
-    return container;
-  });
-}
-
 describe("browser maintenance", () => {
   let testRoot = "";
   let homeDir = "";
   let tmpDir = "";
+  let closeTrackedBrowserTabsForSessions: typeof import("./browser-maintenance.js").closeTrackedBrowserTabsForSessions;
+  let movePathToTrash: typeof import("./browser-maintenance.js").movePathToTrash;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.resetModules();
     testRoot = realRealpathSyncNative(
@@ -52,15 +60,17 @@ describe("browser maintenance", () => {
     closeTrackedBrowserTabsForSessionsImpl.mockReset();
     tryLoadActivatedBundledPluginPublicSurfaceModule.mockReset();
     runExec.mockReset();
-    vi.spyOn(Date, "now").mockReturnValue(123);
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     vi.spyOn(os, "tmpdir").mockReturnValue(tmpDir);
     vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) =>
       realRealpathSyncNative(candidate),
     );
     tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue({
-      closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
+      supportsSessionEntryCurrent: true,
+      ...cleanupSurface,
     });
+    ({ closeTrackedBrowserTabsForSessions, movePathToTrash } =
+      await import("./browser-maintenance.js"));
   });
 
   afterEach(() => {
@@ -76,240 +86,225 @@ describe("browser maintenance", () => {
     return target;
   }
 
-  it("skips browser cleanup when no session keys are provided", async () => {
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+  function expectTrashDestination(
+    destination: string,
+    target: string,
+    trashDir = path.join(homeDir, ".Trash"),
+  ) {
+    expect(destination.startsWith(`${trashDir}${path.sep}`)).toBe(true);
+    expect(path.basename(destination)).toBe(path.basename(target));
+    expect(fs.realpathSync.native(destination)).toBe(destination);
+    const reservation = path.dirname(destination);
+    expect(reservation).not.toBe(trashDir);
+    const stat = fs.lstatSync(reservation);
+    expect(stat.isDirectory()).toBe(true);
+    if (process.platform !== "win32") {
+      expect(stat.mode & 0o777).toBe(0o700);
+    }
+  }
 
-    await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
-  });
+  function expectMovedTarget(target: string, destination: string, trashDir?: string) {
+    expectTrashDestination(destination, target, trashDir);
+    expect(fs.readFileSync(destination, "utf8")).toBe("demo");
+    expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+  }
 
-  it("skips browser cleanup when the browser plugin is disabled", async () => {
-    tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue(null);
-
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-
-    await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"] }),
-    ).resolves.toBe(0);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledWith({
-      dirName: "browser",
-      artifactBasename: "browser-maintenance.js",
-    });
-    expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
-  });
-
-  it("reports unavailable browser cleanup when async activation fails", async () => {
-    tryLoadActivatedBundledPluginPublicSurfaceModule.mockRejectedValue(
-      new Error("activation unavailable"),
-    );
-    const onWarn = vi.fn();
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-
-    await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"], onWarn }),
-    ).resolves.toBe(0);
-    expect(onWarn).toHaveBeenCalledWith(
-      "browser cleanup unavailable: Error: activation unavailable",
-    );
-    expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
-  });
-
-  it("rechecks plugin activation before using a cached browser cleanup surface", async () => {
-    closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
-
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-
-    await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"] }),
-    ).resolves.toBe(2);
-    tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue(null);
-    await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"] }),
-    ).resolves.toBe(0);
-
-    expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("delegates cleanup through the browser maintenance surface", async () => {
-    closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
-
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-
-    await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"] }),
-    ).resolves.toBe(2);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledWith({
-      dirName: "browser",
-      artifactBasename: "browser-maintenance.js",
-    });
-    expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledWith({
-      sessionKeys: ["agent:main:test"],
-    });
-  });
-
-  it("moves paths to a reserved user trash container without invoking a PATH-resolved command", async () => {
-    const mkdirSync = vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    const mkdtempSync = mockTrashContainer("secure");
-    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
-    const cpSync = vi.spyOn(fs, "cpSync");
-    const rmSync = vi.spyOn(fs, "rmSync");
-
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    const target = writeTrashTarget();
-    const expected = path.join(homeDir, ".Trash", "demo-123-secure", "demo");
-
-    await expect(movePathToTrash(target)).resolves.toBe(expected);
-    expect(runExec).not.toHaveBeenCalled();
-    expect(mkdirSync).toHaveBeenCalledWith(path.join(homeDir, ".Trash"), {
-      recursive: true,
-      mode: 0o700,
-    });
-    expect(mkdtempSync).toHaveBeenCalledWith(path.join(homeDir, ".Trash", "demo-123-"));
-    expect(renameSync).toHaveBeenCalledWith(target, expected);
-    expect(cpSync).not.toHaveBeenCalled();
-    expect(rmSync).not.toHaveBeenCalled();
-  });
-
-  it("uses the resolved trash directory for reserved destinations", async () => {
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    const resolvedHomeDir = path.join(testRoot, "real", "home", "test");
-    const resolvedTrashDir = path.join(resolvedHomeDir, ".Trash");
-    realMkdirSync(path.join(homeDir, ".Trash"), { recursive: true, mode: 0o700 });
-    realMkdirSync(resolvedTrashDir, { recursive: true, mode: 0o700 });
-    vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
-      const value = String(candidate);
-      if (value === homeDir) {
-        return resolvedHomeDir;
+  it.each(["empty", "activation", "prepared", "native", "unpaired"] as const)(
+    "refuses unavailable or unauthorized cleanup: %s",
+    async (kind) => {
+      const onWarn = vi.fn();
+      const prepareCurrent = vi.fn(async () => true);
+      const assertCurrent = vi.fn();
+      const legacy = kind === "prepared" || kind === "native";
+      if (legacy) {
+        closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
+        tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue(cleanupSurface);
+        await expect(closeTrackedBrowserTabsForSessions({ sessionKeys })).resolves.toBe(2);
+      } else if (kind === "activation") {
+        tryLoadActivatedBundledPluginPublicSurfaceModule.mockRejectedValue(
+          new Error("activation unavailable"),
+        );
       }
-      if (value === path.join(homeDir, ".Trash")) {
-        return resolvedTrashDir;
+      const params = {
+        sessionKeys: kind === "empty" ? [] : sessionKeys,
+        onWarn,
+        ...(legacy ? { prepareCurrent } : {}),
+        ...(kind === "native" || kind === "unpaired"
+          ? { sessionEntryCurrent: { source: sessionSource, assertCurrent } }
+          : {}),
+      };
+      // The unpaired row intentionally represents an untyped caller.
+      await expect(
+        Reflect.apply(closeTrackedBrowserTabsForSessions, undefined, [params]),
+      ).resolves.toBe(0);
+      expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledTimes(legacy ? 1 : 0);
+      expect(prepareCurrent).not.toHaveBeenCalled();
+      expect(assertCurrent).not.toHaveBeenCalled();
+      if (kind === "empty" || kind === "unpaired") {
+        expect(tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
       }
-      return realRealpathSyncNative(candidate);
-    });
-    const mkdtempSync = mockTrashContainer("secure");
-    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
+      if (kind === "empty") {
+        expect(onWarn).not.toHaveBeenCalled();
+      } else {
+        const reason = legacy
+          ? "update the Browser plugin to support session-current cleanup"
+          : kind === "unpaired"
+            ? "sessionEntryCurrent requires prepareCurrent"
+            : "Error: activation unavailable";
+        expect(onWarn).toHaveBeenCalledExactlyOnceWith(`browser cleanup unavailable: ${reason}`);
+      }
+    },
+  );
 
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    const target = writeTrashTarget();
-    const expected = path.join(resolvedTrashDir, "demo-123-secure", "demo");
+  it.each([undefined, () => true])(
+    "delegates with owner guard %s and rechecks plugin activation before reuse",
+    async (isCurrent) => {
+      closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
+      const params = { sessionKeys, isCurrent };
+      await expect(closeTrackedBrowserTabsForSessions(params)).resolves.toBe(2);
+      expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledWith({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      });
+      expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledWith(params);
+      tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue(null);
+      await expect(closeTrackedBrowserTabsForSessions(params)).resolves.toBe(0);
+      expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
-    await expect(movePathToTrash(target)).resolves.toBe(expected);
-    expect(mkdtempSync).toHaveBeenCalledWith(path.join(resolvedTrashDir, "demo-123-"));
-    expect(renameSync).toHaveBeenCalledWith(target, expected);
+  it.each(["activation", "preparation"] as const)(
+    "does not dispatch after its owner changes during %s",
+    async (phase) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const wait = async () => {
+        entered.resolve();
+        await release.promise;
+        return true;
+      };
+      const prepareCurrent = vi.fn(wait);
+      if (phase === "activation") {
+        tryLoadActivatedBundledPluginPublicSurfaceModule.mockImplementationOnce(async () => {
+          await wait();
+          return cleanupSurface;
+        });
+      }
+      let current = true;
+      const cleanup = closeTrackedBrowserTabsForSessions({
+        sessionKeys,
+        isCurrent: () => current,
+        ...(phase === "preparation" ? { prepareCurrent } : {}),
+      });
+      try {
+        await Promise.race([entered.promise, cleanup]);
+        expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledOnce();
+        expect(prepareCurrent).toHaveBeenCalledTimes(phase === "preparation" ? 1 : 0);
+        expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
+        current = false;
+        release.resolve();
+        await expect(cleanup).resolves.toBe(0);
+        expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await cleanup;
+      }
+    },
+  );
+
+  it.each(["direct", "symlinked"] as const)(
+    "reserves a private trash destination under a %s home without PATH commands",
+    async (home) => {
+      let trashDir = path.join(homeDir, ".Trash");
+      if (home === "symlinked") {
+        const resolvedHome = path.join(testRoot, "real", "home", "test");
+        trashDir = path.join(resolvedHome, ".Trash");
+        realMkdirSync(trashDir, { recursive: true, mode: 0o700 });
+        realRmSync(homeDir, { recursive: true });
+        fs.symlinkSync(resolvedHome, homeDir, process.platform === "win32" ? "junction" : "dir");
+      } else {
+        realRmSync(trashDir, { recursive: true });
+      }
+      const target = writeTrashTarget();
+      const original = fs.lstatSync(target, { bigint: true });
+      const moved = await movePathToTrash(target);
+      expectMovedTarget(target, moved, trashDir);
+      expect(runExec).not.toHaveBeenCalled();
+      if (process.platform !== "win32") {
+        expect(fs.lstatSync(trashDir).mode & 0o777).toBe(0o700);
+      }
+      expect(fs.lstatSync(moved, { bigint: true }).ino).toBe(original.ino);
+      expect(fs.readdirSync(path.join(homeDir, ".Trash"))).toEqual([
+        path.basename(path.dirname(moved)),
+      ]);
+    },
+  );
+
+  it.each([
+    ["root", "Refusing to trash root path"],
+    ["outside", "Refusing to trash path outside allowed roots"],
+    ["symlink", "Refusing to use non-directory/symlink trash directory"],
+  ] as const)("rejects unsafe trash %s", async (kind, message) => {
+    let target = "/";
+    if (kind === "outside") {
+      const outsideDir = path.join(testRoot, "outside");
+      realMkdirSync(outsideDir, { recursive: true });
+      target = path.join(outsideDir, "openclaw-demo");
+      realWriteFileSync(target, "outside");
+    } else if (kind === "symlink") {
+      const realTrashDir = path.join(testRoot, "real-trash");
+      realRmSync(path.join(homeDir, ".Trash"), { recursive: true, force: true });
+      realMkdirSync(realTrashDir, { recursive: true, mode: 0o700 });
+      fs.symlinkSync(realTrashDir, path.join(homeDir, ".Trash"), "dir");
+      vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+      target = writeTrashTarget();
+    }
+    await expect(movePathToTrash(target)).rejects.toThrow(message);
   });
 
-  it("refuses to trash filesystem roots", async () => {
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-
-    await expect(movePathToTrash("/")).rejects.toThrow("Refusing to trash root path");
-  });
-
-  it("refuses to trash paths outside allowed roots", async () => {
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    const outsideDir = path.join(testRoot, "outside");
-    realMkdirSync(outsideDir, { recursive: true });
-    const outsidePath = path.join(outsideDir, "openclaw-demo");
-    realWriteFileSync(outsidePath, "outside");
-
-    await expect(movePathToTrash(outsidePath)).rejects.toThrow(
-      "Refusing to trash path outside allowed roots",
-    );
-  });
-
-  it("refuses to use a symlinked trash directory", async () => {
-    const realTrashDir = path.join(testRoot, "real-trash");
-    realRmSync(path.join(homeDir, ".Trash"), { recursive: true, force: true });
-    realMkdirSync(realTrashDir, { recursive: true, mode: 0o700 });
-    fs.symlinkSync(realTrashDir, path.join(homeDir, ".Trash"), "dir");
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-
-    await expect(movePathToTrash(writeTrashTarget())).rejects.toThrow(
-      "Refusing to use non-directory/symlink trash directory",
-    );
-  });
-
-  it("falls back to copy and remove when rename crosses filesystems", async () => {
-    const exdev = Object.assign(new Error("cross-device"), { code: "EXDEV" });
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    mockTrashContainer("secure");
-    vi.spyOn(fs, "renameSync").mockImplementation(() => {
-      throw exdev;
-    });
-    const cpSync = vi.spyOn(fs, "cpSync").mockImplementation(() => undefined);
-    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
-
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    const target = writeTrashTarget();
-    const expected = path.join(homeDir, ".Trash", "demo-123-secure", "demo");
-
-    await expect(movePathToTrash(target)).resolves.toBe(expected);
-    expect(cpSync).toHaveBeenCalledWith(target, expected, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-    });
-    expect(rmSync).toHaveBeenCalledWith(target, { recursive: true, force: false });
-  });
-
-  it("retries copy fallback when the copy destination is created concurrently", async () => {
-    const exdev = Object.assign(new Error("cross-device"), { code: "EXDEV" });
-    const copyCollision = Object.assign(new Error("copy exists"), {
-      code: "ERR_FS_CP_EEXIST",
-    });
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    mockTrashContainer("first", "second");
-    vi.spyOn(fs, "renameSync").mockImplementation(() => {
-      throw exdev;
-    });
-    const cpSync = vi
-      .spyOn(fs, "cpSync")
-      .mockImplementationOnce(() => {
-        throw copyCollision;
-      })
-      .mockImplementation(() => undefined);
-    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
-
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    const target = writeTrashTarget();
-    const first = path.join(homeDir, ".Trash", "demo-123-first", "demo");
-    const second = path.join(homeDir, ".Trash", "demo-123-second", "demo");
-
-    await expect(movePathToTrash(target)).resolves.toBe(second);
-    expect(cpSync).toHaveBeenNthCalledWith(1, target, first, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-    });
-    expect(cpSync).toHaveBeenNthCalledWith(2, target, second, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-    });
-    expect(rmSync).toHaveBeenCalledTimes(1);
-    expect(Date.now).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries with the same timestamp when the destination is created concurrently", async () => {
-    const collision = Object.assign(new Error("exists"), { code: "EEXIST" });
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    mockTrashContainer("first", "second");
-    const renameSync = vi
-      .spyOn(fs, "renameSync")
-      .mockImplementationOnce(() => {
-        throw collision;
-      })
-      .mockImplementation(() => undefined);
-
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    const target = writeTrashTarget();
-    const first = path.join(homeDir, ".Trash", "demo-123-first", "demo");
-    const second = path.join(homeDir, ".Trash", "demo-123-second", "demo");
-
-    await expect(movePathToTrash(target)).resolves.toBe(second);
-    expect(renameSync).toHaveBeenNthCalledWith(1, target, first);
-    expect(renameSync).toHaveBeenNthCalledWith(2, target, second);
-    expect(Date.now).toHaveBeenCalledTimes(1);
-  });
+  it.each(["rename", "copy"] as const)(
+    "retries a concurrent %s destination collision without replacing its occupant",
+    async (kind) => {
+      let first = "";
+      let firstInode: bigint | undefined;
+      const occupy = (source: fs.PathLike, destination: fs.PathLike) => {
+        first = String(destination);
+        realWriteFileSync(destination, "occupied");
+        firstInode = fs.lstatSync(destination, { bigint: true }).ino;
+        expect(fs.readFileSync(source, "utf8")).toBe("demo");
+      };
+      const { renameSync, cpSync, rmSync } = trackMoves();
+      if (kind === "copy") {
+        renameSync.mockImplementation(() => {
+          throw Object.assign(new Error("cross-device"), { code: "EXDEV" });
+        });
+        cpSync.mockImplementationOnce((source, destination, options) => {
+          occupy(source, destination);
+          realCpSync(source, destination, options);
+        });
+      } else {
+        renameSync.mockImplementationOnce((source, destination) => {
+          occupy(source, destination);
+          throw Object.assign(new Error("exists"), { code: "EEXIST" });
+        });
+      }
+      const target = writeTrashTarget();
+      const original = fs.lstatSync(target, { bigint: true });
+      const moved = await movePathToTrash(target);
+      expectMovedTarget(target, moved);
+      expectTrashDestination(first, target);
+      expect(moved).not.toBe(first);
+      expect(fs.readFileSync(first, "utf8")).toBe("occupied");
+      expect(fs.lstatSync(first, { bigint: true }).ino).toBe(firstInode);
+      if (kind === "copy") {
+        expect(fs.lstatSync(moved, { bigint: true }).ino).not.toBe(original.ino);
+        expect(cpSync).toHaveBeenCalledTimes(2);
+        expect(rmSync).toHaveBeenCalledTimes(1);
+      } else {
+        expect(renameSync).toHaveBeenCalledTimes(2);
+        expect(cpSync).not.toHaveBeenCalled();
+        expect(rmSync).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

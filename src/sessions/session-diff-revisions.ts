@@ -14,6 +14,9 @@ export async function resolveSessionDiffBase(params: {
   gitOut: GitOutput;
   root: string;
 }): Promise<{ base: string; baseRef: string }> {
+  if (!params.branch) {
+    return { base: params.head, baseRef: "HEAD" };
+  }
   const defaultRef = await params.gitOut(params.root, [
     "symbolic-ref",
     "--short",
@@ -21,30 +24,18 @@ export async function resolveSessionDiffBase(params: {
   ]);
   const remoteDefault = defaultRef?.trim() || null;
   const defaultShort = remoteDefault?.replace(/^origin\//, "");
-  if (remoteDefault && defaultShort && params.branch && params.branch !== defaultShort) {
+  if (remoteDefault && defaultShort && params.branch !== defaultShort) {
     const mergeBase = await params.gitOut(params.root, ["merge-base", remoteDefault, params.head]);
     if (mergeBase?.trim()) {
       return { base: mergeBase.trim(), baseRef: defaultShort };
     }
   }
   // Plain clones without origin/HEAD still get a branch-relative diff.
-  if (params.branch && params.branch !== "main" && params.branch !== "master") {
+  if (params.branch !== "main" && params.branch !== "master") {
     for (const candidate of ["main", "master", "origin/main", "origin/master"]) {
-      const verified = await params.gitOut(params.root, [
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        candidate,
-      ]);
-      if (verified?.trim()) {
-        const mergeBase = await params.gitOut(params.root, [
-          "merge-base",
-          verified.trim(),
-          params.head,
-        ]);
-        if (mergeBase?.trim()) {
-          return { base: mergeBase.trim(), baseRef: candidate };
-        }
+      const mergeBase = await params.gitOut(params.root, ["merge-base", candidate, params.head]);
+      if (mergeBase?.trim()) {
+        return { base: mergeBase.trim(), baseRef: candidate };
       }
     }
   }
@@ -54,7 +45,15 @@ export async function resolveSessionDiffBase(params: {
 /** Resolves the repository-format-specific empty tree without writing it. */
 export async function resolveSessionDiffEmptyTree(
   root: string,
+  objectFormat?: string,
 ): Promise<{ base: string; baseRef?: string } | null> {
+  if (objectFormat === "sha1") {
+    return { base: "4b825dc642cb6eb9a060e54bf8d69288fbee4904" };
+  }
+  if (objectFormat === "sha256") {
+    return { base: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321" };
+  }
+  // Older Git echoes --show-object-format; unknown formats still belong to Git.
   try {
     const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
     const emptyTree = result.code === 0 ? result.stdout.trim() : "";
@@ -66,18 +65,16 @@ export async function resolveSessionDiffEmptyTree(
 
 type BranchDiffMetadata = Pick<SessionsDiffResult, "aheadCount" | "commits" | "mergeBase">;
 
-function parseCommitRecord(line: string): NonNullable<SessionsDiffResult["mergeBase"]> | undefined {
-  const separator = line.indexOf("\0");
-  if (separator <= 0) {
-    return undefined;
-  }
-  return { sha: line.slice(0, separator), subject: line.slice(separator + 1) };
-}
-
 function parseCommitRecords(text: string): NonNullable<SessionsDiffResult["commits"]> {
   return text
     .split("\n")
-    .map(parseCommitRecord)
+    .map((line) => {
+      const separator = line.indexOf("\0");
+      if (separator <= 0) {
+        return undefined;
+      }
+      return { sha: line.slice(0, separator), subject: line.slice(separator + 1) };
+    })
     .filter(
       (record): record is NonNullable<SessionsDiffResult["mergeBase"]> => record !== undefined,
     );

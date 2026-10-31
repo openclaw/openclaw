@@ -1,9 +1,9 @@
-// Novita plugin entrypoint registers its OpenClaw integration.
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildNovitaVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "novita";
 
@@ -35,5 +35,8 @@ export default defineSingleProviderPluginEntry({
       dropReasoningFromHistory: false,
     }),
     ...buildProviderToolCompatFamilyHooks("openai"),
+  },
+  register(api) {
+    api.registerVideoGenerationProvider(buildNovitaVideoGenerationProvider());
   },
 });

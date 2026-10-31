@@ -1,6 +1,6 @@
-// Memory Wiki plugin module implements lint behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
@@ -16,6 +16,7 @@ import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
+  decodeWikiPageUtf8,
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
   renderWikiMarkdown,
@@ -23,31 +24,34 @@ import {
   type WikiPageSummary,
 } from "./markdown.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
+import { readExistingWikiPage } from "./vault-page-write.js";
 
-type MemoryWikiLintIssue = {
-  severity: "error" | "warning";
-  category: "structure" | "provenance" | "links" | "contradictions" | "open-questions" | "quality";
-  code:
-    | "invalid-frontmatter"
-    | "missing-id"
-    | "duplicate-id"
-    | "missing-page-type"
-    | "page-type-mismatch"
-    | "missing-title"
-    | "missing-source-ids"
-    | "missing-import-provenance"
-    | "broken-wikilink"
-    | "contradiction-present"
-    | "claim-conflict"
-    | "open-question"
-    | "low-confidence"
-    | "claim-low-confidence"
-    | "claim-missing-evidence"
-    | "stale-page"
-    | "stale-claim";
-  path: string;
-  message: string;
-};
+const LINT_ISSUE_KINDS = {
+  "invalid-frontmatter": ["error", "structure"],
+  "missing-id": ["error", "structure"],
+  "duplicate-id": ["error", "structure"],
+  "missing-page-type": ["error", "structure"],
+  "page-type-mismatch": ["error", "structure"],
+  "missing-title": ["error", "structure"],
+  "missing-source-ids": ["warning", "provenance"],
+  "missing-import-provenance": ["warning", "provenance"],
+  "broken-wikilink": ["warning", "links"],
+  "contradiction-present": ["warning", "contradictions"],
+  "claim-conflict": ["warning", "contradictions"],
+  "open-question": ["warning", "open-questions"],
+  "low-confidence": ["warning", "quality"],
+  "claim-low-confidence": ["warning", "quality"],
+  "claim-missing-evidence": ["warning", "provenance"],
+  "stale-page": ["warning", "quality"],
+  "stale-claim": ["warning", "quality"],
+} as const;
+
+type MemoryWikiLintIssue = ReturnType<typeof createLintIssue>;
+
+function createLintIssue(code: keyof typeof LINT_ISSUE_KINDS, pagePath: string, message: string) {
+  const [severity, category] = LINT_ISSUE_KINDS[code];
+  return { severity, category, code, path: pagePath, message };
+}
 
 type LintMemoryWikiResult = {
   vaultRoot: string;
@@ -57,35 +61,14 @@ type LintMemoryWikiResult = {
   reportPath: string;
 };
 
-function toExpectedPageType(page: WikiPageSummary): string {
-  return page.kind;
-}
-
-function isUnmanagedRawSourcePage(
-  page: WikiPageSummary,
-  managedImportedSourcePagePaths: Set<string>,
-): boolean {
-  return (
-    isUnmanagedRawSourceSummary(page) && !managedImportedSourcePagePaths.has(page.relativePath)
-  );
-}
-
 type WikiLinkTargetIndex = {
   pathTargets: Set<string>;
   aliasTargets: Set<string>;
 };
 
-function normalizeLintPathTarget(value: string): string {
-  return normalizeLintTarget(value, { stripQuery: true });
-}
-
-function normalizeLintAliasTextTarget(value: string): string {
-  return normalizeLintTarget(value, { stripQuery: false });
-}
-
-function normalizeLintTarget(value: string, options: { stripQuery: boolean }): string {
+function normalizeLintTarget(value: string, stripQuery = true): string {
   const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
-  const target = options.stripQuery ? (withoutFragment.split("?")[0] ?? "") : withoutFragment;
+  const target = stripQuery ? (withoutFragment.split("?")[0] ?? "") : withoutFragment;
   return target
     .replace(/\.md$/i, "")
     .replace(/^\.\/+/, "")
@@ -94,28 +77,8 @@ function normalizeLintTarget(value: string, options: { stripQuery: boolean }): s
     .trim();
 }
 
-function normalizeLintAliasTarget(value: string): string {
-  return normalizeLowercaseStringOrEmpty(normalizeLintAliasTextTarget(value));
-}
-
-function hasLintTargetQuery(value: string): boolean {
-  const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
-  return withoutFragment.includes("?");
-}
-
-function isLintPathStyleTarget(value: string): boolean {
-  const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
-  const withoutQuery = withoutFragment.split("?")[0] ?? "";
-  return (
-    withoutQuery.startsWith("/") ||
-    withoutQuery.startsWith("./") ||
-    withoutQuery.includes("/") ||
-    /\.md$/i.test(withoutQuery)
-  );
-}
-
 function addPathTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
-  const normalized = raw ? normalizeLintPathTarget(raw) : "";
+  const normalized = raw ? normalizeLintTarget(raw) : "";
   if (!normalized) {
     return;
   }
@@ -123,27 +86,15 @@ function addPathTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
   index.pathTargets.add(path.posix.basename(normalized));
 }
 
-function addAliasTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
-  const normalized = raw ? normalizeLintAliasTarget(raw) : "";
-  if (normalized) {
-    index.aliasTargets.add(normalized);
-  }
-}
-
 function addSlugAliasTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
-  const normalized = raw ? normalizeLintAliasTextTarget(raw) : "";
+  const normalized = raw ? normalizeLintTarget(raw, false) : "";
   if (normalized) {
     index.aliasTargets.add(slugifyWikiSegment(normalized));
   }
 }
 
-function addTitleTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
-  addAliasTarget(index, raw);
-  addSlugAliasTarget(index, raw);
-}
-
 function addPathSuffixTargets(index: WikiLinkTargetIndex, raw: string | undefined) {
-  const normalized = raw ? normalizeLintPathTarget(raw) : "";
+  const normalized = raw ? normalizeLintTarget(raw) : "";
   if (!normalized) {
     return;
   }
@@ -162,7 +113,11 @@ function buildWikiLinkTargetIndex(pages: WikiPageSummary[]): WikiLinkTargetIndex
   };
   for (const page of pages) {
     addPathTarget(index, page.relativePath);
-    addTitleTarget(index, page.title);
+    const title = normalizeLowercaseStringOrEmpty(normalizeLintTarget(page.title, false));
+    if (title) {
+      index.aliasTargets.add(title);
+    }
+    addSlugAliasTarget(index, page.title);
     addPathSuffixTargets(index, page.sourcePath);
     addPathSuffixTargets(index, page.bridgeRelativePath);
     addPathSuffixTargets(index, page.unsafeLocalRelativePath);
@@ -171,43 +126,24 @@ function buildWikiLinkTargetIndex(pages: WikiPageSummary[]): WikiLinkTargetIndex
 }
 
 function hasValidWikiLinkTarget(index: WikiLinkTargetIndex, rawTarget: string): boolean {
-  const pathTarget = normalizeLintPathTarget(rawTarget);
+  const pathTarget = normalizeLintTarget(rawTarget);
   if (!pathTarget) {
     return true;
   }
-  if (
-    index.pathTargets.has(pathTarget) &&
-    (!hasLintTargetQuery(rawTarget) || isLintPathStyleTarget(rawTarget))
-  ) {
+  const withoutFragment = rawTarget.trim().replace(/\\/g, "/").split("#")[0] ?? "";
+  const withoutQuery = withoutFragment.split("?")[0] ?? "";
+  const pathStyle = withoutQuery.includes("/") || /\.md$/i.test(withoutQuery);
+  if (index.pathTargets.has(pathTarget) && (!withoutFragment.includes("?") || pathStyle)) {
     return true;
   }
   if (pathTarget.includes("/")) {
     return false;
   }
+  const alias = normalizeLintTarget(rawTarget, false);
   return (
-    index.aliasTargets.has(normalizeLintAliasTarget(rawTarget)) ||
-    index.aliasTargets.has(slugifyWikiSegment(normalizeLintAliasTextTarget(rawTarget)))
+    index.aliasTargets.has(normalizeLowercaseStringOrEmpty(alias)) ||
+    index.aliasTargets.has(slugifyWikiSegment(alias))
   );
-}
-
-function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
-  const validTargets = buildWikiLinkTargetIndex(pages);
-
-  const issues: MemoryWikiLintIssue[] = [];
-  for (const page of pages) {
-    for (const linkTarget of page.linkTargets) {
-      if (!hasValidWikiLinkTarget(validTargets, linkTarget)) {
-        issues.push({
-          severity: "warning",
-          category: "links",
-          code: "broken-wikilink",
-          path: page.relativePath,
-          message: `Broken wikilink target \`${linkTarget}\`.`,
-        });
-      }
-    }
-  }
-  return issues;
 }
 
 function collectPageIssues(
@@ -215,24 +151,19 @@ function collectPageIssues(
   managedImportedSourcePagePaths: Set<string>,
 ): MemoryWikiLintIssue[] {
   const issues: MemoryWikiLintIssue[] = [];
+  const addIssue = (...args: Parameters<typeof createLintIssue>) => {
+    issues.push(createLintIssue(...args));
+  };
   const pagesById = new Map<string, WikiPageSummary[]>();
   const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
-    const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(
-      page,
-      managedImportedSourcePagePaths,
-    );
+    const requiresStructuredPageMetadata =
+      !isUnmanagedRawSourceSummary(page) || managedImportedSourcePagePaths.has(page.relativePath);
 
     if (!page.id) {
       if (requiresStructuredPageMetadata) {
-        issues.push({
-          severity: "error",
-          category: "structure",
-          code: "missing-id",
-          path: page.relativePath,
-          message: "Missing `id` frontmatter.",
-        });
+        addIssue("missing-id", page.relativePath, "Missing `id` frontmatter.");
       }
     } else {
       const current = pagesById.get(page.id) ?? [];
@@ -242,100 +173,72 @@ function collectPageIssues(
 
     if (!page.pageType) {
       if (requiresStructuredPageMetadata) {
-        issues.push({
-          severity: "error",
-          category: "structure",
-          code: "missing-page-type",
-          path: page.relativePath,
-          message: "Missing `pageType` frontmatter.",
-        });
+        addIssue("missing-page-type", page.relativePath, "Missing `pageType` frontmatter.");
       }
-    } else if (page.pageType !== toExpectedPageType(page)) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "page-type-mismatch",
-        path: page.relativePath,
-        message: `Expected pageType \`${toExpectedPageType(page)}\`, found \`${page.pageType}\`.`,
-      });
+    } else if (page.pageType !== page.kind) {
+      addIssue(
+        "page-type-mismatch",
+        page.relativePath,
+        `Expected pageType \`${page.kind}\`, found \`${page.pageType}\`.`,
+      );
     }
 
     if (!page.title.trim()) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "missing-title",
-        path: page.relativePath,
-        message: "Missing page title.",
-      });
+      addIssue("missing-title", page.relativePath, "Missing page title.");
     }
 
     if (page.kind !== "source" && page.kind !== "report" && page.sourceIds.length === 0) {
-      issues.push({
-        severity: "warning",
-        category: "provenance",
-        code: "missing-source-ids",
-        path: page.relativePath,
-        message: "Non-source page is missing `sourceIds` provenance.",
-      });
+      addIssue(
+        "missing-source-ids",
+        page.relativePath,
+        "Non-source page is missing `sourceIds` provenance.",
+      );
     }
 
     if (
       (page.sourceType === "memory-bridge" || page.sourceType === "memory-bridge-events") &&
       (!page.sourcePath || !page.bridgeRelativePath || !page.bridgeWorkspaceDir)
     ) {
-      issues.push({
-        severity: "warning",
-        category: "provenance",
-        code: "missing-import-provenance",
-        path: page.relativePath,
-        message:
-          "Bridge-imported source page is missing `sourcePath`, `bridgeRelativePath`, or `bridgeWorkspaceDir` provenance.",
-      });
+      addIssue(
+        "missing-import-provenance",
+        page.relativePath,
+        "Bridge-imported source page is missing `sourcePath`, `bridgeRelativePath`, or `bridgeWorkspaceDir` provenance.",
+      );
     }
 
     if (
       (page.provenanceMode === "unsafe-local" || page.sourceType === "memory-unsafe-local") &&
       (!page.sourcePath || !page.unsafeLocalConfiguredPath || !page.unsafeLocalRelativePath)
     ) {
-      issues.push({
-        severity: "warning",
-        category: "provenance",
-        code: "missing-import-provenance",
-        path: page.relativePath,
-        message:
-          "Unsafe-local source page is missing `sourcePath`, `unsafeLocalConfiguredPath`, or `unsafeLocalRelativePath` provenance.",
-      });
+      addIssue(
+        "missing-import-provenance",
+        page.relativePath,
+        "Unsafe-local source page is missing `sourcePath`, `unsafeLocalConfiguredPath`, or `unsafeLocalRelativePath` provenance.",
+      );
     }
 
     if (page.contradictions.length > 0) {
-      issues.push({
-        severity: "warning",
-        category: "contradictions",
-        code: "contradiction-present",
-        path: page.relativePath,
-        message: `Page lists ${page.contradictions.length} contradiction${page.contradictions.length === 1 ? "" : "s"} to resolve.`,
-      });
+      addIssue(
+        "contradiction-present",
+        page.relativePath,
+        `Page lists ${page.contradictions.length} contradiction${page.contradictions.length === 1 ? "" : "s"} to resolve.`,
+      );
     }
 
     if (page.questions.length > 0) {
-      issues.push({
-        severity: "warning",
-        category: "open-questions",
-        code: "open-question",
-        path: page.relativePath,
-        message: `Page lists ${page.questions.length} open question${page.questions.length === 1 ? "" : "s"}.`,
-      });
+      addIssue(
+        "open-question",
+        page.relativePath,
+        `Page lists ${page.questions.length} open question${page.questions.length === 1 ? "" : "s"}.`,
+      );
     }
 
-    if (typeof page.confidence === "number" && page.confidence < 0.5) {
-      issues.push({
-        severity: "warning",
-        category: "quality",
-        code: "low-confidence",
-        path: page.relativePath,
-        message: `Page confidence is low (${page.confidence.toFixed(2)}).`,
-      });
+    if (page.confidence !== undefined && page.confidence < 0.5) {
+      addIssue(
+        "low-confidence",
+        page.relativePath,
+        `Page confidence is low (${page.confidence.toFixed(2)}).`,
+      );
     }
 
     const freshness = assessPageFreshness(page);
@@ -344,73 +247,66 @@ function collectPageIssues(
       page.kind !== "report" &&
       (freshness.level === "stale" || freshness.level === "unknown")
     ) {
-      issues.push({
-        severity: "warning",
-        category: "quality",
-        code: "stale-page",
-        path: page.relativePath,
-        message: `Page freshness needs review (${freshness.reason}).`,
-      });
+      addIssue(
+        "stale-page",
+        page.relativePath,
+        `Page freshness needs review (${freshness.reason}).`,
+      );
     }
   }
 
   for (const claim of claimHealth) {
+    const label = `Claim \`${claim.claimId || claim.text}\``;
     if (claim.missingEvidence) {
-      issues.push({
-        severity: "warning",
-        category: "provenance",
-        code: "claim-missing-evidence",
-        path: claim.pagePath,
-        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} is missing structured evidence.`,
-      });
+      addIssue(
+        "claim-missing-evidence",
+        claim.pagePath,
+        `${label} is missing structured evidence.`,
+      );
     }
-    if (typeof claim.confidence === "number" && claim.confidence < 0.5) {
-      issues.push({
-        severity: "warning",
-        category: "quality",
-        code: "claim-low-confidence",
-        path: claim.pagePath,
-        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} has low confidence (${claim.confidence.toFixed(2)}).`,
-      });
+    if (claim.confidence !== undefined && claim.confidence < 0.5) {
+      addIssue(
+        "claim-low-confidence",
+        claim.pagePath,
+        `${label} has low confidence (${claim.confidence.toFixed(2)}).`,
+      );
     }
     if (claim.freshness.level === "stale" || claim.freshness.level === "unknown") {
-      issues.push({
-        severity: "warning",
-        category: "quality",
-        code: "stale-claim",
-        path: claim.pagePath,
-        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} freshness needs review (${claim.freshness.reason}).`,
-      });
+      addIssue(
+        "stale-claim",
+        claim.pagePath,
+        `${label} freshness needs review (${claim.freshness.reason}).`,
+      );
     }
   }
 
   for (const cluster of buildClaimContradictionClusters({ pages })) {
     for (const entry of cluster.entries) {
-      issues.push({
-        severity: "warning",
-        category: "contradictions",
-        code: "claim-conflict",
-        path: entry.pagePath,
-        message: `Claim cluster \`${cluster.label}\` has competing variants across ${cluster.entries.length} pages.`,
-      });
+      addIssue(
+        "claim-conflict",
+        entry.pagePath,
+        `Claim cluster \`${cluster.label}\` has competing variants across ${cluster.entries.length} pages.`,
+      );
     }
   }
 
   for (const [id, matches] of pagesById.entries()) {
     if (matches.length > 1) {
       for (const match of matches) {
-        issues.push({
-          severity: "error",
-          category: "structure",
-          code: "duplicate-id",
-          path: match.relativePath,
-          message: `Duplicate page id \`${id}\`.`,
-        });
+        addIssue("duplicate-id", match.relativePath, `Duplicate page id \`${id}\`.`);
       }
     }
   }
 
-  issues.push(...collectBrokenLinkIssues(pages));
+  const validTargets = buildWikiLinkTargetIndex(pages);
+  for (const page of pages) {
+    for (const linkTarget of page.linkTargets) {
+      if (!hasValidWikiLinkTarget(validTargets, linkTarget)) {
+        addIssue("broken-wikilink", page.relativePath, `Broken wikilink target \`${linkTarget}\`.`);
+      }
+    }
+  }
+
   return issues.toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
@@ -437,38 +333,19 @@ function buildLintReportBody(issues: MemoryWikiLintIssue[]): string {
   const byCategory = buildIssuesByCategory(issues);
   const lines = [`- Errors: ${errors.length}`, `- Warnings: ${warnings.length}`];
 
-  if (errors.length > 0) {
-    lines.push("", "### Errors");
-    for (const issue of errors) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (warnings.length > 0) {
-    lines.push("", "### Warnings");
-    for (const issue of warnings) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (byCategory.contradictions.length > 0) {
-    lines.push("", "### Contradictions");
-    for (const issue of byCategory.contradictions) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (byCategory["open-questions"].length > 0) {
-    lines.push("", "### Open Questions");
-    for (const issue of byCategory["open-questions"]) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (byCategory.provenance.length > 0 || byCategory.quality.length > 0) {
-    lines.push("", "### Quality Follow-Up");
-    for (const issue of [...byCategory.provenance, ...byCategory.quality]) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
+  const sections: Array<[string, MemoryWikiLintIssue[]]> = [
+    ["Errors", errors],
+    ["Warnings", warnings],
+    ["Contradictions", byCategory.contradictions],
+    ["Open Questions", byCategory["open-questions"]],
+    ["Quality Follow-Up", [...byCategory.provenance, ...byCategory.quality]],
+  ];
+  for (const [heading, sectionIssues] of sections) {
+    if (sectionIssues.length > 0) {
+      lines.push("", `### ${heading}`);
+      for (const issue of sectionIssues) {
+        lines.push(`- \`${issue.path}\`: ${issue.message}`);
+      }
     }
   }
 
@@ -480,16 +357,19 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
   const directoryPath = path.dirname(reportPath);
   await fs.mkdir(directoryPath, { recursive: true });
   const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
-  const original = await fs.readFile(reportPath, "utf8").catch(() =>
-    renderWikiMarkdown({
-      frontmatter: {
-        pageType: "report",
-        id: "report.lint",
-        title: "Lint Report",
-        status: "active",
-      },
-      body: "# Lint Report\n",
-    }),
+  const original = await readExistingWikiPage(
+    async () => decodeWikiPageUtf8(await fs.readFile(reportPath), reportPath),
+    (error) => extractErrorCode(error) === "ENOENT",
+    () =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "report",
+          id: "report.lint",
+          title: "Lint Report",
+          status: "active",
+        },
+        body: "# Lint Report\n",
+      }),
   );
   // The lint report is itself a wiki page. Keep its metadata fail-closed before
   // replacing the managed body so malformed frontmatter is never rewritten.
@@ -529,13 +409,13 @@ export async function lintMemoryWikiVault(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
   const issues = [
-    ...compileResult.frontmatterErrors.map((error): MemoryWikiLintIssue => ({
-      severity: "error",
-      category: "structure",
-      code: "invalid-frontmatter",
-      path: error.relativePath,
-      message: `Frontmatter failed to parse: ${error.message}`,
-    })),
+    ...compileResult.frontmatterErrors.map((error) =>
+      createLintIssue(
+        "invalid-frontmatter",
+        error.relativePath,
+        `Frontmatter failed to parse: ${error.message}`,
+      ),
+    ),
     ...collectPageIssues(compileResult.pages, managedImportedSourcePagePaths),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);

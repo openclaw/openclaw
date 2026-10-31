@@ -13,9 +13,34 @@ const BACKUP_PATH = path.join(".artifacts", "package-manifest", "package.json.pr
 const CRABBOX_SOURCE_LAUNCHER = "node scripts/crabbox-wrapper.mjs";
 const CRABBOX_PUBLISHED_LAUNCHER = "node dist/crabbox-wrapper.js";
 
-function preparedPackageManifest(content) {
+function runtimeExportConditions(value) {
+  if (Array.isArray(value)) {
+    return value.map(runtimeExportConditions);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([condition]) => condition !== "types" && !condition.startsWith("types@"))
+        .map(([condition, target]) => [condition, runtimeExportConditions(target)]),
+    );
+  }
+  return value;
+}
+
+function preparedPackageManifest(content, platformOptionals = {}, runtimeOnly = false) {
   const packageJson = JSON.parse(content);
   let changed = false;
+
+  // npm 10's global bundle loader promotes hoisted optional children to prod
+  // dependencies. Explicit optional edges retain platform filtering even then.
+  for (const [name, version] of Object.entries(platformOptionals)) {
+    if (packageJson.optionalDependencies?.[name] !== undefined) {
+      continue;
+    }
+    packageJson.optionalDependencies ??= {};
+    packageJson.optionalDependencies[name] = version;
+    changed = true;
+  }
 
   for (const [name, command] of Object.entries(packageJson.scripts ?? {})) {
     if (
@@ -43,6 +68,17 @@ function preparedPackageManifest(content) {
       }
     }
   }
+  if (runtimeOnly) {
+    // Private app artifacts retain runtime resolution without promising an SDK type build.
+    packageJson.private = true;
+    delete packageJson.types;
+    delete packageJson.typings;
+    delete packageJson.typesVersions;
+    if (packageJson.exports) {
+      packageJson.exports = runtimeExportConditions(packageJson.exports);
+    }
+    changed = true;
+  }
   return changed ? `${JSON.stringify(packageJson, null, 2)}\n` : content;
 }
 
@@ -53,11 +89,20 @@ export async function restorePackageManifest(cwd = process.cwd()) {
     return false;
   }
   const packageJsonPath = path.join(cwd, PACKAGE_JSON_PATH);
-  const [original, current] = await Promise.all([
+  const [receipt, current] = await Promise.all([
     readFile(backupPath, "utf8"),
     readFile(packageJsonPath, "utf8"),
   ]);
-  if (current !== original && current !== preparedPackageManifest(original)) {
+  const stored = JSON.parse(receipt);
+  const captured =
+    Object.keys(stored).length === 2 &&
+    typeof stored.original === "string" &&
+    typeof stored.prepared === "string";
+  // v2026.9.8 left raw manifests here after interrupted packs. Recover those
+  // using the prior source-only transform, without resolving dependencies.
+  const original = captured ? stored.original : receipt;
+  const prepared = captured ? stored.prepared : preparedPackageManifest(receipt);
+  if (current !== original && current !== prepared) {
     throw new Error(
       `Refusing to restore ${PACKAGE_JSON_PATH} because it changed after prepack sanitized it.`,
     );
@@ -69,16 +114,42 @@ export async function restorePackageManifest(cwd = process.cwd()) {
 
 /** Prepare published package metadata while recording restorable source bytes. */
 export async function preparePackageManifest(cwd = process.cwd()) {
+  return prepareManifest(cwd, false);
+}
+
+/** Prepare an unpublished private runtime artifact, including bundled workspace packages. */
+export async function prepareRuntimePackageManifest(cwd = process.cwd()) {
+  return prepareManifest(cwd, true);
+}
+
+async function prepareManifest(cwd, runtimeOnly) {
   const packageJsonPath = path.join(cwd, PACKAGE_JSON_PATH);
   const backupPath = path.join(cwd, BACKUP_PATH);
   const original = await readFile(packageJsonPath, "utf8");
-  const prepared = preparedPackageManifest(original);
+  const packageJson = JSON.parse(original);
+  const bundles = packageJson.bundleDependencies ?? packageJson.bundledDependencies;
+  let platformOptionals = {};
+  if (bundles === true || (Array.isArray(bundles) && bundles.length > 0)) {
+    const { collectNpmPlatformOptionalDependencies, generateNpmPackageLock } =
+      await import("./generate-npm-package-lock.mts");
+    platformOptionals = collectNpmPlatformOptionalDependencies(
+      JSON.parse(generateNpmPackageLock(cwd)),
+    );
+  }
+  const prepared = preparedPackageManifest(original, platformOptionals, runtimeOnly);
   if (prepared === original) {
     return false;
   }
+  if ((await readFile(packageJsonPath, "utf8")) !== original) {
+    throw new Error(`${PACKAGE_JSON_PATH} changed while preparing its dependency graph.`);
+  }
   await mkdir(path.dirname(backupPath), { recursive: true });
   try {
-    await writeFile(backupPath, original, { encoding: "utf8", flag: "wx" });
+    // Keep exact prepared bytes so recovery never depends on registry availability.
+    await writeFile(backupPath, JSON.stringify({ original, prepared }), {
+      encoding: "utf8",
+      flag: "wx",
+    });
   } catch (error) {
     if (error?.code === "EEXIST") {
       throw new Error(

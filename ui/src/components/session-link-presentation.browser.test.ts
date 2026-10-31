@@ -1,10 +1,20 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { userEvent } from "vitest/browser";
 import "../styles/base.css";
 import "../styles/chat/text.css";
 import "../styles/sidebar-markdown.css";
-import "../styles/chat/grouped.css";
+import "../pages/chat/components/chat-attribution.css";
 
 const title = "A resolved session title long enough to need truncation in a narrow chat bubble";
+function createHost(className: string) {
+  const host = document.createElement("div");
+  Object.assign(host, { id: "session-link-proof", className });
+  document.body.append(host);
+  return host;
+}
+function setTheme(theme: string) {
+  Object.assign(document.documentElement.dataset, { theme, themeMode: theme });
+}
 
 // Zero-sized inline boxes expose the line's baseline without relying on font metrics.
 function baselineMarker(): HTMLSpanElement {
@@ -20,57 +30,73 @@ afterEach(() => {
   document.documentElement.removeAttribute("data-theme-mode");
 });
 
-describe("session link presentation", () => {
-  it.each(["light", "dark"] as const)(
-    "keeps resolved titles on the text baseline with shared link color in %s",
-    (theme) => {
-      document.documentElement.dataset.theme = theme;
-      document.documentElement.dataset.themeMode = theme;
-      const host = document.createElement("div");
-      host.id = "session-link-proof";
-      host.className = "chat-text";
-      host.innerHTML = `<p>Open <a class="markdown-session-link markdown-session-link--titled" href="/chat/main/research"><span class="session-label">${title}</span></a> or <a class="markdown-session-link" href="/chat/main/unknown">an untitled session</a>.</p>`;
-      document.body.append(host);
-      const link = host.querySelector<HTMLAnchorElement>("a")!;
-      const label = link.querySelector<HTMLSpanElement>("span")!;
-      const untitled = host.querySelectorAll("a")[1]!;
-      const outer = baselineMarker();
-      const inner = baselineMarker();
-      link.after(outer);
-      label.prepend(inner);
-
-      for (const width of [240, 700]) {
-        host.style.width = `${width}px`;
-        expect(
-          Math.abs(inner.getBoundingClientRect().bottom - outer.getBoundingClientRect().bottom),
-        ).toBeLessThan(0.6);
-        expect(label.scrollWidth).toBeGreaterThan(label.clientWidth);
-        expect(getComputedStyle(label).textOverflow).toBe("ellipsis");
-        expect(link.getBoundingClientRect().width).toBeLessThanOrEqual(width);
+it.each([
+  ["chat-text", "inline-grid"],
+  ["sidebar-markdown", "inline-grid"],
+  ["chat-reply-attribution", "grid"],
+  ["chat-reply-attribution chat-reply-attribution--forwarded", "grid"],
+])("styles links and preserves keyboard focus in %s", async (className, display) => {
+  const host = createHost(className);
+  host.innerHTML =
+    '<a class="markdown-session-link" href="/chat/main/raw">agent:main:raw</a>' +
+    '<a class="markdown-session-link markdown-session-link--titled" href="/chat/main/resolved"><span class="session-label">Resolved title</span></a>' +
+    '<a class="markdown-session-link" href="/chat/main/code"><code>agent:main:code</code></a>' +
+    '<a class="markdown-session-link markdown-session-link--titled markdown-session-link--automation" href="/chat/main/cron"><span class="session-label">Automation</span></a>' +
+    '<a class="markdown-session-link markdown-session-link--titled markdown-session-link--agent" href="/chat/research"><span class="session-label">Research</span></a>';
+  const start = document.createElement("button");
+  start.textContent = "Start keyboard navigation";
+  host.prepend(start);
+  for (const theme of ["light", "dark"]) {
+    setTheme(theme);
+    const titled = host.querySelector(".markdown-session-link--titled")!;
+    expect(getComputedStyle(titled)).toMatchObject({
+      color: getComputedStyle(host.querySelector("a")!).color,
+      display,
+    });
+    expect(getComputedStyle(titled.firstElementChild!).textOverflow).toBe("ellipsis");
+    await userEvent.click(start);
+    for (const link of host.querySelectorAll("a")) {
+      const style = getComputedStyle(link);
+      for (const side of ["Top", "Right", "Bottom", "Left"] as const) {
+        expect(style[`border${side}Width`]).toBe("0px");
       }
-      expect(getComputedStyle(link).color).toBe(getComputedStyle(untitled).color);
-      expect(getComputedStyle(link, "::before").backgroundColor).toBe(getComputedStyle(link).color);
-      expect(getComputedStyle(link, "::before").maskImage).toContain("data:image/svg+xml");
-      expect(getComputedStyle(link, "::before").animationName).toBe("none");
-      outer.remove();
-      inner.remove();
-      expect(link.textContent).toBe(title);
-    },
-  );
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(link);
+      expect(link.matches(":focus-visible")).toBe(true);
+      expect(getComputedStyle(link)).toMatchObject({ outlineStyle: "solid", outlineWidth: "2px" });
+    }
+  }
+});
 
-  // Flex items blockify inline-grid; ordinary Markdown links retain their inline outer display.
-  it.each([
-    ["sidebar-markdown", "inline-grid"],
-    ["chat-reply-attribution", "grid"],
-  ])("shares the titled-link treatment in %s", (className, expectedDisplay) => {
-    const host = document.createElement("div");
-    host.id = "session-link-proof";
-    host.className = className;
-    host.innerHTML = `<a class="markdown-session-link markdown-session-link--titled"><span class="session-label">${title}</span></a><a class="markdown-session-link">untitled</a>`;
-    document.body.append(host);
-    const [titled, untitled] = host.querySelectorAll("a");
-    expect(getComputedStyle(titled!).color).toBe(getComputedStyle(untitled!).color);
-    expect(getComputedStyle(titled!).display).toBe(expectedDisplay);
-    expect(getComputedStyle(titled!.firstElementChild!).textOverflow).toBe("ellipsis");
+it.each(["light", "dark"] as const)("aligns and truncates resolved titles in %s", (theme) => {
+  setTheme(theme);
+  const host = createHost("chat-text");
+  host.innerHTML = `<p>Open <a class="markdown-session-link markdown-session-link--titled" href="/chat/main/research"><span class="session-label">${title}</span></a> or <a class="markdown-session-link" href="/chat/main/unknown">an untitled session</a>.</p>`;
+  const link = host.querySelector<HTMLAnchorElement>("a")!;
+  const label = link.querySelector<HTMLSpanElement>("span")!;
+  const untitled = host.querySelectorAll("a")[1]!;
+  const outer = baselineMarker();
+  const inner = baselineMarker();
+  link.after(outer);
+  label.prepend(inner);
+
+  for (const width of [240, 700]) {
+    host.style.width = `${width}px`;
+    expect(
+      Math.abs(inner.getBoundingClientRect().bottom - outer.getBoundingClientRect().bottom),
+    ).toBeLessThan(0.6);
+    expect(label.scrollWidth).toBeGreaterThan(label.clientWidth);
+    expect(getComputedStyle(label).textOverflow).toBe("ellipsis");
+    expect(link.getBoundingClientRect().width).toBeLessThanOrEqual(width);
+  }
+  const color = getComputedStyle(link).color;
+  expect(color).toBe(getComputedStyle(untitled).color);
+  expect(getComputedStyle(link, "::before")).toMatchObject({
+    backgroundColor: color,
+    maskImage: expect.stringContaining("data:image/svg+xml"),
+    animationName: "none",
   });
+  outer.remove();
+  inner.remove();
+  expect(link.textContent).toBe(title);
 });

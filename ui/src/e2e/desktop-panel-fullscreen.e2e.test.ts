@@ -4,6 +4,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
@@ -27,21 +28,15 @@ beforeEach(() => {
 });
 
 function sessionsList() {
-  return {
-    count: 1,
-    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-    path: "",
-    sessions: [
-      {
-        key: "main",
-        kind: "direct",
-        label: "Main",
-        placement: { state: "active" },
-        updatedAt: Date.now(),
-      },
-    ],
-    ts: Date.now(),
-  };
+  return chatSessionListResponse([
+    {
+      key: "main",
+      kind: "direct",
+      label: "Main",
+      placement: { state: "active" },
+      updatedAt: Date.now(),
+    },
+  ]);
 }
 
 const workerDesktopEnvironment = {
@@ -65,7 +60,10 @@ async function openDesktopPanel(page: Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
   });
-  await page.getByRole("combobox", { name: "Search chats and commands…" }).waitFor();
+  await page
+    .locator("openclaw-command-palette")
+    .getByRole("textbox", { name: "Search or start a task…" })
+    .waitFor();
   await page.getByRole("option", { name: "Desktop", exact: true }).click();
   const panel = page.locator("openclaw-desktop-panel");
   await panel.locator("section[aria-label='Desktop']").waitFor();
@@ -77,8 +75,6 @@ async function setTheme(page: Page, theme: "dark" | "light") {
   await page.evaluate((nextTheme) => {
     document.documentElement.dataset.themeMode = nextTheme;
     document.documentElement.dataset.themeResolved = nextTheme;
-    document.documentElement.classList.toggle("wa-light", nextTheme === "light");
-    document.documentElement.classList.toggle("wa-dark", nextTheme === "dark");
     document.documentElement.style.colorScheme = nextTheme;
   }, theme);
 }
@@ -283,8 +279,16 @@ suite.define(() => {
     },
   );
 
-  it("reports unavailable and denied fullscreen requests", async () => {
+  it.each(["unavailable", "denied"])("reports %s fullscreen requests", async (mode) => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      if (mode === "unavailable") {
+        await page.addInitScript(() => {
+          Object.defineProperty(document, "fullscreenEnabled", {
+            configurable: true,
+            value: false,
+          });
+        });
+      }
       await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
         methodResponses: {
@@ -294,31 +298,28 @@ suite.define(() => {
       });
       const panel = await openDesktopPanel(page);
       const button = panel.locator(".desktop-fullscreen-button");
-      await panel.locator("section.bp").evaluate((element) => {
-        element.requestFullscreen = () =>
-          Promise.reject(new DOMException("Fullscreen permission denied", "NotAllowedError"));
-      });
-      await button.click();
+      if (mode === "denied") {
+        await panel.locator("section.bp").evaluate((element) => {
+          element.requestFullscreen = () =>
+            Promise.reject(new DOMException("Fullscreen permission denied", "NotAllowedError"));
+        });
+        await button.click();
+      } else {
+        expect(await button.getAttribute("aria-label")).toBe(
+          "Fullscreen is unavailable in this browser",
+        );
+        expect(await button.getAttribute("aria-disabled")).toBe("true");
+        await button.focus();
+        await button.press("Enter");
+      }
       await panel
         .getByRole("alert")
-        .filter({ hasText: "Could not change fullscreen mode: Fullscreen permission denied" })
-        .waitFor();
-
-      await page.evaluate(() => {
-        Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: false });
-      });
-      await panel.evaluate((element) =>
-        (element as HTMLElement & { requestUpdate(): void }).requestUpdate(),
-      );
-      await expect
-        .poll(() => button.getAttribute("aria-label"))
-        .toBe("Fullscreen is unavailable in this browser");
-      expect(await button.getAttribute("aria-disabled")).toBe("true");
-      await button.focus();
-      await button.press("Enter");
-      await panel
-        .getByRole("alert")
-        .filter({ hasText: "Fullscreen is unavailable in this browser" })
+        .filter({
+          hasText:
+            mode === "denied"
+              ? "Could not change fullscreen mode: Fullscreen permission denied"
+              : "Fullscreen is unavailable in this browser",
+        })
         .waitFor();
     });
   });

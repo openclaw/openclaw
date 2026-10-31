@@ -1,4 +1,10 @@
-import { describeRunningOpenClawBuild } from "../infra/sqlite-user-version.js";
+import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
+import {
+  describeRunningOpenClawBuild,
+  isNewerSqliteWriterVersion,
+  SqliteSchemaVersionError,
+} from "../infra/sqlite-user-version.js";
+import { VERSION } from "../version.js";
 import type {
   DeferredStateSchemaPublication,
   IncompatibleOpenClawDatabase,
@@ -8,13 +14,27 @@ import type {
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
 import type { StateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
 
-function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
-  const agent = database.agentId ? ` for agent ${database.agentId}` : "";
-  const writer = database.writerAppVersion ? `; writer build ${database.writerAppVersion}` : "";
-  return `${database.kind} database${agent} ${database.path} uses schema ${database.foundVersion}; this build supports ${database.supportedVersion}${writer}.`;
+/** Fatal refusal when persisted schemas were written by a newer build. */
+export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionError {
+  constructor(
+    readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
+    options: { operation?: OpenClawDatabaseSchemaPreflightOperation } = {},
+  ) {
+    const operation = options.operation ?? "gateway-startup";
+    super(formatIncompatibleDatabaseSchemas(incompatibleDatabases, operation));
+    this.name = "OpenClawDatabaseSchemaPreflightError";
+  }
 }
 
-export function formatIncompatibleDatabaseSchemas(
+function formatIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
+  const agent = database.agentId ? ` for agent ${database.agentId}` : "";
+  const writer = isNewerSqliteWriterVersion(database.writerAppVersion)
+    ? `It was written by OpenClaw ${database.writerAppVersion}; it is newer than this Gateway (${VERSION}).`
+    : `writer build ${database.writerAppVersion ?? "unknown"}.`;
+  return `${database.kind} database${agent} ${database.path} uses schema ${database.foundVersion}; this build supports ${database.supportedVersion}; ${writer}`;
+}
+
+function formatIncompatibleDatabaseSchemas(
   incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
   operation: OpenClawDatabaseSchemaPreflightOperation,
 ): string {
@@ -24,31 +44,40 @@ export function formatIncompatibleDatabaseSchemas(
       : operation === "gateway-restart"
         ? "Gateway refused restart"
         : "Gateway refused startup";
-  const doctorGuidance =
-    operation === "doctor"
-      ? ` ${incompatibleDatabases.map(formatDoctorIncompatibleDatabase).join(" ")} Run Doctor with the OpenClaw install that wrote this state (typically the active Gateway install), or another build that supports these schemas.`
-      : "";
   return (
     `${prefix} because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
-    `Refused by ${describeRunningOpenClawBuild()}.${doctorGuidance} See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`
+    `${incompatibleDatabases.map(formatIncompatibleDatabase).join(" ")} ` +
+    `Refused by ${describeRunningOpenClawBuild()}. ` +
+    (incompatibleDatabases.some((database) => isNewerSqliteWriterVersion(database.writerAppVersion))
+      ? "Use the newer install that supports these schemas, or run openclaw update to update this Gateway service before restarting. To use an older build, stop the service and restore your pre-upgrade backup created with openclaw backup create. "
+      : "Run a build at least as new as the writer that supports these schemas, or stop the service and restore your pre-upgrade backup created with openclaw backup create. ") +
+    `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`
   );
 }
 
 export function formatIndeterminateDatabaseReadiness(
   indeterminate: readonly IndeterminateOpenClawDatabase[],
   operation: OpenClawDatabaseSchemaPreflightOperation,
+  causes: WeakMap<IndeterminateOpenClawDatabase, unknown>,
 ): string {
   const shown = indeterminate
-    .slice(0, 3)
-    .map((database) => `${database.kind} ${database.path}: ${database.reason}`);
-  const omitted = indeterminate.length - shown.length;
+    .toSorted((left, right) => left.path.localeCompare(right.path))
+    .map((database) => {
+      const guidance =
+        operation !== "doctor"
+          ? ""
+          : causes.get(database) instanceof SqliteReadOnlyInspectionContentionError
+            ? " Wait a moment for write activity to settle, then retry the inspection."
+            : " Stop OpenClaw processes, then restore the affected database from a verified backup.";
+      return `${database.kind}${database.agentId ? ` ${database.agentId}` : ""} ${database.path}: ${database.reason}${guidance}`;
+    });
   const action =
     operation === "doctor"
       ? "Doctor could not complete repair"
       : operation === "gateway-startup"
         ? "Gateway refused startup"
         : "Gateway refused restart";
-  return `${action} because persisted database readiness could not be verified: ${shown.join("; ")}${omitted > 0 ? `; +${omitted} more` : ""}. ${operation === "doctor" ? "Stop OpenClaw processes, then restore the affected database from a verified backup." : "Stop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
+  return `${action} because persisted database readiness could not be verified:\n${shown.join("\n")}${operation === "doctor" ? "" : "\nStop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
 }
 
 export function describeDeferredStateSchemaPublication(

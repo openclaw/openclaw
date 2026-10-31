@@ -1,4 +1,3 @@
-// Imessage plugin module binds provider message ids to one authorized chat.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ResolvedIMessageAccount } from "./accounts.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
@@ -14,17 +13,6 @@ import {
 import type { IMessageService, IMessageTarget } from "./targets.js";
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
-
-type IMessageResourceAuthorizationParams = {
-  accountId: string;
-  chatContext: IMessageChatContext;
-  cliPath: string;
-  dbPath?: string;
-  remoteHost?: string;
-  hasExclusiveLocalDatabase: boolean;
-  messageId: string;
-  conversationReadOrigin?: string;
-};
 
 function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();
@@ -42,7 +30,7 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
   return sanitized.trim().slice(0, MAX_REPLY_TO_ID_LENGTH) || undefined;
 }
 
-export function resolveAuthorizedIMessageReplyReference(params: {
+export async function resolveAuthorizedIMessageReplyReference(params: {
   account: ResolvedIMessageAccount;
   target: IMessageTarget;
   cliPath: string;
@@ -52,7 +40,7 @@ export function resolveAuthorizedIMessageReplyReference(params: {
   service?: IMessageService;
   replyToId?: string;
   conversationReadOrigin?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!createActionGate(params.account.config.actions)("reply")) {
     return undefined;
   }
@@ -61,11 +49,10 @@ export function resolveAuthorizedIMessageReplyReference(params: {
     return undefined;
   }
   const chatContext = chatContextFromIMessageTarget(params.target, params.service);
-  const messageId = resolveIMessageMessageId(rawReplyToId, {
-    requireKnownShortId: true,
+  const messageId = await resolveIMessageMessageId(rawReplyToId, {
     chatContext,
   });
-  authorizeIMessageResourceReference({
+  await authorizeIMessageResourceReference({
     accountId: params.account.accountId,
     chatContext,
     cliPath: params.cliPath,
@@ -78,17 +65,24 @@ export function resolveAuthorizedIMessageReplyReference(params: {
   return messageId;
 }
 
-export function authorizeIMessageResourceReference(
-  params: IMessageResourceAuthorizationParams,
-): void {
+export async function authorizeIMessageResourceReference(params: {
+  accountId: string;
+  chatContext: IMessageChatContext;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+  hasExclusiveLocalDatabase: boolean;
+  messageId: string;
+  conversationReadOrigin?: string;
+}): Promise<void> {
   const cacheContext = {
     ...params.chatContext,
     accountId: params.accountId,
   };
-  let cacheBinding = resolveIMessageCachedResourceBinding(params.messageId, cacheContext);
+  let cacheBinding = await resolveIMessageCachedResourceBinding(params.messageId, cacheContext);
   const normalizedMessageId = normalizeIMessageMessageGuidForLookup(params.messageId);
   if (cacheBinding === "unknown" && normalizedMessageId !== params.messageId.trim()) {
-    cacheBinding = resolveIMessageCachedResourceBinding(normalizedMessageId, cacheContext);
+    cacheBinding = await resolveIMessageCachedResourceBinding(normalizedMessageId, cacheContext);
   }
   if (cacheBinding === "match") {
     return;
@@ -98,7 +92,7 @@ export function authorizeIMessageResourceReference(
   }
 
   const providerBinding = params.hasExclusiveLocalDatabase
-    ? checkIMessageResourceBinding(params)
+    ? await checkIMessageResourceBinding(params)
     : "unavailable";
   if (providerBinding === "match") {
     return;

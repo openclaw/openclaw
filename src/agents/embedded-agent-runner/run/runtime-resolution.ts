@@ -1,6 +1,14 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveRunModelFallbacksOverride } from "../../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
+import type { AgentHarnessPluginSelection } from "../../harness/runtime-plugin-load-plan.js";
+import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
@@ -8,15 +16,60 @@ import {
 } from "../../model-selection.js";
 import { resolveThinkingDefault } from "../../model-thinking-default.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
+import type { PreparedModelRuntimeInput } from "../../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 export const CODEX_HARNESS_ID = "codex";
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
-function normalizeRuntimeId(value: string | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
+export function resolveEmbeddedRuntimePluginPreparation(
+  run: RunEmbeddedAgentParamsWithSessionFile,
+): Pick<PreparedModelRuntimeInput, "loadRuntimePlugins" | "runtimePluginPurpose"> {
+  if (run.preparedModelRuntimeMode !== "isolated-read-only") {
+    return {};
+  }
+  // Prompt-only probes need only their selected inference owners.
+  return {
+    loadRuntimePlugins: true,
+    ...(run.sessionPersistence === "detached" &&
+    run.disableTools === true &&
+    (run.modelRun === true || run.promptMode === "none")
+      ? { runtimePluginPurpose: "isolated-completion" }
+      : {}),
+  };
+}
+
+export function resolveEmbeddedRuntimePluginSelections(input: {
+  run: RunEmbeddedAgentParamsWithSessionFile;
+  config: OpenClawConfig;
+  agentId: string;
+  manifestPlugins: PluginMetadataSnapshot;
+  requestedModel: ReturnType<typeof resolveInitialEmbeddedRunModel>;
+}): AgentHarnessPluginSelection[] {
+  const { run, config, agentId, manifestPlugins, requestedModel } = input;
+  const explicitHarness = run.agentHarnessId ?? run.agentHarnessRuntimeOverride;
+  const requestedHarness = explicitHarness ?? run.agentHarnessRuntimePreparationHint;
+  return resolveModelCandidateChain({
+    cfg: config,
+    agentId,
+    manifestPlugins,
+    provider: requestedModel.provider,
+    model: requestedModel.modelId,
+    requestedRouteResolution: run.requestedRouteResolution,
+    fallbacksOverride:
+      run.modelFallbacksOverride ??
+      resolveRunModelFallbacksOverride({ cfg: config, agentId, sessionKey: run.sessionKey }),
+  }).map((candidate, index): AgentHarnessPluginSelection =>
+    Object.assign(
+      { provider: candidate.provider, modelId: candidate.model },
+      // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+      requestedHarness && (index === 0 || explicitHarness) ? { runtime: requestedHarness } : {},
+      { agentId },
+    ),
+  );
 }
 
 export function resolveAttemptTrajectoryAttribution(params: {
@@ -28,15 +81,15 @@ export function resolveAttemptTrajectoryAttribution(params: {
     observability?: Pick<AgentRuntimePlan["observability"], "harnessId">;
   };
 }): { modelApi?: string; modelId: string; provider: string } {
-  const authProfileProvider = normalizeRuntimeId(
+  const authProfileProvider = normalizeLowercaseStringOrEmpty(
     params.runtimePlan.auth?.authProfileProviderForAuth,
   );
-  const harnessId = normalizeRuntimeId(params.runtimePlan.observability?.harnessId);
+  const harnessId = normalizeLowercaseStringOrEmpty(params.runtimePlan.observability?.harnessId);
   if (
     harnessId === CODEX_HARNESS_ID &&
     authProfileProvider !== OPENAI_PROVIDER_ID &&
-    normalizeRuntimeId(params.model.provider) === OPENAI_PROVIDER_ID &&
-    normalizeRuntimeId(params.model.api) === OPENAI_RESPONSES_API
+    normalizeLowercaseStringOrEmpty(params.model.provider) === OPENAI_PROVIDER_ID &&
+    normalizeLowercaseStringOrEmpty(params.model.api) === OPENAI_RESPONSES_API
   ) {
     return {
       modelApi: OPENAI_CODEX_RESPONSES_API,
@@ -54,6 +107,7 @@ export function resolveAttemptTrajectoryAttribution(params: {
 export function resolveInitialThinkLevel(params: {
   requested?: ThinkLevel;
   config?: RunEmbeddedAgentParams["config"];
+  agentId?: string;
   provider: string;
   modelId: string;
   model: { reasoning?: boolean };
@@ -63,6 +117,7 @@ export function resolveInitialThinkLevel(params: {
   }
   return resolveThinkingDefault({
     cfg: params.config ?? {},
+    agentId: params.agentId,
     provider: params.provider,
     model: params.modelId,
     catalog: [
@@ -89,18 +144,15 @@ export function resolveInitialEmbeddedRunModel(params: {
   provider?: string;
   model?: string;
 }): { provider: string; modelId: string } {
-  const cfg = params.config ?? {};
   // Preliminary route identification stays static; prepared metadata owns
   // plugin and workspace normalization once the runtime context exists.
-  const staticPreliminaryNormalization = {
+  const resolutionContext = {
+    cfg: params.config ?? {},
+    agentId: params.agentId,
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   } as const;
-  const configuredDefault = resolveDefaultModelForAgent({
-    cfg,
-    agentId: params.agentId,
-    ...staticPreliminaryNormalization,
-  });
+  const configuredDefault = resolveDefaultModelForAgent(resolutionContext);
   const explicitProvider = normalizeOptionalString(params.provider);
   const explicitModel = normalizeOptionalString(params.model);
   const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
@@ -110,23 +162,18 @@ export function resolveInitialEmbeddedRunModel(params: {
   }
 
   if (explicitModel) {
-    const provider = explicitProvider ?? defaultProvider;
     const aliasIndex = buildModelAliasIndex({
-      cfg,
-      agentId: params.agentId,
-      defaultProvider: provider,
-      ...staticPreliminaryNormalization,
+      ...resolutionContext,
+      defaultProvider,
     });
     const resolved = resolveModelRefFromString({
-      cfg,
-      agentId: params.agentId,
+      ...resolutionContext,
       raw: explicitModel,
-      defaultProvider: provider,
+      defaultProvider,
       aliasIndex,
-      ...staticPreliminaryNormalization,
     });
     return {
-      provider: explicitProvider ?? resolved?.ref.provider ?? provider,
+      provider: resolved?.ref.provider ?? defaultProvider,
       modelId: resolved?.ref.model ?? explicitModel,
     };
   }

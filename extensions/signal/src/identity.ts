@@ -1,4 +1,3 @@
-// Signal plugin module implements identity behavior.
 import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -12,11 +11,6 @@ type SignalSenderAliases = {
 export type SignalSender =
   | { kind: "phone"; raw: string; e164: string; aliases?: SignalSenderAliases }
   | { kind: "uuid"; raw: string; aliases?: SignalSenderAliases };
-
-type SignalAllowEntry =
-  | { kind: "any" }
-  | { kind: "phone"; e164: string }
-  | { kind: "uuid"; raw: string };
 
 export { looksLikeUuid } from "./uuid.js";
 
@@ -51,9 +45,7 @@ export function formatSignalSenderId(sender: SignalSender): string {
   return sender.kind === "phone" ? sender.e164 : `uuid:${sender.raw}`;
 }
 
-export function formatSignalSenderDisplay(sender: SignalSender): string {
-  return sender.kind === "phone" ? sender.e164 : `uuid:${sender.raw}`;
-}
+export const formatSignalSenderDisplay = formatSignalSenderId;
 
 export function formatSignalPairingIdLine(sender: SignalSender): string {
   if (sender.kind === "phone") {
@@ -66,11 +58,11 @@ export function resolveSignalRecipient(sender: SignalSender): string {
   return sender.kind === "phone" ? sender.e164 : sender.raw;
 }
 
-export function resolveSignalPeerId(sender: SignalSender): string {
-  return sender.kind === "phone" ? sender.e164 : `uuid:${sender.raw}`;
-}
+export const resolveSignalPeerId = formatSignalSenderId;
 
-function parseSignalAllowEntry(entry: string): SignalAllowEntry | null {
+function parseSignalAllowEntry(
+  entry: string,
+): { kind: "any" } | { kind: "phone"; e164: string } | { kind: "uuid"; raw: string } | null {
   const trimmed = entry.trim();
   if (!trimmed) {
     return null;

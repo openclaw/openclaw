@@ -45,10 +45,12 @@ typed tool exists.
 Read [hosting.md](references/hosting.md) before opening or repairing a remote
 Control UI. Read [dashboards.md](references/dashboards.md) before creating or
 restructuring a board.
+Use the `visualize` skill for widget composition, libraries, interactive code
+explanations, and dashboard content. Keep session and board organization here.
 
 ## Navigate and arrange the UI
 
-Use `screen` for deterministic client commands:
+Use `screen` for direct client commands:
 
 - `navigate` to open a session by `sessionKey`;
 - `sidebar_show` / `sidebar_hide` for the session sidebar;
@@ -57,8 +59,8 @@ Use `screen` for deterministic client commands:
   docked panels.
 
 `screen` broadcasts to every connected Control UI that advertises UI commands;
-it cannot select one browser tab. Confirm the blast radius when several clients
-may be open. If it reports no capable client, ask the user to open the Control
+it cannot select one browser tab. Check which clients are connected before sending
+a command. If it reports no capable client, ask the user to open the Control
 UI and retry.
 
 Use the in-app browser or an available browser-control tool when the task needs
@@ -71,6 +73,8 @@ Control UI tab when possible.
 2. Create or rename tabs with `tab_create` / `tab_update`; use short lowercase
    slug IDs.
 3. Add content with the correct owner:
+   - native text, metrics, tables, charts, and links: `show_widget` with
+     `pin: true` and `report`;
    - self-contained custom HTML/SVG or registered-source content:
      `show_widget` with `pin: true`;
    - trusted plugin widgets: `dashboard widget_put` with an advertised

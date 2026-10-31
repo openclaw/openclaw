@@ -1,4 +1,3 @@
-// GitHub Copilot source-token validation and account endpoint resolution.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
@@ -39,10 +38,8 @@ function parseCopilotApiBaseUrl(value: unknown, domain: string): string {
   if (typeof api !== "string" || !api.trim()) {
     throw new Error("GitHub Copilot user response has an invalid endpoints.api URL");
   }
-  let url: URL;
-  try {
-    url = new URL(api);
-  } catch {
+  const url = URL.parse(api);
+  if (!url) {
     throw new Error("GitHub Copilot user response has an invalid endpoints.api URL");
   }
   const host = url.hostname.toLowerCase();
@@ -67,7 +64,6 @@ export async function resolveCopilotRuntimeAuth(params: {
   config?: OpenClawConfig;
 }): Promise<{
   apiKey: string;
-  source: string;
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
@@ -104,7 +100,6 @@ export async function resolveCopilotRuntimeAuth(params: {
     // exchange rejects supported fine-grained PATs before inference.
     return {
       apiKey: params.githubToken,
-      source: `validated:${userUrl}`,
       baseUrl,
     };
   } catch (error) {

@@ -1,10 +1,43 @@
 import { createHash } from "node:crypto";
+import { runtimeProcessDeployEntryFileName } from "../infra/runtime-process-manifest.ts";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
 export const WORKER_BUNDLE_ARTIFACT_MODE = 0o700;
-export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";
-export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";
+export const WORKER_BUNDLE_ENTRY_PATH = runtimeProcessDeployEntryFileName("worker");
+const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";
+const WORKER_BUNDLE_IMAGE_PROCESSOR_PATH = "image-processor.worker.mjs";
+const WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH = "file-tool-planning.worker.mjs";
+const WORKER_BUNDLE_FILE_TOOL_READ_PATH = "file-tool-read.worker.mjs";
 export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";
+const WORKER_BUNDLE_SQLITE_SOURCE_REVISION_PATH = "sqlite-source-revision.worker.mjs";
+export const WORKER_BUNDLE_SQLITE_STORE_PATH = "sqlite-store.worker.mjs";
+const WORKER_BUNDLE_CLIENT_CREDENTIAL_PATH = "client-credential.worker.mjs";
+export const WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH = "windows-security-helper.exe";
+export const WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS = {
+  "darwin-arm64": "fs-safe-darwin-arm64.node",
+  "darwin-x64": "fs-safe-darwin-x64.node",
+} as const;
+export const WORKER_BUNDLE_ARTIFACT_PATHS = [
+  WORKER_BUNDLE_CLIENT_CREDENTIAL_PATH,
+  "code-mode-node.worker.mjs",
+  "openclaw-state-read.worker.mjs",
+  "worker-native-lifecycle.worker.mjs",
+  WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH,
+  WORKER_BUNDLE_FILE_TOOL_READ_PATH,
+  ...Object.values(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS),
+  "gateway-state-owner-heartbeat.worker.mjs",
+  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
+  WORKER_BUNDLE_IMAGE_PROCESSOR_PATH,
+  "service-child-group-anchor.mjs",
+  "service-child-relay.mjs",
+  WORKER_BUNDLE_SQLITE_SOURCE_REVISION_PATH,
+  WORKER_BUNDLE_SQLITE_STORE_PATH,
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+] as const;
+
+export const WORKER_BUNDLE_CHUNK_PATH_PATTERN = /^worker-chunk-[A-Za-z0-9_-]+\.mjs$/u;
 
 /** Immutable source archive within the running node's owning package, outside its dist inventory. */
 export function workerBundleArchiveRelativePath(sha256: string): string {

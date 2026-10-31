@@ -1,177 +1,306 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
-import type { GatewayAgentRow } from "../api/types.ts";
-import type { RouteId } from "../app-routes.ts";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  PORTAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
-import { i18n, isSupportedLocale } from "../i18n/index.ts";
-import type { ShellRouteState } from "./app-host-route-state.ts";
-import type { ApplicationContext } from "./context.ts";
-import { hasOperatorWriteAccess } from "./operator-access.ts";
+import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
+import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
 import {
-  applyServerUiPrefs,
-  flushServerUiPrefs,
-  refreshProfileAppearancePrefs,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+  invalidateChatMetadataForSessionEvent,
+  invalidateChatMetadataStore,
+} from "../lib/chat/chat-metadata-cache.ts";
+import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store-scope.ts";
+import { currentDisplayConfig } from "../lib/config/config-state-model.ts";
+import {
+  invalidateModelAuthStatusRequests,
+  modelAuthEventInvalidates,
+} from "../lib/model-auth-request-state.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
+import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifecycle.ts";
+import type { ShellRouteState } from "./app-host-route-state.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
+import type { ApplicationContext } from "./context.ts";
+import { isNativeMobileHost } from "./native-web-chrome.ts";
+import { hasOperatorWriteAccess } from "./operator-access.ts";
+import { profilePreferencesState } from "./server-prefs-profile.ts";
+import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
+import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 
 export type StoredOutboxScopeHost = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
   settings: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
-export type OutboxStoreRuntime = Pick<
-  typeof import("../lib/chat/outbox-store-projection.ts"),
-  "summarizeStoredChatOutboxes" | "subscribeStoredChatOutboxChanges"
+export type OutboxStoreRuntime = ReturnType<
+  (typeof import("../lib/chat/outbox-store-projection.ts"))["createStoredChatOutboxReader"]
 >;
 
 export interface ShellGatewayHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   routeState: ShellRouteState;
   activeSessionKey: string;
   desktopNavigationExpanded: boolean;
-  agentsListClient: GatewayBrowserClient | null;
-  agentsListSource: ApplicationContext["agents"] | null;
-  sessionKeyClient: GatewayBrowserClient | null;
-  runtimeConfigClient: GatewayBrowserClient | null;
-  runtimeConfigSource: ApplicationContext["runtimeConfig"] | null;
   lastLocalePrefSignature: string | null;
-  previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null;
-  agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null;
-  criticalNoticeRuntime: Promise<
-    typeof import("../pages/chat/critical-observer-notice.runtime.ts")
-  > | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
-  selectChatSession(sessionKey: string, agentId?: string | null): void;
-  storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
-  requestUpdate(): void;
-}
-
-function diffAgentRoster(
-  previous: readonly GatewayAgentRow[],
-  next: readonly GatewayAgentRow[],
-): { invalidatedIds: string[]; changedIds: string[] } {
-  const nextById = new Map(next.map((agent) => [agent.id, agent]));
-  const invalidatedIds: string[] = [];
-  const changedIds: string[] = [];
-  for (const agent of previous) {
-    const replacement = nextById.get(agent.id);
-    if (!replacement) {
-      invalidatedIds.push(agent.id);
-    } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
-      invalidatedIds.push(agent.id);
-      changedIds.push(agent.id);
-    }
-  }
-  return { invalidatedIds, changedIds };
+  readonly shellNavigation: Pick<
+    ShellNavigationCapability,
+    "recoverDeletedActiveSession" | "selectChatSession" | "synchronizeSessionUrl"
+  >;
+  invalidate(): void;
 }
 
 export class ShellGatewayOwner {
+  private lastDeletedSessions: ApplicationContext["sessions"]["state"]["deletedSessions"] | null =
+    null;
+  private agentsListClient: GatewayBrowserClient | null = null;
+  private agentsListSource: ApplicationContext["agents"] | null = null;
+  private sessionKeyClient: GatewayBrowserClient | null = null;
+  private runtimeConfigClient: GatewayBrowserClient | null = null;
+  private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
+  private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private runtimeConfigProfileId: string | null = null;
+  private runtimeConfigReady: Promise<void> | null = null;
+  private preferenceGeneration = 0;
   private profileAppearanceSource: {
     client: GatewayBrowserClient;
     profileId: string;
+    runtimeConfig: ApplicationContext["runtimeConfig"];
+    configObject: unknown;
+    invalidationId: number;
+    promise: Promise<void>;
   } | null = null;
 
   constructor(private readonly host: ShellGatewayHost) {}
 
-  reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): void {
-    const snapshot = runtimeConfig.state.configSnapshot;
+  observeSessions(
+    sessions: ApplicationContext["sessions"],
+    synchronizeTitle: () => void,
+  ): () => void {
+    let active = true;
+    const synchronize = () => {
+      if (!active || this.host.context?.sessions !== sessions) {
+        return;
+      }
+      this.observeDeletedSessions(sessions.state);
+      this.host.shellNavigation.recoverDeletedActiveSession();
+      this.host.shellNavigation.synchronizeSessionUrl();
+      synchronizeTitle();
+    };
+    synchronize();
+    // Deletion receipts retire handoffs and reconcile selection before the next render.
+    const unsubscribe = sessions.subscribe(synchronize);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }
+
+  private observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void {
+    const context = this.host.context;
+    const deletedSessions = sessionState.deletedSessions;
+    if (!context || Object.is(deletedSessions, this.lastDeletedSessions)) {
+      return;
+    }
+    this.lastDeletedSessions = deletedSessions;
+    if (deletedSessions.length === 0) {
+      return;
+    }
+    const { client, assistantAgentId, hello } = context.gateway.snapshot;
+    // Handoffs belong to this synchronous deletion observation, not the later storage import.
+    retireSessionPaneHandoffs(context, deletedSessions);
+    for (const { key, agentId, retireBeforeRevision } of deletedSessions) {
+      context.chatAttachmentHandoff.retireScope(
+        storedChatOutboxScopeKey({ sessionKey: key, agentId }),
+        retireBeforeRevision,
+      );
+    }
+    const gatewayUrl = context.gateway.connection.gatewayUrl;
+    const sameConnection = capturePlacementStartupConnection(context.gateway, {
+      gatewayUrl,
+      recoveryScope: client?.recoveryScope || undefined,
+    });
+    const scope = {
+      client,
+      gatewayUrl,
+      isCurrent: () => context.gateway.snapshot.client === client && sameConnection(),
+      assistantAgentId,
+      hello,
+      agentsList: context.agents.state.agentsList,
+    };
+    void (async () => {
+      let retireDrafts: typeof import("../lib/chat/composer-draft-retirement.runtime.ts").retireDeletedComposerDrafts;
+      try {
+        const { retireDeletedComposerDrafts } =
+          await import("../lib/chat/composer-draft-retirement.runtime.ts");
+        retireDrafts = retireDeletedComposerDrafts;
+      } catch {
+        showToast({ message: t("sessionsView.draftCleanupFailed") });
+        return;
+      }
+      return retireDrafts(context, scope, deletedSessions);
+    })();
+  }
+
+  async reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): Promise<void> {
+    const configObject = currentDisplayConfig(runtimeConfig.state);
     const context = this.host.context;
     if (
-      !snapshot?.config ||
+      !configObject ||
       !context ||
       context.runtimeConfig !== runtimeConfig ||
-      // selfUser is cleared on close; retained config must not reclassify that as an identity swap.
       context.gateway.snapshot.phase !== "connected"
     ) {
       return;
     }
+    const { client, hello } = context.gateway.snapshot;
+    const profileId = context.gateway.snapshot.selfUser?.id;
+    if (!client) {
+      return;
+    }
     const scope = context.gateway.connection.gatewayUrl;
-    applyServerUiPrefs(snapshot.config, {
-      scope,
-      profileId: context.gateway.snapshot?.selfUser?.id,
-      onThemeChanged: (theme) => context.theme.recordServerSelection(theme, scope),
-      onApplied: (patch) => {
-        if (patch.sidebarEntries !== undefined) {
-          context.navigation.update({ sidebarEntries: patch.sidebarEntries });
+    const sourceClient = runtimeConfig.state.client;
+    const generation = this.preferenceGeneration;
+    const remainsCurrent = () =>
+      this.host.context === context &&
+      context.runtimeConfig === runtimeConfig &&
+      currentDisplayConfig(runtimeConfig.state) === configObject &&
+      runtimeConfig.state.client === sourceClient &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.hello === hello &&
+      context.gateway.snapshot.selfUser?.id === profileId &&
+      context.gateway.snapshot.phase === "connected" &&
+      context.gateway.connection.gatewayUrl === scope &&
+      this.preferenceGeneration === generation;
+    try {
+      const runtime = await import("./server-prefs-reconcile.ts");
+      if (!remainsCurrent()) {
+        return;
+      }
+      runtime.applyServerUiPrefs(configObject, {
+        scope,
+        profileId,
+        onThemeChanged: (theme) => {
+          if (remainsCurrent()) {
+            context.theme.recordServerSelection(theme, scope);
+          }
+        },
+        onApplied: () => {
+          if (remainsCurrent()) {
+            context.theme.refresh();
+          }
+        },
+      });
+      if (!remainsCurrent()) {
+        return;
+      }
+      const localePref = runtime.resolveServerUiPrefState(configObject, "locale", scope);
+      const signature = JSON.stringify([scope, localePref.overridden, localePref.value]);
+      if (signature !== this.host.lastLocalePrefSignature) {
+        this.host.lastLocalePrefSignature = signature;
+        if (localePref.overridden && isSupportedLocale(localePref.value)) {
+          void i18n.setLocale(localePref.value);
+        } else {
+          void i18n.useSystemLocale();
         }
-        context.theme.refresh();
-      },
-    });
-    void this.refreshProfileAppearancePrefs(context).catch(() => undefined);
-    const localePref = resolveServerUiPrefState(snapshot.config, "locale", scope);
-    const localePrefSignature = JSON.stringify([scope, localePref.overridden, localePref.value]);
-    if (localePrefSignature === this.host.lastLocalePrefSignature) {
-      return;
+      }
+      await this.refreshProfileAppearancePrefs(context);
+    } catch (error) {
+      if (remainsCurrent()) {
+        console.error("[gateway] profile preference refresh failed:", error);
+      }
     }
-    this.host.lastLocalePrefSignature = localePrefSignature;
-    if (localePref.overridden && isSupportedLocale(localePref.value)) {
-      void i18n.setLocale(localePref.value);
-      return;
-    }
-    void i18n.useSystemLocale();
   }
 
-  reconcileCommittedServerUiPrefs(
+  async reconcileCommittedServerUiPrefs(
     runtimeConfig: ApplicationContext["runtimeConfig"],
     needsRefresh: boolean,
     retainedLocal = false,
-  ): void {
-    if (this.host.context?.runtimeConfig !== runtimeConfig) {
+  ): Promise<void> {
+    const context = this.host.context;
+    if (context?.runtimeConfig !== runtimeConfig) {
       return;
     }
     if (needsRefresh) {
-      void runtimeConfig.refresh();
+      await runtimeConfig.refreshDisplay();
       return;
     }
-    this.reconcileServerUiPrefs(runtimeConfig);
     if (retainedLocal) {
-      this.host.context?.theme.refresh();
+      context.theme.refresh();
     }
+    await this.reconcileServerUiPrefs(runtimeConfig);
   }
 
   handleGatewayEvent(event: GatewayEventFrame): void {
+    const sourceContext = this.host.context;
+    const client = sourceContext?.gateway?.snapshot.client;
+    if (client && event.event === "sessions.changed") {
+      invalidateChatMetadataForSessionEvent(client, event.payload, {
+        hello: sourceContext?.gateway.snapshot.hello,
+        agentsList: sourceContext?.agents.state.agentsList,
+      });
+    }
+    const modelInvalidation = modelCatalogEventInvalidation(event);
+    const metadataChange =
+      event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
+    const commandsChanged = metadataChange?.commandsChanged !== false;
+    if (client && modelAuthEventInvalidates(event)) {
+      invalidateModelAuthStatusRequests(client);
+    }
+    if (
+      client &&
+      (modelInvalidation || (event.event === "chat.metadata.changed" && commandsChanged))
+    ) {
+      invalidateChatMetadataStore(
+        client,
+        typeof metadataChange?.agentId === "string"
+          ? { agentId: metadataChange.agentId }
+          : undefined,
+        undefined,
+        modelInvalidation ?? "preserve",
+        {
+          commandsChanged,
+          // Fulfillment observations change speed hints, not session descriptor facts.
+          refreshSessionFacts: metadataChange?.authChanged !== false,
+        },
+      );
+    }
     if (event.event === "sessions.changed") {
-      const context = this.host.context;
-      if (context) {
-        this.host.recoverDeletedActiveSession(context.sessions.state);
-      }
+      this.host.shellNavigation.recoverDeletedActiveSession();
       return;
     }
-    if (event.event === "session.observer") {
-      const context = this.host.context;
-      if (context) {
-        // Recovery digests share the tracker so stale critical notices can announce again.
-        this.host.criticalNoticeRuntime ??=
-          import("../pages/chat/critical-observer-notice.runtime.ts");
-        const payload = event.payload;
-        void this.host.criticalNoticeRuntime.then((runtime) =>
-          runtime.handleCriticalObserverDigest({
-            payload,
-            selectedSessionKey: this.host.activeSessionKey,
-            sessionHost: this.host.storedOutboxScopeHost(context),
-            sessions: context.sessions.state.result?.sessions ?? [],
-            onOpen: (sessionKey, agentId) => this.host.selectChatSession(sessionKey, agentId),
-          }),
-        );
-      }
+    if (event.event === "agent.identity.changed") {
+      this.scheduleAgentRosterRefresh();
       return;
     }
     if (event.event === "config.changed") {
+      // Bootstrap owns upload policy independently of an open configuration editor.
+      void this.host.context?.config.refresh();
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
-      if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
-        void runtimeConfig.refresh();
+      if (
+        runtimeConfig &&
+        !runtimeConfig.state.configFormDirty &&
+        (runtimeConfig.state.configSnapshot || !runtimeConfig.state.bootstrapConfig)
+      ) {
+        // Save notifications reconcile in place so active editors keep focus and stay interactive.
+        void runtimeConfig.refreshDisplay({ background: true });
       }
       this.scheduleAgentRosterRefresh();
       return;
@@ -179,20 +308,17 @@ export class ShellGatewayOwner {
     if (event.event === "users.prefs.changed") {
       const context = this.host.context;
       const profileId = context?.gateway.snapshot.selfUser?.id;
-      const payload = event.payload;
-      if (
-        context &&
-        profileId &&
-        payload &&
-        typeof payload === "object" &&
-        "profileId" in payload &&
-        payload.profileId === profileId
-      ) {
+      // The server routes this invalidation to the current profile and its aliases;
+      // the payload can name the canonical profile while this connection holds an alias.
+      if (context && profileId) {
+        if (context.gateway.snapshot.client) {
+          invalidateUserPreferences(context.gateway.snapshot.client);
+        }
         void this.refreshProfileAppearancePrefs(context, true).catch(() => undefined);
       }
       return;
     }
-    if (event.event !== "ui.command" || !event.payload) {
+    if (event.event !== "ui.command" || !event.payload || isNativeMobileHost()) {
       return;
     }
     const context = this.host.context;
@@ -210,20 +336,64 @@ export class ShellGatewayOwner {
       return;
     }
     if (command.kind === "panel") {
-      window.dispatchEvent(
-        new CustomEvent(
-          command.panel === "terminal" ? TERMINAL_PANEL_TOGGLE_EVENT : BROWSER_PANEL_TOGGLE_EVENT,
-          {
-            detail: {
-              open: command.open,
-              ...(command.dock ? { dock: command.dock } : {}),
-              ...(command.panel === "terminal" && command.terminalSessionId
-                ? { terminalSessionId: command.terminalSessionId }
-                : {}),
-            },
+      const sessionKey =
+        commandParams.sessionKey ??
+        (command.panel === "portal" || command.panel === "plugin"
+          ? this.host.activeSessionKey
+          : undefined);
+      if (
+        sessionKey &&
+        (!areUiSessionKeysEquivalent(sessionKey, this.host.activeSessionKey) ||
+          !isSessionRouteId(this.host.routeState.routeId) ||
+          (command.panel === "plugin" &&
+            commandParams.agentId !== undefined &&
+            commandParams.agentId !== context.agentSelection.state.selectedId))
+      ) {
+        this.host.shellNavigation.selectChatSession(sessionKey, commandParams.agentId);
+      }
+      const panelEvent = new CustomEvent(
+        {
+          terminal: TERMINAL_PANEL_TOGGLE_EVENT,
+          browser: BROWSER_PANEL_TOGGLE_EVENT,
+          desktop: DESKTOP_PANEL_TOGGLE_EVENT,
+          portal: PORTAL_PANEL_TOGGLE_EVENT,
+          plugin: PLUGIN_PANEL_TOGGLE_EVENT,
+        }[command.panel],
+        {
+          detail: {
+            open: command.open,
+            ...(command.panel === "portal" && commandParams.requestId
+              ? { requestId: commandParams.requestId }
+              : {}),
+            ...(command.panel === "plugin"
+              ? {
+                  pluginId: command.pluginId,
+                  panelId: command.panelId,
+                  agentId: commandParams.agentId,
+                }
+              : {}),
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(command.dock ? { dock: command.dock } : {}),
+            ...(command.expanded !== undefined ? { expanded: command.expanded } : {}),
+            ...(command.panel === "terminal" && command.terminalSessionId
+              ? { terminalSessionId: command.terminalSessionId }
+              : {}),
+            ...("environmentId" in command && command.environmentId
+              ? { environmentId: command.environmentId }
+              : {}),
+            ...("portalId" in command && command.portalId ? { portalId: command.portalId } : {}),
           },
-        ),
+        },
       );
+      if (sessionKey) {
+        rememberSessionPanelToggle(
+          command.panel === "plugin"
+            ? `plugin:${command.pluginId}/${command.panelId}`
+            : command.panel,
+          panelEvent,
+        );
+      }
+      window.dispatchEvent(panelEvent);
       return;
     }
 
@@ -231,17 +401,17 @@ export class ShellGatewayOwner {
       new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
     );
     if (!handled && (command.kind === "navigate" || command.kind === "split")) {
-      this.host.selectChatSession(command.sessionKey);
+      this.host.shellNavigation.selectChatSession(command.sessionKey, commandParams.agentId);
     }
   }
 
   scheduleAgentRosterRefresh(): void {
     // Config writes arrive in bursts; only the final authoritative roster snapshot matters.
-    if (this.host.agentRosterRefreshTimer !== null) {
-      globalThis.clearTimeout(this.host.agentRosterRefreshTimer);
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
     }
-    this.host.agentRosterRefreshTimer = globalThis.setTimeout(() => {
-      this.host.agentRosterRefreshTimer = null;
+    this.agentRosterRefreshTimer = globalThis.setTimeout(() => {
+      this.agentRosterRefreshTimer = null;
       void this.refreshAgentRoster();
     }, AGENT_ROSTER_REFRESH_DEBOUNCE_MS);
   }
@@ -257,13 +427,25 @@ export class ShellGatewayOwner {
     if (!next || this.host.context !== context) {
       return;
     }
-    const rosterDiff = diffAgentRoster(previous?.agents ?? [], next.agents);
-    if (rosterDiff.invalidatedIds.length > 0) {
-      context.agents.invalidateFiles(rosterDiff.invalidatedIds);
-      context.agentIdentity.invalidate(rosterDiff.invalidatedIds);
+    const previousAgents = previous?.agents ?? [];
+    const nextById = new Map(next.agents.map((agent) => [agent.id, agent]));
+    const invalidatedIds: string[] = [];
+    const changedIds: string[] = [];
+    for (const agent of previousAgents) {
+      const replacement = nextById.get(agent.id);
+      if (!replacement) {
+        invalidatedIds.push(agent.id);
+      } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
+        invalidatedIds.push(agent.id);
+        changedIds.push(agent.id);
+      }
     }
-    if (rosterDiff.changedIds.length > 0) {
-      void context.agentIdentity.ensure(rosterDiff.changedIds);
+    if (invalidatedIds.length > 0) {
+      context.agents.invalidateFiles(invalidatedIds);
+      context.agentIdentity.invalidate(invalidatedIds);
+    }
+    if (changedIds.length > 0) {
+      void context.agentIdentity.ensure(changedIds);
     }
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (
@@ -272,30 +454,30 @@ export class ShellGatewayOwner {
       next.agents.length > 0 &&
       !nextIds.has(activeAgentId)
     ) {
-      context.agentSelection.set(next.defaultId);
+      context.agentSelection.set(next.defaultId, { background: true });
     }
   }
 
   synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
-    const previousPhase = this.host.previousGatewayPhase;
-    this.host.previousGatewayPhase = snapshot.phase;
+    const previousPhase = this.previousGatewayPhase;
+    this.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
+    this.host.shellNavigation.recoverDeletedActiveSession();
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
-      void connectionBootstrap.run("runtime-config", async () => {
-        await this.ensureRuntimeConfig(snapshot, context.runtimeConfig);
-        return this.refreshProfileAppearancePrefs(context);
-      });
-      if (
-        this.host.routeState.routeId &&
-        (!context.agents.state.agentsList || context.agents.state.agentsListCached)
-      ) {
+      void connectionBootstrap.run("runtime-config", () =>
+        this.ensureRuntimeConfig(snapshot, context.runtimeConfig),
+      );
+      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
       }
       void connectionBootstrap.run("outbox", () => this.host.outboxStoreImport.load());
+    } else {
+      // A reconnect can retain the client; retire its completed preference read now.
+      void this.ensureRuntimeConfig(snapshot, context?.runtimeConfig);
     }
     if (previousPhase !== "connected" && snapshot.phase === "connected") {
       i18n.retryPendingLocale();
@@ -307,30 +489,49 @@ export class ShellGatewayOwner {
     runtimeConfig = this.host.context?.runtimeConfig,
   ): Promise<void> {
     // Config-gated sidebar routes require the snapshot before any settings page opens.
-    if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig) {
-      this.host.runtimeConfigClient = null;
+    if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig?.state.connected) {
+      this.runtimeConfigClient = null;
       this.runtimeConfigProfileId = null;
+      this.runtimeConfigReady = null;
+      this.preferenceGeneration += 1;
       this.profileAppearanceSource = null;
       return Promise.resolve();
     }
     const profileId = snapshot.selfUser?.id ?? null;
     if (
-      this.host.runtimeConfigClient === snapshot.client &&
-      this.host.runtimeConfigSource === runtimeConfig &&
+      this.runtimeConfigClient === snapshot.client &&
+      this.runtimeConfigSource === runtimeConfig &&
       this.runtimeConfigProfileId === profileId
     ) {
-      return Promise.resolve();
+      return this.runtimeConfigReady ?? Promise.resolve();
     }
-    this.host.runtimeConfigClient = snapshot.client;
-    this.host.runtimeConfigSource = runtimeConfig;
+    this.runtimeConfigClient = snapshot.client;
+    this.runtimeConfigSource = runtimeConfig;
     this.runtimeConfigProfileId = profileId;
     flushServerUiPrefs(runtimeConfig, {
       profileId,
       canWrite: hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
-      afterCommit: ({ needsRefresh, retainedLocal }) =>
-        this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
+      afterCommit: ({ needsRefresh, retainedLocal }) => {
+        void this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal);
+      },
     });
-    return runtimeConfig.ensureLoaded();
+    const context = this.host.context;
+    const generation = ++this.preferenceGeneration;
+    this.runtimeConfigReady = (
+      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureDisplayLoaded()
+    ).then(async () => {
+      if (
+        this.host.context !== context ||
+        this.runtimeConfigClient !== snapshot.client ||
+        this.runtimeConfigSource !== runtimeConfig ||
+        this.runtimeConfigProfileId !== profileId ||
+        this.preferenceGeneration !== generation
+      ) {
+        return;
+      }
+      await this.reconcileServerUiPrefs(runtimeConfig);
+    });
+    return this.runtimeConfigReady;
   }
 
   ensureAgentsList(
@@ -338,18 +539,18 @@ export class ShellGatewayOwner {
     agents = this.host.context?.agents,
   ): Promise<void> {
     if (snapshot.phase !== "connected" || !snapshot.client) {
-      this.host.agentsListClient = null;
+      this.agentsListClient = null;
       return Promise.resolve();
     }
     const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || (agents.state.agentsList && !agents.state.agentsListCached)) {
+    if (!agents || !routeId || agents.state.agentsList) {
       return Promise.resolve();
     }
-    if (this.host.agentsListClient === snapshot.client && this.host.agentsListSource === agents) {
+    if (this.agentsListClient === snapshot.client && this.agentsListSource === agents) {
       return Promise.resolve();
     }
-    this.host.agentsListClient = snapshot.client;
-    this.host.agentsListSource = agents;
+    this.agentsListClient = snapshot.client;
+    this.agentsListSource = agents;
     return agents.ensureList().then(() => undefined);
   }
 
@@ -358,85 +559,122 @@ export class ShellGatewayOwner {
     sessionKey: string;
   }): void {
     const sessionKey = snapshot.sessionKey.trim();
-    if (
-      snapshot.client === this.host.sessionKeyClient &&
-      sessionKey === this.host.activeSessionKey
-    ) {
+    if (snapshot.client === this.sessionKeyClient && sessionKey === this.host.activeSessionKey) {
       return;
     }
-    this.host.sessionKeyClient = snapshot.client;
+    this.sessionKeyClient = snapshot.client;
     if (sessionKey) {
       this.host.activeSessionKey = sessionKey;
     }
   }
 
-  private refreshProfileAppearancePrefs(
-    context: ApplicationContext<RouteId>,
-    force = false,
-  ): Promise<void> {
+  private refreshProfileAppearancePrefs(context: ApplicationContext, force = false): Promise<void> {
     const snapshot = context.gateway.snapshot;
     const profileId = snapshot?.selfUser?.id;
     if (!profileId) {
       return Promise.resolve();
     }
     const client = snapshot.client;
-    const configObject = context.runtimeConfig.state.configSnapshot?.config;
+    const configObject = currentDisplayConfig(context.runtimeConfig.state);
     if (snapshot.phase !== "connected" || !client || !configObject) {
       return Promise.resolve();
     }
+    const runtimeConfig = context.runtimeConfig;
     const previous = this.profileAppearanceSource;
-    if (!force && previous?.client === client && previous.profileId === profileId) {
-      return Promise.resolve();
+    if (
+      !force &&
+      previous?.client === client &&
+      previous.profileId === profileId &&
+      previous.runtimeConfig === runtimeConfig &&
+      previous.configObject === configObject &&
+      previous.invalidationId === profilePreferencesState.invalidationId
+    ) {
+      return previous.promise;
     }
-    const source = { client, profileId };
-    this.profileAppearanceSource = source;
-    const scope = context.gateway.connection.gatewayUrl;
-    const remainsCurrent = () =>
-      this.host.context === context &&
-      context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.selfUser?.id === profileId &&
-      this.profileAppearanceSource === source;
-    return refreshProfileAppearancePrefs({
+    // Writes retire profile reads independently of the config snapshot's identity.
+    const source = {
       client,
       profileId,
+      runtimeConfig,
       configObject,
-      scope,
-      onApplied: () => {
-        if (remainsCurrent()) {
-          context.theme.refresh();
+      invalidationId: profilePreferencesState.invalidationId,
+      promise: Promise.resolve(),
+    };
+    this.profileAppearanceSource = source;
+    const scope = context.gateway.connection.gatewayUrl;
+    const hello = snapshot.hello;
+    const sourceClient = runtimeConfig.state.client;
+    const generation = this.preferenceGeneration;
+    const remainsCurrent = () =>
+      this.host.context === context &&
+      context.runtimeConfig === runtimeConfig &&
+      currentDisplayConfig(runtimeConfig.state) === configObject &&
+      runtimeConfig.state.client === sourceClient &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.phase === "connected" &&
+      context.gateway.snapshot.hello === hello &&
+      context.gateway.snapshot.selfUser?.id === profileId &&
+      context.gateway.connection.gatewayUrl === scope &&
+      this.profileAppearanceSource === source &&
+      this.preferenceGeneration === generation;
+    const reportError = (error: unknown) => {
+      if (remainsCurrent()) {
+        console.error("[gateway] profile preference refresh failed:", error);
+      }
+    };
+    source.promise = import("./server-prefs-reconcile.ts")
+      .then(async (runtime) => {
+        if (!remainsCurrent()) {
+          return;
         }
-      },
-      onThemeChanged: (theme) => {
+        const pending = runtime.refreshProfileAppearancePrefs({
+          client,
+          profileId,
+          configObject,
+          scope,
+          isCurrent: remainsCurrent,
+          onApplied: () => {
+            if (remainsCurrent()) {
+              context.theme.refresh({ notify: true });
+            }
+          },
+          onThemeChanged: (theme) => {
+            if (remainsCurrent()) {
+              context.theme.recordServerSelection(theme, scope);
+            }
+          },
+        });
+        // Read admission may adopt the profile identity before its first await.
+        source.invalidationId = profilePreferencesState.invalidationId;
+        const applied = await pending;
         if (remainsCurrent()) {
-          context.theme.recordServerSelection(theme, scope);
-        }
-      },
-    })
-      .then((applied) => {
-        if (!applied && remainsCurrent()) {
-          context.theme.refresh();
+          if (!applied) {
+            context.theme.refresh({ notify: true });
+          }
+          // Readiness releases the shell and private-background descendants even
+          // when the profile snapshot matches the browser mirror.
+          this.host.invalidate();
         }
       })
-      .catch((error: unknown) => {
-        if (remainsCurrent()) {
-          console.error("[gateway] profile appearance preference refresh failed:", error);
-        }
-      });
+      .catch(reportError);
+    return source.promise;
   }
 
   reset(): void {
-    void this.host.criticalNoticeRuntime?.then((runtime) => runtime.resetCriticalObserverTracker());
-    this.host.agentsListClient = null;
-    this.host.agentsListSource = null;
-    this.host.sessionKeyClient = null;
-    this.host.runtimeConfigClient = null;
-    this.host.runtimeConfigSource = null;
+    this.lastDeletedSessions = null;
+    this.preferenceGeneration += 1;
+    this.runtimeConfigReady = null;
+    this.agentsListClient = null;
+    this.agentsListSource = null;
+    this.sessionKeyClient = null;
+    this.runtimeConfigClient = null;
+    this.runtimeConfigSource = null;
     this.runtimeConfigProfileId = null;
     this.profileAppearanceSource = null;
-    this.host.previousGatewayPhase = null;
-    if (this.host.agentRosterRefreshTimer !== null) {
-      globalThis.clearTimeout(this.host.agentRosterRefreshTimer);
-      this.host.agentRosterRefreshTimer = null;
+    this.previousGatewayPhase = null;
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
+      this.agentRosterRefreshTimer = null;
     }
     resetServerUiPrefsSync();
   }

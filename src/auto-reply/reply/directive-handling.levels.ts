@@ -1,4 +1,3 @@
-// Parses directive level values for reasoning, verbosity, and elevated mode.
 import {
   normalizeFastMode,
   type ElevatedLevel,
@@ -19,6 +18,7 @@ export async function resolveCurrentDirectiveLevels(params: {
   };
   agentEntry?: {
     fastModeDefault?: unknown;
+    verboseDefault?: VerboseLevel;
     reasoningDefault?: unknown;
   };
   agentCfg?: {
@@ -35,30 +35,25 @@ export async function resolveCurrentDirectiveLevels(params: {
   currentReasoningLevel: ReasoningLevel;
   currentElevatedLevel: ElevatedLevel | undefined;
 }> {
-  const resolvedDefaultThinkLevel =
-    (params.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-    (await params.resolveDefaultThinkingLevel()) ??
-    (params.agentCfg?.thinkingDefault as ThinkLevel | undefined);
-  const currentThinkLevel = resolvedDefaultThinkLevel;
-  const currentFastMode =
-    normalizeFastMode(params.sessionEntry?.fastMode) ??
-    normalizeFastMode(params.agentEntry?.fastModeDefault);
-  const currentVerboseLevel =
-    (params.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-    (params.agentCfg?.verboseDefault as VerboseLevel | undefined);
-  const currentReasoningLevel =
-    (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
-    (params.agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
-    (params.agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
-    "off";
-  const currentElevatedLevel =
-    (params.sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-    (params.agentCfg?.elevatedDefault as ElevatedLevel | undefined);
   return {
-    currentThinkLevel,
-    currentFastMode,
-    currentVerboseLevel,
-    currentReasoningLevel,
-    currentElevatedLevel,
+    currentThinkLevel:
+      (params.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      (await params.resolveDefaultThinkingLevel()) ??
+      (params.agentCfg?.thinkingDefault as ThinkLevel | undefined),
+    currentFastMode:
+      normalizeFastMode(params.sessionEntry?.fastMode) ??
+      normalizeFastMode(params.agentEntry?.fastModeDefault),
+    currentVerboseLevel:
+      (params.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+      params.agentEntry?.verboseDefault ??
+      (params.agentCfg?.verboseDefault as VerboseLevel | undefined),
+    currentReasoningLevel:
+      (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+      (params.agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
+      (params.agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
+      "off",
+    currentElevatedLevel:
+      (params.sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+      (params.agentCfg?.elevatedDefault as ElevatedLevel | undefined),
   };
 }

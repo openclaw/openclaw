@@ -1,57 +1,140 @@
-/**
- * Azure Speech provider descriptor. It reads config/env defaults, parses speech
- * directives, lists voices, and calls the Azure TTS runtime helper.
- */
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
+  SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
+import {
+  createSpeechDirectiveParser,
+  resolveSpeechProviderApiKey,
+} from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  azureSpeechTTS,
-  DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
-  DEFAULT_AZURE_SPEECH_LANG,
-  DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
-  DEFAULT_AZURE_SPEECH_VOICE,
-  DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT,
-  inferAzureSpeechFileExtension,
-  isAzureSpeechVoiceCompatible,
-  listAzureSpeechVoices,
-  normalizeAzureSpeechBaseUrl,
-} from "./tts.js";
 
-type AzureSpeechProviderConfig = {
-  apiKey?: string;
-  region?: string;
-  endpoint?: string;
+const DEFAULT_AZURE_SPEECH_VOICE = "en-US-JennyNeural";
+const DEFAULT_AZURE_SPEECH_LANG = "en-US";
+const DEFAULT_AZURE_SPEECH_AUDIO_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT = "ogg-24khz-16bit-mono-opus";
+const DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT = "raw-8khz-8bit-mono-mulaw";
+// Voice discovery should fail boundedly instead of waiting forever when the
+// Azure Speech voices endpoint accepts the connection but never responds.
+const DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS = 30_000;
+const AZURE_SPEECH_FILE_EXTENSIONS = [
+  ["ogg-", ".ogg"],
+  ["webm-", ".webm"],
+  ["riff-", ".wav"],
+  ["raw-", ".pcm"],
+  ["amr-", ".amr"],
+] as const;
+
+function normalizeAzureSpeechBaseUrl(params: {
   baseUrl?: string;
-  voice: string;
-  lang: string;
-  outputFormat: string;
-  voiceNoteOutputFormat: string;
-  timeoutMs?: number;
-};
+  endpoint?: string;
+  region?: string;
+}): string | undefined {
+  const configured = trimToUndefined(params.baseUrl) ?? trimToUndefined(params.endpoint);
+  if (configured) {
+    return configured.replace(/\/+$/, "").replace(/\/cognitiveservices\/v1$/i, "");
+  }
+  const region = trimToUndefined(params.region);
+  return region ? `https://${region}.tts.speech.microsoft.com` : undefined;
+}
 
-type AzureSpeechProviderOverrides = {
-  voice?: string;
-  lang?: string;
-  outputFormat?: string;
-};
+function azureSpeechUrl(params: {
+  baseUrl?: string;
+  endpoint?: string;
+  region?: string;
+  path: "/cognitiveservices/v1" | "/cognitiveservices/voices/list";
+}): string {
+  const baseUrl = normalizeAzureSpeechBaseUrl(params);
+  if (!baseUrl) {
+    throw new Error("Azure Speech region or endpoint missing");
+  }
+  return `${baseUrl}${params.path}`;
+}
 
-function readAzureSpeechEnvApiKey(): string | undefined {
-  return (
-    trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
-    trimToUndefined(process.env.AZURE_SPEECH_API_KEY) ??
-    trimToUndefined(process.env.SPEECH_KEY)
-  );
+function escapeXmlText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeXmlAttr(value: string): string {
+  return escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+function readAzureVoiceTagStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => trimToUndefined(entry) !== undefined)
+    : undefined;
+}
+
+async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?: string) {
+  const config = readAzureSpeechProviderConfig(req.providerConfig);
+  const overrides = req.providerOverrides;
+  const voiceOverride = trimToUndefined(overrides?.voice ?? overrides?.voiceId);
+  const lang = trimToUndefined(overrides?.lang ?? overrides?.languageCode) ?? config.lang;
+  const formatOverride = trimToUndefined(overrides?.outputFormat);
+  const apiKey = resolveApiKey(config.apiKey);
+  if (!apiKey) {
+    throw new Error("Azure Speech API key missing");
+  }
+  const { resolveGeneratedMediaMaxBytes } =
+    await import("openclaw/plugin-sdk/media-generation-runtime");
+  const text = req.text;
+  const outputFormat =
+    outputFormatOverride ??
+    formatOverride ??
+    (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat);
+  const timeoutMs = config.timeoutMs ?? req.timeoutMs;
+  const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "audio");
+  const voice = voiceOverride ?? config.voice;
+  const url = azureSpeechUrl({ ...config, path: "/cognitiveservices/v1" });
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/ssml+xml",
+        "Ocp-Apim-Subscription-Key": apiKey,
+        "X-Microsoft-OutputFormat": outputFormat,
+        "User-Agent": "OpenClaw",
+      },
+      body:
+        `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
+        `xml:lang="${escapeXmlAttr(lang)}">` +
+        `<voice name="${escapeXmlAttr(voice)}">${escapeXmlText(text)}</voice>` +
+        `</speak>`,
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),
+    auditContext: "azure-speech.tts",
+  });
+
+  try {
+    await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
+    return {
+      audioBuffer: await readProviderBinaryResponse(
+        response,
+        "Azure Speech TTS API error",
+        "audio",
+        {
+          maxBytes,
+          onOverflow: ({ maxBytes: limit }) =>
+            new Error(`Azure Speech TTS audio response exceeds ${limit} bytes`),
+        },
+      ),
+      outputFormat,
+    };
+  } finally {
+    await release();
+  }
 }
 
 function readAzureSpeechEnvRegion(): string | undefined {
@@ -60,38 +143,22 @@ function readAzureSpeechEnvRegion(): string | undefined {
   );
 }
 
-function readAzureSpeechEnvEndpoint(): string | undefined {
-  return trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
-}
-
-function resolveAzureSpeechConfigRecord(
-  rawConfig: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const providers = asOptionalRecord(rawConfig.providers);
-  return (
-    asOptionalRecord(providers?.["azure-speech"]) ??
-    asOptionalRecord(providers?.azure) ??
-    asOptionalRecord(rawConfig["azure-speech"]) ??
-    asOptionalRecord(rawConfig.azure)
-  );
-}
-
-function normalizeAzureSpeechProviderConfig(
-  rawConfig: Record<string, unknown>,
-): AzureSpeechProviderConfig {
-  const raw = resolveAzureSpeechConfigRecord(rawConfig);
-  const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
-  const endpoint = trimToUndefined(raw?.endpoint) ?? readAzureSpeechEnvEndpoint();
+function normalizeAzureSpeechFields(
+  raw: Record<string, unknown> | undefined,
+  apiKey: string | undefined,
+) {
+  const configuredRegion = trimToUndefined(raw?.region);
+  const region = configuredRegion ?? readAzureSpeechEnvRegion();
+  const endpoint =
+    trimToUndefined(raw?.endpoint) ??
+    (configuredRegion ? undefined : trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT));
   const baseUrl = normalizeAzureSpeechBaseUrl({
     baseUrl: trimToUndefined(raw?.baseUrl),
     endpoint,
     region,
   });
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
-      path: "tts.providers.azure-speech.apiKey",
-    }),
+    apiKey,
     region,
     endpoint,
     baseUrl,
@@ -104,90 +171,53 @@ function normalizeAzureSpeechProviderConfig(
   };
 }
 
-function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeechProviderConfig {
-  const defaults = normalizeAzureSpeechProviderConfig({});
-  const region = trimToUndefined(config.region) ?? defaults.region;
-  const endpoint = trimToUndefined(config.endpoint) ?? defaults.endpoint;
-  const baseUrl = normalizeAzureSpeechBaseUrl({
-    baseUrl: trimToUndefined(config.baseUrl) ?? defaults.baseUrl,
-    endpoint,
-    region,
-  });
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    region,
-    endpoint,
-    baseUrl,
-    voice: trimToUndefined(config.voice ?? config.voiceId) ?? defaults.voice,
-    lang: trimToUndefined(config.lang ?? config.languageCode) ?? defaults.lang,
-    outputFormat: trimToUndefined(config.outputFormat) ?? defaults.outputFormat,
-    voiceNoteOutputFormat:
-      trimToUndefined(config.voiceNoteOutputFormat) ?? defaults.voiceNoteOutputFormat,
-    timeoutMs: asFiniteNumber(config.timeoutMs) ?? defaults.timeoutMs,
-  };
+function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.["azure-speech"]) ?? asOptionalRecord(providers?.azure);
+  return normalizeAzureSpeechFields(
+    raw,
+    normalizeResolvedSecretInputString({
+      value: raw?.apiKey,
+      path: "tts.providers.azure-speech.apiKey",
+    }),
+  );
 }
 
-function readAzureSpeechOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): AzureSpeechProviderOverrides {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    voice: trimToUndefined(overrides.voice ?? overrides.voiceId),
-    lang: trimToUndefined(overrides.lang ?? overrides.languageCode),
-    outputFormat: trimToUndefined(overrides.outputFormat),
-  };
+function readAzureSpeechProviderConfig(config: SpeechProviderConfig) {
+  return normalizeAzureSpeechFields(config, trimToUndefined(config.apiKey));
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-} {
-  switch (ctx.key) {
-    case "voice":
-    case "voiceid":
-    case "voice_id":
-    case "azure_voice":
-    case "azurevoice":
-    case "azure_speech_voice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, voice: ctx.value } };
-    case "lang":
-    case "language":
-    case "language_code":
-    case "languagecode":
-    case "azure_lang":
-    case "azure_language":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, lang: ctx.value } };
-    case "output_format":
-    case "outputformat":
-    case "azure_format":
-    case "azure_output_format":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, outputFormat: ctx.value } };
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  voice: [
+    "allowVoice",
+    ["voice", "voiceid", "voice_id", "azure_voice", "azurevoice", "azure_speech_voice"],
+  ],
+  lang: [
+    "allowVoiceSettings",
+    ["lang", "language", "language_code", "languagecode", "azure_lang", "azure_language"],
+  ],
+  outputFormat: [
+    "allowVoiceSettings",
+    ["output_format", "outputformat", "azure_format", "azure_output_format"],
+  ],
+});
 
 function resolveApiKey(...candidates: Array<string | undefined>): string | undefined {
-  return resolveSpeechProviderApiKey(...candidates, readAzureSpeechEnvApiKey());
+  return resolveSpeechProviderApiKey(
+    ...candidates,
+    trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
+      trimToUndefined(process.env.AZURE_SPEECH_API_KEY) ??
+      trimToUndefined(process.env.SPEECH_KEY),
+  );
 }
 
-function resolveTimeoutMs(config: AzureSpeechProviderConfig, timeoutMs: number): number {
-  return config.timeoutMs ?? timeoutMs;
-}
-
-/** Build the Azure Speech provider descriptor for the speech-core runtime. */
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) => {
+    const config = readAzureSpeechProviderConfig(providerConfig);
+    return Boolean(
+      resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
+    );
+  };
   return {
     id: "azure-speech",
     label: "Azure Speech",
@@ -207,119 +237,127 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       const region = trimToUndefined(talkProviderConfig.region);
       const endpoint = trimToUndefined(talkProviderConfig.endpoint ?? talkProviderConfig.baseUrl);
       const baseUrl = normalizeAzureSpeechBaseUrl({
-        baseUrl: trimToUndefined(talkProviderConfig.baseUrl),
+        // Inherit the resolved route unless Talk explicitly selects another one.
+        baseUrl:
+          trimToUndefined(talkProviderConfig.baseUrl) ??
+          (!region && !endpoint ? base.baseUrl : undefined),
         endpoint,
         region: region ?? base.region,
       });
       return {
         ...base,
-        ...(apiKey === undefined ? {} : { apiKey }),
-        ...(region === undefined ? {} : { region }),
-        ...(endpoint === undefined ? {} : { endpoint }),
-        ...(baseUrl === undefined ? {} : { baseUrl }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
+        ...filterStringRecord({
+          apiKey,
+          region,
+          endpoint,
+          baseUrl,
+          voice: trimToUndefined(talkProviderConfig.voiceId),
+          lang: trimToUndefined(talkProviderConfig.languageCode),
+          outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+        }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.languageCode) == null
-        ? {}
-        : { lang: trimToUndefined(params.languageCode) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voice: trimToUndefined(params.voiceId),
+        lang: trimToUndefined(params.languageCode),
+        outputFormat: trimToUndefined(params.outputFormat),
+      }) ?? {},
     listVoices: async (req) => {
       const config = req.providerConfig
         ? readAzureSpeechProviderConfig(req.providerConfig)
         : undefined;
-      const requestValue = req.apiKey;
-      const configValue = config?.apiKey;
-      const apiKey = resolveApiKey(requestValue, configValue);
+      const apiKey = resolveApiKey(req.apiKey, config?.apiKey);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
-      return listAzureSpeechVoices({
-        apiKey,
+      const url = azureSpeechUrl({
         baseUrl: req.baseUrl ?? config?.baseUrl,
         endpoint: config?.endpoint,
         region: config?.region ?? readAzureSpeechEnvRegion(),
-        timeoutMs: config?.timeoutMs ?? req.timeoutMs,
+        path: "/cognitiveservices/voices/list",
       });
-    },
-    isConfigured: ({ providerConfig }) => {
-      const config = readAzureSpeechProviderConfig(providerConfig);
-      return Boolean(
-        resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
-      );
-    },
-    synthesize: async (req) => {
-      const config = readAzureSpeechProviderConfig(req.providerConfig);
-      const overrides = readAzureSpeechOverrides(req.providerOverrides);
-      const apiKey = resolveApiKey(config.apiKey);
-      if (!apiKey) {
-        throw new Error("Azure Speech API key missing");
+      const timeoutMs = config?.timeoutMs ?? req.timeoutMs;
+      const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+        await import("openclaw/plugin-sdk/provider-http");
+      const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+        await import("openclaw/plugin-sdk/ssrf-runtime");
+      const { response, release } = await fetchWithSsrFGuard({
+        url,
+        init: {
+          method: "GET",
+          headers: { "Ocp-Apim-Subscription-Key": apiKey },
+        },
+        timeoutMs: timeoutMs ?? DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),
+        auditContext: "azure-speech.voices",
+      });
+
+      try {
+        await assertOkOrThrowProviderError(response, "Azure Speech voices API error");
+        const voices = await readProviderJsonResponse<unknown>(response, "azure-speech.voices");
+        return Array.isArray(voices)
+          ? voices.flatMap((value) => {
+              const voice = asOptionalRecord(value);
+              const id = trimToUndefined(voice?.ShortName);
+              if (
+                !voice ||
+                !id ||
+                voice.IsDeprecated === true ||
+                (typeof voice.IsDeprecated === "string" &&
+                  voice.IsDeprecated.toLowerCase() === "true")
+              ) {
+                return [];
+              }
+              const status = trimToUndefined(voice.Status)?.toLowerCase();
+              if (status === "deprecated" || status === "retired" || status === "disabled") {
+                return [];
+              }
+              const voiceTag = asOptionalRecord(voice.VoiceTag);
+              const tailoredScenarios = readAzureVoiceTagStrings(voiceTag?.TailoredScenarios);
+              const personalities = readAzureVoiceTagStrings(voiceTag?.VoicePersonalities);
+              const description = [...(tailoredScenarios ?? []), ...(personalities ?? [])];
+              return [
+                {
+                  id,
+                  name: trimToUndefined(voice.DisplayName) ?? trimToUndefined(voice.LocalName),
+                  description: description.length > 0 ? description.join(", ") : undefined,
+                  locale: trimToUndefined(voice.Locale),
+                  gender: trimToUndefined(voice.Gender),
+                  personalities,
+                },
+              ];
+            })
+          : [];
+      } finally {
+        await release();
       }
-      const outputFormat =
-        overrides.outputFormat ??
-        (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat);
-      const { resolveGeneratedMediaMaxBytes } =
-        await import("openclaw/plugin-sdk/media-generation-runtime");
-      const audioBuffer = await azureSpeechTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        endpoint: config.endpoint,
-        region: config.region,
-        voice: overrides.voice ?? config.voice,
-        lang: overrides.lang ?? config.lang,
-        outputFormat,
-        timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
+    },
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    synthesize: async (req) => {
+      const { audioBuffer, outputFormat } = await azureSpeechTTS(req);
+      const normalized = outputFormat.toLowerCase();
       return {
         audioBuffer,
         outputFormat,
-        fileExtension: inferAzureSpeechFileExtension(outputFormat),
-        voiceCompatible: isAzureSpeechVoiceCompatible(outputFormat),
+        fileExtension: normalized.includes("mp3")
+          ? ".mp3"
+          : (AZURE_SPEECH_FILE_EXTENSIONS.find(([prefix]) => normalized.startsWith(prefix))?.[1] ??
+            ".audio"),
+        voiceCompatible: normalized.startsWith("ogg-") && normalized.includes("opus"),
       };
     },
     synthesizeTelephony: async (req) => {
-      const config = readAzureSpeechProviderConfig(req.providerConfig);
-      const overrides = readAzureSpeechOverrides(req.providerOverrides);
-      const apiKey = resolveApiKey(config.apiKey);
-      if (!apiKey) {
-        throw new Error("Azure Speech API key missing");
-      }
-      const sampleRate = 8_000;
-      const { resolveGeneratedMediaMaxBytes } =
-        await import("openclaw/plugin-sdk/media-generation-runtime");
-      const audioBuffer = await azureSpeechTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        endpoint: config.endpoint,
-        region: config.region,
-        voice: overrides.voice ?? config.voice,
-        lang: overrides.lang ?? config.lang,
-        outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
-        timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
+      const { audioBuffer } = await azureSpeechTTS(
+        { ...req, target: "telephony" },
+        DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
+      );
       return {
         audioBuffer,
         outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
-        sampleRate,
+        sampleRate: 8_000,
       };
     },
   };

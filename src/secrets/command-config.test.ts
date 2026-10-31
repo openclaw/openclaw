@@ -1,5 +1,4 @@
-/** Tests command-specific secret assignment collection from config snapshots. */
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import {
@@ -9,151 +8,88 @@ import {
 } from "../config/resolution-facts.js";
 import {
   buildTalkTestProviderConfig,
-  TALK_TEST_PROVIDER_API_KEY_PATH,
-  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+  TALK_TEST_PROVIDER_API_KEY_PATH as keyPath,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS as keySegments,
 } from "../test-utils/talk-test-provider.js";
 import { analyzeCommandSecretAssignmentsFromSnapshot } from "./command-config.js";
 
-describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
-  it("returns assignments from the active runtime snapshot for configured refs", () => {
-    const sourceConfig = buildTalkTestProviderConfig({
-      source: "env",
-      provider: "default",
-      id: "TALK_API_KEY",
-    });
-    const resolvedConfig = buildTalkTestProviderConfig("talk-key"); // pragma: allowlist secret
-
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
-
-    expect(result.assignments).toEqual([
-      {
-        path: TALK_TEST_PROVIDER_API_KEY_PATH,
-        pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
-        value: "talk-key",
-      },
-    ]);
+const talkPath = { path: keyPath, pathSegments: [...keySegments] };
+function analyzeTalk(sourceConfig: OpenClawConfig, resolvedConfig: OpenClawConfig) {
+  return analyzeCommandSecretAssignmentsFromSnapshot({
+    sourceConfig,
+    resolvedConfig,
+    targetIds: new Set(["talk.providers.*.apiKey"]),
   });
+}
+function readSource(config: OpenClawConfig, env = {}) {
+  const read = resolveConfigForRead(config, env);
+  const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
+  setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
+  return sourceConfig;
+}
 
-  it("reports configured refs that are unresolved in the snapshot", () => {
-    const sourceConfig = buildTalkTestProviderConfig({
-      source: "env",
-      provider: "default",
-      id: "TALK_API_KEY",
-    });
-    const resolvedConfig = buildTalkTestProviderConfig(undefined);
+it("quotes dotted provider keys in unresolved paths", () => {
+  const sourceConfig = readSource({
+    talk: { providers: { "acme.speech": { apiKey: "${TALK_API_KEY}" } } },
+  } as OpenClawConfig);
+  const result = analyzeTalk(sourceConfig, sourceConfig);
 
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
-
-    expect(result.unresolved).toEqual([
-      {
-        path: TALK_TEST_PROVIDER_API_KEY_PATH,
-        pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
-      },
-    ]);
-  });
-
-  it.each([
-    { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
-    { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },
+  expect(result.unresolved).toEqual([
     {
-      name: "substituted braced-looking literal",
-      authored: "${SOURCE}",
-      env: { SOURCE: "${OTHER}" },
-      expected: "${OTHER}",
+      path: 'talk.providers["acme.speech"].apiKey',
+      pathSegments: ["talk", "providers", "acme.speech", "apiKey"],
     },
-    { name: "escaped template literal", authored: "$${OTHER}", env: {}, expected: "${OTHER}" },
-  ])("keeps command assignments source-authoritative: $name", ({ authored, env, expected }) => {
-    const read = resolveConfigForRead(buildTalkTestProviderConfig(authored), env);
-    const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
-    setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
-    const resolvedConfig = cloneConfigWithResolutionFacts(sourceConfig);
+  ]);
+});
 
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
+it.each([
+  ["explicit ref", { source: "env", provider: "default", id: "TALK_API_KEY" }, {}, true],
+  ["unresolved bare shorthand", "$MISSING", {}, true],
+  ["unresolved braced shorthand", "${MISSING}", {}, true],
+  ["substituted braced-looking literal", "${SOURCE}", { SOURCE: "${OTHER}" }, false],
+  ["escaped template literal", "$${OTHER}", {}, false],
+] as const)(
+  "keeps command assignments source-authoritative: %s",
+  (_name, authored, env, unresolved) => {
+    const sourceConfig = readSource(buildTalkTestProviderConfig(authored), env);
+    const resolvedConfig =
+      typeof authored === "object"
+        ? buildTalkTestProviderConfig(undefined)
+        : cloneConfigWithResolutionFacts(sourceConfig);
+    const result = analyzeTalk(sourceConfig, resolvedConfig);
 
-    expect(result.assignments).toEqual([]);
-    expect(result.unresolved).toEqual(
-      expected === null
-        ? [
-            {
-              path: TALK_TEST_PROVIDER_API_KEY_PATH,
-              pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
-            },
-          ]
-        : [],
-    );
+    expect([result.assignments, result.unresolved]).toEqual([[], unresolved ? [talkPath] : []]);
+  },
+);
+
+it("accepts materialized reference-looking literals", () => {
+  const sourceConfig = readSource(buildTalkTestProviderConfig("$SOURCE"));
+  const resolvedConfig = buildTalkTestProviderConfig("${OTHER}");
+  copyConfigResolutionFactsExcept(sourceConfig, resolvedConfig, [keyPath]);
+
+  const result = analyzeTalk(sourceConfig, resolvedConfig);
+
+  expect([result.unresolved, result.assignments]).toEqual([
+    [],
+    [expect.objectContaining({ path: keyPath, value: "${OTHER}" })],
+  ]);
+});
+
+it("skips inactive unresolved refs with a diagnostic", () => {
+  const sourceConfig = buildTalkTestProviderConfig({
+    source: "env",
+    provider: "default",
+    id: "KEY",
+  });
+  const result = analyzeCommandSecretAssignmentsFromSnapshot({
+    sourceConfig,
+    resolvedConfig: structuredClone(sourceConfig),
+    targetIds: new Set(["talk.providers.*.apiKey"]),
+    inactiveRefPaths: new Set([keyPath]),
   });
 
-  it("accepts a materialized shorthand whose literal still resembles a reference", () => {
-    const read = resolveConfigForRead(buildTalkTestProviderConfig("$SOURCE"), {});
-    const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
-    setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
-    const resolvedConfig = buildTalkTestProviderConfig("${OTHER}");
-    copyConfigResolutionFactsExcept(sourceConfig, resolvedConfig, [
-      TALK_TEST_PROVIDER_API_KEY_PATH,
-    ]);
-
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
-
-    expect(result.unresolved).toEqual([]);
-    expect(result.assignments).toEqual([
-      expect.objectContaining({ path: TALK_TEST_PROVIDER_API_KEY_PATH, value: "${OTHER}" }),
-    ]);
-  });
-
-  it("skips unresolved refs that are marked inactive by runtime warnings", () => {
-    const sourceConfig = {
-      memory: {
-        search: {
-          remote: {
-            apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    } as unknown as OpenClawConfig;
-    const resolvedConfig = {
-      memory: {
-        search: {
-          remote: {
-            apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["memory.search.remote.apiKey"]),
-      inactiveRefPaths: new Set(["memory.search.remote.apiKey"]),
-    });
-
-    expect(result.assignments).toStrictEqual([]);
-    expect(result.diagnostics).toEqual([
-      "memory.search.remote.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
-    ]);
-  });
+  expect(result.assignments).toStrictEqual([]);
+  expect(result.diagnostics).toEqual([
+    `${keyPath}: secret ref is configured on an inactive surface; skipping command-time assignment.`,
+  ]);
 });

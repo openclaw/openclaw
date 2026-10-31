@@ -1,5 +1,3 @@
-// Normalizes user-provided embedding model ids by removing accepted provider prefixes.
-
 /** Trim a configured model id, fall back when empty, and strip known prefixes. */
 export function normalizeEmbeddingModelWithPrefixes(params: {
   model: string;

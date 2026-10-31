@@ -1,4 +1,3 @@
-// Update Clawtributors.Types script supports OpenClaw repository automation.
 export type MapConfig = {
   ensureLogins?: string[];
   displayName?: Record<string, string>;

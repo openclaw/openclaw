@@ -1,12 +1,11 @@
-// Attachment selection applies per-capability filters, ordering preferences,
-// and max-count policy before provider execution.
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
-import {
-  isAudioAttachment,
-  isImageAttachment,
-  isVideoAttachment,
-} from "./attachments.normalize.js";
-import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
+import type {
+  MediaAttachment,
+  MediaAttachmentDisposition,
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+} from "./types.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 1;
 
@@ -14,40 +13,19 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
-  // Ordering is stable and non-mutating so downstream decisions can still cite
-  // original attachment indexes.
   if (prefer === "last") {
-    return attachments.toReversed();
+    // oxlint-disable-next-line unicorn/no-array-reverse -- selectAttachments owns the filtered array.
+    return attachments.reverse();
   }
   if (prefer === "path" || prefer === "url") {
-    const preferred = attachments.filter((item) => item[prefer]);
-    const remaining = attachments.filter((item) => !item[prefer]);
+    const preferred: MediaAttachment[] = [];
+    const remaining: MediaAttachment[] = [];
+    for (const item of attachments) {
+      (item[prefer] ? preferred : remaining).push(item);
+    }
     return [...preferred, ...remaining];
   }
   return attachments;
-}
-
-function isAttachmentRecord(value: unknown): value is MediaAttachment {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const entry = value as Record<string, unknown>;
-  if (typeof entry.index !== "number") {
-    return false;
-  }
-  if (entry.path !== undefined && typeof entry.path !== "string") {
-    return false;
-  }
-  if (entry.url !== undefined && typeof entry.url !== "string") {
-    return false;
-  }
-  if (entry.mime !== undefined && typeof entry.mime !== "string") {
-    return false;
-  }
-  if (entry.alreadyTranscribed !== undefined && typeof entry.alreadyTranscribed !== "boolean") {
-    return false;
-  }
-  return true;
 }
 
 /** Selects attachments for a media-understanding capability under configured ordering limits. */
@@ -55,21 +33,30 @@ export function selectAttachments(params: {
   capability: MediaUnderstandingCapability;
   attachments: MediaAttachment[];
   policy?: MediaUnderstandingAttachmentsConfig;
+  previousDecisions?: readonly MediaUnderstandingDecision[];
 }): { selected: MediaAttachment[]; droppedAttachmentIndexes: number[] } {
   const { capability, attachments, policy } = params;
-  const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
-  const matches = input.filter((item) => {
-    // Preflight audio has already been consumed; rerunning STT would duplicate transcript output.
-    if (capability === "audio" && item.alreadyTranscribed) {
+  const decidedAudioIndexes = new Set(
+    capability === "audio"
+      ? (params.previousDecisions ?? []).flatMap((decision) =>
+          decision.capability === "audio"
+            ? decision.attachments
+                .map((attachment) => attachment.attachmentIndex)
+                .concat(Object.keys(decision.attachmentDispositions ?? {}).map(Number))
+            : [],
+        )
+      : [],
+  );
+  const matches = attachments.filter((item) => {
+    // Reuse the preflight selection budget, including dropped/failed indexes,
+    // without treating those attachments as successfully transcribed.
+    if (
+      capability === "audio" &&
+      (item.alreadyTranscribed || decidedAudioIndexes.has(item.index))
+    ) {
       return false;
     }
-    if (capability === "image") {
-      return isImageAttachment(item);
-    }
-    if (capability === "audio") {
-      return isAudioAttachment(item);
-    }
-    return isVideoAttachment(item);
+    return resolveAttachmentKind(item) === capability;
   });
   if (matches.length === 0) {
     return { selected: [], droppedAttachmentIndexes: [] };
@@ -83,4 +70,11 @@ export function selectAttachments(params: {
     selected: ordered.slice(0, limit),
     droppedAttachmentIndexes: ordered.slice(limit).map((attachment) => attachment.index),
   };
+}
+
+export function createAttachmentDispositions(
+  indexes: readonly number[],
+  disposition: MediaAttachmentDisposition,
+): Record<number, MediaAttachmentDisposition> {
+  return Object.fromEntries(indexes.map((index) => [index, disposition]));
 }

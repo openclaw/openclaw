@@ -1,59 +1,100 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { hasUnjoinedWork } from "../../../scripts/lib/managed-child-process.mts";
+import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
+import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runCliProcessChild } from "../../cli/cli-process-child.test-helpers.js";
+import * as sessionCleanup from "../../test-utils/session-state-cleanup.js";
 import { withTempHomeCore } from "./temp-home.js";
 
-describe("shared temp-home root acquisition", () => {
-  it("shares a failed acquisition, then recovers on the next explicit call", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "sdk-home-acquisition-"));
-    const missingParent = path.join(parent, "missing");
-    const prefix = path.join(path.basename(parent), "missing", "shared-");
-    const options = { prefix, skipSessionCleanup: true };
-    const unexpectedCallback = async () => {
-      throw new Error("callback must not run when root acquisition fails");
-    };
-    try {
-      const failures = await Promise.allSettled([
-        withTempHomeCore(unexpectedCallback, options),
-        withTempHomeCore(unexpectedCallback, options),
-        withTempHomeCore(unexpectedCallback, options),
-      ]);
-      const errors = failures.map((result) => {
-        expect(result.status).toBe("rejected");
-        return result.status === "rejected" ? result.reason : undefined;
-      });
-      expect(errors[0]).toMatchObject({ code: "ENOENT" });
-      expect(errors.every((error) => error === errors[0])).toBe(true);
-      expect(await fs.readdir(parent)).toEqual([]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const read = (file: string) => fs.readFile(file, "utf8");
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
-      await fs.mkdir(missingParent);
-      const first = await withTempHomeCore(
-        async (home) => {
-          await fs.writeFile(path.join(home, "retained.txt"), "keep");
-          return home;
+it.each(["joined", "kill-error", "exit-timeout"])(
+  "cleans a failed CLI fixture only after child cleanup is verified (%s)",
+  async (cleanupMode) => {
+    const unjoined = cleanupMode !== "joined";
+    const ownerRoot = tempDirs.make("sdk-home-owner-");
+    const owner = createVitestResourceOwner(ownerRoot);
+    const runtimeSource =
+      "require('node:fs').writeFileSync(require('node:path').join(process.env.OPENCLAW_STATE_DIR, 'child.txt'), 'child state'); process.stdout.write('ready'); setInterval(() => {}, 1_000);";
+    const { HOME, OPENCLAW_STATE_DIR } = process.env;
+    const inputFailure = new Error("CLI interaction failed");
+    const cleanupSessionState = sessionCleanup.cleanupSessionStateForTest;
+    const cleanupSignals: (NodeJS.Signals | null | undefined)[] = [];
+    let child: ChildProcessWithoutNullStreams | undefined;
+    let home: string | undefined;
+    let restoreKill: (() => void) | undefined;
+    const cleanup = vi.spyOn(sessionCleanup, "cleanupSessionStateForTest");
+    cleanup.mockImplementation(async (options) => {
+      cleanupSignals.push(child?.signalCode);
+      await cleanupSessionState(options);
+    });
+    try {
+      const failure = await withTempHomeCore(
+        async (fixtureHome) => {
+          home = fixtureHome;
+          await fs.writeFile(path.join(fixtureHome, "owned.txt"), "retain while live");
+          return runCliProcessChild({
+            nodeArgs: ["-e", runtimeSource],
+            env: process.env,
+            interact: async (runningChild) => {
+              child = runningChild;
+              await once(runningChild.stdout, "data");
+              if (unjoined) {
+                const kill = vi.spyOn(runningChild, "kill").mockImplementation(() => {
+                  if (cleanupMode === "exit-timeout") {
+                    return true;
+                  }
+                  throw new Error("cleanup kill failed");
+                });
+                restoreKill = () => kill.mockRestore();
+              }
+              throw inputFailure;
+            },
+          });
         },
-        { ...options, skipHomeCleanup: true },
-      );
-      const second = await withTempHomeCore(async (home) => home, options);
-      const third = await withTempHomeCore(async (home) => home, options);
-      expect(path.dirname(second)).toBe(path.dirname(first));
-      expect(path.dirname(third)).toBe(path.dirname(first));
-      expect([first, second, third].map((home) => path.basename(home))).toEqual([
-        "case-0",
-        "case-1",
-        "case-2",
-      ]);
-      expect(await fs.readdir(path.dirname(first))).toEqual([path.basename(first)]);
-      expect(await fs.readFile(path.join(first, "retained.txt"), "utf8")).toBe("keep");
-      const independent = await withTempHomeCore(async (home) => home, {
-        prefix: path.join(path.basename(parent), "independent-"),
-        skipSessionCleanup: true,
-      });
-      expect(path.dirname(independent)).not.toBe(path.dirname(first));
-      expect(await fs.readdir(path.dirname(independent))).toEqual([]);
+        {
+          prefix: path.join(path.basename(ownerRoot), "home-"),
+          ...(unjoined ? { env: { TMPDIR: ownerRoot, TMP: ownerRoot, TEMP: ownerRoot } } : {}),
+        },
+      ).catch((error: unknown) => error);
+
+      expect(hasUnjoinedWork(failure)).toBe(unjoined);
+      expect(process.env.HOME).toBe(HOME);
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(OPENCLAW_STATE_DIR);
+      if (unjoined) {
+        expect(failure).toMatchObject({ cause: inputFailure });
+        expect(child).toMatchObject({ exitCode: null, signalCode: null });
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        if (cleanupMode === "exit-timeout") {
+          expect(String(failure)).toContain("did not exit within 5000ms after SIGKILL");
+        }
+        expect(await read(path.join(home!, "owned.txt"))).toBe("retain while live");
+        expect(await read(path.join(home!, ".openclaw", "child.txt"))).toBe("child state");
+      } else {
+        expect(failure).toBe(inputFailure);
+        expect(cleanupSignals).toEqual(["SIGKILL"]);
+        expect(() => owner.assertReleased()).not.toThrow();
+        await expectMissing(home!);
+      }
     } finally {
-      await fs.rm(parent, { recursive: true, force: true });
+      cleanup.mockRestore();
+      restoreKill?.();
+      if (child) {
+        await stopChildProcess(child, 1_000);
+      }
+      if (home) {
+        await cleanupSessionState({ stateDir: path.join(home, ".openclaw") });
+        await fs.rm(home, { recursive: true, force: true });
+      }
     }
-  });
-});
+  },
+);

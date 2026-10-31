@@ -350,43 +350,32 @@ enum PairingCardPresentation {
         }
     }
 
+    private static let modelSymbols = [
+        ("macbook", "macbook"),
+        ("macmini", "macmini"),
+        ("macstudio", "macstudio"),
+        ("macpro", "macpro.gen3"),
+        ("imac", "desktopcomputer"),
+    ]
+    private static let platformSymbols = [
+        (["iphone", "ios"], "iphone"),
+        (["ipad"], "ipad"),
+        (["android"], "smartphone"),
+        (["mac", "darwin"], "laptopcomputer"),
+        (["linux", "windows"], "server.rack"),
+    ]
+
     static func deviceSymbol(for card: PairingApprovalCenter.Card) -> String {
         let model = card.modelIdentifier?.lowercased() ?? ""
-        if model.hasPrefix("macbook") {
-            return "macbook"
+        if let match = self.modelSymbols.first(where: { model.hasPrefix($0.0) }) {
+            return match.1
         }
-        if model.hasPrefix("macmini") {
-            return "macmini"
-        }
-        if model.hasPrefix("macstudio") {
-            return "macstudio"
-        }
-        if model.hasPrefix("macpro") {
-            return "macpro.gen3"
-        }
-        if model.hasPrefix("imac") {
-            return "desktopcomputer"
-        }
-
         let family = (card.deviceFamily ?? "").lowercased()
         let platform = (card.platform ?? "").lowercased()
         let hints = "\(family) \(platform)"
-        if hints.contains("iphone") || hints.contains("ios") {
-            return "iphone"
-        }
-        if hints.contains("ipad") {
-            return "ipad"
-        }
-        if hints.contains("android") {
-            return "smartphone"
-        }
-        if hints.contains("mac") || hints.contains("darwin") {
-            return "laptopcomputer"
-        }
-        if hints.contains("linux") || hints.contains("windows") {
-            return "server.rack"
-        }
-        return "network"
+        return self.platformSymbols.first { tokens, _ in
+            tokens.contains { hints.contains($0) }
+        }?.1 ?? "network"
     }
 
     static func prettyIP(_ ip: String?) -> String? {
@@ -419,6 +408,15 @@ enum PairingCardPresentation {
         }
     }
 
+    private static let scopeLabels = [
+        "operator.admin": "Admin access",
+        "operator.read": "Read OpenClaw data",
+        "operator.write": "Send messages and make changes",
+        "operator.approvals": "Manage approvals",
+        "operator.pairing": "Pair and repair devices",
+        "operator.talk.secrets": "Use Talk credentials",
+    ]
+
     static func friendlyScopes(_ scopes: [String]) -> [(raw: String, text: String)] {
         var seen = Set<String>()
         return scopes.compactMap { scope in
@@ -426,31 +424,27 @@ enum PairingCardPresentation {
             guard !normalized.isEmpty, seen.insert(normalized).inserted else {
                 return nil
             }
-            switch normalized {
-            case "operator.admin":
-                return (normalized, "Admin access")
-            case "operator.read":
-                return (normalized, "Read OpenClaw data")
-            case "operator.write":
-                return (normalized, "Send messages and make changes")
-            case "operator.approvals":
-                return (normalized, "Manage approvals")
-            case "operator.pairing":
-                return (normalized, "Pair and repair devices")
-            case "operator.talk.secrets":
-                return (normalized, "Use Talk credentials")
-            default:
-                return (normalized, normalized)
-            }
+            return (normalized, self.scopeLabels[normalized] ?? normalized)
         }
     }
 
     private static let sessionProviderByCapability = [
         "codex-app-server-threads": "Codex",
         "codex-cli-sessions": "Codex",
+        "codex-cli-session-source": "Codex",
         "claude-sessions": "Claude",
         "opencode-sessions": "OpenCode",
         "pi-sessions": "Pi",
+    ]
+
+    private static let capabilityLabels = [
+        "screen": ("rectangle.inset.filled.badge.record", "Screen capture"),
+        "camera": ("camera", "Camera"),
+        "file": ("folder", "File transfer"),
+        "location": ("location", "Location"),
+        "voice": ("mic", "Microphone and voice"),
+        "audio": ("mic", "Microphone and voice"),
+        "canvas": ("paintbrush", "Canvas display"),
     ]
 
     static func friendlyCapNames(_ caps: [String]) -> [(id: String, symbol: String, text: String)] {
@@ -481,22 +475,9 @@ enum PairingCardPresentation {
                     "rectangle.stack",
                     "Sessions: \(sessionProviders.joined(separator: ", "))")
             }
-            switch normalized {
-            case "screen":
-                return ("cap:\(normalized)", "rectangle.inset.filled.badge.record", "Screen capture")
-            case "camera":
-                return ("cap:\(normalized)", "camera", "Camera")
-            case "file":
-                return ("cap:\(normalized)", "folder", "File transfer")
-            case "location":
-                return ("cap:\(normalized)", "location", "Location")
-            case "voice", "audio":
-                return ("cap:\(normalized)", "mic", "Microphone and voice")
-            case "canvas":
-                return ("cap:\(normalized)", "paintbrush", "Canvas display")
-            default:
-                return ("cap:\(normalized)", "puzzlepiece.extension", self.prettifyRawName(normalized))
-            }
+            let label = self.capabilityLabels[normalized] ??
+                ("puzzlepiece.extension", self.prettifyRawName(normalized))
+            return ("cap:\(normalized)", label.0, label.1)
         }
     }
 

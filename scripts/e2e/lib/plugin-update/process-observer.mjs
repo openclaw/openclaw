@@ -1,5 +1,14 @@
 import { once } from "node:events";
 import fs from "node:fs";
+import path from "node:path";
+
+function hasUpdateArguments(argv) {
+  return (
+    argv.includes("update") ||
+    (path.basename(argv[1] ?? "") === "update-migrated-finalize.worker.js" &&
+      argv.includes("--post-core"))
+  );
+}
 
 function readProc(file) {
   try {
@@ -19,7 +28,7 @@ function descendants(pid, seen) {
   for (const child of children?.trim().split(/\s+/).filter(Boolean) ?? []) {
     const argv = readProc(`/proc/${child}/cmdline`)?.split("\0").filter(Boolean);
     const postCore = argv
-      ? (argv.includes("update") || argv[0] === "openclaw-update") &&
+      ? (hasUpdateArguments(argv) || argv[0] === "openclaw-update") &&
         (readProc(`/proc/${child}/environ`)?.split("\0").includes("OPENCLAW_UPDATE_POST_CORE=1") ??
           null)
       : null;
@@ -27,7 +36,10 @@ function descendants(pid, seen) {
     seen.set(child, {
       pid: child,
       // process.title overwrites Linux argv; retain previously observed arguments.
-      argv: previous?.argv.includes("update") ? previous.argv : (argv ?? previous?.argv ?? []),
+      argv:
+        previous && hasUpdateArguments(previous.argv)
+          ? previous.argv
+          : (argv ?? previous?.argv ?? []),
       postCore: previous?.postCore === true || postCore,
     });
     descendants(child, seen);

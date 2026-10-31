@@ -84,6 +84,25 @@ private struct CacheMessageRowProbe: Sendable {
     let payloadJSON: String
 }
 
+private final class OutboxReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reads = 0
+
+    func record(_ sql: String) {
+        let normalized = sql.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.hasPrefix("select"), normalized.contains("outbox_") else { return }
+        self.lock.lock()
+        self.reads += 1
+        self.lock.unlock()
+    }
+
+    var count: Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.reads
+    }
+}
+
 private func outboxCommand(
     id: String = UUID().uuidString,
     sessionKey: String = "main",
@@ -280,6 +299,50 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(messageRows.map(\.idempotencyKey) == ["run-1:user", "run-1"])
         #expect(messageRows[0].payloadJSON.contains("\"role\":\"user\""))
         #expect(!messageRows[0].payloadJSON.hasPrefix("["))
+    }
+
+    @Test(arguments: [
+        "",
+        #","senderId":42"#,
+        #","senderName":[]"#,
+        #","senderUsername":false"#,
+        #","senderProfileAvatarUrl":{}"#,
+        #","media":42"#,
+        #","media":[false]"#,
+        #","media":[{"url":"media://inbound/report.pdf","sizeBytes":"old"}]"#,
+        #","mediaImageLayout":42"#,
+        #","mediaImageLayout":{"slots":[{"kind":"inline","factIndex":"old"}]}"#,
+    ])
+    func `legacy transcript rows survive reopening and retain their partition`(optionalFields: String) async throws {
+        await store.storeTestTranscript(
+            sessionKey: "main",
+            messages: [cacheMessage(role: "assistant", text: "cached reply", timestamp: 1000)])
+        // Older readers ignored this optional metadata; it must not invalidate the cached row.
+        let legacyPayload = """
+        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(optionalFields)}}
+        """
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: "UPDATE cached_messages SET payload_json = ? WHERE gateway_id = 'gw-a'",
+                arguments: [legacyPayload])
+        }
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let messages = await reopened.store(gatewayID: "gw-a").loadTranscript(sessionKey: "main")
+        #expect(messageTexts(messages) == ["cached reply"])
+        let message = try #require(messages.first)
+        #expect(message.timestamp == 1000)
+        #expect(message.transcriptRunID == "old-run")
+        #expect(message.model == nil)
+        let counts = try await reopened.cacheQueue.read { db in
+            try (
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_messages WHERE gateway_id = 'gw-a'"),
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_transcripts WHERE gateway_id = 'gw-a'"))
+        }
+        #expect(counts.0 == 1)
+        #expect(counts.1 == 1)
     }
 
     @Test func `agent session snapshots preserve another agents offline roster`() async throws {
@@ -577,21 +640,29 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
 
     @Test func `cache projection strips payloads and keeps bounded diffs`() throws {
         let oversizedDiff = "+1 " + String(repeating: "x", count: 64100)
+        let activity = try JSONDecoder().decode([OpenClawAgentActivityItem].self, from: Data(
+            #"[{"itemId":"live-tool","kind":"tool","phase":"start","title":"Editing"}]"#.utf8))
         let message = OpenClawChatMessage(
             role: "toolResult",
             content: [
                 OpenClawChatMessageContent(
                     type: "toolCall",
                     text: "done",
+                    thinkingSignature: "transient-signature",
                     mimeType: "image/jpeg",
                     fileName: "photo.jpg",
+                    playback: .transcode,
                     content: AnyCodable(String(repeating: "payload", count: 1000)),
+                    preview: OpenClawChatCanvasPreview(
+                        kind: "canvas", surface: "assistant_message", render: "url", title: "Live preview",
+                        preferredHeight: 320, url: "/__openclaw__/canvas/live", viewId: "live", sandbox: "scripts"),
                     name: "apply_patch",
                     arguments: AnyCodable([
                         "input": AnyCodable(oversizedDiff),
                         "ignored": AnyCodable("drop"),
                     ]),
-                    details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")])),
+                    details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]),
+                    runId: "transient-run"),
             ],
             timestamp: 1,
             details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]),
@@ -602,16 +673,53 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
                 kind: "compaction",
                 id: "compact-cache",
                 tokensBefore: 12000,
-                tokensAfter: 7000))
+                tokensAfter: 7000),
+            activity: activity)
 
         let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
         #expect(cached.content[0].content == nil)
         #expect(cached.content[0].thinkingSignature == nil)
+        #expect(cached.content[0].playback == nil)
+        #expect(cached.content[0].preview == nil)
+        #expect(cached.content[0].runId == nil)
+        #expect(cached.activity == nil)
         #expect(Set(cached.content[0].arguments?.dictionaryValue?.keys.map(\.self) ?? []) == ["input"])
         #expect(cached.content[0].arguments?.dictionaryValue?["input"]?.stringValue?.utf16.count == 64000)
         #expect(Set(cached.details?.dictionaryValue?.keys.map(\.self) ?? []) == ["diff"])
         #expect(cached.provenance == message.provenance)
         #expect(cached.historyMarker == message.historyMarker)
+    }
+
+    @Test(arguments: ["dispatch_action", "tool_call"])
+    func `cache projection preserves dispatcher IDs and only inner patch input`(dispatcher: String) throws {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "toolCall", id: "search", name: dispatcher,
+                    arguments: AnyCodable(["id": " web_search ", "args": ["query": "drop"]])),
+                OpenClawChatMessageContent(
+                    type: "toolUse", id: "patch", name: dispatcher,
+                    arguments: AnyCodable([
+                        "id": "mcp:editor:apply_patch", "ignored": "drop",
+                        "args": ["input": "*** Begin Patch\n*** End Patch", "ignored": "drop"],
+                    ])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", name: "web_search", arguments: AnyCodable(["query": "drop"])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", name: dispatcher, arguments: AnyCodable(["id": " "])),
+            ],
+            timestamp: 1)
+
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        #expect(cached.content[0].id == "search")
+        #expect(cached.content[0].name == dispatcher)
+        #expect(cached.content[0].arguments == AnyCodable(["id": "web_search"]))
+        #expect(cached.content[1].arguments == AnyCodable([
+            "id": "mcp:editor:apply_patch", "args": ["input": "*** Begin Patch\n*** End Patch"],
+        ]))
+        #expect(cached.content[2].arguments == nil)
+        #expect(cached.content[3].arguments == nil)
     }
 
     @Test func `gateway removal deletes only that gateways cache and state`() async throws {
@@ -852,11 +960,64 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-outbox-settings-claim-v8",
             "client-state-watch-message-journal-v9",
             "client-state-watch-message-legacy-receipts-v1",
+            "client-state-outbox-queue-mode-v10",
         ])
     }
 }
 
 final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchecked Sendable {
+    @Test func `v9 outbox upgrade preserves drafts attachments routing and FIFO`() async throws {
+        let stateURL = directory.appendingPathComponent(OpenClawClientDatabases.clientStateFilename)
+        let legacy = try DatabaseQueue(path: stateURL.path)
+        var migrator = DatabaseMigrator()
+        OpenClawClientDatabases.registerClientStateMigrationsV1ThroughV5(&migrator)
+        OpenClawClientDatabases.registerClientStateMigrationsV6ThroughV8(&migrator)
+        OpenClawClientDatabases.registerWatchMessageJournalMigration(&migrator)
+        try migrator.migrate(legacy)
+        let now = Date().timeIntervalSince1970
+        let bytes = Data("legacy image bytes".utf8)
+        let expectation = OpenClawChatSessionSettingsExpectation(permissionMode: .guarded, toolOverrides: nil)
+        let encodedSettings = try JSONEncoder().encode(expectation)
+        let settings = try #require(String(data: encodedSettings, encoding: .utf8))
+        try await legacy.write { db in
+            try db.execute(sql: """
+            INSERT INTO outbox_branch_scopes(gateway_id, session_key, agent_id)
+            VALUES ('gw-a', 'main', 'main');
+            """)
+            for id in ["legacy-text", "legacy-image"] {
+                try db.execute(sql: """
+                INSERT INTO outbox_commands(
+                    gateway_id, client_uuid, session_key, delivery_session_key,
+                    routing_contract, agent_id, text, thinking, expected_settings_json,
+                    created_at, status, attachment_bytes
+                ) VALUES ('gw-a', ?, 'main', 'agent:main:main', 'per-sender|main|main',
+                    'main', ?, 'off', ?, ?, 'queued', ?)
+                """, arguments: [id, id, settings, now, id == "legacy-image" ? bytes.count : 0])
+            }
+            try db.execute(sql: """
+            INSERT INTO outbox_attachments(
+                gateway_id, command_id, position, type, mime_type, file_name, payload
+            ) VALUES ('gw-a', 'legacy-image', 0, 'image', 'image/png', 'legacy.png', ?)
+            """, arguments: [bytes])
+        }
+        try legacy.close()
+
+        let upgraded = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? upgraded.close() }
+        let store = upgraded.store(gatewayID: "gw-a")
+        let commands = await store.loadCommands()
+        #expect(commands.map(\.id) == ["legacy-text", "legacy-image"])
+        #expect(commands.allSatisfy { $0.queueMode == nil && $0.expectedSessionSettings == expectation })
+        #expect(commands.allSatisfy {
+            $0.text == $0.id && $0.deliverySessionKey == "agent:main:main" &&
+                $0.routingContract == "per-sender|main|main" && $0.agentID == "main"
+        })
+        let attachment = try #require(commands.last?.attachments.first)
+        #expect(attachment.data == bytes && attachment.fileName == "legacy.png" && attachment.mimeType == "image/png")
+        let claimed = try #require(await store.claimNextCommand())
+        #expect(claimed.id == "legacy-text" && claimed.queueMode == nil)
+    }
+
     @Test func `legacy v1 cache is discarded`() async throws {
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
         try withRawDatabase(at: legacyURL) { raw in
@@ -1116,6 +1277,59 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
 }
 
 final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sendable {
+    @Test(arguments: [nil, .steer, .followup] as [OpenClawChatQueueMode?])
+    func `queue mode survives claim and retry`(mode: OpenClawChatQueueMode?) async throws {
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "mode-choice", sessionKey: "main", text: "Preserve the choice.",
+            thinking: "off", queueMode: mode, createdAt: Date().timeIntervalSince1970,
+            status: .queued, retryCount: 0, lastError: nil)))
+        let claimed = try #require(await store.claimNextCommand())
+        #expect(claimed.queueMode == mode)
+        #expect(await store.markCommandQueued(
+            id: claimed.id, attemptVersion: claimed.attemptVersion, retryCount: 1, lastError: nil) == .updated)
+        let secondClaim = try #require(await store.claimNextCommand())
+        #expect(secondClaim.queueMode == mode)
+        #expect(await store.markCommandFailedIfPresent(
+            id: secondClaim.id, attemptVersion: secondClaim.attemptVersion,
+            retryCount: 1, lastError: "rejected") == .updated)
+        let failed = try #require(await store.loadCommands().first)
+        #expect(await store.markCommandRetriedIfPresent(
+            id: failed.id, expectation: retryExpectation(failed), agentID: "main",
+            deliverySessionKey: "agent:main:main", routingContract: "per-sender|main|main",
+            expectedSessionSettings: .init(permissionMode: nil, toolOverrides: nil),
+            replacementID: nil) == .updated)
+        let retriedClaim = try #require(await store.claimNextCommand())
+        #expect(retriedClaim.queueMode == mode)
+    }
+
+    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    func `older clients cannot claim or retry an explicit queue mode`(mode: OpenClawChatQueueMode) async throws {
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "explicit-mode", sessionKey: "main", text: "Keep this choice.",
+            thinking: "off", queueMode: mode, createdAt: Date().timeIntervalSince1970,
+            status: .queued, retryCount: 0, lastError: nil)))
+        try databases.close()
+        let stateURL = directory.appendingPathComponent("client-state.sqlite")
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, """
+            UPDATE outbox_commands
+            SET status = 'sending', settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1
+            WHERE client_uuid = 'explicit-mode';
+            """)
+            let result = sqlite3_exec(raw, """
+            UPDATE outbox_commands
+            SET status = 'queued', settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1
+            WHERE client_uuid = 'explicit-mode';
+            """, nil, nil, nil)
+            #expect(result == SQLITE_CONSTRAINT)
+        }
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let command = try #require(await reopened.store(gatewayID: "gw-a").loadCommands().first)
+        #expect(command.status == .failed && command.queueMode == mode)
+        #expect(command.lastError == OpenClawChatSQLiteTranscriptCache.outboxQueueModeUpgradeRequiredError)
+    }
+
     @Test func `session settings expectation survives a cold outbox reopen`() async throws {
         let expectation = OpenClawChatSessionSettingsExpectation(
             permissionMode: .guarded,
@@ -1472,16 +1686,98 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             fileName: "note.m4a",
             data: Data([4, 5, 6]),
             durationSeconds: 1.5)
+        let secondAttachment = OpenClawChatOutboxAttachment(
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "empty.bin",
+            data: Data())
+        let now = Date().timeIntervalSince1970
+        let composedID = "caf\u{00e9}"
+        let decomposedID = "cafe\u{0301}"
         #expect(await store.enqueueCommand(outboxCommand(
-            id: "later", text: "two", attachments: [attachment], createdAt: 2)))
-        #expect(await store.enqueueCommand(outboxCommand(id: "earlier", text: "one", createdAt: 1)))
+            id: "later", text: "two", attachments: [attachment, secondAttachment], createdAt: now)))
+        #expect(await store.enqueueCommand(outboxCommand(id: "earlier", text: "one", createdAt: now - 1)))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: composedID, text: "three", attachments: [secondAttachment], createdAt: now)))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: decomposedID, text: "four", attachments: [attachment], createdAt: now)))
+        let otherGateway = databases.store(gatewayID: "gw-b")
+        #expect(await otherGateway.enqueueCommand(outboxCommand(
+            id: "later", text: "other gateway", attachments: [secondAttachment], createdAt: now)))
 
-        let commands = await store.loadCommands()
-        #expect(commands.map(\.id) == ["earlier", "later"])
-        #expect(commands[1].attachments == [attachment])
+        let counter = OutboxReadCounter()
+        try await databases.stateQueue.writeWithoutTransaction { db in
+            db.trace(options: .statement) { event in
+                counter.record(String(describing: event))
+            }
+        }
+        let loaded = await store.loadCommandsIfAvailable()
+        try await databases.stateQueue.writeWithoutTransaction { db in
+            db.trace(options: [])
+        }
+        let commands = try #require(loaded)
+        #expect(counter.count > 0)
+        #expect(counter.count <= 2)
+        #expect(commands.map { Data($0.id.utf8) } == [
+            Data("earlier".utf8), Data("later".utf8), Data(composedID.utf8), Data(decomposedID.utf8),
+        ])
+        #expect(commands.map(\.text) == ["one", "two", "three", "four"])
+        #expect(commands.map(\.attachments) == [
+            [], [attachment, secondAttachment], [secondAttachment], [attachment],
+        ])
+        #expect(commands.allSatisfy { $0.status == .queued })
+        let otherCommands = await otherGateway.loadCommands()
+        #expect(otherCommands.map(\.text) == ["other gateway"])
+        #expect(otherCommands.first?.attachments == [secondAttachment])
         #expect(try await databases.stateQueue.read { db in
-            try Data.fetchOne(db, sql: "SELECT payload FROM outbox_attachments WHERE command_id = 'later'")
+            try Data.fetchOne(
+                db,
+                sql: """
+                SELECT payload FROM outbox_attachments
+                WHERE gateway_id = 'gw-a' AND command_id = 'later' AND position = 0
+                """)
         } == attachment.data)
+    }
+
+    @Test(arguments: [false, true])
+    func `earlier command decode failure precedes later attachment corruption`(changeBranch: Bool) async throws {
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        let attachment = OpenClawChatOutboxAttachment(
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "later.bin",
+            data: Data([9]))
+        let now = Date().timeIntervalSince1970
+        #expect(await store.enqueueCommand(outboxCommand(id: "first", text: "first", createdAt: now)))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "later", text: "later", attachments: [attachment], createdAt: now)))
+        try await databases.stateQueue.write { db in
+            try db.execute(
+                sql: "UPDATE outbox_commands SET expected_settings_json = '{' WHERE client_uuid = 'first'")
+            // BLOB affinity accepts this value; GRDB's Data conversion must not run before the first error.
+            try db.execute(sql: "UPDATE outbox_attachments SET payload = 7 WHERE command_id = 'later'")
+        }
+        let before = try #require(await store.branchState(for: scope))
+        let result: [OpenClawChatOutboxCommand]? = if changeBranch {
+            await store.confirmBranchChange(
+                scope, activeLeafEntryID: "leaf-b", lastError: "branch changed")
+        } else {
+            await store.loadCommandsIfAvailable()
+        }
+        #expect(result == nil)
+        #expect(await store.branchState(for: scope) == before)
+        try await databases.stateQueue.read { db in
+            let statuses = try String.fetchAll(
+                db,
+                sql: "SELECT status || ':' || last_error FROM outbox_commands ORDER BY enqueue_sequence")
+            #expect(statuses == ["queued:", "queued:"])
+            let settingsJSON = try String.fetchOne(
+                db, sql: "SELECT expected_settings_json FROM outbox_commands WHERE client_uuid = 'first'")
+            #expect(settingsJSON == "{")
+            let payload = try Int.fetchOne(db, sql: "SELECT payload FROM outbox_attachments WHERE command_id = 'later'")
+            #expect(payload == 7)
+        }
     }
 
     @Test func `claims are insertion FIFO when timestamps tie and exclusive`() async throws {

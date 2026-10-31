@@ -1,16 +1,15 @@
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { formatBatchErrorDetail } from "./batch-error-utils.js";
-import { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./batch-output.js";
+import { readEmbeddingBatchJsonl } from "./batch-output.js";
 import type { EmbeddingBatchStatus, ProviderBatchOutputLine } from "./batch-provider-common.js";
+import { getBatchResponseError } from "./batch-response-error.js";
 import {
   resolveCompletedBatchResult,
   throwIfBatchCompletionError,
   type BatchCompletionResult,
 } from "./batch-status.js";
 import { splitBatchRequestsByLimits } from "./batch-utils.js";
-import { runMemoryHostTasksWithConcurrency } from "./internal.js";
-
-// Shared runner for splitting and executing remote embedding batch groups.
+import { runWithConcurrency } from "./concurrency.js";
 
 /** Execution controls for provider embedding batch submissions and polling. */
 export type EmbeddingBatchExecutionParams = {
@@ -93,9 +92,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
         throw error;
       }
       const splitAt = Math.ceil(group.length / 2);
-      const parts = [group.slice(0, splitAt), group.slice(splitAt)].filter(
-        (part) => part.length > 0,
-      );
+      const parts = [group.slice(0, splitAt), group.slice(splitAt)];
       params.onSplitGroup?.({
         error,
         group,
@@ -109,9 +106,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
       }
     }
   };
-  const tasks = groups.map((group, groupIndex) => async () => {
-    await runGroup(group, groupIndex);
-  });
+  const tasks = groups.map((group, groupIndex) => () => runGroup(group, groupIndex));
 
   params.debug?.(params.debugLabel, {
     requests: params.requests.length,
@@ -124,7 +119,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     timeoutMs: params.timeoutMs,
   });
 
-  await runMemoryHostTasksWithConcurrency(tasks, params.concurrency);
+  await runWithConcurrency(tasks, params.concurrency);
   return byCustomId;
 }
 
@@ -200,9 +195,41 @@ export async function runEmbeddingBatches<
           maxRecords: group.length,
           onRecord: (line) => {
             // Only the first response for a submitted id may mutate results.
-            if (line.custom_id && remaining.has(line.custom_id)) {
-              applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+            const customId = line.custom_id;
+            if (!customId || !remaining.has(customId)) {
+              return errors.length === 0 && remaining.size > 0;
             }
+            remaining.delete(customId);
+
+            const errorMessage = line.error?.message;
+            if (errorMessage) {
+              errors.push(`${customId}: ${errorMessage}`);
+              return false;
+            }
+
+            const batchResponse = line.response;
+            const statusCode = batchResponse?.status_code ?? 0;
+            if (statusCode >= 400) {
+              errors.push(
+                `${customId}: ${getBatchResponseError(batchResponse) || "unknown error"}`,
+              );
+              return false;
+            }
+
+            const data =
+              batchResponse?.body && typeof batchResponse.body === "object"
+                ? (batchResponse.body.data ?? [])
+                : [];
+            const embedding = data[0]?.embedding ?? [];
+            if (
+              !Array.isArray(embedding) ||
+              embedding.length === 0 ||
+              !embedding.every(Number.isFinite)
+            ) {
+              errors.push(`${customId}: ${embedding?.length ? "invalid" : "empty"} embedding`);
+              return false;
+            }
+            byCustomId.set(customId, embedding);
             return errors.length === 0 && remaining.size > 0;
           },
         });

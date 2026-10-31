@@ -1,25 +1,15 @@
-// Channels page view contracts.
-import type {
-  ChannelAccountSnapshot,
-  ChannelsPairingListResult,
-  ChannelsPairingRequest,
-  ChannelsStatusSnapshot,
-  ConfigUiHints,
-  DiscordStatus,
-  GoogleChatStatus,
-  IMessageStatus,
-  NostrProfile,
-  NostrStatus,
-  SignalStatus,
-  SlackStatus,
-  TelegramStatus,
-  WhatsAppStatus,
-} from "../../api/types.ts";
+import type { ChannelsPairingRequest } from "../../api/types.ts";
+import type { ChannelsState } from "../../lib/channels/index.ts";
+import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
-import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
-import type { ChannelWizardState } from "./wizard-controller.ts";
+import type { createChannelSetup } from "./wizard-setup.ts";
 
-export type ChannelKey = string;
+export type ChannelSettingsPresentation = {
+  has: (channelId: string) => boolean;
+  sync: () => void;
+  reset: () => void;
+  attach: (channelId: string, container: HTMLElement) => () => void;
+};
 
 export type ChannelPairingPrompt = {
   kind: "approve" | "dismiss";
@@ -29,54 +19,29 @@ export type ChannelPairingPrompt = {
 };
 
 export type ChannelsProps = {
-  connected: boolean;
-  loading: boolean;
-  snapshot: ChannelsStatusSnapshot | null;
-  pluginCatalog: PluginListResult | null;
-  pluginIconUrls: Readonly<Record<string, string>>;
-  lastError: string | null;
-  lastSuccessAt: number | null;
-  pairingLoading: boolean;
-  pairingSnapshot: ChannelsPairingListResult | null;
-  pairingError: string | null;
-  pairingLastSuccessAt: number | null;
-  pairingBusyRequestId: string | null;
+  mutationBusy?: Readonly<Partial<Record<"config" | "pairing" | "whatsapp" | "wizard", boolean>>>;
+  channels: ChannelsState;
+  config: RuntimeConfigState;
+  presentation: {
+    readonly pluginCatalog: PluginListResult | null;
+    readonly pluginIconUrls: Record<string, string>;
+    readonly details: ChannelSettingsPresentation;
+  };
+  wizardHost: ReturnType<typeof createChannelSetup>;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;
   pairingPrompt: ChannelPairingPrompt | null;
   pairingNotice: string | null;
   canManagePairing: boolean;
   canAdmin: boolean;
-  whatsappMessage: string | null;
-  whatsappQrDataUrl: string | null;
-  whatsappConnected: boolean | null;
-  whatsappBusy: boolean;
-  configSchema: unknown;
-  configSchemaLoading: boolean;
-  configForm: Record<string, unknown> | null;
-  configUiHints: ConfigUiHints;
-  configSaving: boolean;
-  configError: string | null;
-  configFormDirty: boolean;
   showAdvancedSettings: boolean;
-  nostrProfileFormState: NostrProfileFormState | null;
-  nostrProfileAccountId: string | null;
   selectedChannel: string | null;
-  wizard: ChannelWizardState;
-  wizardMultiselect: readonly unknown[];
-  wizardTextValue: string;
-  wizardSecretVisible: boolean;
-  setupBlockedByDirtyConfig: boolean;
   onShowDetail: (channelId: string) => void;
   onCloseDetail: () => void;
   onStartSetup: (channelId: string | null) => void;
-  onWizardAnswer: (value: unknown) => void;
-  onWizardToggleMultiselect: (value: unknown) => void;
-  onWizardTextInput: (value: string) => void;
-  onWizardToggleSecretVisibility: () => void;
-  onWizardClose: () => void;
   onRefresh: (probe: boolean) => void;
   onPairingRefresh: () => void;
+  onPairingRoot: (element: HTMLDivElement) => void;
   onPairingFilterChange: (channel: string | null, accountId: string | null) => void;
   onPairingReviewAccount: (channel: string, accountId: string) => void;
   onPairingApprove: (request: ChannelsPairingRequest) => void;
@@ -86,29 +51,11 @@ export type ChannelsProps = {
   ) => void;
   onPairingPromptCancel: () => void;
   onPairingPromptConfirm: () => void;
-  onWhatsAppStart: (force: boolean) => void;
-  onWhatsAppWait: () => void;
-  onWhatsAppLogout: () => void;
+  onWhatsAppStart: (force: boolean) => void | Promise<void>;
+  onWhatsAppWait: () => void | Promise<void>;
+  onWhatsAppLogout: (accountId: string) => void | Promise<void>;
   onShowAdvancedSettings: (enabled: boolean) => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;
   onConfigReload: () => void;
-  onNostrProfileEdit: (accountId: string, profile: NostrProfile | null) => void;
-  onNostrProfileCancel: () => void;
-  onNostrProfileFieldChange: (field: keyof NostrProfile, value: string) => void;
-  onNostrProfileSave: () => void;
-  onNostrProfileImport: () => void;
-  onNostrProfileToggleAdvanced: () => void;
-};
-
-export type ChannelsChannelData = {
-  whatsapp?: WhatsAppStatus;
-  telegram?: TelegramStatus;
-  discord?: DiscordStatus | null;
-  googlechat?: GoogleChatStatus | null;
-  slack?: SlackStatus | null;
-  signal?: SignalStatus | null;
-  imessage?: IMessageStatus | null;
-  nostr?: NostrStatus | null;
-  channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null;
 };

@@ -1,12 +1,21 @@
-import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { renderAgentFiles } from "./panels-status-files.ts";
-import type { renderAgents } from "./view.ts";
+import type { CronJob } from "../../api/types.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
+import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import type { AgentFiles } from "./panels-files.tsx";
+import type { Agents } from "./view.tsx";
 
-type AgentsViewProps = Parameters<typeof renderAgents>[0];
-type AgentFilesProps = Parameters<typeof renderAgentFiles>[0];
+type AgentsViewProps = Parameters<typeof Agents>[0];
+type AgentFilesProps = Parameters<typeof AgentFiles>[0];
+
+export function primaryModelPicker(container: ParentNode) {
+  return container.querySelector<HTMLElement>(
+    'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+  );
+}
 
 export const inertAgentFileControls = {
-  agentFileConflict: null,
   onLoadFiles: () => undefined,
   onSelectFile: () => undefined,
   onFileDraftChange: () => undefined,
@@ -19,7 +28,38 @@ export const inertAgentFileControls = {
 export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
 ): AgentsViewProps {
+  const retired = Promise.withResolvers<void>().promise;
+  const data: ReturnType<AgentsViewProps["readData"]> = {
+    agentsList: agentRoster({ alpha: "Alpha", beta: "Beta" }, "alpha", "per-sender"),
+    agentsSelectedId: "beta",
+    agentsPanel: "overview",
+    requestGeneration: 0,
+    chatModelCatalogRead: null,
+    agentFilesLoading: false,
+    agentFileRead: null,
+    agentFileOutcome: null,
+    agentFilesList: null,
+    agentFileActive: null,
+    agentFileEditors: {},
+    agentFileSaving: false,
+    agentFileConflict: null,
+    identityDraft: { name: null, emoji: null, avatar: null },
+    identitySaving: false,
+    identityOutcome: null,
+    agentSkillsRead: null,
+    agentSkillsReport: null,
+    agentSkillsAgentId: null,
+    cron: createInitialCronState(),
+  };
   return {
+    readData: () => data,
+    presentationRetired: () => retired,
+    readChannels: () => ({
+      channelsSnapshot: null,
+      channelsRead: null,
+      channelsError: null,
+      channelsLastSuccess: null,
+    }),
     access: {
       canCreateAgent: true,
       canPatchConfig: true,
@@ -29,124 +69,102 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    loading: false,
-    error: null,
-    agentsList: {
-      defaultId: "alpha",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "alpha", name: "Alpha" } as never, { id: "beta", name: "Beta" } as never],
-    },
+    listRead: null,
     selectedAgentId: "beta",
-    activePanel: "overview",
+    memoryTarget: {
+      read: () => (overrides.selectedAgentId === undefined ? "beta" : overrides.selectedAgentId),
+      subscribe: () => () => {},
+    },
     config: {
-      form: null,
-      loading: false,
-      saving: false,
-      dirty: false,
-      error: null,
+      configForm: null,
+      configSnapshot: null,
+      configLoading: false,
+      configSaving: false,
+      configFormDirty: false,
+      lastError: null,
     },
     channels: {
-      snapshot: null,
-      loading: false,
-      error: null,
-      lastSuccess: null,
+      onRefresh: () => undefined,
     },
     cron: {
-      status: null,
-      jobs: [],
-      jobsTotal: 0,
-      jobsHasMore: false,
-      jobsLoadingMore: false,
-      scopedTotal: null,
-      scopedNextWakeAtMs: null,
-      loading: false,
-      error: null,
+      read: () => ({ summary: null, jobs: null, refresh: null, command: null }),
+      onRefresh: () => undefined,
+      onLoadMore: () => undefined,
+      onRunNow: () => undefined,
     },
     agentFiles: {
-      list: null,
-      loading: false,
-      error: null,
-      active: null,
-      contents: {},
-      drafts: {},
-      saving: false,
-      conflict: null,
+      listRead: null,
+      ...inertAgentFileControls,
     },
-    agentIdentityLoading: false,
-    agentIdentityError: null,
     agentIdentityById: {},
-    identityDraft: { name: null, emoji: null, avatar: null },
-    identityAvatarLoader: {
-      resolve: (url) => url,
-      imageErrorHandler: () => () => undefined,
-    },
-    identitySaving: false,
-    identityError: null,
-    agentSkills: {
-      report: null,
-      loading: false,
-      error: null,
-      agentId: null,
-      filter: "",
-    },
-    toolsCatalog: {
-      loading: false,
-      error: null,
-      result: null,
-    },
-    toolsEffective: {
-      loading: false,
-      error: null,
-      result: null,
-    },
-    onOpenGitHubConnections: () => undefined,
-    githubIdentity: new GitHubIdentityController({
-      requestUpdate: () => undefined,
-      runExternalMutation: async () => ({
-        ok: false,
-        reason: "unavailable",
-        error: "Mutation unavailable in rendering test.",
+    overview: {
+      modelCatalog: [],
+      decisionModels: [],
+      modelCatalogRetired: false,
+      modelCatalogHasSnapshot: false,
+      modelCatalogGateway: createApplicationGatewaySnapshot({
+        phase: "connected",
+        sessionKey: "main",
       }),
-    }),
-    runtimeSessionKey: "main",
-    runtimeSessionMatchesSelectedAgent: false,
-    modelCatalog: [],
-    modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
+      modelSelectionPolicy: undefined,
+      onModelChange: () => false,
+      onDecisionModelChange: () => false,
+      onModelFallbacksChange: () => false,
+      onModelCatalogOpen: () => undefined,
+      onIdentityFieldChange: () => undefined,
+      onIdentityAvatarSelect: () => undefined,
+      onIdentityAvatarSet: () => undefined,
+      onIdentityAvatarGenerate: async () => ({ name: "", description: "", svg: "" }),
+      onIdentitySave: () => undefined,
+    },
+    agentSkills: {
+      filter: "",
+      onFilterChange: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => false,
+      onClear: () => undefined,
+      onDisableAll: () => false,
+    },
+    tools: {
+      readCatalog: () => null,
+      readEffective: () => null,
+      effectivePreview: null,
+      effectiveRequest: null,
+      catalogRequest: null,
+      onRetryCatalog: () => undefined,
+      onOpenGitHubConnections: () => undefined,
+      githubIdentity: githubIdentityViewFixture(),
+      runtimeSessionKey: "main",
+      runtimeSessionMatchesSelectedAgent: false,
+      onProfileChange: () => undefined,
+      onOverridesChange: () => undefined,
+    },
     pinnedAgentIds: [],
     onRefresh: () => undefined,
-    onSelectAgent: () => undefined,
     onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
-    onLoadFiles: () => undefined,
-    onSelectFile: () => undefined,
-    onFileDraftChange: () => undefined,
-    onFileReset: () => undefined,
-    onFileSave: () => undefined,
-    onFileReload: () => undefined,
-    onFileOverwrite: () => undefined,
-    onToolsProfileChange: () => undefined,
-    onToolsOverridesChange: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
-    onModelChange: () => undefined,
-    onModelFallbacksChange: () => undefined,
-    onModelCatalogOpen: () => undefined,
-    onChannelsRefresh: () => undefined,
-    onCronRefresh: () => undefined,
-    onCronLoadMore: () => undefined,
-    onCronRunNow: () => undefined,
-    onSkillsFilterChange: () => undefined,
-    onSkillsRefresh: () => undefined,
-    onAgentSkillToggle: () => undefined,
-    onAgentSkillsClear: () => undefined,
-    onAgentSkillsDisableAll: () => undefined,
-    onSetDefault: () => undefined,
-    onIdentityFieldChange: () => undefined,
-    onIdentityAvatarSelect: () => undefined,
-    onIdentitySave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
+    onSetDefault: async () => undefined,
     onTogglePinnedAgent: () => undefined,
+    onOpenMemoryImport: () => undefined,
+    onOpenMemorySettings: () => undefined,
     onOpenAgentDefaults: () => undefined,
     ...overrides,
   };
+}
+
+export function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name: `Scheduled job ${id}`,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "cron", expr: "0 9 * * *" },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "ping" },
+    ...overrides,
+  } as CronJob;
 }

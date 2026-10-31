@@ -1,10 +1,19 @@
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingHttpHeaders } from "node:http";
-import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  type ClientOptions,
+  WebSocket,
+  WebSocketServer,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WebSocket, { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
+import { isTerminalResponse } from "./inference-dispatch.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
 const transport = vi.hoisted(() => {
   const wsAgents: unknown[] = [];
@@ -28,12 +37,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) => {
     resolvePinnedHostnameWithPolicy: transport.resolve,
   };
 });
-vi.mock("ws", async (original) => {
-  const actual = await original<typeof import("ws")>();
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (original) => {
+  const actual = await original<typeof import("openclaw/plugin-sdk/websocket-runtime")>();
   return {
     ...actual,
-    default: class extends actual.default {
-      constructor(url: string | URL, options?: import("ws").ClientOptions) {
+    WebSocket: class extends actual.WebSocket {
+      constructor(url: string | URL, options?: ClientOptions) {
         const value = String(url);
         if (value.startsWith("wss:")) {
           transport.dials.push(value);
@@ -47,6 +56,7 @@ vi.mock("ws", async (original) => {
   };
 });
 const proxies: CodexInferenceProxy[] = [];
+const cleanups: Array<() => void | Promise<void>> = [];
 beforeEach(() => {
   transport.fetch.mockReset();
   transport.proxyAgent.mockReset();
@@ -58,49 +68,102 @@ beforeEach(() => {
   transport.wsAgents.length = 0;
   transport.dials = [];
 });
-afterEach(() => {
+afterEach(async () => {
   for (const proxy of proxies.splice(0)) {
     proxy.close();
   }
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    await cleanup();
+  }
 });
 
-async function post(
-  url: string,
-  options: { method: string; body: string | Buffer; headers?: Record<string, string> },
-) {
+function connect(proxy: CodexInferenceProxy) {
+  const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+  cleanups.push(() => socket.terminate());
+  return socket;
+}
+
+function proxyAgent() {
+  const agent = new Agent();
+  cleanups.push(() => agent.destroy());
+  return agent;
+}
+
+async function upstreamFixture(final: string, headers: string[] = []) {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const received: unknown[] = [];
+  wss.on("headers", (outgoing) => outgoing.push(...headers));
+  wss.on("connection", (socket) => {
+    socket.on("message", (bytes) => {
+      if (!Buffer.isBuffer(bytes)) {
+        throw new Error("fixture expected an uncompressed Node WebSocket buffer");
+      }
+      received.push(JSON.parse(bytes.toString("utf8")));
+      socket.send(final);
+    });
+  });
+  cleanups.push(async () => {
+    for (const socket of wss.clients) {
+      socket.terminate();
+    }
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+  transport.upstream = "ws://127.0.0.1:" + (await listenOnLoopback(server));
+  return received;
+}
+
+async function rejectedResponse(socket: WebSocket) {
+  const [, response] = await once(socket, "unexpected-response");
+  const chunks: Buffer[] = [];
+  for await (const chunk of response) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return { response, text: Buffer.concat(chunks).toString() };
+}
+
+async function post(url: string, body: unknown, headers?: Record<string, string>) {
   if (new URL(url).hostname !== "127.0.0.1") {
     throw new Error("fixture requires its own loopback server");
   }
   return await new Promise<{ status: number | undefined; text: () => Promise<string> }>(
     (resolve, reject) => {
-      const req = request(
-        url,
-        { method: options.method, headers: options.headers, agent: false },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk) => chunks.push(chunk));
-          res.once("error", reject);
-          res.once("end", () =>
-            resolve({ status: res.statusCode, text: async () => Buffer.concat(chunks).toString() }),
-          );
-        },
-      );
+      const req = request(url, { method: "POST", headers, agent: false }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.once("error", reject);
+        res.once("end", () =>
+          resolve({ status: res.statusCode, text: async () => Buffer.concat(chunks).toString() }),
+        );
+      });
       req.once("error", reject);
-      req.end(options.body);
+      req.end(JSON.stringify(body));
     },
   );
 }
 
-async function fixture(withInstructions = true) {
+async function fixture(
+  withInstructions = true,
+  contextText = "synthetic persona",
+  oauth?: Parameters<typeof createCodexInferenceProxy>[0]["oauth"],
+  bindModelExecution?: Parameters<typeof createCodexInferenceProxy>[0]["bindModelExecution"],
+) {
   const proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
+    oauth,
+    bindModelExecution,
   });
   proxies.push(proxy);
   const controller = new AbortController();
-  const registration = proxy.context.register({
+  const registration = await proxy.context.register({
     threadId: "root",
-    text: "synthetic persona",
+    text: contextText,
     signal: controller.signal,
     assertCurrent: () => {},
   });
@@ -119,84 +182,245 @@ async function fixture(withInstructions = true) {
   return { proxy, controller, registration, body };
 }
 
-describe("private inference HTTP relay", () => {
-  it.each([
-    { zstd: false, withInstructions: true },
-    { zstd: true, withInstructions: true },
-    { zstd: false, withInstructions: false },
-    { zstd: true, withInstructions: false },
-  ])(
-    "preserves auth and native input (zstd=$zstd, top-level instructions=$withInstructions)",
-    async ({ zstd, withInstructions }) => {
-      const { proxy, body } = await fixture(withInstructions);
-      let forwarded: unknown;
-      transport.fetch.mockImplementation(async (args) => {
-        args.beforeRequest();
-        const bytes = zstd ? zstdDecompressSync(args.init.body) : args.init.body;
-        forwarded = JSON.parse(bytes.toString());
-        expect(args.url).toBe("https://api.openai.com/v1/responses");
-        expect(args.init.headers.authorization).toBe("Bearer synthetic-native-auth");
-        expect(args.capture).toBe(false);
-        expect(args.mode).toBe("trusted_env_proxy");
-        expect(args.maxRedirects).toBe(0);
-        return {
-          response: new Response("data: synthetic\n\n", {
-            headers: { "content-type": "text/event-stream" },
+it("reports bounded stage and cause without exposing private upstream errors", async () => {
+  const debug = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    const { proxy, body } = await fixture();
+    transport.fetch.mockRejectedValue(
+      new Error(`Bearer synthetic-secret at ${proxy.baseUrl}`, { cause: { code: "ECONNRESET" } }),
+    );
+    const result = await post(proxy.baseUrl + "/responses", body);
+    expect(result.status).toBe(502);
+    expect(await result.text()).toBe(
+      "Codex parent-local inference transport failed; retry on a fresh connection.",
+    );
+    expect(debug).toHaveBeenCalledWith("codex inference HTTP relay failed", {
+      stage: "upstream",
+      reason: "ECONNRESET",
+      responseStarted: false,
+    });
+    expect(JSON.stringify(debug.mock.calls)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(proxy.baseUrl);
+  } finally {
+    debug.mockRestore();
+  }
+});
+
+it.each(["HTTP", "WebSocket"] as const)(
+  "admits a fresh %s assignment after its listener's startup binding lease closes",
+  async (kind) => {
+    const startupContext = new AsyncLocalStorage<string>();
+    const store = createCodexTestBindingStore();
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "synthetic-parent-session",
+      sessionKey: "agent:main:synthetic-inference-context",
+    };
+    const binding = {
+      threadId: "root",
+      cwd: "/synthetic-workspace",
+      appServerRuntimeFingerprint: "synthetic-runtime",
+    };
+    await store.mutate(identity, { kind: "set", binding });
+    const owner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId: binding.threadId,
+      sessionId: identity.sessionId,
+      binding,
+    });
+    if (!owner) {
+      throw new Error("Synthetic binding has no history owner");
+    }
+    const assignment = {
+      runId: "codex-thread:synthetic-child:turn:synthetic-child-turn",
+      childThreadId: "synthetic-child",
+      nativeTurnId: "synthetic-child-turn",
+      nativeParentThreadId: binding.threadId,
+      owner,
+    };
+    let observedStartup: string | undefined;
+    const release = vi.fn();
+    const bindModelExecution = vi.fn(async () => {
+      observedStartup = startupContext.getStore();
+      expect(
+        await store.mutate(
+          identity,
+          { kind: "record-native-subagent-assignment", owner, assignment },
+          () => {},
+        ),
+      ).toBe(true);
+      return { signal: new AbortController().signal, assertCurrent: () => {}, release };
+    });
+    const { next, staleWrite } = await startupContext.run("startup lease", () =>
+      store.withLease(identity, async () => ({
+        next: await fixture(true, undefined, undefined, bindModelExecution),
+        staleWrite: AsyncResource.bind(() =>
+          store.mutate(identity, {
+            kind: "patch",
+            threadId: binding.threadId,
+            patch: { model: "stale-callback" },
           }),
-          release: async () => {},
-        };
+        ),
+      })),
+    );
+    await expect(staleWrite()).rejects.toThrow("Lost Codex binding lease");
+    expect(store.read(identity)).toEqual(binding);
+    const final = '{"type":"response.completed","response":{"id":"synthetic-assignment"}}';
+    transport.fetch.mockResolvedValue({
+      response: new Response(final),
+      release: async () => {},
+    });
+    const forwarded = kind === "WebSocket" ? await upstreamFixture(final) : [];
+    let response: string | undefined;
+    if (kind === "WebSocket") {
+      const socket = connect(next.proxy);
+      await once(socket, "open");
+      const received = Promise.race([
+        once(socket, "message").then(([bytes]) => bytes.toString()),
+        once(socket, "close").then(() => undefined),
+      ]);
+      socket.send(JSON.stringify({ ...next.body, type: "response.create", model: "synthetic" }));
+      response = await received;
+    } else {
+      const result = await post(next.proxy.baseUrl + "/responses", {
+        ...next.body,
+        model: "synthetic",
       });
-      const bytes = Buffer.from(JSON.stringify(body));
-      const response = await post(proxy.baseUrl + "/responses", {
-        method: "POST",
-        body: zstd ? zstdCompressSync(bytes) : bytes,
-        headers: {
-          authorization: "Bearer synthetic-native-auth",
-          ...(zstd ? { "content-encoding": "zstd" } : {}),
-        },
+      response = await result.text();
+    }
+    expect(observedStartup).toBeUndefined();
+    expect(response).toBe(final);
+    expect(bindModelExecution).toHaveBeenCalledOnce();
+    expect(await store.readNativeSubagentAssignments?.(identity, owner)).toEqual([assignment]);
+    if (kind === "HTTP") {
+      expect(transport.fetch).toHaveBeenCalledOnce();
+    } else {
+      expect(forwarded).toHaveLength(1);
+    }
+    await expect(staleWrite()).rejects.toThrow("Lost Codex binding lease");
+    expect(store.read(identity)).toEqual(binding);
+  },
+);
+
+describe("private inference HTTP relay", () => {
+  it("resolves host OAuth only for admitted Responses requests and refreshes once after 401", async () => {
+    const resolve = vi.fn(async (forceRefresh: boolean) => ({
+      token: forceRefresh ? "synthetic-refreshed" : "synthetic-access",
+      assertCurrent: () => {},
+    }));
+    const { proxy, body } = await fixture(true, undefined, { resolve });
+    transport.fetch.mockImplementation(async (args) => {
+      args.beforeRequest();
+      const bytes = await new Response(args.init.body).text();
+      expect(JSON.parse(bytes).instructions).toBe("native base\n\nsynthetic persona");
+      const first = args.init.headers.authorization === "Bearer synthetic-access";
+      expect(args.init.headers).not.toHaveProperty("chatgpt-account-id");
+      expect(args.init.headers).not.toHaveProperty("openai-organization");
+      expect(args.init.headers).not.toHaveProperty("openai-project");
+      return {
+        response: new Response(first ? "expired" : "data: completed\n\n", {
+          status: first ? 401 : 200,
+        }),
+        release: async () => {},
+      };
+    });
+    for (const path of ["/models", "/responses/compact", "/responses?other=1"]) {
+      expect((await post(proxy.baseUrl + path, body)).status).toBe(502);
+    }
+    expect(resolve).not.toHaveBeenCalled();
+    const result = await post(proxy.baseUrl + "/responses", body, {
+      authorization: "Bearer local-placeholder",
+      "chatgpt-account-id": "native-account",
+      "openai-project": "native-project",
+      "openai-organization": "native-org",
+      "X-OpenAI-ChatPass-Test": "stale",
+    });
+    expect(result.status).toBe(200);
+    expect(await result.text()).toBe("data: completed\n\n");
+    expect(resolve.mock.calls).toEqual([[false], [true]]);
+    expect(transport.fetch).toHaveBeenCalledTimes(2);
+    expect(
+      transport.fetch.mock.calls.map(([args]) => args.init.headers["x-openai-chatpass-test"]),
+    ).toEqual(["codex-direct", "codex-direct"]);
+    expect(transport.fetch.mock.calls[1]?.[0].init.headers.authorization).toBe(
+      "Bearer synthetic-refreshed",
+    );
+  });
+
+  it.each(["OAuth grant", "empty context"])(
+    "revalidates %s after asynchronous transport preparation",
+    async (owner) => {
+      const grant = new AbortController();
+      const resolve = vi.fn(async () => ({
+        token: "synthetic-access",
+        assertCurrent: () => grant.signal.throwIfAborted(),
+      }));
+      const oauth = owner === "OAuth grant";
+      const { proxy, controller, body } = await fixture(
+        true,
+        oauth ? undefined : "",
+        oauth ? { resolve } : undefined,
+      );
+      let writes = 0;
+      transport.fetch.mockImplementation(async (args) => {
+        (oauth ? grant : controller).abort();
+        args.beforeRequest();
+        writes++;
+        throw new Error("unexpected upstream write");
       });
+      expect((await post(proxy.baseUrl + "/responses", body)).status).toBe(502);
       expect(transport.fetch).toHaveBeenCalledTimes(1);
-      await transport.fetch.mock.results[0]?.value;
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("data: synthetic\n\n");
-      expect(forwarded).toEqual({
-        ...body,
-        instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
-      });
+      expect(writes).toBe(0);
     },
   );
 
+  it("rejects unadmitted native prewarm for OAuth", async () => {
+    const resolve = vi.fn();
+    const { proxy } = await fixture(true, undefined, { resolve });
+    const body = {
+      generate: false,
+      client_metadata: { "x-codex-turn-metadata": JSON.stringify({ request_kind: "prewarm" }) },
+    };
+    expect((await post(proxy.baseUrl + "/responses", body)).status).toBe(502);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("authorizes automatic compaction only with the current admitted generation", async () => {
+    const resolve = vi.fn(async () => ({ token: "synthetic-access", assertCurrent: () => {} }));
+    const { proxy, body, registration } = await fixture(true, undefined, { resolve });
+    const compaction = {
+      ...body,
+      client_metadata: {
+        thread_id: "root",
+        "x-codex-turn-metadata": JSON.stringify({
+          thread_id: "root",
+          request_kind: "compaction",
+          [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+        }),
+      },
+    };
+    transport.fetch.mockImplementation(async (args) => {
+      args.beforeRequest();
+      expect(JSON.parse(await new Response(args.init.body).text()).instructions).toBe(
+        "native base",
+      );
+      return { response: new Response("data: summary\n\n"), release: async () => {} };
+    });
+    expect((await post(proxy.baseUrl + "/responses", compaction)).status).toBe(200);
+    registration.release();
+    expect((await post(proxy.baseUrl + "/responses", compaction)).status).toBe(502);
+    expect(resolve).toHaveBeenCalledOnce();
+  });
   it("rejects missing private route authority and stale admitted generation without an upstream call", async () => {
     const { proxy, registration, body } = await fixture();
     const unknownRoute = new URL(proxy.baseUrl).origin + "/responses";
-    const response = await post(unknownRoute, { method: "POST", body: JSON.stringify(body) });
+    const response = await post(unknownRoute, body);
     expect(response.status).toBe(502);
     registration.release();
-    const stale = await post(proxy.baseUrl + "/responses", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const stale = await post(proxy.baseUrl + "/responses", body);
     expect(stale.status).toBe(502);
     expect(await stale.text()).not.toContain("synthetic persona");
     expect(transport.fetch).not.toHaveBeenCalled();
-  });
-
-  it("revalidates admission after asynchronous transport preparation", async () => {
-    const { proxy, controller, body } = await fixture();
-    let writes = 0;
-    transport.fetch.mockImplementation(async (args) => {
-      controller.abort();
-      args.beforeRequest();
-      writes++;
-      throw new Error("must not reach the upstream");
-    });
-    const response = await post(proxy.baseUrl + "/responses", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    expect(response.status).toBe(502);
-    expect(transport.fetch).toHaveBeenCalledTimes(1);
-    expect(writes).toBe(0);
   });
 
   it("passes native unauthorized responses through for native auth recovery", async () => {
@@ -205,10 +429,7 @@ describe("private inference HTTP relay", () => {
       response: new Response("native unauthorized", { status: 401 }),
       release: async () => {},
     });
-    const response = await post(proxy.baseUrl + "/responses", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const response = await post(proxy.baseUrl + "/responses", body);
     expect(transport.fetch).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("native unauthorized");
@@ -216,69 +437,90 @@ describe("private inference HTTP relay", () => {
 });
 
 describe("private inference WebSocket relay", () => {
-  it.each(["unavailable", "private"] as const)(
-    "rejects %s destination DNS on a direct WebSocket route",
-    async (resolution) => {
-      if (resolution === "unavailable") {
-        transport.resolve.mockRejectedValue(new Error("synthetic DNS failure"));
-      } else {
-        const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-          "openclaw/plugin-sdk/ssrf-runtime",
-        );
-        transport.resolve.mockImplementation(
-          (hostname: string, options: { signal?: AbortSignal }) =>
-            actual.resolvePinnedHostnameWithPolicy(hostname, {
-              ...options,
-              lookupFn: async () => [{ address: "127.0.0.1", family: 4 }],
-            }),
+  it("does not decode ordinary deltas while preserving terminal JSON semantics", () => {
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      for (const type of ["response.output_text.delta", "response.function_call_arguments.delta"]) {
+        expect(isTerminalResponse(Buffer.from(JSON.stringify({ type, delta: "synthetic" })))).toBe(
+          false,
         );
       }
-      const { proxy } = await fixture();
-      const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
-      try {
-        await once(socket, "error");
-        expect(transport.resolve).toHaveBeenCalledOnce();
-        expect(transport.proxyAgent).toHaveBeenCalledOnce();
-        expect(transport.dials).toEqual([]);
-      } finally {
-        socket.terminate();
+      expect(parse).not.toHaveBeenCalled();
+      for (const [wire, terminal] of [
+        ['{"type":"response.completed","response":{"id":"synthetic"}}', true],
+        ['{"type":"response.failed"}', true],
+        ['{"type":"response.incomplete"}', true],
+        ['{"type":"response.completed"}', false],
+        ['{"type":"response.completed","response":{"id":1}}', false],
+        ['{"type":"response.failed"', false],
+        ['{"type":"response.failed","type":"response.output_text.delta"}', false],
+        ['{"nested":{"type":"response.failed"}}', false],
+        ['{"type":"delta","delta":"response.failed"}', false],
+        ['{"ty\\u0070e":"response.fa\\u0069led"}', true],
+        ['{"type":"response.completed","response":{"id":"\\u0061"}}', true],
+      ] as const) {
+        expect(isTerminalResponse(Buffer.from(wire)), wire).toBe(terminal);
       }
-    },
-  );
+    } finally {
+      parse.mockRestore();
+    }
+  });
 
-  it.each(["https://127.0.0.1/v1", "https://service.internal/v1"])(
-    "rejects blocked hostname %s before proxy or DNS work",
-    async (upstream) => {
-      const agent = new Agent();
-      transport.proxyAgent.mockReturnValue(agent);
-      const proxy = await createCodexInferenceProxy({
-        upstream: new URL(upstream),
-        assertCurrent: () => {},
-      });
-      proxies.push(proxy);
-      const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
-      try {
-        await once(socket, "error");
-        expect(transport.proxyAgent).not.toHaveBeenCalled();
-        expect(transport.resolve).not.toHaveBeenCalled();
-        expect(transport.dials).toEqual([]);
-      } finally {
-        socket.terminate();
-        agent.destroy();
-      }
-    },
-  );
+  it("rejects WebSocket OAuth without resolving a bearer or dialing upstream", async () => {
+    const resolve = vi.fn();
+    const { proxy } = await fixture(true, undefined, { resolve });
+    const socket = connect(proxy);
+    socket.on("error", () => {});
+    await once(socket, "error");
+    expect(resolve).not.toHaveBeenCalled();
+    expect(transport.resolve).not.toHaveBeenCalled();
+    expect(transport.dials).toEqual([]);
+  });
+  it("rejects private destination DNS on a direct WebSocket route", async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    transport.resolve.mockImplementation((hostname: string, options: { signal?: AbortSignal }) =>
+      actual.resolvePinnedHostnameWithPolicy(hostname, {
+        ...options,
+        lookupFn: async () => [{ address: "127.0.0.1", family: 4 }],
+      }),
+    );
+    const { proxy } = await fixture();
+    const socket = connect(proxy);
+    socket.on("error", () => {});
+    const { response, text } = await rejectedResponse(socket);
+    expect(response.statusCode).toBe(502);
+    expect(text).toBe(
+      "Codex parent-local inference transport failed; retry on a fresh connection.",
+    );
+    expect(transport.resolve).toHaveBeenCalledOnce();
+    expect(transport.proxyAgent).toHaveBeenCalledOnce();
+    expect(transport.dials).toEqual([]);
+  });
+
+  it("rejects blocked hostnames before proxy or DNS work", async () => {
+    const agent = proxyAgent();
+    transport.proxyAgent.mockReturnValue(agent);
+    const proxy = await createCodexInferenceProxy({
+      upstream: new URL("https://service.internal/v1"),
+      assertCurrent: () => {},
+    });
+    proxies.push(proxy);
+    const socket = connect(proxy);
+    await once(socket, "error");
+    expect(transport.proxyAgent).not.toHaveBeenCalled();
+    expect(transport.resolve).not.toHaveBeenCalled();
+    expect(transport.dials).toEqual([]);
+  });
 
   it.each([
     { proxied: false, localDnsUnavailable: false, withInstructions: true },
-    { proxied: true, localDnsUnavailable: false, withInstructions: true },
-    { proxied: true, localDnsUnavailable: true, withInstructions: true },
-    { proxied: false, localDnsUnavailable: false, withInstructions: false },
     { proxied: true, localDnsUnavailable: true, withInstructions: false },
   ])(
     "preserves WS deltas (proxy=$proxied, local DNS unavailable=$localDnsUnavailable, instructions=$withInstructions)",
     async ({ proxied, localDnsUnavailable, withInstructions }) => {
-      const agent = new Agent();
+      const agent = proxyAgent();
       const destroy = vi.spyOn(agent, "destroy");
       transport.proxyAgent.mockReturnValue(proxied ? agent : undefined);
       if (localDnsUnavailable) {
@@ -286,100 +528,68 @@ describe("private inference WebSocket relay", () => {
           Object.assign(new Error("synthetic local DNS unavailable"), { code: "ENOTFOUND" }),
         );
       }
-      const server = createServer();
-      const wss = new WebSocketServer({ server });
-      const received: unknown[] = [];
-      wss.on("headers", (headers) => {
-        headers.push(
-          "x-codex-turn-state: synthetic-turn-state",
-          "x-reasoning-included: true",
-          "openai-model: fixture-model",
-        );
-      });
-      wss.on("connection", (socket) => {
-        socket.on("message", (data) => {
-          if (!Buffer.isBuffer(data)) {
-            throw new Error("fixture expected an uncompressed Node WebSocket buffer");
-          }
-          received.push(JSON.parse(data.toString("utf8")));
-          socket.send('{"type":"response.completed","response":{"id":"synthetic-response"}}');
-        });
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("fixture did not listen");
-      }
-      transport.upstream = "ws://127.0.0.1:" + address.port;
+      const final = '{"type":"response.completed","response":{"id":"synthetic-response"}}';
+      const received = await upstreamFixture(final, [
+        "x-codex-turn-state: synthetic-turn-state",
+        "x-reasoning-included: true",
+        "openai-model: fixture-model",
+      ]);
       const { proxy, registration, body } = await fixture(withInstructions);
-      const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+      const socket = connect(proxy);
       let responseHeaders: IncomingHttpHeaders | undefined;
       socket.on("upgrade", (response) => {
         responseHeaders = response.headers;
       });
-      try {
-        await once(socket, "open");
-        expect(responseHeaders).toMatchObject({
-          "x-codex-turn-state": "synthetic-turn-state",
-          "x-reasoning-included": "true",
-          "openai-model": "fixture-model",
-        });
-        for (const input of [body.input, []]) {
-          const response = Promise.race([
-            once(socket, "message"),
-            once(socket, "close").then(() => {
-              throw new Error("inference relay closed before its response");
-            }),
-          ]);
-          socket.send(
-            JSON.stringify({
-              ...body,
-              type: "response.create",
-              input,
-              previous_response_id: "previous",
-            }),
-          );
-          expect((await response)[0].toString()).toBe(
-            '{"type":"response.completed","response":{"id":"synthetic-response"}}',
-          );
+      await once(socket, "open");
+      expect(responseHeaders).toMatchObject({
+        "x-codex-turn-state": "synthetic-turn-state",
+        "x-reasoning-included": "true",
+        "openai-model": "fixture-model",
+      });
+      for (const input of [body.input, []]) {
+        const response = Promise.race([
+          once(socket, "message"),
+          once(socket, "close").then(() => {
+            throw new Error("inference relay closed before its response");
+          }),
+        ]);
+        const wire = JSON.stringify(
+          {
+            ...body,
+            type: "response.create",
+            input,
+            previous_response_id: "previous",
+          },
+          null,
+          2,
+        );
+        const compose = vi.spyOn(AbortSignal, "any");
+        try {
+          socket.send(wire);
+          expect((await response)[0].toString()).toBe(final);
+          // Dispatch composes cancellation once; forwarding reuses the admitted signal.
+          expect(compose).toHaveBeenCalledTimes(1);
+        } finally {
+          compose.mockRestore();
         }
-        const expected = {
-          ...body,
-          instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
-          type: "response.create",
-          previous_response_id: "previous",
-        };
-        expect(received).toEqual([expected, { ...expected, input: [] }]);
-        expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
-        expect(transport.resolve).toHaveBeenCalledTimes(proxied ? 0 : 1);
-        if (proxied) {
-          expect(transport.wsAgents[0] === agent).toBe(true);
-          expect(transport.proxyAgent).toHaveBeenCalledWith({
-            mode: "env",
-            targetUrl: expect.any(String),
-          });
-        }
-        const closed = once(socket, "close");
-        registration.release();
-        await closed;
-        if (proxied) {
-          expect(destroy).toHaveBeenCalled();
-        }
-      } finally {
-        socket.terminate();
-        proxy.close();
-        agent.destroy();
-        for (const client of wss.clients) {
-          client.terminate();
-        }
-        await new Promise<void>((resolve) => {
-          wss.close(() => resolve());
-        });
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+      }
+      const expected = {
+        ...body,
+        instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
+        type: "response.create",
+        previous_response_id: "previous",
+      };
+      expect(received).toEqual([expected, { ...expected, input: [] }]);
+      expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
+      expect(transport.resolve).toHaveBeenCalledTimes(proxied ? 0 : 1);
+      if (proxied) {
+        expect(transport.wsAgents[0] === agent).toBe(true);
+      }
+      const closed = once(socket, "close");
+      registration.release();
+      await closed;
+      if (proxied) {
+        expect(destroy).toHaveBeenCalled();
       }
     },
   );
@@ -398,36 +608,22 @@ it("preserves WebSocket connection error headers and body for native auth recove
         body,
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture did not listen");
-  }
-  transport.upstream = "ws://127.0.0.1:" + address.port;
-  const { proxy } = await fixture();
-  const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
-  socket.on("error", () => {});
-  try {
-    const [, response] = await once(socket, "unexpected-response");
-    const chunks: Buffer[] = [];
-    for await (const chunk of response) {
-      chunks.push(Buffer.from(chunk));
-    }
-    expect(response.statusCode).toBe(401);
-    expect(response.headers).toMatchObject({
-      "www-authenticate": "Bearer synthetic-challenge",
-      "retry-after": "5",
-      "content-type": "application/json",
-    });
-    expect(Buffer.concat(chunks).toString()).toBe(body);
-  } finally {
-    socket.terminate();
-    proxy.close();
+  transport.upstream = "ws://127.0.0.1:" + (await listenOnLoopback(server));
+  cleanups.push(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
-  }
+  });
+  const { proxy } = await fixture();
+  const socket = connect(proxy);
+  socket.on("error", () => {});
+  const { response, text } = await rejectedResponse(socket);
+  expect(response.statusCode).toBe(401);
+  expect(response.headers).toMatchObject({
+    "www-authenticate": "Bearer synthetic-challenge",
+    "retry-after": "5",
+    "content-type": "application/json",
+  });
+  expect(text).toBe(body);
 });

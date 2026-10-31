@@ -1,21 +1,41 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { WebSocket } from "playwright";
 import { expect, it } from "vitest";
+import type { SessionsCreateResult } from "../../../packages/gateway-protocol/src/schema/sessions.ts";
 import config from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const requireRecord = createRequireRecord("record", "expected-object-value");
+
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 const tempDirs = createTempDirTracker();
 const suite = createControlUiE2eSuite({
   name: "Partial refresh with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const mockProvider = path.join(tempDirs.make("partial-refresh-provider-"), "copilot.mjs");
     await fs.writeFile(
@@ -36,6 +56,7 @@ const suite = createControlUiE2eSuite({
     );
     instance = await createOpenClawTestInstance({
       name: "partial-refresh",
+      gatewayToken: config.gateway.auth.token,
       env: {
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         VITEST: undefined,
@@ -67,39 +88,32 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("retains existing-chat controls after another provider fails to refresh", async () => {
-    const call = async (method: string, params: Record<string, unknown>) => {
-      const result = await instance.cli([
-        "gateway",
-        "call",
-        method,
-        "--json",
-        "--timeout",
-        "30000",
-        "--params",
-        JSON.stringify(params),
-      ]);
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout;
-    };
     const key = "agent:main:partial-refresh";
-    await call("sessions.create", {
-      key,
-      agentId: "main",
-      label: "Partial refresh",
-      model: "openai/gpt-5.4",
-    });
-    await call("sessions.patch", { key, thinkingLevel: "high" });
-    let catalog: ModelCatalogResult = JSON.parse(
-      await call("models.list", { agentId: "main", view: "configured", refresh: true }),
+    const { sessionId } = await client.request<SessionsCreateResult>(
+      "sessions.create",
+      { key, agentId: "main", label: "Partial refresh", model: "openai/gpt-5.4" },
+      { timeoutMs: 30_000 },
+    );
+    expect.assert(typeof sessionId === "string");
+    await client.request("sessions.patch", { key, thinkingLevel: "high" }, { timeoutMs: 30_000 });
+    let catalog = await client.request<ModelCatalogResult>(
+      "models.list",
+      { agentId: "main", view: "configured", refresh: true },
+      { timeoutMs: 30_000 },
     );
     await expect
       .poll(async () => {
-        if (catalog.pendingProviders?.length) {
-          catalog = JSON.parse(await call("models.list", { agentId: "main", view: "configured" }));
+        if (!catalog.refreshFailed || catalog.pendingProviders?.length) {
+          catalog = await client.request<ModelCatalogResult>(
+            "models.list",
+            { agentId: "main", view: "configured" },
+            { timeoutMs: 30_000 },
+          );
         }
-        return catalog.pendingProviders ?? [];
+        // An empty initial pending list is not a completed provider outcome.
+        return catalog.refreshFailed === true && !catalog.pendingProviders?.length;
       })
-      .toEqual([]);
+      .toBe(true);
     await fs.writeFile(
       path.join(suite.artifactDir, "models-list.json"),
       JSON.stringify(catalog, null, 2),
@@ -116,9 +130,73 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
+          let currentSocket: WebSocket | undefined;
+          let latestDiscovery: { socket: WebSocket; id: string; complete: boolean } | undefined;
+          let latestHistory:
+            | { socket: WebSocket; id: string; complete: boolean; initialHistory: boolean }
+            | undefined;
+          page.on("websocket", (socket) => {
+            currentSocket = socket;
+            socket.on("framesent", ({ payload }) => {
+              const frame = requireRecord(JSON.parse(payload.toString()));
+              if (frame.type !== "req" || typeof frame.id !== "string") {
+                return;
+              }
+              const params = requireRecord(frame.params);
+              const initialHistory =
+                frame.method === "sessions.messages.subscribe" &&
+                params.key === key &&
+                params.initialHistory !== undefined;
+              if (
+                initialHistory ||
+                ((frame.method === "chat.startup" || frame.method === "chat.history") &&
+                  params.sessionKey === key)
+              ) {
+                latestHistory = { socket, id: frame.id, complete: false, initialHistory };
+              }
+              if (frame.method !== "sessions.catalog.list") {
+                return;
+              }
+              if (params.agentId === "main" && params.metadataOnly === true && !params.catalogId) {
+                latestDiscovery = { socket, id: frame.id, complete: false };
+              }
+            });
+            socket.on("framereceived", ({ payload }) => {
+              const frame = requireRecord(JSON.parse(payload.toString()));
+              if (
+                frame.type === "res" &&
+                latestDiscovery !== undefined &&
+                frame.id === latestDiscovery.id &&
+                latestDiscovery.socket === socket
+              ) {
+                latestDiscovery.complete = frame.ok === true;
+              }
+              if (
+                frame.type === "res" &&
+                latestHistory !== undefined &&
+                frame.id === latestHistory.id &&
+                latestHistory.socket === socket
+              ) {
+                const result = frame.ok === true ? requireRecord(frame.payload) : undefined;
+                const initialHistory =
+                  result && latestHistory.initialHistory
+                    ? requireRecord(result.initialHistory)
+                    : undefined;
+                const historyResult = latestHistory.initialHistory
+                  ? initialHistory?.ok === true
+                    ? requireRecord(initialHistory.payload)
+                    : undefined
+                  : result;
+                latestHistory.complete =
+                  historyResult !== undefined &&
+                  historyResult.kind !== "reset" &&
+                  requireRecord(historyResult.sessionInfo).sessionId === sessionId;
+              }
+            });
+          });
           await page.addInitScript(() => {
             localStorage.setItem(
-              "openclaw:control-ui:community-invite",
+              "openclaw:control-ui:community-invite:v2",
               JSON.stringify({ dismissedAtMs: 1770000000000 }),
             );
           });
@@ -128,13 +206,47 @@ suite.define(() => {
           const url = new URL(browserUrl);
           url.pathname = `/${route}`;
           await page.goto(url.href);
+          if (route !== "new") {
+            await enterControlUiSession(page);
+          }
           await waitForControlUiGatewayReady(page);
           const composer = page.locator(".agent-chat__input").first();
           const model = composer.locator("[data-chat-model-select]");
+          // Summary elements do not participate in Playwright's disabled actionability check.
+          await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
           await model.click();
           // A failed background refresh must not add chrome above a usable list.
-          await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();
-          // CLI discovery starts with agent hydration and can outlive model loading.
+          await revealChatModelOption(composer, "openai/gpt-5.4");
+          if (route === "new") {
+            // An absent CLI group can mean discovery has not started, or a completed empty result.
+            await expect
+              .poll(async () => {
+                const discovery = latestDiscovery;
+                if (!discovery?.complete || discovery.socket !== currentSocket) {
+                  return false;
+                }
+                const settled = await evaluateControlUiContext(page, async (context) => {
+                  const agents = context.agents.state;
+                  if (
+                    context.config.current.cliAgentsEnabled !== true ||
+                    !agents.connected ||
+                    agents.client !== context.gateway.snapshot.client ||
+                    !agents.agentsList?.agents.some((agent) => agent.id === "main")
+                  ) {
+                    return false;
+                  }
+                  const view = document.querySelector<
+                    HTMLElement & { updateComplete: Promise<boolean> }
+                  >("openclaw-new-session-page");
+                  return (await view?.updateComplete) === true;
+                });
+                // updated() can reset discovery; require the same completed request after rendering.
+                return (
+                  settled && latestDiscovery === discovery && currentSocket === discovery.socket
+                );
+              })
+              .toBe(true);
+          }
           await composer
             .locator(
               '[data-chat-model-target-group="cliAgents"] [data-chat-model-catalog-state="loading"]',
@@ -154,26 +266,64 @@ suite.define(() => {
             );
           expect(catalogNotices).toEqual([]);
           const stage = route === "new" ? "new" : "chat";
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `${stage}-catalog.png`),
-            animations: "disabled",
-          });
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `${stage}-catalog.png`),
+              animations: "disabled",
+            });
+          }
           await model.click();
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `${stage}-composer.png`),
-            animations: "disabled",
-          });
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `${stage}-composer.png`),
+              animations: "disabled",
+            });
+          }
+          if (route !== "new") {
+            // Model browsing is ready before history hydration unlocks effort changes.
+            await expect
+              .poll(async () => {
+                const history = latestHistory;
+                if (!history?.complete || history.socket !== currentSocket) {
+                  return false;
+                }
+                const rendered = await page.evaluate(
+                  async ({ key: expectedKey, sessionId: expectedSessionId }) => {
+                    const pane = document.querySelector<
+                      HTMLElement & {
+                        state?: ChatPageHost;
+                        transcriptReady: boolean;
+                        updateComplete: Promise<unknown>;
+                      }
+                    >('openclaw-chat-pane[aria-hidden="false"]');
+                    await pane?.updateComplete;
+                    const state = pane?.state;
+                    return (
+                      pane?.transcriptReady &&
+                      state?.sessionKey === expectedKey &&
+                      state.currentSessionId === expectedSessionId &&
+                      !state.chatLoading
+                    );
+                  },
+                  { key, sessionId },
+                );
+                return rendered && latestHistory === history && currentSocket === history.socket;
+              })
+              .toBe(true);
+          }
           const effort = composer.locator("[data-chat-thinking-select]");
           await expect.poll(() => effort.isVisible()).toBe(true);
-          expect(await effort.getAttribute("aria-disabled")).toBe("false");
+          await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("false");
           await effort.click();
           await expect
             .poll(() => composer.locator("[data-chat-thinking-slider]").isEnabled())
             .toBe(true);
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `${stage}-effort.png`),
-            animations: "disabled",
-          });
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `${stage}-effort.png`),
+              animations: "disabled",
+            });
+          }
         },
       );
     }

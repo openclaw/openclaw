@@ -1,10 +1,64 @@
 // Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
+import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
+declare const SEALED_RUNTIME_BUILD: boolean;
+function readDarwinNativeIdentity(
+  pid: number,
+): { startedAt: number; startTimeMicros: number } | null | undefined {
+  if (
+    process.platform !== "darwin" ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return undefined;
+  }
+  try {
+    const identity = readProcessIdentity(pid);
+    // A retained zombie is not a live owner. Do not recover it through ps.
+    return identity && !identity.exited
+      ? {
+          // Published Darwin leases use epoch seconds, not microseconds.
+          startedAt: Math.floor(identity.startTimeMicros / 1_000_000),
+          startTimeMicros: identity.startTimeMicros,
+        }
+      : null;
+  } catch {
+    // Sealed or unavailable native runtimes retain the bounded diagnostic path.
+    return undefined;
+  }
+}
+
+/** Unknown observations never prove death; Linux keeps its thread-aware procfs policy. */
+function readNativeLiveness(pid: number): boolean | undefined {
+  if (
+    !["darwin", "win32", "freebsd"].includes(process.platform) ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return undefined;
+  }
+  try {
+    const identity = readProcessIdentity(pid);
+    return identity !== null && !identity.exited;
+  } catch (error) {
+    // Visibility policy can hide an existing PID even from kill(pid, 0).
+    if (
+      error instanceof ProcSafeError &&
+      (error.code === "helper-unavailable" || error.code === "unsupported-platform")
+    ) {
+      return undefined;
+    }
+    return true;
+  }
+}
+// Bound corrupted/cyclic ancestry while allowing nested service supervisors.
+export const MAX_ANCESTOR_WALK_DEPTH = 32;
+
 // Cache only a successful self read: this identity lasts for the process.
 // Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
 let selfStartTime: number | null = null;
@@ -13,64 +67,108 @@ function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
 }
 
+// Android (Termux) runs the Linux kernel and reports its own process.platform.
+function hasLinuxProcfs(): boolean {
+  return process.platform === "linux" || process.platform === "android";
+}
+
 /**
- * Check if every thread has exited by reading Linux /proc/<pid>/status.
- * Returns false on non-Linux platforms or if the proc file can't be read.
+ * Reject recycled worker TIDs and terminal leaders without live sibling threads.
+ * Missing or reaped procfs snapshots require a fresh existence probe.
  */
-function isZombieProcess(pid: number): boolean {
-  if (process.platform !== "linux") {
+function isExitedLinuxProcess(pid: number): boolean {
+  if (!hasLinuxProcfs()) {
     return false;
   }
   try {
     const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
-    const stateMatch = status.match(/^State:\s+(\S)/m);
-    // pthread_exit can leave a zombie leader with live workers; missing thread
-    // evidence must not revoke a live process's locks or cleanup obligations.
-    return stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status);
+    const state = status.match(/^State:\s+(\S)/m)?.[1];
+    const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
+    if (threads !== "0") {
+      // process.pid records a leader; kill(pid, 0) also accepts recycled worker TIDs.
+      const tgid = status.match(/^Tgid:[ \t]+(\d+)[ \t]*$/m)?.[1];
+      // pthread_exit can leave a terminal leader with live workers. Reaping also
+      // moves the last retained task from Z to X before removing its PID.
+      return (
+        (tgid !== undefined && Number(tgid) !== pid) ||
+        ((state === "Z" || state === "X") && threads === "1")
+      );
+    }
   } catch {
-    return false;
+    // Reaping can remove procfs after the caller's existence probe.
   }
+  // A successful read can outlive the task's signal metadata and report zero
+  // threads. PID reuse or a nonleader exec can still leave a live current owner.
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    // SAFETY: Node's process.kill reports syscall failures as ErrnoException.
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+  return false;
 }
 
-/** Returns true only when a positive PID exists and is not a Linux zombie process. */
+/** Returns true only when a positive PID exists and is not a known terminal task. */
 export function isPidAlive(pid: number): boolean {
   if (!isValidPid(pid)) {
     return false;
   }
   try {
     process.kill(pid, 0);
-  } catch (err) {
-    // EPERM means the PID exists but we cannot signal it. Treat that as a
-    // successful existence probe, then still apply the Linux zombie check.
-    // Keep parity with isPidDefinitelyDead (EPERM is not "definitely dead").
-    if ((err as NodeJS.ErrnoException).code !== "EPERM") {
-      return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EPERM") {
+      // A visibility policy can hide a live process even from the signal probe.
+      return code === "ESRCH" ? (readNativeLiveness(pid) ?? false) : false;
     }
   }
-  return !isZombieProcess(pid);
+  return readNativeLiveness(pid) ?? !isExitedLinuxProcess(pid);
 }
 
-/** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
+/** Returns true only when the PID is invalid, missing, or a known terminal task. */
 export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;
   }
   try {
     process.kill(pid, 0);
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+      return false;
+    }
+    const native = readNativeLiveness(pid);
+    // Without native visibility facts, FreeBSD ESRCH can still mean a hidden PID.
+    return native === undefined ? process.platform !== "freebsd" : !native;
   }
-  return isZombieProcess(pid);
+  const native = readNativeLiveness(pid);
+  return native === undefined ? isExitedLinuxProcess(pid) : !native;
 }
 
-function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number | null {
+function getDarwinProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): number | null {
+  const started = performance.now();
+  const native = readDarwinNativeIdentity(pid);
+  if (native !== undefined) {
+    return native?.startedAt ?? null;
+  }
+  // The default bounds ps itself; explicit deadlines also pay for native loading.
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
+  if (remainingMs <= 0) {
+    return null;
+  }
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: PROCESS_START_TIMEOUT_MS,
+        timeout: remainingMs,
         killSignal: "SIGKILL",
       })
       .trim();
@@ -83,15 +181,15 @@ function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number 
   }
 }
 
-/** Read the Linux procfs start identity used by Linux-owned runtime state. */
-export function getProcessStartTime(pid: number): number | null {
-  if (!isValidPid(pid) || process.platform !== "linux") {
+/** Kernel parent and birth ticks share one procfs snapshot, independent of native addons. */
+export function readLinuxProcessStat(pid: number): { parentPid: number; startedAt: number } | null {
+  if (!isValidPid(pid) || !hasLinuxProcfs()) {
     return null;
   }
   try {
     const stat = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8");
     const commEndIndex = stat.lastIndexOf(")");
-    if (commEndIndex < 0) {
+    if (commEndIndex < 0 || !stat.startsWith(`${pid} (`)) {
       return null;
     }
     // The comm field (field 2) is wrapped in parens and can contain spaces,
@@ -100,17 +198,45 @@ export function getProcessStartTime(pid: number): number | null {
     const fields = afterComm.split(/\s+/);
     // field 22 (starttime) = index 19 after the comm-split (field 3 is index 0).
     const starttime = Number(fields[19]);
-    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
+    const parentPid = Number(fields[1]);
+    return Number.isSafeInteger(starttime) &&
+      starttime >= 0 &&
+      Number.isSafeInteger(parentPid) &&
+      parentPid >= 0
+      ? { parentPid, startedAt: starttime }
+      : null;
   } catch {
     return null;
   }
+}
+
+/** Read the Linux procfs start identity used by Linux-owned runtime state. */
+export function getProcessStartTime(pid: number): number | null {
+  return readLinuxProcessStat(pid)?.startedAt ?? null;
+}
+
+/** Custody recovery needs native birth precision rather than the shipped lease timestamp format. */
+export function getProcessInstanceStartTime(pid: number): number | null {
+  if (!isValidPid(pid)) {
+    return null;
+  }
+  if (hasLinuxProcfs()) {
+    const startedAt = getProcessStartTime(pid);
+    return Number.isSafeInteger(startedAt) ? startedAt : null;
+  }
+  const native = readDarwinNativeIdentity(pid);
+  if (!native) {
+    return null;
+  }
+  const startedAt = native.startTimeMicros;
+  return Number.isSafeInteger(startedAt) ? startedAt : null;
 }
 
 /** Read a cross-platform process identity for filesystem lock ownership. */
 export function getFileLockProcessStartTime(
   pid: number,
   env: NodeJS.ProcessEnv = process.env,
-  windowsTimeoutMs?: number,
+  timeoutMs?: number,
 ): number | null {
   if (!isValidPid(pid)) {
     return null;
@@ -121,10 +247,12 @@ export function getFileLockProcessStartTime(
   }
   const startTime =
     process.platform === "darwin"
-      ? getDarwinProcessStartTime(pid, env)
+      ? getDarwinProcessStartTime(pid, env, timeoutMs)
       : process.platform === "win32"
-        ? readWindowsProcessStartTimeSync(pid, windowsTimeoutMs, env)
-        : getProcessStartTime(pid);
+        ? readWindowsProcessStartTimeSync(pid, timeoutMs, env)
+        : process.platform === "freebsd"
+          ? readFreeBsdProcessStartTime(pid)
+          : getProcessStartTime(pid);
   if (isSelf && startTime !== null) {
     selfStartTime = startTime;
   }

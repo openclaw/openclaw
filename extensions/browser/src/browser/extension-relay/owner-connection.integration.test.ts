@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it } from "vitest";
-import type { RawData, WebSocket } from "ws";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -13,36 +13,37 @@ import { withConnectedDaemon } from "./relay-coexistence.test-support.js";
 
 afterEach(clearRuntimeConfigSnapshot);
 
+const connectOwner = (port: number, token: string) =>
+  authenticateRelayOwner({ port, token, profile: "chrome", signal: new AbortController().signal });
+
 function ownerRequests(ws: WebSocket) {
   let sequence = 0;
   return async (op: string, fields: object = {}) => {
     const id = ++sequence;
-    const response = new Promise<{ result?: unknown; error?: string }>((resolve) => {
-      const onMessage = (raw: RawData) => {
-        const value = JSON.parse(rawDataToString(raw));
-        if (value.id === id) {
-          ws.off("message", onMessage);
-          resolve(value);
-        }
-      };
-      ws.on("message", onMessage);
-    });
+    const response = receive(ws, (value) => value.id === id);
     ws.send(JSON.stringify({ id, op, ...fields }));
     return await response;
   };
 }
 
-it("scopes references to their authenticated connection and releases native claims on peer loss", async () => {
-  await withConnectedDaemon(async ({ port, token, extension, holdDetach }) => {
-    const connect = () =>
-      authenticateRelayOwner({
-        port,
-        token,
-        profile: "chrome",
-        signal: new AbortController().signal,
-      });
-    const first = await connect();
-    const second = await connect();
+function receive(ws: WebSocket, accepts: (value: Record<string, unknown>) => boolean) {
+  return new Promise<Record<string, unknown>>((resolve) => {
+    const onMessage = (raw: RawData) => {
+      const value: Record<string, unknown> = JSON.parse(rawDataToString(raw));
+      if (!accepts(value)) {
+        return;
+      }
+      ws.off("message", onMessage);
+      resolve(value);
+    };
+    ws.on("message", onMessage);
+  });
+}
+
+it("scopes references to their authenticated connection and releases native claims on peer loss", () =>
+  withConnectedDaemon(async ({ port, token, extension, holdDetach }) => {
+    const first = await connectOwner(port, token);
+    const second = await connectOwner(port, token);
     const request = ownerRequests(first.ws);
     const other = ownerRequests(second.ws);
     const hold = holdDetach();
@@ -57,28 +58,19 @@ it("scopes references to their authenticated connection and releases native clai
 
       // Give the first owner a real logical claimant before the Gateway drops its own.
       const { result: stream } = await request("cdp.open");
-      const attached = new Promise<void>((resolve) => {
-        first.ws.on("message", (raw) => {
-          const value = JSON.parse(rawDataToString(raw));
-          if (
-            value.stream === stream &&
-            value.frame &&
-            JSON.parse(value.frame).method === "Target.attachedToTarget"
-          ) {
-            resolve();
-          }
-        });
-      });
-      first.ws.send(
-        JSON.stringify({
-          stream,
-          frame: JSON.stringify({
-            id: 1,
-            method: "Target.setAutoAttach",
-            params: { autoAttach: true, flatten: true },
-          }),
-        }),
+      const attached = receive(
+        first.ws,
+        (value) =>
+          value.stream === stream &&
+          typeof value.frame === "string" &&
+          JSON.parse(value.frame).method === "Target.attachedToTarget",
       );
+      const frame = JSON.stringify({
+        id: 1,
+        method: "Target.setAutoAttach",
+        params: { autoAttach: true, flatten: true },
+      });
+      first.ws.send(JSON.stringify({ stream, frame }));
       await attached;
       await stopBrowserControlService();
       first.ws.terminate();
@@ -97,20 +89,12 @@ it("scopes references to their authenticated connection and releases native clai
       first.ws.terminate();
       second.ws.terminate();
     }
-  });
-});
+  }));
 
-it("owns malformed-frame errors after owner authentication without stopping the relay", async () => {
-  await withConnectedDaemon(async ({ port, token, extension }) => {
-    const connect = () =>
-      authenticateRelayOwner({
-        port,
-        token,
-        profile: "chrome",
-        signal: new AbortController().signal,
-      });
-    const failed = await connect();
-    const healthy = await connect();
+it("owns malformed-frame errors after owner authentication without stopping the relay", () =>
+  withConnectedDaemon(async ({ port, token, extension }) => {
+    const failed = await connectOwner(port, token);
+    const healthy = await connectOwner(port, token);
     try {
       const closed = once(failed.ws, "close");
       failed.ws.send("invalid client frame", { mask: false });
@@ -124,5 +108,4 @@ it("owns malformed-frame errors after owner authentication without stopping the 
       failed.ws.terminate();
       healthy.ws.terminate();
     }
-  });
-});
+  }));

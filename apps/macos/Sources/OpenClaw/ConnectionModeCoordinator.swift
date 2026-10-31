@@ -22,13 +22,15 @@ final class ConnectionModeCoordinator {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "connection")
     private var transition = Transition()
-    private var portSweepTask: Task<Void, Never>?
+    private var orphanedTunnelCleanupTask: Task<Void, Never>?
     private var localDisconnectTask: Task<Void, Never>?
 
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
-        self.portSweepTask?.cancel()
+        // Endpoint admission retires primary windows when their selected Gateway changes.
+        // Lifecycle setup can finish after chat opens, so it must preserve those windows.
+        self.orphanedTunnelCleanupTask?.cancel()
         self.localDisconnectTask?.cancel()
         let hostsLocalGateway = AppStateStore.shared.hostsLocalGatewayWithRemotePrimary
         let previousMode = self.transition.mode
@@ -52,7 +54,6 @@ final class ConnectionModeCoordinator {
             NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
             guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
-            WebChatManager.shared.resetPrimaryConnections()
         }
 
         switch mode {
@@ -72,7 +73,6 @@ final class ConnectionModeCoordinator {
                 hostsLocalGateway: hostsLocalGateway,
                 generation: applyGeneration)
             guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
-            WebChatManager.shared.resetPrimaryConnections()
 
             do {
                 NodesStore.shared.lastError = nil
@@ -91,8 +91,8 @@ final class ConnectionModeCoordinator {
             }
         }
 
-        self.portSweepTask = Task {
-            await PortGuardian.shared.sweep(mode: mode, hostsLocalGateway: hostsLocalGateway)
+        self.orphanedTunnelCleanupTask = Task {
+            await PortGuardian.shared.reapOrphanedTunnels()
         }
     }
 
@@ -112,17 +112,11 @@ final class ConnectionModeCoordinator {
             GatewayProcessManager.shared.setActive(true)
             await GatewayProcessManager.shared.waitForStartupAttempt()
             guard self.transition.isCurrent(generation, mode: mode) else { return }
-            var launchAgentInstalled = false
-            if GatewayAutostartPolicy.shouldEnsureLaunchAgent(
-                mode: mode, paused: paused, hostsLocalGateway: hostsLocalGateway)
-            {
-                launchAgentInstalled = await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
-            }
+            let launchAgentInstalled = await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
             guard self.transition.isCurrent(generation, mode: mode) else { return }
             // Finish persistence before readiness so a newer lifecycle cannot clear its repair marker.
             _ = await GatewayProcessManager.shared.waitForGatewayReady(
                 launchAgentInstalled: launchAgentInstalled)
-            guard self.transition.isCurrent(generation, mode: mode) else { return }
         } else {
             GatewayProcessManager.shared.stop()
             await GatewayProcessManager.shared.waitForStartupAttempt()

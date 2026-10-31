@@ -1,4 +1,3 @@
-// Signal plugin module implements approval auth behavior.
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalAccount } from "./accounts.js";

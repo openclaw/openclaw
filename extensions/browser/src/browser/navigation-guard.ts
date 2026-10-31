@@ -1,17 +1,16 @@
 /**
- * Browser navigation SSRF guard.
- *
  * Validates page navigation URLs and redirect chains before or after browser
  * navigation while accounting for browser proxy routing.
  */
 import { isIP } from "node:net";
 import {
   isPrivateNetworkAllowedByPolicy,
+  matchesHostnameAllowlist,
+  normalizeHostname,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
-} from "../infra/net/ssrf.js";
-import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+} from "openclaw/plugin-sdk/security-runtime";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
@@ -23,7 +22,6 @@ function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
   return SAFE_NON_NETWORK_URLS.has(parsed.href);
 }
 
-/** Raised when a browser navigation URL fails syntax or policy validation. */
 export class InvalidBrowserNavigationUrlError extends Error {
   constructor(message: string) {
     super(message);
@@ -38,10 +36,8 @@ export function parseBrowserNavigationUrl(url: string): URL {
     throw new InvalidBrowserNavigationUrlError("url is required");
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     const diagnostic = rawUrl.includes("@") ? "[redacted credential-bearing URL]" : rawUrl;
     throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${diagnostic}`);
   }
@@ -52,10 +48,11 @@ export function parseBrowserNavigationUrl(url: string): URL {
   return parsed;
 }
 
-/** Policy inputs applied to browser page navigation checks. */
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
+  /** Live authority for an invocation-scoped navigation exception. */
+  assertNavigationCurrent?: () => void;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -70,19 +67,17 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: { browserProxyMode?: BrowserNavigationProxyMode },
+  opts?: Pick<BrowserNavigationPolicyOptions, "browserProxyMode" | "assertNavigationCurrent">,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.assertNavigationCurrent
+      ? { assertNavigationCurrent: opts.assertNavigationCurrent }
+      : {}),
     ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
       ? { browserProxyMode: opts.browserProxyMode }
       : {}),
   };
-}
-
-/** Return true when strict policy requires redirect-chain inspection. */
-function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
-  return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
 }
 
 /** Return true when a URL needs redirect inspection under strict policy. */
@@ -90,19 +85,10 @@ export function requiresInspectableBrowserNavigationRedirectsForUrl(
   url: string,
   ssrfPolicy?: SsrFPolicy,
 ): boolean {
-  if (!requiresInspectableBrowserNavigationRedirects(ssrfPolicy)) {
+  if (ssrfPolicy?.dangerouslyAllowPrivateNetwork !== false) {
     return false;
   }
-  try {
-    const parsed = new URL(url);
-    return NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
-
-function isIpLiteralHostname(hostname: string): boolean {
-  return isIP(normalizeHostname(hostname)) !== 0;
+  return NETWORK_NAVIGATION_PROTOCOLS.has(URL.parse(url)?.protocol ?? "");
 }
 
 function isExplicitlyAllowedBrowserHostname(hostname: string, ssrfPolicy?: SsrFPolicy): boolean {
@@ -124,6 +110,7 @@ export async function assertBrowserNavigationAllowed(
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   opts.signal?.throwIfAborted();
+  opts.assertNavigationCurrent?.();
   const parsed = parseBrowserNavigationUrl(opts.url);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
@@ -155,7 +142,7 @@ export async function assertBrowserNavigationAllowed(
     opts.ssrfPolicy &&
     opts.ssrfPolicy.dangerouslyAllowPrivateNetwork === false &&
     !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
-    !isIpLiteralHostname(parsed.hostname) &&
+    isIP(normalizeHostname(parsed.hostname)) === 0 &&
     !isExplicitlyAllowedBrowserHostname(parsed.hostname, opts.ssrfPolicy)
   ) {
     throw new InvalidBrowserNavigationUrlError(
@@ -168,6 +155,7 @@ export async function assertBrowserNavigationAllowed(
     policy: opts.ssrfPolicy,
     signal: opts.signal,
   });
+  opts.assertNavigationCurrent?.();
 }
 
 /**
@@ -188,10 +176,8 @@ export async function assertBrowserNavigationResultAllowed(
   if (!rawUrl) {
     return;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return;
   }
   if (
@@ -223,6 +209,7 @@ export async function assertBrowserNavigationRedirectChainAllowed(
       lookupFn: opts.lookupFn,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
+      assertNavigationCurrent: opts.assertNavigationCurrent,
       signal: opts.signal,
     });
   }

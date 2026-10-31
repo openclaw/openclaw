@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 @MainActor
@@ -9,45 +10,81 @@ import SwiftUI
 final class StatusMenuSessions: NSObject {
     static let shared = StatusMenuSessions()
 
-    private(set) var rows: [SessionRow] = []
-    private(set) var errorText: String?
-    private(set) var cachedSnapshot: SessionStoreSnapshot?
+    private final class SessionMenu: NSMenu {
+        var source: GatewayConnection.ServerLease?
+    }
 
-    @ObservationIgnored private var updatedAt: Date?
+    private struct Cache {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var snapshot: SessionStoreSnapshot?
+        var error: String?
+        var updatedAt: Date?
+    }
+
+    private var cache: Cache?
+    @ObservationIgnored private let control: ControlChannel
     @ObservationIgnored private var previewTasks: [Task<Void, Never>] = []
     @ObservationIgnored private let refreshInterval: TimeInterval = 12
 
+    init(control: ControlChannel = .shared) {
+        self.control = control
+        super.init()
+    }
+
+    private var currentCache: Cache? {
+        guard let cache,
+              cache.revision == self.control.gateway.selectedEndpointRevision,
+              cache.lease.map(self.control.gateway.serverLeaseMatchesCurrentRoute) != false
+        else { return nil }
+        return cache
+    }
+
+    var cachedSnapshot: SessionStoreSnapshot? {
+        self.currentCache?.snapshot
+    }
+
+    var rows: [SessionRow] {
+        self.cachedSnapshot?.rows ?? []
+    }
+
+    var errorText: String? {
+        self.currentCache?.error
+    }
+
     func refresh(force: Bool = false) async {
         guard !Task.isCancelled else { return }
-        if !force,
-           let updatedAt,
-           Date().timeIntervalSince(updatedAt) < self.refreshInterval
-        {
+        var cache = self.currentCache ?? Cache(revision: self.control.gateway.selectedEndpointRevision)
+        if !force, let updatedAt = cache.updatedAt, Date().timeIntervalSince(updatedAt) < self.refreshInterval {
             return
         }
 
-        guard case .connected = ControlChannel.shared.state else {
-            self.errorText = self.cachedSnapshot == nil
-                ? nil
-                : String(localized: "Gateway disconnected (showing cached)")
-            self.updatedAt = Date()
+        guard case .connected = self.control.state else {
+            cache.error = cache.snapshot == nil ? nil : String(localized: "Gateway disconnected (showing cached)")
+            cache.updatedAt = Date()
+            self.cache = cache
             return
         }
 
+        func isCurrent() -> Bool {
+            !Task.isCancelled && cache.revision == self.control.gateway.selectedEndpointRevision &&
+                cache.lease.map(self.control.gateway.serverLeaseMatchesCurrentState) != false
+        }
         do {
-            let snapshot = try await SessionLoader.loadSnapshot(limit: 32)
-            guard !Task.isCancelled else { return }
-            self.cachedSnapshot = snapshot
-            self.rows = snapshot.rows
-            self.errorText = nil
-            self.updatedAt = Date()
-            self.prewarmPreviews(for: snapshot.rows)
+            cache.lease = try await self.control.acquireServerLease()
+            guard isCurrent() else { return }
+            cache.snapshot = try await SessionLoader.loadSnapshot(limit: 32, control: self.control)
+            guard isCurrent() else { return }
+            cache.error = nil
+            cache.updatedAt = Date()
+            self.cache = cache
+            self.prewarmPreviews(for: cache.snapshot?.rows ?? [])
         } catch {
-            guard !Task.isCancelled else { return }
-            self.cachedSnapshot = nil
-            self.rows = []
-            self.errorText = self.compactError(error)
-            self.updatedAt = Date()
+            guard isCurrent() else { return }
+            cache.snapshot = nil
+            cache.error = self.compactError(error)
+            cache.updatedAt = Date()
+            self.cache = cache
         }
     }
 
@@ -56,18 +93,24 @@ final class StatusMenuSessions: NSObject {
         item.isEnabled = true
         StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row), highlights: true)
 
-        if let submenu = item.submenu {
+        if let submenu = item.submenu as? SessionMenu, submenu.source == self.currentCache?.lease {
             self.updateSessionSubmenu(submenu, row: row)
         } else {
             item.submenu = self.buildSessionSubmenu(for: row)
         }
     }
 
-    func configureApprovalItem(_ item: NSMenuItem, request: ExecApprovalQueueItem) {
+    func configureApprovalItem(
+        _ item: NSMenuItem,
+        request: ExecApprovalQueueItem,
+        approvalQueue: ExecApprovalQueueStore)
+    {
         item.title = String(localized: "Approval requested")
         item.isEnabled = true
         item.submenu = nil
-        StatusMenuRenderer.configureHostedView(item, rootView: StatusApprovalCard(request: request))
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusApprovalCard(request: request, approvalQueue: approvalQueue))
     }
 
     func cancelPreviewTasks() {
@@ -83,18 +126,13 @@ final class StatusMenuSessions: NSObject {
             .map(\.key)
         guard !keys.isEmpty else { return }
         self.previewTasks.append(Task {
-            await SessionMenuPreviewLoader.prewarm(sessionKeys: keys, maxItems: 10)
+            await SessionMenuPreviewLoader.prewarm(sessionKeys: keys, maxItems: 10, gateway: self.control.gateway)
         })
     }
 
     private func compactError(_ error: Error) -> String {
-        if let loadError = error as? SessionLoadError {
-            switch loadError {
-            case .gatewayUnavailable:
-                return String(localized: "No connection to gateway")
-            case .decodeFailed:
-                return String(localized: "Sessions unavailable")
-            }
+        if case .gatewayUnavailable = error as? SessionLoadError {
+            return String(localized: "No connection to gateway")
         }
         return String(localized: "Sessions unavailable")
     }
@@ -102,7 +140,8 @@ final class StatusMenuSessions: NSObject {
 
 extension StatusMenuSessions {
     private func buildSessionSubmenu(for row: SessionRow) -> NSMenu {
-        let menu = NSMenu()
+        let menu = SessionMenu()
+        menu.source = self.currentCache?.lease
         menu.autoenablesItems = false
         menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
@@ -122,23 +161,25 @@ extension StatusMenuSessions {
 
         menu.addItem(NSMenuItem.separator())
 
-        let thinking = NSMenuItem(title: String(localized: "Thinking"), action: nil, keyEquivalent: "")
-        thinking.identifier = NSUserInterfaceItemIdentifier("session.thinking")
-        thinking.submenu = self.buildPreferenceMenu(
-            key: row.key,
-            levels: ["off", "minimal", "low", "medium", "high"],
-            current: row.thinkingLevel,
-            action: #selector(self.patchThinking(_:)))
-        menu.addItem(thinking)
-
-        let verbose = NSMenuItem(title: String(localized: "Verbose"), action: nil, keyEquivalent: "")
-        verbose.identifier = NSUserInterfaceItemIdentifier("session.verbose")
-        verbose.submenu = self.buildPreferenceMenu(
-            key: row.key,
-            levels: ["on", "off"],
-            current: row.verboseLevel,
-            action: #selector(self.patchVerbose(_:)))
-        menu.addItem(verbose)
+        for (title, identifier, levels, current, action) in [
+            (
+                String(localized: "Thinking"),
+                "session.thinking",
+                ["off", "minimal", "low", "medium", "high"],
+                row.thinkingLevel,
+                #selector(self.patchThinking(_:))),
+            (
+                String(localized: "Verbose"),
+                "session.verbose",
+                ["on", "off"],
+                row.verboseLevel,
+                #selector(self.patchVerbose(_:))),
+        ] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            item.submenu = self.buildPreferenceMenu(key: row.key, levels: levels, current: current, action: action)
+            menu.addItem(item)
+        }
 
         let color = NSMenuItem(title: String(localized: "Color"), action: nil, keyEquivalent: "")
         color.identifier = NSUserInterfaceItemIdentifier("session.color")
@@ -334,9 +375,12 @@ extension StatusMenuSessions {
                 status: .loading)
                 .environment(\.isEnabled, true))
 
+        let gateway = self.control.gateway
+        let revision = gateway.selectedEndpointRevision
         self.previewTasks.append(Task { [weak item] in
-            let snapshot = await SessionMenuPreviewLoader.load(sessionKey: sessionKey, maxItems: 10)
-            guard !Task.isCancelled, let item else { return }
+            let snapshot = await SessionMenuPreviewLoader.load(
+                sessionKey: sessionKey, maxItems: 10, gateway: gateway)
+            guard !Task.isCancelled, gateway.selectedEndpointRevision == revision, let item else { return }
             StatusMenuRenderer.configureHostedView(
                 item,
                 rootView: SessionMenuPreviewView(
@@ -366,8 +410,9 @@ extension StatusMenuSessions {
               let value = payload["value"]
         else { return }
         Task {
-            do {
-                let request = OpenClawChatGatewayRequests.patchSession(
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.patchSession(
                     sessionKey: key,
                     agentID: nil,
                     label: nil,
@@ -375,44 +420,35 @@ extension StatusMenuSessions {
                     color: .some(value.isEmpty ? nil : value),
                     pinned: nil,
                     archived: nil,
-                    unreadPatch: nil)
-                _ = try await ControlChannel.shared.request(request)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update color failed"), error: error)
-            }
+                    unreadPatch: nil),
+                errorTitle: String(localized: "Update color failed"))
         }
     }
 
     @objc private func patchThinking(_ sender: NSMenuItem) {
-        guard let payload = sender.representedObject as? [String: String],
-              let key = payload["key"],
-              let value = payload["value"]
-        else { return }
-
-        Task {
-            do {
-                try await SessionActions.patchSession(key: key, thinking: .some(value))
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update thinking failed"), error: error)
-            }
-        }
+        self.patchSessionSettings(sender, thinking: true)
     }
 
     @objc private func patchVerbose(_ sender: NSMenuItem) {
+        self.patchSessionSettings(sender, thinking: false)
+    }
+
+    private func patchSessionSettings(_ sender: NSMenuItem, thinking: Bool) {
         guard let payload = sender.representedObject as? [String: String],
               let key = payload["key"],
               let value = payload["value"]
         else { return }
 
         Task {
-            do {
-                try await SessionActions.patchSession(key: key, verbose: .some(value))
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update verbose failed"), error: error)
-            }
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.patchSessionSettings(
+                    sessionKey: key,
+                    agentID: nil,
+                    thinkingLevel: thinking ? .some(value) : nil,
+                    verboseLevel: thinking ? nil : .some(value)),
+                errorTitle: thinking
+                    ? String(localized: "Update thinking failed") : String(localized: "Update verbose failed"))
         }
     }
 
@@ -426,17 +462,15 @@ extension StatusMenuSessions {
     @objc private func resetSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Reset session?"),
-                message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
-                action: String(localized: "Reset"))
-            else { return }
-
-            do {
-                try await SessionActions.resetSession(key: key)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Reset failed"), error: error)
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.resetSession(sessionKey: key, agentID: nil),
+                errorTitle: String(localized: "Reset failed"))
+            {
+                await SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Reset session?"),
+                    message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
+                    action: String(localized: "Reset"))
             }
         }
     }
@@ -444,17 +478,15 @@ extension StatusMenuSessions {
     @objc private func compactSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Compact session log?"),
-                message: String(localized: "Keeps the last 400 lines and archives the old file."),
-                action: String(localized: "Compact"))
-            else { return }
-
-            do {
-                try await SessionActions.compactSession(key: key, maxLines: 400)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Compact failed"), error: error)
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.compactSession(sessionKey: key, agentID: nil, maxLines: 400),
+                errorTitle: String(localized: "Compact failed"))
+            {
+                await SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Compact session log?"),
+                    message: String(localized: "Keeps the last 400 lines and archives the old file."),
+                    action: String(localized: "Compact"))
             }
         }
     }
@@ -466,18 +498,46 @@ extension StatusMenuSessions {
         else { return }
 
         Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Delete session?"),
-                message: String(format: String(localized: "Deletes the “%@” entry and archives its transcript."), key),
-                action: String(localized: "Delete"))
-            else { return }
-
-            do {
-                try await SessionActions.deleteSession(key: key)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Delete failed"), error: error)
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.deleteSession(sessionKey: key, agentID: nil),
+                errorTitle: String(localized: "Delete failed"))
+            {
+                await SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Delete session?"),
+                    message: String(
+                        format: String(localized: "Deletes the “%@” entry and archives its transcript."),
+                        key),
+                    action: String(localized: "Delete"))
             }
+        }
+    }
+
+    func performSessionAction(
+        _ sender: NSMenuItem,
+        request: OpenClawChatGatewayRequest,
+        errorTitle: String,
+        confirm: @MainActor () async -> Bool = { true }) async
+    {
+        var menu = sender.menu
+        while let current = menu, !(current is SessionMenu) {
+            menu = current.supermenu
+        }
+        // Retain the rendered row's owner across nested menus and confirmation dialogs.
+        guard let source = (menu as? SessionMenu)?.source,
+              self.control.gateway.serverLeaseMatchesCurrentRoute(source), !Task.isCancelled,
+              await confirm(), !Task.isCancelled,
+              self.control.gateway.serverLeaseMatchesCurrentRoute(source) else { return }
+        do {
+            let response = try await self.control.gateway.request(request, ifCurrentRoute: source.route)
+            if request.method == "sessions.compact" {
+                try OpenClawSessionsCompactResponse.requireSuccess(from: response)
+            }
+            await self.refresh(force: true)
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError),
+                  self.control.gateway.serverLeaseMatchesCurrentRoute(source) else { return }
+            SessionActions.presentError(title: errorTitle, error: error)
         }
     }
 }

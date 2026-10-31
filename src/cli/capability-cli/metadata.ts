@@ -1,12 +1,6 @@
-export type CapabilityTransport = "local" | "gateway";
+import type { NormalizedUsage } from "../../agents/usage.js";
 
-type CapabilityMetadata = {
-  id: string;
-  description: string;
-  transports: Array<CapabilityTransport>;
-  flags: string[];
-  resultShape: string;
-};
+export type CapabilityTransport = "local" | "gateway";
 
 export type CapabilityEnvelope = {
   ok: boolean;
@@ -14,6 +8,8 @@ export type CapabilityEnvelope = {
   transport: CapabilityTransport;
   provider?: string;
   model?: string;
+  usage?: NormalizedUsage;
+  lastCallUsage?: NormalizedUsage;
   attempts: Array<Record<string, unknown>>;
   inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
@@ -21,7 +17,31 @@ export type CapabilityEnvelope = {
   error?: string;
 };
 
-export const CAPABILITY_METADATA: CapabilityMetadata[] = [
+const IMAGE_GENERATION_FLAGS = [
+  "--prompt",
+  "--model",
+  "--count",
+  "--size",
+  "--aspect-ratio",
+  "--resolution",
+  "--output-format",
+  "--background",
+  "--openai-background",
+  "--openai-moderation",
+  "--quality",
+  "--timeout-ms",
+  "--output",
+  "--agent",
+  "--json",
+];
+
+export const CAPABILITY_METADATA: {
+  id: string;
+  description: string;
+  transports: Array<CapabilityTransport>;
+  flags: string[];
+  resultShape: string;
+}[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
@@ -84,47 +104,14 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "image.generate",
     description: "Generate raster images with configured image providers.",
     transports: ["local"],
-    flags: [
-      "--prompt",
-      "--model",
-      "--count",
-      "--size",
-      "--aspect-ratio",
-      "--resolution",
-      "--output-format",
-      "--background",
-      "--openai-background",
-      "--openai-moderation",
-      "--quality",
-      "--timeout-ms",
-      "--output",
-      "--agent",
-      "--json",
-    ],
+    flags: [...IMAGE_GENERATION_FLAGS],
     resultShape: "saved image files plus attempts",
   },
   {
     id: "image.edit",
     description: "Generate edited images from one or more input files.",
     transports: ["local"],
-    flags: [
-      "--file",
-      "--prompt",
-      "--model",
-      "--count",
-      "--size",
-      "--aspect-ratio",
-      "--resolution",
-      "--output-format",
-      "--background",
-      "--openai-background",
-      "--openai-moderation",
-      "--quality",
-      "--timeout-ms",
-      "--output",
-      "--agent",
-      "--json",
-    ],
+    flags: ["--file", ...IMAGE_GENERATION_FLAGS],
     resultShape: "saved image files plus attempts",
   },
   {
@@ -278,10 +265,10 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   },
   {
     id: "web.fetch",
-    description: "Fetch URL content through configured web fetch providers.",
+    description: "Fetch URL content directly or through a selected web fetch provider.",
     transports: ["local"],
     flags: ["--url", "--provider", "--format", "--json"],
-    resultShape: "fetch provider result",
+    resultShape: "page content with fetch metadata",
   },
   {
     id: "web.providers",
@@ -305,7 +292,3 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     resultShape: "provider ids and default models",
   },
 ];
-
-export function findCapabilityMetadata(id: string): CapabilityMetadata | undefined {
-  return CAPABILITY_METADATA.find((entry) => entry.id === id);
-}

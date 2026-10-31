@@ -1,4 +1,3 @@
-/** Coordinates provider OAuth flows exposed by plugin-owned auth integrations. */
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -54,14 +53,13 @@ export function createVpsAwareOAuthHandlers(params: {
       if (manualCodePromise) {
         return manualCodePromise;
       }
-      const code = await params.prompter.text({
+      return await params.prompter.text({
         message: prompt.message,
         placeholder: prompt.placeholder,
         sensitive: true,
         signal: params.manualPromptSignal,
         validate: validateRequiredInput,
       });
-      return code;
     },
   };
 }

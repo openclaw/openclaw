@@ -18,6 +18,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 import { MODEL_REF } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
@@ -27,7 +28,8 @@ import {
   startPairedNodeWorkerGateway,
   type PairedNodeWorkerHost,
 } from "./paired-node-worker-wire-fixture.js";
-import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { produceQaScriptProof } from "./script-proof.js";
 
 const SCENARIO_ID = "subagent-lineage-inspection";
 const SUMMARY_FILE = `${SCENARIO_ID}-summary.json`;
@@ -58,13 +60,6 @@ type WorkerTopology = {
   privateValues: string[];
   root: SessionRef;
   runIds: [string, string, string];
-};
-
-type ProofResult = {
-  artifacts?: Array<{ filePath: string; kind: string }>;
-  details?: string;
-  durationMs: number;
-  status: QaScriptEvidenceStatus;
 };
 
 function parseOptions(argv: readonly string[]): ProducerOptions {
@@ -357,30 +352,24 @@ async function requireActivePlacement(gateway: Gateway, session: SessionRef) {
   });
 }
 
-async function waitForSubagentTasks(gateway: Gateway, children: readonly SessionRef[]) {
+async function waitForSubagentRuns(gateway: Gateway, children: readonly SessionRef[]) {
   return await waitUntil(
-    "worker lineage subagent tasks",
+    "worker lineage native subagent runs",
     async () => {
-      const payload = requireRecord(
-        await gateway.call("tasks.list", { agentId: "qa", limit: 100 }),
-        "tasks.list",
-      );
-      const rows = (Array.isArray(payload.tasks) ? payload.tasks : []).map((row, index) =>
-        requireRecord(row, `tasks.list row ${index}`),
-      );
+      const rows = readQaSubagentRuns(gateway.runtimeEnv);
       const matched = children.map((child) =>
         rows.find((row) => row.childSessionKey === child.key),
       );
-      const terminalFailure = matched.find(
-        (row) => row && row.status !== "running" && row.status !== "completed",
+      const failure = matched.find(
+        (row) => row?.execution.status === "terminal" && row.execution.outcome?.status !== "ok",
       );
-      if (terminalFailure) {
+      if (failure) {
         throw new Error(
-          `worker lineage subagent task failed with ${String(terminalFailure.status)}`,
+          `worker lineage child failed: ${JSON.stringify(failure.execution.outcome)}`,
         );
       }
-      return matched.every((row) => row?.status === "completed")
-        ? (matched as Record<string, unknown>[])
+      return matched.every((row) => row?.execution.status === "terminal")
+        ? matched.flatMap((row) => (row ? [row] : []))
         : undefined;
     },
     30_000,
@@ -508,7 +497,7 @@ async function runNestedWorkerTopology(params: {
   } catch (error) {
     throw new Error("nested worker child session was not created", { cause: error });
   }
-  const tasks = await waitForSubagentTasks(params.gateway, [child, grandchild]);
+  const tasks = await waitForSubagentRuns(params.gateway, [child, grandchild]);
   const childRunId = requireString(tasks[0]?.runId, "worker child run id");
   const grandchildRunId = requireString(tasks[1]?.runId, "nested worker child run id");
   const childPlacement = await requireActivePlacement(params.gateway, child);
@@ -605,14 +594,7 @@ async function inspectEnabledTopology(
   }
 
   await gateway.restartAfterStateMutation(async () => {});
-  await waitUntil("paired node reconnect after Gateway restart", async () => {
-    try {
-      await workerNode.publishInventory();
-      return true;
-    } catch {
-      return undefined;
-    }
-  });
+  await workerNode.publishInventory();
   await Promise.all([
     requireActivePlacement(gateway, topology.root),
     requireActivePlacement(gateway, topology.child),
@@ -679,14 +661,7 @@ async function inspectDefaultOffTopology(
   }
 
   await gateway.restartAfterStateMutation(async () => {});
-  await waitUntil("default-off paired node reconnect after Gateway restart", async () => {
-    try {
-      await workerNode.publishInventory();
-      return true;
-    } catch {
-      return undefined;
-    }
-  });
+  await workerNode.publishInventory();
   await Promise.all([
     requireActivePlacement(gateway, topology.root),
     requireActivePlacement(gateway, topology.child),
@@ -958,24 +933,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
   return `actual worker and nested-worker sessions_spawn lineage passed; redacted chain sha256=${enabledDigest}`;
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
-  const startedAt = Date.now();
-  try {
-    return {
-      artifacts: [{ filePath: SUMMARY_FILE, kind: "summary" }],
-      details: await runProof(options),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "pass",
-    };
-  } catch (error) {
-    return {
-      details: formatErrorMessage(error),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "fail",
-    };
-  }
-}
-
 async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -998,7 +955,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       ],
     },
   });
-  const result = await produceProof(options);
+  const result = await produceQaScriptProof(options, runProof, SUMMARY_FILE);
   writer.appendLog(`${result.status}: ${result.details ?? "no details"}\n`);
   return await writer.write(result);
 }

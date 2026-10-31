@@ -1,0 +1,508 @@
+import { EventDispatcher } from "@larksuiteoapi/node-sdk";
+import {
+  createChannelIngressQueueForTests,
+  observeChannelIngressQueueWrite,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createPluginRuntimeMock, createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
+import type { handleFeishuMessage } from "./bot.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import {
+  expectFeishuCardButtonRow,
+  expectFirstSentCardUsesFillWidthOnly,
+} from "./card-test-helpers.js";
+import type { FeishuMessageProcessingClaim } from "./dedup.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+import { monitorSingleAccount } from "./monitor.account.js";
+import { createFeishuTestIngressQueue } from "./monitor.test-mocks.js";
+
+type MessageParams = Parameters<typeof handleFeishuMessage>[0];
+const meetingEvent = (event_id: string) => ({
+  event_id,
+  meeting: { meeting_no: "123456789" },
+  inviter: { id: { open_id: "fixture-user" } },
+  invite_time: "1712345678",
+});
+
+function gated<T>(result: () => T | Promise<T>) {
+  const started = createDeferred<void>();
+  const gate = createDeferred<void>();
+  return {
+    started: started.promise,
+    release: gate.resolve,
+    run: async (): Promise<T> => {
+      started.resolve();
+      await gate.promise;
+      return await result();
+    },
+  };
+}
+
+const mocks = vi.hoisted(() => ({
+  register: vi.fn(),
+  createDispatcher: vi.fn(),
+  chatLookup: vi.fn(),
+  runtime: vi.fn(),
+  transport: vi.fn(),
+  warmup: vi.fn(),
+  claim: vi.fn(),
+  sendCard: vi.fn(),
+  handleMessage: vi.fn<typeof handleFeishuMessage>(),
+  parseMessage: vi.fn(),
+  stopBindings: vi.fn(),
+  createBindings: vi.fn(),
+}));
+
+vi.mock("./client.js", () => ({
+  createEventDispatcher: mocks.createDispatcher,
+  createFeishuClient: () => ({ im: { chat: { get: mocks.chatLookup } } }),
+}));
+vi.mock("./runtime.js", () => ({ getFeishuRuntime: mocks.runtime }));
+vi.mock("./monitor.transport.js", () => ({
+  monitorWebSocket: mocks.transport,
+  monitorWebhook: mocks.transport,
+}));
+vi.mock("./dedup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dedup.js")>()),
+  warmupDedupFromPluginState: mocks.warmup,
+  claimUnprocessedFeishuMessage: mocks.claim,
+  hasProcessedFeishuMessage: vi.fn(async () => false),
+}));
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  sendCardFeishu: mocks.sendCard,
+}));
+vi.mock("./bot.js", () => ({
+  handleFeishuMessage: mocks.handleMessage,
+  parseFeishuMessageEvent: mocks.parseMessage,
+}));
+vi.mock("./thread-bindings.js", () => ({
+  createFeishuThreadBindingManager: mocks.createBindings,
+}));
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.warmup.mockResolvedValue(0);
+  mocks.parseMessage.mockReturnValue({ content: "hello" });
+  mocks.createDispatcher.mockImplementation(() => {
+    const dispatcher = new EventDispatcher({});
+    const register = dispatcher.register.bind(dispatcher);
+    vi.spyOn(dispatcher, "register").mockImplementation((handlers) => {
+      mocks.register(handlers);
+      return register(handlers);
+    });
+    return dispatcher;
+  });
+  mockIngressQueue(createFeishuTestIngressQueue);
+  mocks.sendCard.mockResolvedValue({ messageId: "m1", chatId: "c1" });
+  mocks.createBindings.mockReturnValue({ stop: mocks.stopBindings });
+});
+
+function mockIngressQueue(openChannelIngressQueue: typeof createFeishuTestIngressQueue) {
+  mocks.runtime.mockReturnValue(createPluginRuntimeMock({ state: { openChannelIngressQueue } }));
+}
+
+function startAccount(controller: AbortController, vcAutoJoin = false) {
+  const credentials = { appId: "fixture-app", appSecret: "fixture-secret", vcAutoJoin };
+  const cfg = { channels: { feishu: { accounts: { test: credentials } } } };
+  return {
+    cfg,
+    monitor: monitorSingleAccount({
+      cfg,
+      account: resolveFeishuAccount({ cfg, accountId: "test" }),
+      abortSignal: controller.signal,
+      botOpenIdSource: { kind: "prefetched", botOpenId: "fixture-bot", source: "provider" },
+      channelRuntime: createPluginRuntimeMock().channel,
+      runtime: createRuntimeEnv(),
+    }),
+  };
+}
+
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+
+function monitorAccount(eventType?: string, vcAutoJoin = false) {
+  const controller = new AbortController();
+  const ready = createDeferred<(event: unknown) => Promise<unknown>>();
+  mocks.register.mockImplementation(
+    (handlers: Record<string, (event: unknown) => Promise<unknown>>) => {
+      if (eventType) {
+        const handler = handlers[eventType];
+        if (!handler) {
+          throw new Error(`Handler was not registered: ${eventType}`);
+        }
+        ready.resolve(handler);
+      }
+    },
+  );
+  const transportClosed = createDeferred<void>();
+  mocks.transport.mockImplementation(
+    async ({ eventDispatcher }: { eventDispatcher: EventDispatcher }) => {
+      if (!eventType) {
+        ready.resolve((event) => eventDispatcher.invoke(event));
+      }
+      if (!controller.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+      transportClosed.resolve();
+    },
+  );
+  let stopped = false;
+  const { cfg, monitor: accountMonitor } = startAccount(controller, vcAutoJoin);
+  const monitor = accountMonitor.finally(() => {
+    stopped = true;
+  });
+  void monitor.catch(ready.reject);
+  return {
+    cfg,
+    ready: ready.promise,
+    monitor,
+    close: async (settle?: () => unknown) => {
+      controller.abort();
+      await settle?.();
+      await monitor;
+    },
+    expectRunning: () => expect(stopped).toBe(false),
+    expectStopping: async () => {
+      controller.abort();
+      await transportClosed.promise;
+      await nextTurn();
+      expect(stopped).toBe(false);
+      expect(mocks.stopBindings).not.toHaveBeenCalled();
+    },
+  };
+}
+
+describe("Feishu account replay work ownership", () => {
+  it("opens the launcher through the registered bot menu handler", async () => {
+    const settled = createDeferred<void>();
+    const claim: FeishuMessageProcessingClaim = {
+      keys: ["fixture-launcher"],
+      commit: vi.fn(async () => {
+        settled.resolve();
+        return true;
+      }),
+      release: vi.fn(),
+    };
+    mocks.claim.mockResolvedValue({ kind: "claimed", handle: claim });
+    const { cfg, ready, close } = monitorAccount("application.bot.menu_v6");
+    const clock = vi.spyOn(Date, "now");
+    try {
+      const handler = await ready;
+      clock.mockReturnValue(100);
+      await handler({
+        event_key: "quick-actions",
+        timestamp: "fixture-launcher",
+        operator: { operator_id: { open_id: "u123" } },
+      });
+      await settled.promise;
+      expect(mocks.sendCard).toHaveBeenCalledTimes(1);
+      const sendArgs = mocks.sendCard.mock.calls.at(0)?.[0] as
+        | { accountId?: string; card?: unknown; cfg?: typeof cfg; to?: string }
+        | undefined;
+      expect(Object.keys(sendArgs ?? {}).toSorted()).toEqual(["accountId", "card", "cfg", "to"]);
+      expect(sendArgs?.cfg).toBe(cfg);
+      expect(sendArgs?.to).toBe("user:u123");
+      expect(sendArgs?.accountId).toBe("test");
+      expectFirstSentCardUsesFillWidthOnly(mocks.sendCard);
+      const buttons = expectFeishuCardButtonRow(sendArgs?.card);
+      expect(buttons).toHaveLength(3);
+      expect(buttons.map((button) => button.value)).toEqual([
+        expect.objectContaining({ q: "/help", c: { u: "u123", e: 600_100, t: "p2p" } }),
+        expect.objectContaining({ m: expect.objectContaining({ command: "/new" }) }),
+        expect.objectContaining({ m: expect.objectContaining({ command: "/reset" }) }),
+      ]);
+      expect(claim.commit).toHaveBeenCalledOnce();
+      expect(claim.release).not.toHaveBeenCalled();
+      expect(mocks.handleMessage).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+      await close();
+    }
+  });
+
+  it.each(["message", "evicted-handler"] as const)(
+    "joins %s settlement after transport ownership ends",
+    (kind) =>
+      withOpenClawTestState({ label: "feishu-deferred-commit" }, async ({ stateDir }) => {
+        const deferred = createDeferred<FeishuIngressLifecycle>();
+        const commit = gated(() => true);
+        const evicted = createDeferred<boolean>();
+        const claim: FeishuMessageProcessingClaim = {
+          keys: ["deferred-message"],
+          commit: vi.fn(commit.run),
+          release: vi.fn(),
+        };
+        mocks.claim.mockResolvedValue({ kind: "claimed", handle: claim });
+        mocks.handleMessage.mockImplementation(async ({ turnAdoptionLifecycle }: MessageParams) => {
+          if (!turnAdoptionLifecycle) {
+            throw new Error("Missing registered message lifecycle");
+          }
+          if (kind === "evicted-handler") {
+            await claim.commit();
+            return;
+          }
+          turnAdoptionLifecycle.onDeferred();
+          deferred.resolve(turnAdoptionLifecycle);
+        });
+        const queueOptions = {
+          channelId: "feishu",
+          accountId: "test",
+          stateDir,
+        };
+        const queue = createChannelIngressQueueForTests(queueOptions);
+        mockIngressQueue(<T, TMetadata = unknown, TCompletedMetadata = unknown>() => {
+          const ingressQueue = createChannelIngressQueueForTests<T, TMetadata, TCompletedMetadata>(
+            queueOptions,
+          );
+          void observeChannelIngressQueueWrite(ingressQueue, "release").then(
+            evicted.resolve,
+            evicted.reject,
+          );
+          return ingressQueue;
+        });
+        const { ready, close, expectStopping } = monitorAccount();
+        let adoption: Promise<void> | undefined;
+        try {
+          const invoke = await ready;
+          if (kind === "evicted-handler") {
+            await queue.listPending();
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          }
+          await invoke({
+            schema: "2.0",
+            header: {
+              event_id: "evt-deferred-commit",
+              event_type: "im.message.receive_v1",
+            },
+            event: {
+              sender: { sender_id: { open_id: "fixture-user" }, sender_type: "user" },
+              message: {
+                message_id: "om-deferred-commit",
+                chat_id: "oc-test",
+                chat_type: "p2p",
+                message_type: "text",
+                content: JSON.stringify({ text: "hello" }),
+              },
+            },
+          });
+          if (kind === "evicted-handler") {
+            await commit.started;
+            await vi.advanceTimersByTimeAsync(5 * 60_000);
+            vi.useRealTimers();
+            await expect(evicted.promise).resolves.toBe(true);
+          } else {
+            const lifecycle = await deferred.promise;
+            adoption = Promise.resolve(lifecycle.onAdopted());
+          }
+          await commit.started;
+          if (kind !== "evicted-handler") {
+            expect(await queue.listPending()).toEqual([]);
+          }
+          expect(await queue.listClaims()).toEqual([]);
+          await expectStopping();
+        } finally {
+          vi.useRealTimers();
+          commit.release();
+          await close(() => adoption);
+        }
+        expect(claim.commit).toHaveBeenCalledOnce();
+        if (kind === "evicted-handler") {
+          expect(claim.release).toHaveBeenCalled();
+        } else {
+          expect(claim.release).not.toHaveBeenCalled();
+        }
+        expect(mocks.stopBindings).toHaveBeenCalledOnce();
+      }),
+  );
+
+  it.each(["meeting", "card-broadcast"] as const)(
+    "joins an accepted %s commit and rejects new events after shutdown",
+    (kind) =>
+      withOpenClawTestState({ label: `feishu-${kind}-commit` }, async ({ stateDir }) => {
+        const guard = createChannelReplayGuard<string>({
+          dedupe: {
+            ttlMs: 60_000,
+            memoryMaxSize: 0,
+            pluginId: "feishu",
+            stateMaxEntries: 10,
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          },
+          buildReplayKey: (key) => key,
+        });
+        const lookup = gated(() => ({ code: 0, data: { chat_type: "group" } }));
+        mocks.chatLookup.mockImplementation(lookup.run);
+        const claimed = await guard.claim(kind);
+        if (claimed.kind !== "claimed") {
+          throw new Error("Expected synthetic event replay claim");
+        }
+        const commit = gated(claimed.handle.commit);
+        if (kind === "meeting") {
+          mocks.claim.mockResolvedValue(claimed);
+        }
+        const processingFinished = createDeferred<void>();
+        let broadcastLane: FeishuIngressLifecycle | undefined;
+        let broadcastAdoption: Promise<void> | undefined;
+        vi.spyOn(claimed.handle, "commit").mockImplementation(commit.run);
+        mocks.handleMessage.mockImplementation(
+          async ({ trackTask, turnAdoptionLifecycle }: MessageParams) => {
+            try {
+              if (kind === "card-broadcast") {
+                const broadcast = createFeishuBroadcastIngressSettlement({
+                  replayClaim: claimed.handle,
+                  trackTask,
+                });
+                broadcastLane = broadcast.createLane().lifecycle;
+                broadcastLane.onDeferred();
+                await broadcast.onDispatchComplete();
+                return;
+              }
+              await turnAdoptionLifecycle?.onAdopted();
+            } finally {
+              processingFinished.resolve();
+            }
+          },
+        );
+        const eventType = kind === "meeting" ? "vc.bot.meeting_invited_v1" : "card.action.trigger";
+        const event =
+          kind !== "meeting"
+            ? {
+                token: `fixture-${kind}-settlement`,
+                operator: { open_id: "fixture-user" },
+                action: {
+                  tag: "button",
+                  value: createFeishuCardInteractionEnvelope({
+                    k: "quick",
+                    a: "help",
+                    q: "/help",
+                    c: { u: "fixture-user", h: "oc-card-broadcast", e: Date.now() + 60_000 },
+                  }),
+                },
+                context: { chat_id: "oc-card-broadcast" },
+              }
+            : meetingEvent("fixture-meeting");
+        const { monitor, ready, close, expectStopping, expectRunning } = monitorAccount(
+          eventType,
+          true,
+        );
+        try {
+          const handler = await ready;
+          const acknowledgement = handler(event);
+          await (kind !== "meeting" ? lookup.started : commit.started);
+          await acknowledgement;
+          await expectStopping();
+          if (kind !== "meeting") {
+            expect(mocks.handleMessage).not.toHaveBeenCalled();
+            lookup.release();
+            await processingFinished.promise;
+            const dispatchResult = mocks.handleMessage.mock.results[0];
+            if (!dispatchResult) {
+              throw new Error("Expected broadcast message dispatch");
+            }
+            await expect(dispatchResult.value).resolves.toBeUndefined();
+            await nextTurn();
+            expectRunning();
+            broadcastAdoption = Promise.resolve(broadcastLane?.onAdopted());
+            await commit.started;
+            await nextTurn();
+            expectRunning();
+          }
+          commit.release();
+          await monitor;
+          expect(await guard.hasRecent(kind)).toBe(true);
+          await handler({ ...event, token: "fixture-after-stop", event_id: "fixture-after-stop" });
+          expect(mocks.handleMessage).toHaveBeenCalledOnce();
+          expect(claimed.handle.commit).toHaveBeenCalledOnce();
+        } finally {
+          lookup.release();
+          commit.release();
+          await close(async () => {
+            await processingFinished.promise;
+            if (broadcastLane && !broadcastAdoption) {
+              broadcastAdoption = Promise.resolve(broadcastLane.onAdopted());
+            }
+            await broadcastAdoption;
+          });
+        }
+        expect(mocks.stopBindings).toHaveBeenCalledOnce();
+      }),
+  );
+
+  it("does not start account resources after abort during dedupe warmup", async () => {
+    const controller = new AbortController();
+    const warmup = createDeferred<number>();
+    mocks.warmup.mockReturnValue(warmup.promise);
+    const { monitor } = startAccount(controller);
+    controller.abort();
+    warmup.resolve(1);
+    await monitor;
+    expect(mocks.register).not.toHaveBeenCalled();
+    expect(mocks.transport).not.toHaveBeenCalled();
+    expect(mocks.createBindings).not.toHaveBeenCalled();
+  });
+
+  it.each(["menu", "meeting"] as const)(
+    "joins detached %s claim before retiring the account",
+    async (kind) => {
+      const reached = createDeferred<void>();
+      const release = createDeferred<void>();
+      const settled = createDeferred<void>();
+      let claimStarted = false;
+      const claim: FeishuMessageProcessingClaim = {
+        keys: ["fixture-menu"],
+        commit: vi.fn(async () => {
+          settled.resolve();
+          return true;
+        }),
+        release: vi.fn(() => settled.resolve()),
+      };
+      mocks.claim.mockImplementation(async () => {
+        claimStarted = true;
+        reached.resolve();
+        await release.promise;
+        return { kind: "claimed", handle: claim };
+      });
+      const { monitor, ready, close, expectStopping } = monitorAccount(
+        kind === "meeting" ? "vc.bot.meeting_invited_v1" : "application.bot.menu_v6",
+        kind === "meeting",
+      );
+      try {
+        const menu = await ready;
+        const acknowledgement = menu(
+          kind === "meeting"
+            ? meetingEvent("fixture-pending-meeting")
+            : {
+                event_key: "quick-actions",
+                timestamp: "fixture-time",
+                operator: { operator_id: { open_id: "fixture-user" } },
+              },
+        );
+        await reached.promise;
+        await expectStopping();
+        release.resolve();
+        await acknowledgement;
+        await monitor;
+        expect(mocks.stopBindings).toHaveBeenCalledOnce();
+        expect(mocks.sendCard).not.toHaveBeenCalled();
+        expect(mocks.handleMessage).not.toHaveBeenCalled();
+        expect(claim.release).toHaveBeenCalledOnce();
+        expect(claim.commit).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await close();
+        if (claimStarted) {
+          await settled.promise;
+        }
+      }
+    },
+  );
+});

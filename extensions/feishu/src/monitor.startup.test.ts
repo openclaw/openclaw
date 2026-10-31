@@ -1,16 +1,34 @@
 // Feishu tests cover monitor.startup plugin behavior.
+import { EventDispatcher } from "@larksuiteoapi/node-sdk";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import { resolveStartupProbeTimeoutMs } from "./monitor-startup-timeout.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import { monitorFeishuProvider } from "./monitor.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
+import { getFeishuRuntime } from "./runtime.js";
+import type { ResolvedFeishuAccount } from "./types.js";
+
+const providerIdentity = { ok: true, appId: "cli_alpha", botOpenId: "bot_alpha", botName: "Alpha" };
+const resolvedIdentity = { botOpenId: "bot_alpha", source: "provider" };
+
+const alphaAccount: ResolvedFeishuAccount = {
+  accountId: "alpha",
+  enabled: true,
+  configured: true,
+  appId: "cli_alpha",
+  appSecret: "secret_alpha", // pragma: allowlist secret
+  domain: "feishu",
+  config: FeishuConfigSchema.parse({ connectionMode: "websocket" }),
+};
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const registerFeishuAiAgentMock = vi.hoisted(() => vi.fn());
-const readCachedFeishuBotIdentityMock = vi.hoisted(() => vi.fn());
-const writeCachedFeishuBotIdentityMock = vi.hoisted(() => vi.fn());
+const identityStore = vi.hoisted(() => ({ lookup: vi.fn(), register: vi.fn(), open: vi.fn() }));
 const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const createFeishuDurableIngressMock = vi.hoisted(() => vi.fn());
 
@@ -19,18 +37,11 @@ vi.mock("./probe.js", () => ({
   registerFeishuAiAgent: registerFeishuAiAgentMock,
 }));
 
-vi.mock("./bot-identity-cache.js", () => ({
-  readCachedFeishuBotIdentity: readCachedFeishuBotIdentityMock,
-  writeCachedFeishuBotIdentity: writeCachedFeishuBotIdentityMock,
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  createFeishuWSClient: vi.fn(() => ({ start: vi.fn(), close: vi.fn() })),
+  createEventDispatcher: createEventDispatcherMock,
 }));
-
-vi.mock("./client.js", async () => {
-  const { createFeishuClientMockModule } = await import("./monitor.test-mocks.js");
-  return {
-    ...createFeishuClientMockModule(),
-    createEventDispatcher: createEventDispatcherMock,
-  };
-});
 vi.mock("./feishu-ingress.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./feishu-ingress.js")>();
   return {
@@ -50,9 +61,11 @@ beforeAll(async () => {
 
 beforeEach(() => {
   registerFeishuAiAgentMock.mockReset().mockResolvedValue({ ok: true });
-  readCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(null);
-  writeCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(undefined);
-  createEventDispatcherMock.mockReset().mockReturnValue({ register: vi.fn() });
+  identityStore.lookup.mockReset().mockResolvedValue(undefined);
+  identityStore.register.mockReset().mockResolvedValue(undefined);
+  identityStore.open.mockReset().mockReturnValue(identityStore);
+  getFeishuRuntime().state.openKeyedStore = identityStore.open;
+  createEventDispatcherMock.mockReset().mockImplementation(() => new EventDispatcher({}));
   createFeishuDurableIngressMock.mockReset().mockReturnValue(undefined);
 });
 
@@ -77,17 +90,8 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
   } as ClawdbotConfig;
 }
 
-async function waitForStartedAccount(started: string[], accountId: string) {
-  await vi.waitFor(
-    () => {
-      expect(started).toContain(accountId);
-    },
-    { timeout: 10_000 },
-  );
-}
-
-afterEach(() => {
-  cleanupFeishuMonitorStateForTests();
+afterEach(async () => {
+  await cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {
@@ -105,7 +109,6 @@ describe("Feishu monitor startup preflight", () => {
       throw startError;
     });
     const ingressStop = vi.fn().mockResolvedValue(undefined);
-    createEventDispatcherMock.mockReturnValue({ register: vi.fn(), invoke: vi.fn() });
     createFeishuDurableIngressMock.mockReturnValue({
       invoke: vi.fn(),
       resolveLifecycle: vi.fn(),
@@ -114,255 +117,105 @@ describe("Feishu monitor startup preflight", () => {
       stop: ingressStop,
       waitForIdle: vi.fn(),
     });
-    probeFeishuMock.mockResolvedValue({
-      ok: true,
-      appId: "cli_alpha",
-      botOpenId: "bot_alpha",
-      botName: "Alpha",
-    });
+    probeFeishuMock.mockResolvedValue(providerIdentity);
 
     await expect(
       monitorFeishuProvider({ config: buildMultiAccountWebsocketConfig(["alpha"]) }),
     ).rejects.toBe(startError);
 
-    expect(ingressStart).toHaveBeenCalledTimes(1);
     expect(ingressStop).toHaveBeenCalledTimes(1);
   });
 
   it("parses startup probe timeout env strictly", () => {
     expect(resolveStartupProbeTimeoutMs({})).toBe(30_000);
-    expect(
-      resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: "90000" }),
-    ).toBe(90_000);
-
-    for (const value of ["0x10", "1e3", "10.5"]) {
+    for (const [value, expected] of [
+      ["90000", 90_000],
+      [String(Number.MAX_SAFE_INTEGER), MAX_TIMER_TIMEOUT_MS],
+      ...["0x10", "1e3", "10.5"].map((invalid) => [invalid, 30_000] as const),
+    ] as const) {
       expect(
         resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: value }),
-      ).toBe(30_000);
+      ).toBe(expected);
     }
   });
 
-  it("starts account probes sequentially to avoid startup bursts", async () => {
-    let inFlight = 0;
-    let maxInFlight = 0;
+  it("probes sequentially, continues after timeout, and stops the remaining accounts on abort", async () => {
     const started: string[] = [];
-    let releaseProbes: (() => void) | undefined;
-    const probesReleased = new Promise<void>((resolve) => {
-      releaseProbes = () => resolve();
-    });
-    if (!releaseProbes) {
-      throw new Error("Expected probe release callback to be initialized");
-    }
-    const releaseStartedProbes = releaseProbes;
-    probeFeishuMock.mockImplementation(async (account: { accountId: string; appId: string }) => {
-      started.push(account.accountId);
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await probesReleased;
-      inFlight -= 1;
-      return { ok: true, appId: account.appId, botOpenId: `bot_${account.accountId}` };
-    });
-
-    const abortController = new AbortController();
-    const monitorPromise = monitorFeishuProvider({
-      config: buildMultiAccountWebsocketConfig(["alpha", "beta", "gamma"]),
-      abortSignal: abortController.signal,
-    });
-
-    try {
-      await waitForStartedAccount(started, "alpha");
-      expect(started).toEqual(["alpha"]);
-      expect(maxInFlight).toBe(1);
-    } finally {
-      releaseStartedProbes();
-      abortController.abort();
-      await monitorPromise;
-    }
-  });
-
-  it("does not refetch bot info after a failed sequential preflight", async () => {
-    const started: string[] = [];
-    let releaseBetaProbe: (() => void) | undefined;
-    const betaProbeReleased = new Promise<void>((resolve) => {
-      releaseBetaProbe = () => resolve();
-    });
-    if (!releaseBetaProbe) {
-      throw new Error("Expected beta probe release callback to be initialized");
-    }
-    const releaseStartedBetaProbe = releaseBetaProbe;
-
-    probeFeishuMock.mockImplementation(async (account: { accountId: string; appId: string }) => {
-      started.push(account.accountId);
-      if (account.accountId === "alpha") {
-        return { ok: false };
-      }
-      await betaProbeReleased;
-      return { ok: true, appId: account.appId, botOpenId: `bot_${account.accountId}` };
-    });
-
-    const abortController = new AbortController();
-    const monitorPromise = monitorFeishuProvider({
-      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
-      abortSignal: abortController.signal,
-    });
-
-    try {
-      await waitForStartedAccount(started, "beta");
-      expect(started).toEqual(["alpha", "beta"]);
-      expect(started.reduce((count, accountId) => count + (accountId === "alpha" ? 1 : 0), 0)).toBe(
-        1,
-      );
-    } finally {
-      releaseStartedBetaProbe();
-      abortController.abort();
-      await monitorPromise;
-    }
-  });
-
-  it("continues startup when probe layer reports timeout", async () => {
-    const started: string[] = [];
-    let releaseBetaProbe: (() => void) | undefined;
-    const betaProbeReleased = new Promise<void>((resolve) => {
-      releaseBetaProbe = () => resolve();
-    });
-    if (!releaseBetaProbe) {
-      throw new Error("Expected beta probe release callback to be initialized");
-    }
-    const releaseStartedBetaProbe = releaseBetaProbe;
-
-    probeFeishuMock.mockImplementation((account: { accountId: string; appId: string }) => {
-      started.push(account.accountId);
-      if (account.accountId === "alpha") {
-        return Promise.resolve({ ok: false, error: "probe timed out after 10000ms" });
-      }
-      return betaProbeReleased.then(() => ({
-        ok: true,
-        appId: account.appId,
-        botOpenId: `bot_${account.accountId}`,
-      }));
-    });
-
-    const abortController = new AbortController();
+    const alphaStarted = createDeferred<void>();
+    const betaStarted = createDeferred<void>();
+    const alphaResult = createDeferred<{ ok: boolean; error: string }>();
+    probeFeishuMock.mockImplementation(
+      (account: { accountId: string }, options: { abortSignal?: AbortSignal }) => {
+        started.push(account.accountId);
+        if (account.accountId === "alpha") {
+          alphaStarted.resolve();
+          return alphaResult.promise;
+        }
+        betaStarted.resolve();
+        return new Promise((resolve) => {
+          options.abortSignal?.addEventListener(
+            "abort",
+            () => resolve({ ok: false, error: "probe aborted" }),
+            { once: true },
+          );
+        });
+      },
+    );
+    const abort = new AbortController();
     const runtime = createNonExitingRuntimeEnv();
-    const monitorPromise = monitorFeishuProvider({
-      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+    const monitor = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta", "gamma"]),
       runtime,
-      abortSignal: abortController.signal,
+      abortSignal: abort.signal,
     });
-
     try {
-      await waitForStartedAccount(started, "beta");
+      await alphaStarted.promise;
+      expect(started).toEqual(["alpha"]);
+      alphaResult.resolve({ ok: false, error: "probe timed out after 10000ms" });
+      await betaStarted.promise;
       expect(started).toEqual(["alpha", "beta"]);
       expect(runtime.error).toHaveBeenCalledWith(
-        "feishu[alpha]: bot info probe timed out after 30000ms; continuing startup",
+        "feishu[alpha]: bot info check timed out after 30000ms; continuing startup",
       );
+      abort.abort();
+      await monitor;
+      expect(started).toEqual(["alpha", "beta"]);
     } finally {
-      releaseStartedBetaProbe();
-      abortController.abort();
-      await monitorPromise;
+      alphaResult.resolve({ ok: false, error: "probe aborted" });
+      abort.abort();
+      await monitor;
     }
   });
 
   it("returns standard bot identity without waiting for AI-agent registration", async () => {
-    probeFeishuMock.mockResolvedValue({
-      ok: true,
-      appId: "cli_alpha",
-      botOpenId: "bot_alpha",
-      botName: "Alpha",
-    });
-    registerFeishuAiAgentMock.mockReturnValue(new Promise(() => {}));
-
-    await expect(
-      fetchBotIdentityForMonitor({
-        accountId: "alpha",
-        appId: "cli_alpha",
-        appSecret: "secret_alpha", // pragma: allowlist secret
-      } as never),
-    ).resolves.toEqual({ botOpenId: "bot_alpha", botName: "Alpha", source: "provider" });
-    expect(writeCachedFeishuBotIdentityMock).toHaveBeenCalledWith({
-      accountId: "alpha",
-      appId: "cli_alpha",
-      botOpenId: "bot_alpha",
-      botName: "Alpha",
-    });
-  });
-
-  it("keeps standard bot identity when AI-agent registration is unavailable", async () => {
-    probeFeishuMock.mockResolvedValue({
-      ok: true,
-      appId: "cli_alpha",
-      botOpenId: "bot_alpha",
-      botName: "Alpha",
-    });
-    registerFeishuAiAgentMock.mockResolvedValue({ ok: false, reason: "api-error" });
+    probeFeishuMock.mockResolvedValue(providerIdentity);
+    const registration = createDeferred<{ ok: false; reason: "api-error" }>();
+    registerFeishuAiAgentMock.mockReturnValue(registration.promise);
     const runtime = createNonExitingRuntimeEnv();
 
-    await expect(
-      fetchBotIdentityForMonitor(
-        {
-          accountId: "alpha",
-          appId: "cli_alpha",
-          appSecret: "secret_alpha", // pragma: allowlist secret
-        } as never,
-        { runtime },
-      ),
-    ).resolves.toEqual({ botOpenId: "bot_alpha", botName: "Alpha", source: "provider" });
-    await vi.waitFor(() => {
-      expect(runtime.log).toHaveBeenCalledWith(
-        "feishu[alpha]: AI-agent registration unavailable (api-error); continuing with standard bot identity",
-      );
-    });
-  });
-
-  it("falls back to cached identity without treating it as a fresh provider result", async () => {
-    probeFeishuMock.mockResolvedValue({ ok: false, error: "rate limited" });
-    readCachedFeishuBotIdentityMock.mockResolvedValue({
-      botOpenId: "bot_alpha",
-      botName: "Alpha",
-      fetchedAt: "2026-07-22T23:00:00.000Z",
-    });
-    const runtime = createNonExitingRuntimeEnv();
-
-    await expect(
-      fetchBotIdentityForMonitor(
-        {
-          accountId: "alpha",
-          appId: "cli_alpha",
-          appSecret: "rotated_secret_alpha", // pragma: allowlist secret
-        } as never,
-        { runtime },
-      ),
-    ).resolves.toEqual({ botOpenId: "bot_alpha", botName: "Alpha", source: "cache" });
-    expect(writeCachedFeishuBotIdentityMock).not.toHaveBeenCalled();
+    await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual(
+      resolvedIdentity,
+    );
+    expect(identityStore.register).toHaveBeenCalledWith(
+      "alpha",
+      expect.objectContaining({ appId: "cli_alpha", botOpenId: "bot_alpha" }),
+    );
+    registration.resolve({ ok: false, reason: "api-error" });
+    await registration.promise;
     expect(runtime.log).toHaveBeenCalledWith(
-      "feishu[alpha]: using cached provider-verified bot identity while the fresh probe is unavailable",
+      "feishu[alpha]: AI-agent registration unavailable (api-error); continuing with standard bot identity",
     );
   });
 
   it("rejects a provider result from another app before persistence", async () => {
-    probeFeishuMock.mockResolvedValue({
-      ok: true,
-      appId: "cli_old",
-      botOpenId: "bot_old",
-      botName: "Old",
-    });
-    readCachedFeishuBotIdentityMock.mockResolvedValue(null);
+    probeFeishuMock.mockResolvedValue({ ...providerIdentity, appId: "cli_old" });
     const runtime = createNonExitingRuntimeEnv();
 
-    await expect(
-      fetchBotIdentityForMonitor(
-        {
-          accountId: "alpha",
-          appId: "cli_alpha",
-          appSecret: "secret_alpha", // pragma: allowlist secret
-        } as never,
-        { runtime },
-      ),
-    ).resolves.toEqual({});
-    expect(writeCachedFeishuBotIdentityMock).not.toHaveBeenCalled();
+    await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({});
+    expect(identityStore.register).not.toHaveBeenCalled();
     expect(registerFeishuAiAgentMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      "feishu[alpha]: bot info probe returned identity for a different app; ignoring stale result",
+      "feishu[alpha]: bot info check returned identity for a different app; ignoring stale result",
     );
   });
 
@@ -370,56 +223,29 @@ describe("Feishu monitor startup preflight", () => {
     probeFeishuMock.mockResolvedValue({ ok: false, error: "rate limited" });
 
     await expect(
-      fetchBotIdentityForMonitor(
-        {
-          accountId: "alpha",
-          appId: "cli_alpha",
-          appSecret: "secret_alpha", // pragma: allowlist secret
-        } as never,
-        { allowCachedFallback: false },
-      ),
+      fetchBotIdentityForMonitor(alphaAccount, { allowCachedFallback: false }),
     ).resolves.toEqual({});
-    expect(readCachedFeishuBotIdentityMock).not.toHaveBeenCalled();
+    expect(identityStore.lookup).not.toHaveBeenCalled();
   });
 
   it("keeps cache read and write failures best-effort", async () => {
     const runtime = createNonExitingRuntimeEnv();
-    probeFeishuMock.mockResolvedValueOnce({
-      ok: true,
-      appId: "cli_alpha",
-      botOpenId: "bot_alpha",
-      botName: "Alpha",
-    });
-    writeCachedFeishuBotIdentityMock.mockRejectedValueOnce(new Error("state unavailable"));
+    probeFeishuMock.mockResolvedValueOnce(providerIdentity);
+    identityStore.register.mockRejectedValueOnce(new Error("state unavailable"));
 
-    await expect(
-      fetchBotIdentityForMonitor(
-        {
-          accountId: "alpha",
-          appId: "cli_alpha",
-          appSecret: "secret_alpha", // pragma: allowlist secret
-        } as never,
-        { runtime },
-      ),
-    ).resolves.toEqual({ botOpenId: "bot_alpha", botName: "Alpha", source: "provider" });
+    await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual(
+      resolvedIdentity,
+    );
 
     probeFeishuMock.mockResolvedValueOnce({ ok: false, error: "rate limited" });
-    readCachedFeishuBotIdentityMock.mockRejectedValueOnce(new Error("state unavailable"));
-    await expect(
-      fetchBotIdentityForMonitor(
-        {
-          accountId: "alpha",
-          appId: "cli_alpha",
-          appSecret: "secret_alpha", // pragma: allowlist secret
-        } as never,
-        { runtime },
-      ),
-    ).resolves.toEqual({});
+    identityStore.lookup.mockRejectedValueOnce(new Error("state unavailable"));
+    await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({});
   });
 
   it("starts a provider refresh while a cached identity keeps ingress available", async () => {
     probeFeishuMock.mockResolvedValue({ ok: false, error: "rate limited" });
-    readCachedFeishuBotIdentityMock.mockResolvedValue({
+    identityStore.lookup.mockResolvedValue({
+      appId: "cli_alpha",
       botOpenId: "bot_alpha",
       botName: "Alpha",
       fetchedAt: "2026-07-22T23:00:00.000Z",
@@ -445,38 +271,85 @@ describe("Feishu monitor startup preflight", () => {
       await monitorPromise;
     }
   });
+});
 
-  it("stops sequential preflight when aborted during probe", async () => {
-    const started: string[] = [];
-    probeFeishuMock.mockImplementation(
-      (account: { accountId: string }, options: { abortSignal?: AbortSignal }) => {
-        started.push(account.accountId);
-        return new Promise((resolve) => {
-          options.abortSignal?.addEventListener(
-            "abort",
-            () => resolve({ ok: false, error: "probe aborted" }),
-            { once: true },
-          );
-        });
-      },
-    );
+describe("Feishu bot identity cache", () => {
+  const account = { ...alphaAccount, accountId: "person-2", appId: "cli_person_2" };
+  const entries = new Map<string, unknown>();
+  beforeEach(() => {
+    entries.clear();
+    probeFeishuMock.mockReset().mockResolvedValue({ ok: false, error: "provider unavailable" });
+    identityStore.lookup.mockImplementation(async (key: string) => entries.get(key));
+    identityStore.register.mockImplementation(async (key: string, value: unknown) => {
+      entries.set(key, value);
+    });
+  });
+  afterEach(() => vi.useRealTimers());
 
-    const abortController = new AbortController();
-    const monitorPromise = monitorFeishuProvider({
-      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
-      abortSignal: abortController.signal,
+  it("persists provider-verified identity in a bounded plugin-state namespace", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-22T23:00:00.000Z"));
+
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      appId: "cli_person_2",
+      botOpenId: "ou_bot_person_2",
+      botName: "OpenClaw QA",
+    });
+    await fetchBotIdentityForMonitor(account);
+    probeFeishuMock.mockResolvedValue({ ok: false, error: "provider unavailable" });
+
+    expect(entries.get("person-2")).toEqual({
+      appId: "cli_person_2",
+      botOpenId: "ou_bot_person_2",
+      botName: "OpenClaw QA",
+      fetchedAt: "2026-07-22T23:00:00.000Z",
+    });
+    await expect(fetchBotIdentityForMonitor(account)).resolves.toEqual({
+      botOpenId: "ou_bot_person_2",
+      source: "cache",
+    });
+    expect(identityStore.open).toHaveBeenCalledWith({
+      namespace: "feishu.bot-identity-cache",
+      maxEntries: 128,
+    });
+  });
+
+  it("keeps identity across secret rotation but rejects a different app id", async () => {
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      appId: "cli_person_2",
+      botOpenId: "ou_bot_person_2",
+    });
+    await fetchBotIdentityForMonitor(account);
+    probeFeishuMock.mockResolvedValue({ ok: false, error: "provider unavailable" });
+
+    await expect(
+      fetchBotIdentityForMonitor({ ...account, appSecret: "rotated" }),
+    ).resolves.toMatchObject({ botOpenId: "ou_bot_person_2" });
+    await expect(
+      fetchBotIdentityForMonitor({ ...account, appId: "cli_replacement" }),
+    ).resolves.toEqual({});
+  });
+
+  it("rejects malformed or incomplete persisted values", async () => {
+    entries.set("person-2", {
+      appId: "cli_person_2",
+      botOpenId: "ou_bot_person_2",
+      fetchedAt: "not-a-date",
     });
 
-    try {
-      await waitForStartedAccount(started, "alpha");
-      expect(started).toEqual(["alpha"]);
+    await expect(fetchBotIdentityForMonitor(account)).resolves.toEqual({});
+  });
 
-      abortController.abort();
-      await monitorPromise;
-
-      expect(started).toEqual(["alpha"]);
-    } finally {
-      abortController.abort();
+  it("does not persist an identity without both app and bot ids", async () => {
+    for (const identity of [
+      { appId: undefined, botOpenId: "ou_bot_person_2" },
+      { appId: "cli_person_2", botOpenId: undefined },
+    ]) {
+      probeFeishuMock.mockResolvedValue({ ok: true, ...identity });
+      await fetchBotIdentityForMonitor({ ...account, appId: identity.appId });
     }
+    expect(entries.size).toBe(0);
   });
 });

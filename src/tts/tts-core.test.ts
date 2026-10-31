@@ -1,97 +1,60 @@
-// TTS core tests cover provider selection, synthesis, and error handling.
-import { readFileSync } from "node:fs";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Model, Usage } from "../llm/types.js";
-import type { SpeechModelOverridePolicy } from "./provider-types.js";
-import { resolveSpeechProviderApiKey, summarizeText } from "./tts-core.js";
-import type { ResolvedTtsConfig } from "./tts-types.js";
-
-const modelOverridePolicy: SpeechModelOverridePolicy = {
-  enabled: false,
-  allowText: false,
-  allowProvider: false,
-  allowVoice: false,
-  allowModelId: false,
-  allowVoiceSettings: false,
-  allowNormalization: false,
-  allowSeed: false,
-};
-
-const usage: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { resolveTtsConfig } from "./tts-settings.js";
 
 describe("TTS core", () => {
-  it("keeps summarization-only LLM modules lazy", () => {
-    const source = readFileSync(new URL("./tts-core.ts", import.meta.url), "utf8");
-
-    expect(source).toContain('import("../agents/simple-completion-runtime.js")');
-    expect(source).not.toContain('from "../llm/stream.js"');
-    expect(source).not.toContain('from "../agents/simple-completion-runtime.js"');
-    expect(source).not.toContain('from "../agents/model-auth.js"');
-  });
-
-  it("resolves the first non-blank speech provider API key", () => {
-    expect(resolveSpeechProviderApiKey(undefined, " \t", "  provider-key  ", "fallback")).toBe(
-      "provider-key",
-    );
-    expect(resolveSpeechProviderApiKey(undefined, "\n")).toBeUndefined();
+  it("resolves speech provider keys without loading summarization-only LLM modules", async () => {
+    vi.resetModules();
+    // mock-isolation: Cold speech imports must not load the summary completion runtime.
+    vi.doMock("../agents/simple-completion-runtime.js", () => {
+      throw new Error("Cold speech import loaded the summary completion runtime");
+    });
+    // mock-isolation: Cold speech imports must not load the summary credential runtime.
+    vi.doMock("../agents/model-auth.js", () => {
+      throw new Error("Cold speech import loaded the summary credential runtime");
+    });
+    // mock-isolation: Cold speech imports must not load the LLM streaming runtime.
+    vi.doMock("../llm/stream.js", () => {
+      throw new Error("Cold speech import loaded the LLM streaming runtime");
+    });
+    try {
+      const { resolveSpeechProviderApiKey } = await import("./tts-core.js");
+      expect(resolveSpeechProviderApiKey(undefined, " \t", "  provider-key  ", "fallback")).toBe(
+        "provider-key",
+      );
+      expect(resolveSpeechProviderApiKey(undefined, "\n")).toBeUndefined();
+    } finally {
+      vi.doUnmock("../agents/simple-completion-runtime.js");
+      vi.doUnmock("../agents/model-auth.js");
+      vi.doUnmock("../llm/stream.js");
+      vi.resetModules();
+    }
   });
 
   it("clamps oversized summarization timeout timers", async () => {
+    const { summarizeText } = await import("./tts-core.js");
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const model = {
+      const model = makeProviderModelFixture({
         id: "test-model",
-        name: "Test Model",
         api: "test-api",
         provider: "test-provider",
         baseUrl: "https://example.test",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 4096,
-        maxTokens: 1024,
-      } satisfies Model;
-      const config = {
-        auto: "off",
-        mode: "final",
-        provider: "test-provider",
-        providerSource: "config",
-        personas: {},
-        summaryModel: "test-provider/test-model",
-        modelOverrides: modelOverridePolicy,
-        providerConfigs: {},
-        maxTextLength: 10_000,
-        timeoutMs: 10_000,
-      } satisfies ResolvedTtsConfig;
+      });
+      const config = resolveTtsConfig({ tts: { summaryModel: "test-provider/test-model" } });
       const auth = {
         apiKey: "key",
         source: "test",
         mode: "api-key",
       } as const;
-      const assistant = {
-        role: "assistant",
+      const assistant = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Short summary." }],
         api: model.api,
         provider: model.provider,
         model: model.id,
-        stopReason: "stop",
-        usage,
-        timestamp: Date.now(),
-      } satisfies AssistantMessage;
+      });
 
       const result = await summarizeText(
         {

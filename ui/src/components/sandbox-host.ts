@@ -18,6 +18,8 @@ export function resolveSandboxHostUrl(
   gatewayUrl: string,
   hostOrigin: string,
   invalidMessage = "Sandbox host URL is invalid",
+  /** Exact capability shell path returned by the authenticated session-file preview RPC. */
+  expectedSandboxPath?: string,
 ): string {
   if (!Number.isInteger(sandboxPort) || sandboxPort < 1 || sandboxPort > 65535) {
     throw new Error(invalidMessage);
@@ -44,12 +46,19 @@ export function resolveSandboxHostUrl(
   base.search = "";
   base.hash = "";
   const resolved = new URL(value, base);
+  const allowedPath = expectedSandboxPath
+    ? value === expectedSandboxPath &&
+      expectedSandboxPath.startsWith("/__openclaw__/file-preview/") &&
+      resolved.pathname === expectedSandboxPath &&
+      resolved.search === "" &&
+      resolved.hash === ""
+    : resolved.pathname === "/mcp-app-sandbox";
   if (
     (base.protocol !== "http:" && base.protocol !== "https:") ||
     base.origin === new URL(hostOrigin).origin ||
     base.origin === activeGatewayOrigin ||
     resolved.origin !== base.origin ||
-    resolved.pathname !== "/mcp-app-sandbox"
+    !allowedPath
   ) {
     throw new Error(invalidMessage);
   }

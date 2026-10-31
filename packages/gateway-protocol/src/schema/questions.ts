@@ -1,9 +1,10 @@
-// Gateway Protocol schema module defines transient operator questions.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { withSince } from "./since.js";
+// Gateway Protocol schema module defines transient operator questions.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const QuestionIdSchema = Type.String({ pattern: "^[a-z][a-z0-9_]*$" });
 const QuestionResolutionIdSchema = withSince(
@@ -17,14 +18,45 @@ const QuestionSecretStoreAllowedHostsSchema = Type.Array(
   { maxItems: 128, uniqueItems: true },
 );
 
+const QuestionResourcePreviewSchema = Type.Union([
+  closedObject({
+    type: Type.Literal("mcp_app_tool"),
+    name: NonEmptyString,
+    arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  }),
+  closedObject({
+    type: Type.Literal("resource_link"),
+    uri: NonEmptyString,
+    name: NonEmptyString,
+    title: Type.Optional(Type.String()),
+    description: Type.Optional(Type.String()),
+    mimeType: Type.Optional(Type.String()),
+  }),
+]);
+
+const QuestionResourceInputSchema = closedObject({
+  viewId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  selection: stringLiteralUnion(["explicit", "implicit"]),
+  userOptions: Type.Optional(
+    closedObject({
+      kind: stringLiteralUnion(["file", "directory"]),
+      accept: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { maxItems: 32 })),
+    }),
+  ),
+});
+
 export const QuestionOptionSchema = closedObject({
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
+  value: Type.Optional(withSince("2026.9", Type.String({ minLength: 1, maxLength: 4096 }))),
+  thumbnail: Type.Optional(Type.String({ minLength: 1, maxLength: 65536 })),
+  resourceUri: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+  preview: Type.Optional(QuestionResourcePreviewSchema),
 });
 
 export const QuestionSecretStoreBindingSchema = closedObject({
   name: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Z][A-Z0-9_]{0,127}$" }),
-  kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
+  kind: stringLiteralUnion(["secret", "env"]),
   allowedHosts: Type.Optional(QuestionSecretStoreAllowedHostsSchema),
   reason: Type.Optional(Type.String({ maxLength: 200 })),
 });
@@ -40,8 +72,13 @@ const QuestionInputFields = {
   question: NonEmptyString,
   // Opening an external page is separate from submitting the question's answer.
   url: Type.Optional(withSince("2026.8", Type.String({ minLength: 1, maxLength: 2048 }))),
-  options: Type.Array(QuestionOptionSchema, { maxItems: 4 }),
+  options: Type.Array(QuestionOptionSchema, { maxItems: 64 }),
+  presentation: Type.Optional(Type.Literal("form")),
+  resource: Type.Optional(QuestionResourceInputSchema),
   multiSelect: Type.Optional(Type.Boolean()),
+  answerFormat: Type.Optional(Type.Literal("lines")),
+  allowEmpty: Type.Optional(Type.Boolean()),
+  defaultAnswers: Type.Optional(Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 64 })),
   isOther: Type.Optional(Type.Boolean()),
   isSecret: Type.Optional(Type.Boolean()),
   secretStore: Type.Optional(withSince("2026.8", QuestionSecretStoreBindingSchema)),
@@ -62,11 +99,11 @@ export const QuestionAnswersSchema = closedObject({
   answers: Type.Record(QuestionIdSchema, Type.Array(Type.String())),
 });
 
-export const QuestionStatusSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("answered"),
-  Type.Literal("cancelled"),
-  Type.Literal("expired"),
+export const QuestionStatusSchema = stringLiteralUnion([
+  "pending",
+  "answered",
+  "cancelled",
+  "expired",
 ]);
 
 /**
@@ -164,6 +201,8 @@ export const QuestionResolvedEventSchema = withSince(
   ]),
 );
 
+export type QuestionResourceInput = Static<typeof QuestionResourceInputSchema>;
+export type QuestionResourcePreview = Static<typeof QuestionResourcePreviewSchema>;
 export type QuestionOption = Static<typeof QuestionOptionSchema>;
 export type Question = Static<typeof QuestionSchema>;
 export type QuestionRequestQuestion = Static<typeof QuestionRequestQuestionSchema>;

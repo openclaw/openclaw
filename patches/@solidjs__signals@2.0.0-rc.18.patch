@@ -1,0 +1,89 @@
+diff --git a/dist/dev-shared.js b/dist/dev-shared.js
+index 26c2a3d0eea7c01b594c0c05f3c6f479353d7ca7..c3c6b4672deb5c74d7e0920fb11467aab2f35275 100644
+--- a/dist/dev-shared.js
++++ b/dist/dev-shared.js
+@@ -1214,10 +1214,12 @@ function disposeChildren(node, self = false, zombie) {
+     // A death that can unblock the future (L2, `futureBlocked`): a held
+     // flight's — a transaction's or a lane's (its `_x._transaction`) — or a
+     // stale reader's (REACTIVE_FRAME_READ — a frame that derived from one).
++    // An idle pending queue would also pin it until an unrelated flush.
+     // Nothing else re-examines a dead node, so make sure a seam comes.
+     if (
+       (node._statusFlags & STATUS_PENDING && node._x?._transaction != null) ||
+-      flags & REACTIVE_FRAME_READ
++      flags & REACTIVE_FRAME_READ ||
++      pendingNodes.length
+     )
+       schedule();
+   }
+diff --git a/dist/observe/core/owner.js b/dist/observe/core/owner.js
+index 407b794987b48840c83fb91ef9e4b1034017d9c7..f647534c96343baf90429d22365c3b67f9023bc9 100644
+--- a/dist/observe/core/owner.js
++++ b/dist/observe/core/owner.js
+@@ -8,7 +8,7 @@ import { unobserved, clearDeps } from "./graph.js";
+ 
+ import { deleteFromHeap } from "./heap.js";
+ 
+-import { globalQueue, schedule, dirtyQueue } from "./scheduler.js";
++import { globalQueue, schedule, dirtyQueue, pendingNodes } from "./scheduler.js";
+ 
+ // L2 (step 2): the parked frame. A pass parks the previous frame's children
+ // and `_disposal` list on `_x._pendingFirstChild` / `_x._pendingDisposal`
+@@ -79,8 +79,9 @@ function disposeChildren(e, n = false, r) {
+         // A death that can unblock the future (L2, `futureBlocked`): a held
+         // flight's — a transaction's or a lane's (its `_x._transaction`) — or a
+         // stale reader's (REACTIVE_FRAME_READ — a frame that derived from one).
++        // An idle pending queue would also pin it until an unrelated flush.
+         // Nothing else re-examines a dead node, so make sure a seam comes.
+-                if (e.m & STATUS_PENDING && e.T?.Je != null || t & REACTIVE_FRAME_READ) schedule();
++                if (e.m & STATUS_PENDING && e.T?.Je != null || t & REACTIVE_FRAME_READ || pendingNodes.length) schedule();
+     }
+     let l = r ? e.T.Nt : e.ze;
+     if (r) e.T.Nt = null; else e.ze = null;
+diff --git a/dist/observe/core/scheduler.js b/dist/observe/core/scheduler.js
+index 3cca54db7e1812999fc9ebb407ff3d8b02f45ea5..6976e394257e1a85911db434866b13c891da1bf9 100644
+--- a/dist/observe/core/scheduler.js
++++ b/dist/observe/core/scheduler.js
+@@ -1096,4 +1096,4 @@ function runQueue(e, o) {
+     for (let n = 0; n < e.length; n++) e[n](o);
+ }
+ 
+-export { GlobalQueue, MAINLINE_QUESTION, ROOT_ERROR_HOOK, actionDepth, applyGuessesHook, blocked, blockersOf, boundarySeamHook, bumpNotifyEpoch, catchHook, clock, commitPendingNode, deferZombie, dirtyQueue, endLanesHook, enforceLoadingBoundary, enterAction, exitAction, externalUntrackHook, flush, flushTransaction, freshHook, globalQueue, haltReactivity, haltReactivityAt, heldRunHook, heldTrim, heldUnder, hiddenHook, holdNode, insertSubs, installBoundaryHooks, installLaneHooks, installMarkHooks, installStoreHooks, installVerdictHooks, joinFuture, joinPassTx, laneCorrectionsHook, laneDirty, laneOutcomeHook, laneReadHook, laneSeamsHook, laneStageHook, laneWriteHook, lanesBlockedHook, list, liveTx, merge, newTransaction, nextQuestion, notifyEpoch, observeFlightHook, ownFlights, passLane, passTx, question, queuePendingNode, releaseAmbientMarksHook, releaseMarksHook, releaseQueues, reruns, resetErrorHalt, resolveTx, sameLane, schedule, setExternalHooks, setPassLane, setQuestion, stagedReaders, staleReader, storeCommitHook, storeParkHook, txOf, unhold, wireExternalSourceHook };
+\ No newline at end of file
++export { GlobalQueue, MAINLINE_QUESTION, ROOT_ERROR_HOOK, actionDepth, applyGuessesHook, blocked, blockersOf, boundarySeamHook, bumpNotifyEpoch, catchHook, clock, commitPendingNode, deferZombie, dirtyQueue, endLanesHook, enforceLoadingBoundary, enterAction, exitAction, externalUntrackHook, flush, flushTransaction, freshHook, globalQueue, haltReactivity, haltReactivityAt, heldRunHook, heldTrim, heldUnder, hiddenHook, holdNode, insertSubs, installBoundaryHooks, installLaneHooks, installMarkHooks, installStoreHooks, installVerdictHooks, joinFuture, joinPassTx, laneCorrectionsHook, laneDirty, laneOutcomeHook, laneReadHook, laneSeamsHook, laneStageHook, laneWriteHook, lanesBlockedHook, list, liveTx, merge, newTransaction, nextQuestion, notifyEpoch, observeFlightHook, ownFlights, passLane, passTx, pendingNodes, question, queuePendingNode, releaseAmbientMarksHook, releaseMarksHook, releaseQueues, reruns, resetErrorHalt, resolveTx, sameLane, schedule, setExternalHooks, setPassLane, setQuestion, stagedReaders, staleReader, storeCommitHook, storeParkHook, txOf, unhold, wireExternalSourceHook };
+\ No newline at end of file
+diff --git a/dist/prod/core/owner.js b/dist/prod/core/owner.js
+index c2e120578a16c3f1c4da6b0b926cb582a599230d..1cf3dcb31d87f8131a626d017e2ea20c09611499 100644
+--- a/dist/prod/core/owner.js
++++ b/dist/prod/core/owner.js
+@@ -6,7 +6,7 @@ import { unobserved, clearDeps } from "./graph.js";
+ 
+ import { deleteFromHeap } from "./heap.js";
+ 
+-import { globalQueue, schedule, dirtyQueue } from "./scheduler.js";
++import { globalQueue, schedule, dirtyQueue, pendingNodes } from "./scheduler.js";
+ 
+ // L2 (step 2): the parked frame. A pass parks the previous frame's children
+ // and `_disposal` list on `_x._pendingFirstChild` / `_x._pendingDisposal`
+@@ -76,8 +76,9 @@ function disposeChildren(e, n = false, r) {
+         // A death that can unblock the future (L2, `futureBlocked`): a held
+         // flight's — a transaction's or a lane's (its `_x._transaction`) — or a
+         // stale reader's (REACTIVE_FRAME_READ — a frame that derived from one).
++        // An idle pending queue would also pin it until an unrelated flush.
+         // Nothing else re-examines a dead node, so make sure a seam comes.
+-                if (e.m & STATUS_PENDING && e.T?.Re != null || t & REACTIVE_FRAME_READ) schedule();
++                if (e.m & STATUS_PENDING && e.T?.Re != null || t & REACTIVE_FRAME_READ || pendingNodes.length) schedule();
+     }
+     let l = r ? e.T.Ue : e.De;
+     if (r) e.T.Ue = null; else e.De = null;
+diff --git a/dist/prod/core/scheduler.js b/dist/prod/core/scheduler.js
+index 5fcb84916c9f6b00071c9fb94682daf04e9b4f37..c91509fa1afb6530d6744c3779008f1b406538a8 100644
+--- a/dist/prod/core/scheduler.js
++++ b/dist/prod/core/scheduler.js
+@@ -1051,4 +1051,4 @@ function runQueue(e, n) {
+     for (let o = 0; o < e.length; o++) e[o](n);
+ }
+ 
+-export { GlobalQueue, MAINLINE_QUESTION, ROOT_ERROR_HOOK, actionDepth, applyGuessesHook, blocked, boundarySeamHook, bumpNotifyEpoch, catchHook, clock, commitPendingNode, deferZombie, dirtyQueue, endLanesHook, enforceLoadingBoundary, enterAction, exitAction, externalUntrackHook, flush, flushTransaction, freshHook, globalQueue, haltReactivity, haltReactivityAt, heldRunHook, heldTrim, heldUnder, hiddenHook, holdNode, insertSubs, installBoundaryHooks, installLaneHooks, installMarkHooks, installStoreHooks, installVerdictHooks, joinFuture, joinPassTx, laneCorrectionsHook, laneDirty, laneOutcomeHook, laneReadHook, laneSeamsHook, laneStageHook, laneWriteHook, lanesBlockedHook, list, liveTx, merge, newTransaction, nextQuestion, notifyEpoch, observeFlightHook, ownFlights, passLane, passTx, question, queuePendingNode, releaseAmbientMarksHook, releaseMarksHook, releaseQueues, reruns, resetErrorHalt, resolveTx, sameLane, schedule, setExternalHooks, setPassLane, setQuestion, stagedReaders, staleReader, storeCommitHook, storeParkHook, txOf, unhold, wireExternalSourceHook };
+\ No newline at end of file
++export { GlobalQueue, MAINLINE_QUESTION, ROOT_ERROR_HOOK, actionDepth, applyGuessesHook, blocked, boundarySeamHook, bumpNotifyEpoch, catchHook, clock, commitPendingNode, deferZombie, dirtyQueue, endLanesHook, enforceLoadingBoundary, enterAction, exitAction, externalUntrackHook, flush, flushTransaction, freshHook, globalQueue, haltReactivity, haltReactivityAt, heldRunHook, heldTrim, heldUnder, hiddenHook, holdNode, insertSubs, installBoundaryHooks, installLaneHooks, installMarkHooks, installStoreHooks, installVerdictHooks, joinFuture, joinPassTx, laneCorrectionsHook, laneDirty, laneOutcomeHook, laneReadHook, laneSeamsHook, laneStageHook, laneWriteHook, lanesBlockedHook, list, liveTx, merge, newTransaction, nextQuestion, notifyEpoch, observeFlightHook, ownFlights, passLane, passTx, pendingNodes, question, queuePendingNode, releaseAmbientMarksHook, releaseMarksHook, releaseQueues, reruns, resetErrorHalt, resolveTx, sameLane, schedule, setExternalHooks, setPassLane, setQuestion, stagedReaders, staleReader, storeCommitHook, storeParkHook, txOf, unhold, wireExternalSourceHook };

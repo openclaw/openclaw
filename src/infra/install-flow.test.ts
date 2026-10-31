@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
 
@@ -38,6 +43,87 @@ describe("resolveExistingInstallPath", () => {
 });
 
 describe("withExtractedArchiveRoot", () => {
+  it.for([
+    { workTimeoutMs: null, timeoutMs: 1, succeeds: true },
+    { workTimeoutMs: undefined, timeoutMs: 1, succeeds: false },
+    { workTimeoutMs: 1, timeoutMs: 1000, succeeds: false },
+  ])(
+    "honors work deadline $workTimeoutMs while settling slow extraction",
+    async ({ workTimeoutMs, timeoutMs, succeeds }, { signal }) => {
+      await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+        const archivePath = path.join(fixtureRoot, "slow.zip");
+        const zip = new JSZip();
+        zip.file("package/data.txt", "complete");
+        await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+        const onExtracted = vi.fn(async (rootDir: string) => ({
+          ok: true as const,
+          content: await fs.readFile(path.join(rootDir, "data.txt"), "utf8"),
+        }));
+        const originalOpen = fs.open;
+        const opening = createDeferred();
+        const release = createDeferred();
+        let workspace = "";
+        const originalMkdir = fs.mkdir;
+        using _ = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+          if (path.basename(String(args[0])) === "extract") {
+            workspace = path.dirname(String(args[0]));
+          }
+          return await originalMkdir(...args);
+        });
+        let gated = false;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          if (!gated && String(args[0]).endsWith(`${path.sep}data.txt`)) {
+            gated = true;
+            opening.resolve();
+            await release.promise;
+          }
+          return await originalOpen(...args);
+        });
+        let settled = false;
+        const extracting = withExtractedArchiveRoot({
+          archivePath,
+          tempDirPrefix: "openclaw-install-flow-",
+          timeoutMs,
+          workTimeoutMs,
+          onExtracted,
+        }).finally(() => {
+          settled = true;
+        });
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(opening.promise, extracting, "extraction never reached open"),
+            signal,
+          );
+          // Expire the deadline only after extraction owns the pending filesystem operation.
+          await vi.advanceTimersByTimeAsync(50);
+          expect(settled).toBe(false);
+          expect(onExtracted).not.toHaveBeenCalled();
+          expect(workspace).not.toBe("");
+          expect((await fs.stat(workspace)).isDirectory()).toBe(true);
+          release.resolve();
+          const result = await withinTest(extracting, signal);
+          if (succeeds) {
+            expect(result).toEqual({ ok: true, content: "complete" });
+            expect(onExtracted).toHaveBeenCalledOnce();
+          } else {
+            expect(result).toEqual({ ok: false, error: expect.stringContaining("timed out") });
+            expect(onExtracted).not.toHaveBeenCalled();
+          }
+          await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          release.resolve();
+          try {
+            await extracting;
+          } finally {
+            openSpy.mockRestore();
+            vi.useRealTimers();
+          }
+        }
+      });
+    },
+  );
+
   it("applies optional extraction limits before the callback and leaves installer defaults unchanged", async () => {
     await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const archivePath = path.join(fixtureRoot, "plugin.zip");
@@ -85,16 +171,33 @@ describe("withExtractedArchiveRoot", () => {
           manifest: await fs.readFile(path.join(rootDir, "package.json"), "utf8"),
         };
       });
-
-      await expect(
-        withExtractedArchiveRoot({
-          archivePath,
-          tempDirPrefix: "openclaw-plugin-",
-          timeoutMs: 1000,
-          rootMarkers: ["package.json"],
-          onExtracted,
-        }),
-      ).resolves.toEqual({ ok: true, manifest: '{"name":"example-plugin"}' });
+      let extractionSyncs = 0;
+      const originalOpen = fs.open;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await originalOpen(...args);
+        if (String(args[0]).includes(`${path.sep}extract${path.sep}`)) {
+          const sync = handle.sync.bind(handle);
+          handle.sync = async () => {
+            extractionSyncs++;
+            await sync();
+          };
+        }
+        return handle;
+      });
+      try {
+        await expect(
+          withExtractedArchiveRoot({
+            archivePath,
+            tempDirPrefix: "openclaw-plugin-",
+            timeoutMs: 1000,
+            rootMarkers: ["package.json"],
+            onExtracted,
+          }),
+        ).resolves.toEqual({ ok: true, manifest: '{"name":"example-plugin"}' });
+      } finally {
+        openSpy.mockRestore();
+      }
+      expect(extractionSyncs).toBe(0);
       expect(onExtracted).toHaveBeenCalledOnce();
       await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
     });
@@ -117,6 +220,40 @@ describe("withExtractedArchiveRoot", () => {
         error: `failed to extract archive: Error: unsupported archive: ${archivePath}`,
       });
       expect(onExtracted).not.toHaveBeenCalled();
+    });
+  });
+
+  it("verifies the full extracted tree before selecting a package root or running install work", async () => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.zip");
+      const zip = new JSZip();
+      zip.file("package/package.json", '{"name":"example-plugin"}');
+      zip.file("unexpected.txt", "outside the selected package");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const failure = { ok: false as const, error: "unexpected archive file", code: "integrity" };
+      const onExtracted = vi.fn(async () => ({ ok: true as const }));
+      let extractionRoot = "";
+      const result = await withExtractedArchiveRoot({
+        archivePath,
+        tempDirPrefix: "openclaw-install-flow-",
+        timeoutMs: 1000,
+        rootMarkers: ["package.json"],
+        verification: {
+          limits: {},
+          onExtractionError: () => failure,
+          verify: async (extractDir) => {
+            extractionRoot = extractDir;
+            expect(await fs.readFile(path.join(extractDir, "unexpected.txt"), "utf8")).toBe(
+              "outside the selected package",
+            );
+            return failure;
+          },
+        },
+        onExtracted,
+      });
+      expect(result).toBe(failure);
+      expect(onExtracted).not.toHaveBeenCalled();
+      await expect(fs.stat(extractionRoot)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 

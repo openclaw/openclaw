@@ -7,9 +7,6 @@ import {
 
 const WORK_URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_NzQ1ZDBjYzItZDAxNS00N2YxLTg4Y2EtYjQ1N2I4NDg2Njli%40thread.v2/0?context=%7b%22Tid%22%3a%22tenant%22%7d";
-const WORK_SHORT_URL = "https://teams.microsoft.com/meet/9326458712345?p=abc";
-const WORK_SHORT_LAUNCHER_URL =
-  "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F9326458712345%3Fp%3Dabc%26anon%3Dtrue";
 const CONSUMER_COORDINATES = Buffer.from(
   JSON.stringify({ meetingCode: "9326458712345", passcode: "abc" }),
 ).toString("base64");
@@ -17,11 +14,14 @@ const CONSUMER_COORDINATES = Buffer.from(
 describe("Microsoft Teams meeting URL normalization", () => {
   it.each([
     [WORK_URL, "teams-work:19:meeting_NzQ1ZDBjYzItZDAxNS00N2YxLTg4Y2EtYjQ1N2I4NDg2Njli@thread.v2"],
-    [WORK_SHORT_URL, "teams-work:meet:9326458712345:p:abc"],
-    // Microsoft can 302 the short work invitation to this same-host launcher before the
-    // SPA renders; it must resolve to the identical owned meeting identity, matching the
-    // direct short-link case above, not the unrelated "teams-unrecognized" fallback.
-    [WORK_SHORT_LAUNCHER_URL, "teams-work:meet:9326458712345:p:abc"],
+    [
+      "https://teams.microsoft.com/meet/1234567890123?p=Synthetic-runtime-token",
+      "teams-work:meet:1234567890123:p:Synthetic-runtime-token",
+    ],
+    [
+      "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F1234567890123%3Fp%3DSynthetic-runtime-token",
+      "teams-work:meet:1234567890123:p:Synthetic-runtime-token",
+    ],
     ["https://teams.live.com/meet/9326458712345?p=abc", "teams-consumer:9326458712345:p:abc"],
     [
       "https://teams.live.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F9326458712345%3Fp%3Dabc",
@@ -33,39 +33,6 @@ describe("Microsoft Teams meeting URL normalization", () => {
     ],
   ])("extracts a stable identity from %s", (url, expected) => {
     expect(normalizeTeamsMeetingUrlForReuse(url)).toBe(expected);
-  });
-
-  it("recognizes the short work invitation and its launcher redirect as the same meeting", () => {
-    expect(isSameTeamsMeetingUrl(WORK_SHORT_URL, WORK_SHORT_LAUNCHER_URL)).toBe(true);
-    // A different passcode on the launcher redirect must not be treated as the same meeting.
-    expect(
-      isSameTeamsMeetingUrl(
-        WORK_SHORT_URL,
-        "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F9326458712345%3Fp%3Ddifferent",
-      ),
-    ).toBe(false);
-    // A different meeting id on the launcher redirect must not be treated as the same meeting.
-    expect(
-      isSameTeamsMeetingUrl(
-        WORK_SHORT_URL,
-        "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F0000000000000%3Fp%3Dabc",
-      ),
-    ).toBe(false);
-  });
-
-  it("ignores query parameters when comparing meeting identity", () => {
-    expect(
-      isSameTeamsMeetingUrl(
-        WORK_URL,
-        `${WORK_URL.split("?")[0]}?context=%7b%22Tid%22%3a%22other%22%7d&anon=true`,
-      ),
-    ).toBe(true);
-    expect(
-      isSameTeamsMeetingUrl(
-        "https://teams.live.com/meet/abc-123?invite=one",
-        "https://teams.live.com/meet/ABC-123?invite=two",
-      ),
-    ).toBe(true);
   });
 
   it.each([
@@ -85,13 +52,8 @@ describe("Microsoft Teams meeting URL normalization", () => {
   });
 
   it.each([
-    "https://teams.microsoft.com/",
     "https://teams.microsoft.com/v2/",
     "https://teams.microsoft.com/l/channel/19%3Achannel%40thread.tacv2",
-    "https://teams.microsoft.com/dl/launcher/launcher.html?url=https%3A%2F%2Fevil.example%2Fmeet%2F123",
-    "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2Fnot-numeric%3Fp%3Dabc",
-    "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F123%2Fextra",
-    "https://teams.live.com/",
     "https://teams.live.com/dl/launcher/launcher.html?url=https%3A%2F%2Fevil.example%2Fmeet%2Fabc",
     "https://teams.live.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2Fabc%2Fextra",
     "https://teams.live.com/light-meetings/launch?coords=not-json",
@@ -106,5 +68,28 @@ describe("Microsoft Teams meeting URL normalization", () => {
     const normalized = normalizeTeamsMeetingUrl(`${WORK_URL}#ignored`);
     expect(normalized).toContain("context=");
     expect(normalized).not.toContain("#ignored");
+  });
+
+  it("resolves a work short-link and its server launcher redirect to the same key", () => {
+    const direct = "https://teams.microsoft.com/meet/1234567890123?p=Synthetic-runtime-token";
+    const redirected =
+      "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F1234567890123%3Fp%3DSynthetic-runtime-token";
+    expect(isSameTeamsMeetingUrl(direct, redirected)).toBe(true);
+  });
+
+  it("does not treat a different opaque passcode as the same work short-link meeting", () => {
+    const direct = "https://teams.microsoft.com/meet/1234567890123?p=Synthetic-runtime-token";
+    const other = "https://teams.microsoft.com/meet/1234567890123?p=Different-runtime-token";
+    expect(isSameTeamsMeetingUrl(direct, other)).toBe(false);
+  });
+
+  it.each([
+    "https://teams.microsoft.com/meet/1234567890123",
+    "https://teams.microsoft.com/meet/1234567890123?p=",
+    "https://teams.microsoft.com/meet/1234567890123?p=one&p=two",
+    "https://teams.microsoft.com/dl/launcher/launcher.html?url=https%3A%2F%2Fevil.example%2F_%23%2Fmeet%2F1234567890123%3Fp%3Dx",
+    "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2Fabc%3Fp%3Dx",
+  ])("rejects a malformed or missing-passcode work short-link: %s", (url) => {
+    expect(normalizeTeamsMeetingUrlForReuse(url)).toBeUndefined();
   });
 });

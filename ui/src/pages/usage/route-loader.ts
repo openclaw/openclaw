@@ -1,10 +1,12 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { createDefaultUsageDateRange, DEFAULT_USAGE_SESSION_SORT } from "./helpers.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./types.ts";
 
@@ -25,10 +27,8 @@ export async function loadUsageRouteData(
   snapshot: UsageRouteSnapshot,
 ): Promise<UsageRouteData> {
   const { gateway, gatewaySnapshot, agentId, date } = snapshot;
-  const startDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   const query: UsageRouteData["query"] = {
-    startDate,
-    endDate: startDate,
+    ...createDefaultUsageDateRange(date),
     scope: "family",
     timeZone: "local",
     agentId,
@@ -38,8 +38,6 @@ export async function loadUsageRouteData(
     gatewaySnapshot,
     query,
     result: null,
-    costSummary: null,
-    providerUsage: { state: "pending" },
     loadedAtMs: null,
     error: null,
   };
@@ -58,16 +56,19 @@ export async function loadUsageRouteData(
     ) {
       return pending;
     }
+    if (!hasOperatorReadAccess(current.hello?.auth ?? null)) {
+      return { ...pending, error: formatMissingOperatorReadScopeMessage("usage") };
+    }
     const result = await requestUsageSnapshot(
       gatewaySnapshot.client,
-      { ...query, agentId: query.agentId ?? undefined },
+      { ...query, ...DEFAULT_USAGE_SESSION_SORT, agentId: query.agentId ?? undefined },
       options.signal,
     );
     return result.ok
-      ? { ...pending, ...result.value, loadedAtMs: Date.now() }
+      ? { ...pending, result: result.value, gatewaySnapshot: current, loadedAtMs: Date.now() }
       : {
           ...pending,
-          providerUsage: result.error.providerUsage,
+          gatewaySnapshot: current,
           error: errorMessage(result.error.cause),
         };
   } catch (error) {

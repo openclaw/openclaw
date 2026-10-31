@@ -7,13 +7,15 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { createTestModelDefinition } from "../../test-runtime-config-helpers.js";
 import {
-  createRetiredModelRefRepairResolver,
-  repairRetiredConfigModelRefs,
-  repairRetiredSessionModelRef,
+  createRetiredModelRefRepairResolver as createResolver,
+  repairRetiredConfigModelRefs as repairConfig,
 } from "./retired-model-ref-repair.js";
+import { repairRetiredSessionModelRef as repairSession } from "./retired-session-model-repair.js";
 
 let state: OpenClawTestState;
+let cfg: OpenClawConfig;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "xai-auto-retirement" });
   clearPluginMetadataLifecycleCaches();
@@ -23,6 +25,8 @@ beforeEach(async () => {
       "xai:fixture": { type: "token", provider: "xai", token: "synthetic-subscription-token" },
     },
   });
+  cfg = configForRoute("https://cli-chat-proxy.grok.com/v1");
+  await state.writeConfig(cfg);
 });
 afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
@@ -45,84 +49,74 @@ function configForRoute(baseUrl: string, models: ModelDefinitionConfig[] = []): 
   };
 }
 
-it("repairs the subscription selector while preserving fallbacks and model settings", async () => {
-  const cfg = configForRoute("https://cli-chat-proxy.grok.com/v1");
-  await state.writeConfig(cfg);
-  const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env });
-  const repaired = repairRetiredConfigModelRefs(cfg, resolve);
+function resolver(options: Omit<Parameters<typeof createResolver>[0], "cfg" | "env"> = {}) {
+  return createResolver({ cfg, env: state.env, ...options });
+}
 
-  expect(repaired.config.agents?.defaults?.model).toEqual({
-    primary: "xai/grok-4.6",
-    fallbacks: ["xai/grok-4.3"],
-  });
-  expect(repaired.config.agents?.defaults?.models?.["xai/grok-4.6"]?.params).toEqual({
-    temperature: 0.25,
-  });
-  expect(cfg.agents?.defaults?.model).toEqual({ primary: "xai/auto", fallbacks: ["xai/grok-4.3"] });
-  expect(
-    repairRetiredConfigModelRefs(
-      repaired.config,
-      createRetiredModelRefRepairResolver({ cfg: repaired.config, env: state.env }),
-    ).changes,
-  ).toEqual([]);
-});
-
-it("repairs a session override without changing its selected profile", async () => {
-  const cfg = configForRoute("https://cli-chat-proxy.grok.com/v1");
-  await state.writeConfig(cfg);
-  const entry: SessionEntry = {
-    sessionId: "xai-upgrade-session",
+function session(sessionId: string): SessionEntry {
+  return {
+    sessionId,
     updatedAt: 1,
     providerOverride: "xai",
     modelOverride: "auto",
     authProfileOverride: "xai:fixture",
     authProfileOverrideSource: "user",
   };
-  const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env });
-  expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.6", [])).toBe(true);
-  expect(entry.modelOverride).toBe("grok-4.6");
-  expect(entry.authProfileOverride).toBe("xai:fixture");
-  expect(entry.authProfileOverrideSource).toBe("user");
+}
+
+it("repairs the subscription selector while preserving fallbacks and model settings", () => {
+  const repaired = repairConfig(cfg, resolver());
+  expect(repaired.config.agents?.defaults?.model).toEqual({
+    primary: "xai/grok-4.7",
+    fallbacks: ["xai/grok-4.3"],
+  });
+  const defaults = repaired.config.agents?.defaults;
+  expect(defaults?.models?.["xai/grok-4.7"]?.params).toEqual({ temperature: 0.25 });
+  expect(cfg.agents?.defaults?.model).toEqual({ primary: "xai/auto", fallbacks: ["xai/grok-4.3"] });
+  const nextResolver = createResolver({ cfg: repaired.config, env: state.env });
+  expect(repairConfig(repaired.config, nextResolver).changes).toEqual([]);
+});
+
+it("repairs a session override without changing its selected profile", () => {
+  const entry = session("xai-upgrade-session");
+  expect(repairSession(entry, "main", resolver(), "xai/grok-4.7", [])).toBe(true);
+  expect(entry).toMatchObject({
+    modelOverride: "grok-4.7",
+    authProfileOverride: "xai:fixture",
+    authProfileOverrideSource: "user",
+  });
 });
 
 it("preserves a custom endpoint's explicit auto model", async () => {
-  const cfg = configForRoute("https://custom-models.example/v1", [
-    {
-      id: "auto",
+  cfg = configForRoute("https://custom-models.example/v1", [
+    createTestModelDefinition("auto", {
       name: "Custom automatic model",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1024,
       maxTokens: 256,
-    },
+    }),
   ]);
   await state.writeConfig(cfg);
-  const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env });
+  const resolve = resolver();
   expect(resolve({ modelRef: "xai/auto", agentId: "main" })).toEqual({ kind: "unchanged" });
-  expect(repairRetiredConfigModelRefs(cfg, resolve).config).toBe(cfg);
+  expect(repairConfig(cfg, resolve).config).toBe(cfg);
 });
 
-it("repairs an unpinned config on its declared subscription route without credentials", async () => {
-  const cfg = configForRoute("https://cli-chat-proxy.grok.com/v1");
-  await state.writeConfig(cfg);
+it("repairs an unpinned config for its declared owner without credentials", async () => {
   await state.writeAuthProfiles({ version: 1, profiles: {} });
   const warnings: string[] = [];
-  const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env, warnings });
+  const resolve = resolver({ warnings });
   expect(resolve({ modelRef: "xai/auto", agentId: "main" })).toEqual({
     kind: "replace",
-    modelRef: "xai/grok-4.6",
+    modelRef: "xai/grok-4.7",
     reason: "retirement",
-    retirementScope: "route",
+    retirementScope: "owner",
   });
   expect(warnings).toEqual([]);
 });
 
-it("retains a missing pinned account instead of substituting the available profile", async () => {
-  const cfg = configForRoute("https://cli-chat-proxy.grok.com/v1");
-  await state.writeConfig(cfg);
+it("retains a missing pinned account instead of substituting the available profile", () => {
   const warnings: string[] = [];
-  const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env, warnings });
+  const resolve = resolver({ warnings });
   expect(
     resolve({
       modelRef: "xai/auto",
@@ -135,34 +129,12 @@ it("retains a missing pinned account instead of substituting the available profi
 });
 
 it("keeps a pinned session when its successor is outside the allowed models", async () => {
-  const original = configForRoute("https://cli-chat-proxy.grok.com/v1");
-  const cfg: OpenClawConfig = {
-    ...original,
-    agents: {
-      ...original.agents,
-      defaults: { ...original.agents?.defaults, modelPolicy: { allow: ["xai/auto"] } },
-    },
-  };
+  cfg.agents!.defaults!.modelPolicy = { allow: ["xai/auto"] };
   await state.writeConfig(cfg);
   const warnings: string[] = [];
-  const entry: SessionEntry = {
-    sessionId: "restricted-xai-session",
-    updatedAt: 1,
-    providerOverride: "xai",
-    modelOverride: "auto",
-    authProfileOverride: "xai:fixture",
-    authProfileOverrideSource: "user",
-  };
-  const resolve = createRetiredModelRefRepairResolver({
-    cfg,
-    env: state.env,
-    warnings,
-    checkModelPolicy: true,
-  });
-  expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.6", warnings)).toBe(
-    false,
-  );
-  expect(entry.modelOverride).toBe("auto");
-  expect(entry.authProfileOverride).toBe("xai:fixture");
+  const entry = session("restricted-xai-session");
+  const resolve = resolver({ warnings, checkModelPolicy: true });
+  expect(repairSession(entry, "main", resolve, "xai/grok-4.7", warnings)).toBe(false);
+  expect(entry).toMatchObject({ modelOverride: "auto", authProfileOverride: "xai:fixture" });
   expect(warnings).toEqual([expect.stringContaining("not permitted")]);
 });

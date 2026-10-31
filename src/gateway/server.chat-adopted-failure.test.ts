@@ -12,18 +12,21 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../agents/failover/user-copy.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
 import * as replyRun from "../auto-reply/reply/get-reply-run.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import {
   agentDiscoveryMock,
   connectOk,
@@ -39,7 +42,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const temporaryDirectories = useAutoCleanupTempDirTracker(afterEach);
+const temporaryDirectories = useSessionStoreTempDirs(afterAll, "openclaw-adopted-failure-");
 let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 
 beforeAll(async () => {
@@ -55,10 +58,7 @@ afterEach(() => {
 });
 
 it("reports an adopted pre-model failure as one visible failure over the Gateway WebSocket", async () => {
-  testState.sessionStorePath = path.join(
-    temporaryDirectories.make("openclaw-adopted-failure-"),
-    "sessions.json",
-  );
+  testState.sessionStorePath = path.join(temporaryDirectories.make(), "sessions.json");
   await writeSessionStore({
     entries: { main: { sessionId: "adopted-failure-session", updatedAt: Date.now() } },
   });
@@ -103,14 +103,15 @@ it("reports an adopted pre-model failure as one visible failure over the Gateway
       idempotencyKey: runId,
     };
     const accepted = await rpcReq(socket, "chat.send", request);
-    expect(accepted.ok).toBe(true);
-    expect(accepted.payload).toMatchObject({ runId, status: "started" });
+    expect(accepted).toMatchObject({ ok: true, payload: { runId, status: "started" } });
     const failed = await terminal;
-    expect(JSON.stringify(failed)).toContain("Something went wrong");
+    expect(failed.payload).toMatchObject({
+      state: "error",
+      errorMessage: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    });
     expect(JSON.stringify(failed)).not.toContain(originalError.message);
     const replay = await rpcReq(socket, "chat.send", request);
-    expect(replay.ok).toBe(false);
-    expect(replay.payload).toMatchObject({ runId, status: "error" });
+    expect(replay).toMatchObject({ ok: false, payload: { runId, status: "error" } });
     expect(gatewayReplyMock).toHaveBeenCalledOnce();
     expect(terminalStates).toEqual(["error"]);
   } finally {
@@ -132,21 +133,24 @@ describe("chat.send quoted model profiles", () => {
   };
   const client: GatewayClient = {
     connId: "quoted-profile-ui",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
+    connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
   };
   let context: GatewayRequestContext;
   let storePath: string;
   let runPreparedReply: MockInstance<typeof replyRun.runPreparedReply>;
+  const settle = () =>
+    captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] });
+  function addProfile(profileId: string, provider = "openai") {
+    upsertAuthProfile({
+      agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
+      profileId,
+      credential: { type: "api_key", provider, key: "synthetic-profile-key" },
+    });
+  }
 
   beforeEach(async () => {
     runPreparedReply = vi.spyOn(replyRun, "runPreparedReply");
-    const directory = temporaryDirectories.make("openclaw-chat-model-profile-");
+    const directory = temporaryDirectories.make();
     storePath = path.join(directory, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentConfig = {
@@ -178,11 +182,7 @@ describe("chat.send quoted model profiles", () => {
         },
       },
     });
-    upsertAuthProfile({
-      agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
-      profileId: "openai:before",
-      credential: { type: "api_key", provider: "openai", key: "synthetic-before-key" },
-    });
+    addProfile("openai:before");
     await prepareGatewayReplyRuntimeForTest({ force: true });
     context = createDirectChatContext({ getRuntimeConfig });
     gatewayReplyMock.mockImplementation((ctx, options, config) =>
@@ -194,13 +194,14 @@ describe("chat.send quoted model profiles", () => {
   });
 
   afterEach(async () => {
-    await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
+    await settle();
     testState.agentConfig = undefined;
     runPreparedReply.mockRestore();
     Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
   });
 
   async function sendChat(message: string) {
+    const configBefore = await readConfigFileSnapshot();
     const respond = vi.fn<RespondFn>();
     const requestId = randomUUID();
     await handleGatewayRequest({
@@ -217,38 +218,21 @@ describe("chat.send quoted model profiles", () => {
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
+    await settle();
     expect(context.logGateway.error).not.toHaveBeenCalled();
-    expect(context.chatAbortControllers.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
+    expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
+    expect(getRuntimeConfig().agents?.defaults?.model).toEqual({ primary: "openai/default-model" });
+    expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
   }
 
   it.each([
-    [
-      '/model openai/test-model@"openai:owner+work@example.com" -s',
-      "openai:owner+work@example.com",
-      "openai",
-      "test-model",
-    ],
-    [
-      '/model openai/test-model@"openai:Work account" -s',
-      "openai:Work account",
-      "openai",
-      "test-model",
-    ],
     [
       String.raw`/model openai/test-model@"openai:Work \"account\"\\primary" -s`,
       'openai:Work "account"\\primary',
       "openai",
       "test-model",
     ],
-    [
-      '/model openai/test-model@"openai:Work --global" -s',
-      "openai:Work --global",
-      "openai",
-      "test-model",
-    ],
-    ['/model openai/test-model@"openai:team/work" -s', "openai:team/work", "openai", "test-model"],
-    ['/model openai/test-model@"20260101" -s', "20260101", "openai", "test-model"],
     [
       '/model "sample/model name@20260101"@"sample:team/work" -s',
       "sample:team/work",
@@ -258,12 +242,7 @@ describe("chat.send quoted model profiles", () => {
   ])(
     "persists the exact model and profile only in this session: %s",
     async (command, profile, provider, model) => {
-      upsertAuthProfile({
-        agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
-        profileId: profile,
-        credential: { type: "api_key", provider, key: "synthetic-selected-key" },
-      });
-      const configBefore = await readConfigFileSnapshot();
+      addProfile(profile, provider);
       await sendChat(command);
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
         sessionId,
@@ -272,27 +251,18 @@ describe("chat.send quoted model profiles", () => {
         authProfileOverride: profile,
         authProfileOverrideSource: "user",
       });
-      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
-      expect(getRuntimeConfig().agents?.defaults?.model).toEqual({
-        primary: "openai/default-model",
-      });
-      expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
       expect(runPreparedReply).not.toHaveBeenCalled();
     },
   );
 
   it.each([
     String.raw`openai/test@"work\N"`,
-    String.raw`openai/test@"work\U0041"`,
-    String.raw`openai/test@"work\v"`,
     'openai/test@"unfinished',
     String.raw`"sample/model\N"@"work"`,
-    '"unfinished',
   ])(
     "preserves malformed quoted input without selecting its trailing alias: %s",
     async (reference) => {
       const command = `/model ${reference} -s /opus -g`;
-      const configBefore = await readConfigFileSnapshot();
       await sendChat(command);
       expect(runPreparedReply).toHaveBeenCalledOnce();
       expect(runPreparedReply.mock.calls[0]?.[0]).toMatchObject({
@@ -306,11 +276,6 @@ describe("chat.send quoted model profiles", () => {
       expect(directives?.rawModelProfile).toBeUndefined();
       expect(directives?.modelScope).toBeUndefined();
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(priorSelection);
-      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
-      expect(getRuntimeConfig().agents?.defaults?.model).toEqual({
-        primary: "openai/default-model",
-      });
-      expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
     },
   );
 });

@@ -3,15 +3,13 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
 import {
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
-
-type SidebarAttentionItemKind = Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable">;
 
 type SidebarInboxEntryBase<
   Category extends Exclude<IssueTab, "all">,
@@ -25,7 +23,7 @@ type SidebarInboxEntryBase<
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
   type: "attention";
-  kind: SidebarAttentionItemKind;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;
@@ -48,6 +46,14 @@ export type SidebarInboxEntry =
       state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
     })
   | (SidebarInboxEntryBase<"mentions", "neutral"> & { type: "mention"; mention: MentionInboxItem })
+  | (SidebarInboxEntryBase<"system"> & {
+      type: "outbox";
+      id: string;
+      sessionKey: string;
+      agentId?: string;
+      held: boolean;
+      command: boolean;
+    })
   | (SidebarInboxEntryBase<"system"> & { type: "update" });
 
 export function buildScopeUpgradeInboxEntry(params: {
@@ -68,29 +74,10 @@ export function buildScopeUpgradeInboxEntry(params: {
   };
 }
 
-export function buildUpdateInboxEntry(params: {
-  canDismiss: boolean;
-  dismissal: SidebarAttentionDismissal | null;
-  forced: boolean;
-  requiresAction: boolean;
-  severity: "error" | "warning";
-  visible: boolean;
-}): Extract<SidebarInboxEntry, { type: "update" }> | null {
-  if (!params.visible) {
-    return null;
-  }
-  return {
-    type: "update",
-    category: "system",
-    dismissal: params.canDismiss && !params.forced ? params.dismissal : null,
-    requiresAction: params.requiresAction,
-    severity: params.severity,
-  };
-}
-
 export function buildSidebarInboxEntries(params: {
   approvals: readonly ExecApprovalRequest[];
   attention: readonly SidebarAttentionItem[];
+  outbox?: readonly Extract<SidebarInboxEntry, { type: "outbox" }>[];
   mentions: readonly MentionInboxItem[];
   scopeUpgrade: Extract<SidebarInboxEntry, { type: "scopeUpgrade" }> | null;
   update: Extract<SidebarInboxEntry, { type: "update" }> | null;
@@ -118,6 +105,7 @@ export function buildSidebarInboxEntries(params: {
   // Preserve the Inbox's action-first order while every tab reads one list.
   return [
     ...approvals,
+    ...(params.outbox ?? []),
     ...(params.update?.severity === "error" ? [params.update] : []),
     ...(params.scopeUpgrade ? [params.scopeUpgrade] : []),
     ...errors,

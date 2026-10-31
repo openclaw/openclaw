@@ -1,35 +1,34 @@
-// Gateway startup logging helpers.
-// Produces the compact ready banner with resolved model and safety state.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveAgentConfig, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { legacyModelKey, modelKey } from "../agents/model-ref-shared.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection-shared.js";
 import {
-  buildConfiguredModelCatalog,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection-shared.js";
+  buildThinkingCatalog,
+  resolveConfiguredThinkingDefaultCore,
+} from "../agents/model-thinking-default-core.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import {
+  inspectGatewayServiceInstallationDrift,
+  summarizeGatewayServiceLayout,
+} from "../daemon/service-layout.js";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../infra/bun-sqlite-library.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
+import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
-
-type StartupThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
+import { VERSION } from "../version.js";
 
 /** Emit startup summary lines after Gateway bind and plugin loading complete. */
 export async function logGatewayStartup(params: {
@@ -37,18 +36,15 @@ export async function logGatewayStartup(params: {
   activationSourceConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   manifestRecords: readonly PluginManifestRecord[];
-  bindHost: string;
-  bindHosts?: string[];
-  port: number;
   loadedPluginIds: readonly string[];
   startupStartedAt?: number;
-  tlsEnabled?: boolean;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string) => void };
   isNixMode: boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
     cfg: params.cfg,
+    agentId: tryResolveAmbientOwnerAgentId(params.cfg),
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -68,7 +64,57 @@ export async function logGatewayStartup(params: {
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+  params.log.info(
+    "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
+  );
+  try {
+    const cliPath = resolveExecutableFromPathEnv(
+      "openclaw",
+      resolveEnvironmentValue(params.env, "PATH") ?? "",
+      params.env,
+      { useCache: false },
+    );
+    if (cliPath) {
+      const [gatewayRoot, cli] = await Promise.all([
+        resolveOpenClawPackageRoot({ moduleUrl: import.meta.url }),
+        summarizeGatewayServiceLayout({ programArguments: [cliPath, "gateway"] }),
+      ]);
+      if (
+        gatewayRoot &&
+        cli?.packageRootReal &&
+        cli.packageVersion &&
+        ((await inspectGatewayServiceInstallationDrift(cli, gatewayRoot)) ||
+          cli.packageVersion !== VERSION)
+      ) {
+        params.log.warn(
+          `PATH CLI ${cli.packageVersion} at ${cli.packageRootReal} differs from this Gateway ${VERSION} at ${gatewayRoot}. Run openclaw update or use the CLI from ${gatewayRoot}.`,
+        );
+      }
+    }
+  } catch {
+    // Optional PATH/package inspection must never prevent Gateway startup.
+  }
   const sqliteLibrary = ensureSqliteLibrarySelected();
+  params.log.info(
+    `native runtime: ${JSON.stringify({
+      pid: process.pid,
+      platform: process.platform,
+      arch: process.arch,
+      node: process.versions.node,
+      bun: process.versions.bun,
+      v8: process.versions.v8,
+      uv: process.versions.uv,
+      openssl: process.versions.openssl,
+      sqlite: sqliteLibrary.source === "runtime" ? process.versions.sqlite : sqliteLibrary.version,
+      sqliteClose: getSqliteRuntimeCapabilities(),
+    })}`,
+  );
+  params.log.info(
+    `worker startup state: ${JSON.stringify({
+      ...getTrackedWorkerLifecycleSnapshot(),
+      compute: getWorkerComputeCapacity().getSnapshot(),
+    })}`,
+  );
   if (sqliteLibrary.source !== "runtime") {
     params.log.info(
       `SQLite: using ${sanitizeForLog(sqliteLibrary.path)} (${sqliteLibrary.version}, extension loading enabled)`,
@@ -80,13 +126,52 @@ export async function logGatewayStartup(params: {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }
 
-  for (const warning of await collectConfiguredChannelStartupWarnings({
-    cfg: params.cfg,
-    activationSourceConfig: params.activationSourceConfig,
-    ambientEnvTriggers: params.ambientEnvTriggers,
-    env: params.env,
-    manifestRecords: params.manifestRecords,
-  })) {
+  const { cfg, activationSourceConfig, ambientEnvTriggers, env, manifestRecords } = params;
+  const [blockerModule, presencePolicyModule] = await Promise.all([
+    import("../commands/doctor/shared/channel-plugin-blockers.js"),
+    import("../plugins/channel-presence-policy.js"),
+  ]);
+  const hits = blockerModule.scanConfiguredChannelPluginBlockers(cfg, env, activationSourceConfig, {
+    manifestRecords,
+    ambientEnvTriggers,
+  });
+  const blockerWarnings = blockerModule
+    .collectConfiguredChannelPluginBlockerWarnings(hits)
+    .map((warning) => `configured channel warning: ${warning.replace(/^[-]\s*/u, "")}`);
+  const missingOwnerWarnings = presencePolicyModule
+    .resolveConfiguredChannelPresencePolicy({
+      config: cfg,
+      activationSourceConfig,
+      env,
+      includePersistedAuthState: false,
+      ambientEnvTriggers,
+      manifestRecords,
+    })
+    .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
+    .map((entry) => {
+      const channelId = sanitizeForLog(entry.channelId);
+      const reasons = normalizeSortedUniqueStringEntries(entry.blockedReasons).join(", ");
+      return (
+        `configured channel warning: channels.${channelId} is configured but no channel plugin ` +
+        `is installed or loadable (${reasons}). Run \`openclaw doctor --fix\` or install the ` +
+        "channel plugin before relying on this channel."
+      );
+    });
+  const suppressedAmbientChannelIds =
+    ambientEnvTriggers === "suppress"
+      ? presencePolicyModule.listAmbientOnlyConfiguredChannelIds({
+          config: cfg,
+          activationSourceConfig,
+          env,
+          includePersistedAuthState: false,
+          manifestRecords,
+        })
+      : [];
+  const suppressionWarning =
+    suppressedAmbientChannelIds.length > 0
+      ? [formatSuppressedAmbientChannelsStartupWarning(suppressedAmbientChannelIds)]
+      : [];
+  for (const warning of [...suppressionWarning, ...blockerWarnings, ...missingOwnerWarnings]) {
     params.log.warn(warning);
   }
 
@@ -104,7 +189,7 @@ export async function logGatewayStartup(params: {
 }
 
 /** Format the startup model line from the model ref already selected by the caller. */
-export function formatAgentModelStartupLogLine(params: {
+function formatAgentModelStartupLogLine(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
@@ -117,86 +202,34 @@ export function formatAgentModelStartupLogLine(params: {
   };
 }
 
-/** Normalize model thinking values that are useful in the compact startup log. */
-function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefined {
-  return value === "off" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh" ||
-    value === "adaptive" ||
-    value === "max" ||
-    value === "ultra"
-    ? value
-    : undefined;
-}
-
-/** Resolve explicit thinking overrides from agent defaults and per-model config. */
-function resolveExplicitStartupThinking(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  defaultAgentThinking: unknown;
-}): StartupThinkLevel | undefined {
-  const models = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  return (
-    normalizeStartupThinkLevel(params.defaultAgentThinking) ??
-    normalizeStartupThinkLevel(models?.[canonicalKey]?.params?.thinking) ??
-    normalizeStartupThinkLevel(legacyKey ? models?.[legacyKey]?.params?.thinking : undefined) ??
-    normalizeStartupThinkLevel(params.cfg.agents?.defaults?.thinkingDefault)
-  );
-}
-
-/** True when a configured catalog entry disables reasoning for the startup model. */
-function isConfiguredReasoningDisabled(params: {
-  catalog: readonly ModelCatalogEntry[];
-  provider: string;
-  model: string;
-}): boolean {
-  return params.catalog.some(
-    (entry) =>
-      entry.provider === params.provider && entry.id === params.model && entry.reasoning === false,
-  );
-}
-
-/** Format model thinking and fast-mode details for the Gateway startup banner. */
-export function formatAgentModelStartupDetails(params: {
+function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
 }): string {
-  const soleAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
-  const defaultAgentConfig = soleAgentId ? resolveAgentConfig(params.cfg, soleAgentId) : undefined;
-  const explicitThinking = resolveExplicitStartupThinking({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    defaultAgentThinking: defaultAgentConfig?.thinkingDefault,
-  });
-  let thinking = explicitThinking;
+  const soleAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
+  let thinking = resolveConfiguredThinkingDefaultCore({ ...params, agentId: soleAgentId });
   if (thinking === undefined) {
-    const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+    const configuredCatalog = buildThinkingCatalog(params);
     // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
     // only to discard their default below.
     if (
-      isConfiguredReasoningDisabled({
-        catalog: configuredCatalog,
-        provider: params.provider,
-        model: params.model,
-      })
+      configuredCatalog.some(
+        (entry) =>
+          entry.provider === params.provider &&
+          entry.id === params.model &&
+          entry.reasoning === false,
+      )
     ) {
       thinking = "off";
     } else {
-      const resolvedThinking = resolveThinkingDefault({
+      thinking = resolveThinkingDefault({
         cfg: params.cfg,
+        agentId: soleAgentId,
         provider: params.provider,
         model: params.model,
         catalog: configuredCatalog,
       });
-      thinking = resolvedThinking === "off" ? "medium" : resolvedThinking;
     }
   }
   const fast = resolveFastModeState({
@@ -207,57 +240,6 @@ export function formatAgentModelStartupDetails(params: {
   });
 
   return `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
-}
-
-async function collectConfiguredChannelStartupWarnings(params: {
-  cfg: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-  env: NodeJS.ProcessEnv;
-  manifestRecords: readonly PluginManifestRecord[];
-}): Promise<string[]> {
-  const [blockerModule, presencePolicyModule] = await Promise.all([
-    import("../commands/doctor/shared/channel-plugin-blockers.js"),
-    import("../plugins/channel-presence-policy.js"),
-  ]);
-  const hits = blockerModule.scanConfiguredChannelPluginBlockers(
-    params.cfg,
-    params.env,
-    params.activationSourceConfig,
-    {
-      manifestRecords: params.manifestRecords,
-      ambientEnvTriggers: params.ambientEnvTriggers,
-    },
-  );
-  const blockerWarnings = blockerModule
-    .collectConfiguredChannelPluginBlockerWarnings(hits)
-    .map((warning) => `configured channel warning: ${warning.replace(/^[-]\s*/u, "")}`);
-  const missingOwnerWarnings = presencePolicyModule
-    .resolveConfiguredChannelPresencePolicy({
-      config: params.cfg,
-      activationSourceConfig: params.activationSourceConfig,
-      env: params.env,
-      includePersistedAuthState: false,
-      ambientEnvTriggers: params.ambientEnvTriggers,
-      manifestRecords: params.manifestRecords,
-    })
-    .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
-    .map(formatConfiguredChannelMissingOwnerStartupWarning);
-  const suppressedAmbientChannelIds =
-    params.ambientEnvTriggers === "suppress"
-      ? presencePolicyModule.listAmbientOnlyConfiguredChannelIds({
-          config: params.cfg,
-          activationSourceConfig: params.activationSourceConfig,
-          env: params.env,
-          includePersistedAuthState: false,
-          manifestRecords: params.manifestRecords,
-        })
-      : [];
-  const suppressionWarning =
-    suppressedAmbientChannelIds.length > 0
-      ? [formatSuppressedAmbientChannelsStartupWarning(suppressedAmbientChannelIds)]
-      : [];
-  return [...suppressionWarning, ...blockerWarnings, ...missingOwnerWarnings];
 }
 
 function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly string[]): string {
@@ -272,20 +254,6 @@ function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly stri
   );
 }
 
-function formatConfiguredChannelMissingOwnerStartupWarning(entry: {
-  channelId: string;
-  blockedReasons: readonly string[];
-}): string {
-  const channelId = sanitizeForLog(entry.channelId);
-  const reasons = normalizeSortedUniqueStringEntries(entry.blockedReasons).join(", ");
-  return (
-    `configured channel warning: channels.${channelId} is configured but no channel plugin ` +
-    `is installed or loadable (${reasons}). Run \`openclaw doctor --fix\` or install the ` +
-    "channel plugin before relying on this channel."
-  );
-}
-
-/** Format plugin count/list and optional startup duration for the ready log line. */
 function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,

@@ -4,6 +4,7 @@
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type SubscribeEmbeddedAgentSession = typeof subscribeEmbeddedAgentSession;
@@ -12,28 +13,29 @@ type EmbeddedAgentSession = Parameters<SubscribeEmbeddedAgentSession>[0]["sessio
 type OnBlockReply = NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>;
 type BlockReplyChunking = NonNullable<SubscribeEmbeddedAgentSessionParams["blockReplyChunking"]>;
 
-export const THINKING_TAG_CASES = [
-  { tag: "think", open: "<think>", close: "</think>" },
-  { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-  { tag: "thought", open: "<thought>", close: "</thought>" },
-  { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  { tag: "antml:thinking", open: "<antml:thinking>", close: "</antml:thinking>" },
-  { tag: "mm:think", open: "<mm:think>", close: "</mm:think>" },
-] as const;
-
 export function createStubSessionHarness(): {
   session: EmbeddedAgentSession;
   emit: (evt: unknown) => void;
 } {
-  let handler: ((evt: unknown) => void) | undefined;
+  let handlers: Array<(evt: unknown) => void> = [];
   const session = {
+    sessionManager: { [sessionManagerReadTranscriptStart]: () => null },
     subscribe: (fn: (evt: unknown) => void) => {
-      handler = fn;
-      return () => {};
+      handlers = [...handlers, fn];
+      return () => {
+        handlers = handlers.filter((handler) => handler !== fn);
+      };
     },
   } as unknown as EmbeddedAgentSession;
 
-  return { session, emit: (evt: unknown) => handler?.(evt) };
+  return {
+    session,
+    emit: (evt: unknown) => {
+      for (const handler of handlers) {
+        handler(evt);
+      }
+    },
+  };
 }
 
 export function createSubscribedSessionHarness(
@@ -201,26 +203,6 @@ export function createReasoningFinalAnswerMessage(): AssistantMessage {
   } as AssistantMessage;
 }
 
-type LifecycleErrorAgentEvent = {
-  stream?: unknown;
-  data?: {
-    phase?: unknown;
-    error?: unknown;
-  };
-};
-
-export function findLifecycleErrorAgentEvent(
-  calls: Array<unknown[]>,
-): LifecycleErrorAgentEvent | undefined {
-  for (const call of calls) {
-    const event = call?.[0] as LifecycleErrorAgentEvent | undefined;
-    if (event?.stream === "lifecycle" && event?.data?.phase === "error") {
-      return event;
-    }
-  }
-  return undefined;
-}
-
 export function expectFencedChunks(calls: Array<unknown[]>, expectedPrefix: string): void {
   expect(calls.length).toBeGreaterThan(1);
   for (const call of calls) {
@@ -236,4 +218,27 @@ export function expectSingleAgentEventText(calls: Array<unknown[]>, text: string
   expect(payloads).toHaveLength(1);
   expect(payloads[0]?.text).toBe(text);
   expect(payloads[0]?.delta).toBe(text);
+}
+
+export function emitToolRun(params: {
+  emit: (evt: unknown) => void;
+  toolName: string;
+  toolCallId: string;
+  args?: Record<string, unknown>;
+  isError: boolean;
+  result: unknown;
+}): void {
+  params.emit({
+    type: "tool_execution_start",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    args: params.args,
+  });
+  params.emit({
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    isError: params.isError,
+    result: params.result,
+  });
 }

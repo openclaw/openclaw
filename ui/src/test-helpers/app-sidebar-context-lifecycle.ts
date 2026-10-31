@@ -1,7 +1,10 @@
+import { onTestFinished } from "vitest";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationTheme } from "../app/bootstrap-theme.ts";
+import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type { ApplicationGateway } from "../app/context.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
+import { preserveDocumentStyle } from "./preserve-document-style.ts";
 
 const cleanups = new Set<() => void>();
 
@@ -10,6 +13,15 @@ export function createSidebarContextLifecycle(
   agents: Parameters<typeof createAgentSelectionCapability>[1],
   selectedAgentId: string,
 ) {
+  preserveDocumentStyle();
+  const connectionBootstrap = createConnectionBootstrapCoordinator();
+  const synchronizeBootstrap = (snapshot: ApplicationGateway["snapshot"]) =>
+    connectionBootstrap.synchronize({
+      client: snapshot.client,
+      connected: snapshot.phase === "connected",
+    });
+  synchronizeBootstrap(gateway.snapshot);
+  const stopBootstrap = gateway.subscribe(synchronizeBootstrap);
   const theme = createApplicationTheme(loadSettings(gateway.connection.gatewayUrl), gateway);
   const agentSelection = createAgentSelectionCapability(
     gateway,
@@ -23,11 +35,18 @@ export function createSidebarContextLifecycle(
       patch: patchSettings,
     },
   );
-  cleanups.add(() => {
+  const cleanup = () => {
+    if (!cleanups.delete(cleanup)) {
+      return;
+    }
+    stopBootstrap();
+    connectionBootstrap.reset();
     agentSelection.dispose();
     theme.dispose();
-  });
-  return { theme, agentSelection };
+  };
+  cleanups.add(cleanup);
+  onTestFinished(cleanup);
+  return { theme, agentSelection, connectionBootstrap };
 }
 
 export function disposeSidebarContextLifecycles() {

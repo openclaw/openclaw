@@ -18,22 +18,34 @@ OpenClaw is a great personal assistant and a great team assistant.
 A personal install is yours alone; a shared Gateway is a place people work together, so the same session can carry several humans, their credit, and their history.
 We build OpenClaw with OpenClaw on [team.openclaw.ai](https://team.openclaw.ai), and we sometimes invite visitors there.
 
-The current focus is:
+Run OpenClaw locally or on your own infrastructure.
+Hosted services and shared sign-in should simplify setup and account linking, but stay optional.
 
-Priority:
+Our priorities, in order:
+
+Quality and developer experience:
 
 - Security and safe defaults
-- Bug fixes and stability
-- Setup reliability and first-run UX
+- Bug fixes, stability, reliable updates, and clear errors
+- Easy, reliable first-run setup across CLI, web, and apps
+- Performance, reliable end-to-end tests, and clear plugin APIs, tools, and docs
 
-Next priorities:
+Runtime:
 
-- Supporting all major model providers
-- Improving support for major messaging channels (and adding a few high-demand ones)
-- Performance and test infrastructure
-- Better computer-use and agent harness capabilities
-- Ergonomics across CLI and web frontend
-- Companion apps on macOS, iOS, Android, Windows, and Linux
+- Reliable sessions, automations, and subagents
+- Simpler memory and knowledge
+- All major model providers
+- Reliable major messaging channels, plus a few high-demand additions
+- Better computer use and agent harnesses
+
+Operations and apps:
+
+- Reliable self-hosting and optional hosted services
+- Efficient infrastructure, CI, and releases
+- Usability and consistency across CLI, web, and apps on macOS, iOS, Android, Windows, and Linux
+
+Errors should explain what went wrong and what to do next.
+Show what ran, failed, or was canceled, and how to recover after an interruption.
 
 Contribution rules:
 
@@ -48,7 +60,7 @@ OpenClaw runtime code reads the current configuration schema only.
 We do not keep long-lived aliases or compatibility branches that silently accept old, renamed, or malformed config keys.
 
 When a config change makes existing user config invalid, the same change needs a doctor migration.
-`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the canonical format.
+`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the current format.
 Core-owned config and auth state are repaired in core doctor code; plugin-owned config is repaired by that plugin's doctor contract.
 
 ## Security
@@ -56,16 +68,19 @@ Core-owned config and auth state are repaired in core doctor code; plugin-owned 
 Security in OpenClaw is a deliberate tradeoff: strong defaults without killing capability.
 The goal is to stay powerful for real work while making risky paths explicit and operator-controlled.
 
-Canonical security policy and reporting:
+A shared Gateway is for people who trust each other.
+Mutually untrusted users need separate Gateways, host or container isolation, and access controls.
+
+Security policy and reporting:
 
 - [`SECURITY.md`](SECURITY.md)
 
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
 
 Privacy follows the same default rule.
-OpenClaw sends no usage analytics, tracking identifiers, or telemetry attribution to the project unless the operator turned that on themselves.
+OpenClaw sends no tracking identifiers to the project. Usage analytics and telemetry attribution require operator opt-in, except for the bounded update checks and update-outcome reports described below.
 This rule governs what leaves your install. It is not a rule about shared Gateways: when you join a team Gateway, the people you share it with see the work you do there, and features like Git co-author credit exist to attribute that work to you.
-The setup wizard offers optional anonymous feature statistics, with no selected by default; the daily update check reports version and platform and can be disabled.
+The setup wizard offers optional anonymous feature statistics, with no selected by default. Update checks and bounded terminal update-outcome reports are on by default under the existing update-request controls: `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` disables both. Feature-statistics opt-out and `DO_NOT_TRACK` do not disable these update requests. Outcomes contain release versions and fixed platform, installation, timing-bucket, verification, and failure categories, never identifiers, raw logs, or diagnostic prose. An outcome payload is sent only after the configured receiver advertises support for isolated outcome storage.
 See [Usage telemetry and update checks](https://docs.openclaw.ai/gateway/telemetry).
 
 ## Plugins & Memory
@@ -81,7 +96,7 @@ Plugins, skills, channels, and apps carry no such tax, and we want that surface 
 When our contribution rules read as hostile to a feature, re-check the layer: usually they object to where it plugs in, not to the feature existing.
 
 Recurring demand defines interfaces.
-Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: land the seam in core or the SDK, port the bundled implementation onto it, and let the remaining candidates ship as plugins against it.
+Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: add the shared interface in core or the SDK, update the bundled implementation to use it, and let the remaining candidates ship as plugins against it.
 
 There are two broad plugin styles:
 
@@ -118,11 +133,15 @@ tool, ACPX, plugin, or ClawHub paths.
 
 ### Setup
 
-OpenClaw is currently terminal-first by design.
-This keeps setup explicit: users see docs, auth, permissions, and security posture up front.
+Keep CLI setup and daily use fully supported.
+Make browser and app onboarding easier.
+All setup flows should use safe defaults and explain authentication, permissions, and security choices.
 
-Long term, we want easier onboarding flows as hardening matures.
-We do not want convenience wrappers that hide critical security decisions from users.
+### Localization
+
+Translate CLI and app text, including errors and setup guidance.
+Keep commands, identifiers, and protocol values unchanged.
+Full-document translations remain deferred.
 
 ### Why TypeScript?
 
@@ -134,7 +153,7 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 
 - New core skills when they can live on [ClawHub](https://clawhub.ai/)
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
-- Commercial service integrations that do not clearly fit the model-provider category
+- Vendor-specific service integrations in core; use plugins or companion projects
 - Cloud-based sandbox providers as OpenClaw plugins; implement provider support in [Crabbox](https://github.com/openclaw/crabbox) instead
 - Wrapper channels around already supported channels without a clear capability or security gap
 - MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap

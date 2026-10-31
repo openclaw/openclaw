@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
 import { getPlaywrightCore } from "../playwright-core.runtime.js";
 import { attachBrowserScreencastViewer, stopBrowserScreencasts } from "./session.js";
 import { parseScreencastFrame, screencastParams, ScreencastViewer } from "./test-support.js";

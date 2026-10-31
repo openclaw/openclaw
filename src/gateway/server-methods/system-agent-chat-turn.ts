@@ -3,15 +3,10 @@ import type {
   SystemAgentChatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
-import { appendTranscriptTurn } from "../../system-agent/transcript-store.js";
+import type { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { GatewaySystemAgentSession } from "./shared-types.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
-type SystemAgentChatEngineInput = Pick<
-  SystemAgentChatEngine,
-  "answerWizard" | "cancelWizard" | "handle"
->;
-
 /**
  * Build the welcome-only result for rejoining an existing session. A
  * reconnecting client must re-render the live wizard/question controls the
@@ -21,21 +16,20 @@ type SystemAgentChatEngineInput = Pick<
 export function buildSystemAgentRejoinResult(params: {
   sessionId: string;
   welcome: string;
+  optionalWelcome?: boolean;
   welcomeQuestion?: SystemAgentChatResult["question"];
-  engine: {
-    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
-      text: string;
-      sensitive?: boolean;
-      wizardInputPending?: boolean;
-      question?: SystemAgentChatResult["question"];
-      step?: SystemAgentChatResult["step"];
-    };
-  };
+  engine: Pick<SystemAgentChatEngine, "decorateRejoinReply">;
 }): SystemAgentChatResult {
   const rejoin = params.engine.decorateRejoinReply({ text: params.welcome, action: "none" });
   return {
     sessionId: params.sessionId,
     reply: rejoin.text || params.welcome,
+    optionalWelcome:
+      params.optionalWelcome === true &&
+      !rejoin.sensitive &&
+      !rejoin.wizardInputPending &&
+      !rejoin.step &&
+      !rejoin.question,
     action: "none",
     ...(rejoin.sensitive === true ? { sensitive: true } : {}),
     ...(rejoin.wizardInputPending === true ? { wizardInputPending: true } : {}),
@@ -74,7 +68,7 @@ export function getSystemAgentChatInputError(params: SystemAgentChatParams): str
 }
 
 export async function runSystemAgentChatInput(params: {
-  engine: SystemAgentChatEngineInput;
+  engine: Pick<SystemAgentChatEngine, "answerWizard" | "cancelWizard" | "handle">;
   input: SystemAgentChatParams;
 }): Promise<SystemAgentChatReply | undefined> {
   if (params.input.wizardAnswer !== undefined) {
@@ -127,13 +121,14 @@ export function buildSystemAgentChatResult(params: {
   };
 }
 
-export function persistSystemAgentEngineHistory(
+export async function persistSystemAgentEngineHistory(
   engine: GatewaySystemAgentSession["engine"],
   startIndex: number,
-): void {
+  transcript: ReturnType<typeof createSystemAgentTranscriptStore>,
+): Promise<void> {
   const at = Date.now();
   for (const turn of engine.historySince(startIndex)) {
     // Engine history has already masked sensitive user input.
-    appendTranscriptTurn({ ...turn, at });
+    await transcript.appendTurn({ ...turn, at });
   }
 }

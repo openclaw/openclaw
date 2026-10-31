@@ -1,8 +1,10 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsCreateParams,
   SessionsCreateResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
@@ -11,33 +13,25 @@ export type SessionCreateOutcome = {
   initialRun:
     | { status: "idle" }
     | { status: "started"; runId?: string }
-    | { status: "rejected"; error: string };
+    | { status: "rejected"; error: string; errorDetails?: unknown };
 };
 
 export type SessionCreateParams = SessionsCreateParams & {
   currentSessionKey?: string;
 };
 
-export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
-  const normalizedSessionKey = sessionKey.trim();
-  const normalizedAgentId = agentId?.trim();
-  const parentSessionKey =
-    normalizedSessionKey && normalizedSessionKey.toLowerCase() !== "unknown"
-      ? normalizedSessionKey
-      : undefined;
-  return {
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-    ...(parentSessionKey
-      ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
-      : {}),
-  };
-}
+export type SessionCreateRequestOptions = Pick<GatewayProtocolRequestOptions, "signal">;
 
 export async function requestSessionCreate(
   client: Pick<GatewayBrowserClient, "request">,
   params: Omit<SessionCreateParams, "currentSessionKey"> = {},
+  options?: SessionCreateRequestOptions,
 ): Promise<SessionCreateOutcome> {
-  const result = await client.request<SessionsCreateResult>("sessions.create", params);
+  const result = await client.request<SessionsCreateResult>("sessions.create", params, {
+    timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+    signal: options?.signal,
+    retainSentResultOnAbort: true,
+  });
   const key = stringValue(result?.key) ?? "";
   if (!key) {
     throw new Error("sessions.create returned no key");
@@ -54,6 +48,7 @@ export async function requestSessionCreate(
     initialRun = {
       status: "rejected",
       error: message || "The session was created, but its first message could not be sent.",
+      ...(result.runError?.details !== undefined ? { errorDetails: result.runError.details } : {}),
     };
   }
   return { key, entry: result.entry, initialRun };

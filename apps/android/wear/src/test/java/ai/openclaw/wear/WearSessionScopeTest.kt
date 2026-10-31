@@ -385,16 +385,6 @@ class WearSessionScopeTest {
   }
 
   @Test
-  fun identifiedOlderAbortCannotEndAnAnonymousReply() {
-    assertForeignTerminalPreservesLiveReply("aborted", activeRunId = null)
-  }
-
-  @Test
-  fun identifiedOlderErrorCannotEndAnAnonymousReply() {
-    assertForeignTerminalPreservesLiveReply("error", activeRunId = null)
-  }
-
-  @Test
   fun anonymousReplyFinalReconcilesWhenTheRunIsFirstIdentified() {
     val completed = WearChatMessage("completed", "assistant", "Finished reply", 2)
     val current = activeTerminalState(activeRunId = null)
@@ -501,6 +491,25 @@ class WearSessionScopeTest {
     assertEquals(current, transition.state)
     assertFalse(transition.reloadHistory)
     assertNull(transition.observedMessage)
+  }
+
+  @Test
+  fun anEmptyAnonymousCanonicalStreamStillNeedsIdentityReconciliation() {
+    val current = activeTerminalState(activeRunId = null).copy(streamText = "")
+    val transition = reduceWearTerminalChatEvent(current, terminalEvent("error", "older-run"))
+    assertEquals(current, transition.state)
+    assertTrue(transition.reloadHistory)
+    assertNull(transition.state.replyTerminal)
+  }
+
+  @Test
+  fun aCompletedOutcomeDoesNotOwnLaterTerminalOnlyRuns() {
+    val completed = reduceWearTerminalChatEvent(activeTerminalState(), terminalEvent("aborted", "active-run")).state
+    // Stale traffic is fenced by the wire sequence/epoch owner, not by a completed run ID.
+    val later = reduceWearTerminalChatEvent(completed, terminalEvent("error", "later-run"))
+    assertEquals(WearReplyOutcome.Error, later.state.replyTerminal?.outcome)
+    assertEquals("later-run", later.state.replyTerminal?.runId)
+    assertTrue(later.reloadHistory)
   }
 
   private fun assertUncertainTerminalPreservesReplyAndReloadsHistory(

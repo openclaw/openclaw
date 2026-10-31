@@ -3,7 +3,32 @@ import type {
   EnvironmentSummary,
   EnvironmentsListResult,
 } from "@openclaw/gateway-protocol";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+
+export function resolveChatPaneDesktopTarget(
+  session: GatewaySessionRow | undefined,
+): string | null {
+  if (!session) {
+    return null;
+  }
+  const placement = session.placement;
+  if (placement && placement.state !== "local") {
+    // Wait for the active owner; starting or reclaimed sessions do not own a desktop yet.
+    if (placement.state !== "active") {
+      return null;
+    }
+    if (placement.runner?.kind === "device") {
+      const nodeId = normalizeOptionalString(placement.runner.deviceId);
+      return placement.runner.status === "available" && nodeId ? `node:${nodeId}` : null;
+    }
+    return normalizeOptionalString(placement.environmentId) ?? null;
+  }
+  const execNode = normalizeOptionalString(session.execNode);
+  return execNode ? `node:${execNode}` : "gateway";
+}
 
 async function requestDesktopEnvironments(
   client: Pick<GatewayBrowserClient, "request">,
@@ -41,7 +66,15 @@ export async function loadDesktopEnvironments(
     isCurrent: () => boolean;
     recoverToPicker: boolean;
   },
-): Promise<{ environments: EnvironmentSummary[]; selectedSource: string | undefined } | undefined> {
+): Promise<
+  | {
+      environments: EnvironmentSummary[];
+      selectedSource: string | undefined;
+      pendingSource?: string;
+      hostSetup?: EnvironmentSummary;
+    }
+  | undefined
+> {
   const selectedTarget = await options.target;
   if (!options.isCurrent()) {
     return undefined;
@@ -49,6 +82,20 @@ export async function loadDesktopEnvironments(
   let environments = await requestDesktopEnvironments(client, selectedTarget);
   if (!options.isCurrent()) {
     return undefined;
+  }
+  const selectedEnvironment = environments.find((environment) => environment.id === selectedTarget);
+  if (selectedEnvironment?.status === "starting") {
+    return {
+      environments: [selectedEnvironment],
+      selectedSource: undefined,
+      pendingSource: selectedEnvironment.id,
+    };
+  }
+  if (
+    selectedEnvironment?.status === "error" ||
+    (!options.recoverToPicker && selectedEnvironment && selectedEnvironment.status !== "available")
+  ) {
+    throw new Error(selectedEnvironment.worker?.error ?? "Desktop environment is unavailable");
   }
   if (
     options.recoverToPicker &&
@@ -61,11 +108,34 @@ export async function loadDesktopEnvironments(
       return undefined;
     }
   }
+  const selectedSource = environments.find(
+    (environment) =>
+      environment.id === selectedTarget &&
+      environment.status === "available" &&
+      environment.desktop === true,
+  )?.id;
+  let hostSetup: EnvironmentSummary | undefined;
+  if (
+    !options.recoverToPicker &&
+    selectedTarget === "gateway" &&
+    selectedSource === undefined &&
+    selectedEnvironment?.status === "available"
+  ) {
+    // Host Desktop is off: ask what setup the host needs; a failed check keeps the generic notice.
+    const listed = await client
+      .request<EnvironmentsListResult>("environments.list", { includeDesktopSetup: true })
+      .catch(() => undefined);
+    if (!options.isCurrent()) {
+      return undefined;
+    }
+    hostSetup = listed?.environments.find(
+      (environment) => environment.id === "gateway" && environment.desktopSetup,
+    );
+  }
   return {
-    selectedSource: environments.find(
-      (environment) => environment.id === selectedTarget && environment.desktop === true,
-    )?.id,
+    selectedSource,
     environments: environments.filter((environment) => environment.desktop === true),
+    ...(hostSetup ? { hostSetup } : {}),
   };
 }
 

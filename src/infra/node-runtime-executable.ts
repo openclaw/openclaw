@@ -1,5 +1,10 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { nodeRuntimePathEntries } from "../../node-runtime-env.mjs";
+import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
+
+// Tooling imports this bootstrap directly in Node before a TypeScript loader is available.
 
 const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 const NODE_RUNTIME_CACHE_MAX_ENTRIES = 16;
@@ -25,10 +30,9 @@ function buildNodeExecutableCandidates(env: NodeJS.ProcessEnv): string[] {
           .filter(Boolean)
           .map((extension) => `node${extension.toLowerCase()}`)
       : ["node"];
-  const candidates = (env.PATH ?? "")
-    .split(path.delimiter)
-    .filter(Boolean)
-    .flatMap((directory) => names.map((name) => path.join(directory, name)));
+  const candidates = nodeRuntimePathEntries(env.PATH).flatMap((directory) =>
+    names.map((name) => path.join(directory, name)),
+  );
   if (process.platform === "darwin") {
     candidates.push(
       "/opt/homebrew/bin/node",
@@ -69,25 +73,27 @@ export function resolveNodeRuntimeExecutable(options?: {
     return cached ?? undefined;
   }
 
-  const probeSource = `const requiredFlag=${JSON.stringify(
-    requiredFlag,
-  )};process.stdout.write(!process.versions.bun&&(!requiredFlag||process.allowedNodeEnvironmentFlags.has(requiredFlag))?process.execPath:"")`;
+  const script = createRuntimeProcessScriptFile("nodeRuntimeProbe");
   let resolved: string | undefined;
-  for (const candidate of buildNodeExecutableCandidates(env)) {
-    try {
-      const nodePath = execFileSync(candidate, ["--eval", probeSource], {
-        encoding: "utf8",
-        env: buildProbeEnv(env),
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: NODE_RUNTIME_PROBE_TIMEOUT_MS,
-      }).trim();
-      if (nodePath) {
-        resolved = nodePath;
-        break;
+  try {
+    for (const candidate of buildNodeExecutableCandidates(env)) {
+      try {
+        const nodePath = execFileSync(candidate, [fileURLToPath(script.url), requiredFlag ?? ""], {
+          encoding: "utf8",
+          env: buildProbeEnv(env),
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: NODE_RUNTIME_PROBE_TIMEOUT_MS,
+        }).trim();
+        if (nodePath) {
+          resolved = nodePath;
+          break;
+        }
+      } catch {
+        // Missing, non-executable, incompatible, and Bun shim candidates are skipped.
       }
-    } catch {
-      // Missing, non-executable, incompatible, and Bun shim candidates are skipped.
     }
+  } finally {
+    script.dispose();
   }
 
   resolvedNodeRuntimeExecutables.set(cacheKey, resolved ?? null);

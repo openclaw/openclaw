@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { stageFreeBsdManagedHandoffNativeRuntime } from "./update-managed-service-handoff-native.js";
 import {
   MANAGED_HANDOFF_RUNTIME_ENTRY,
   managedHandoffRuntimeEntrypoint,
@@ -17,6 +18,17 @@ export function stageManagedHandoffRuntime(directory: string): string[] {
   const destination = path.join(directory, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
   fs.writeFileSync(destination, fs.readFileSync(source), { mode: 0o600, flag: "wx" });
+  const staged = [destination];
+  if (process.platform === "win32") {
+    // fs-safe resolves its executable beside the sealed bundle after the
+    // original installation is replaced; partial stages remain caller-owned.
+    const helper = path.join(path.dirname(destination), "windows-security-helper.exe");
+    fs.writeFileSync(helper, fs.readFileSync(new URL("./windows-security-helper.exe", source)), {
+      mode: 0o700,
+      flag: "wx",
+    });
+    staged.push(helper);
+  }
   // Survives update-to-triage exec, then shares the helper's sensitive-file cleanup.
-  return [destination];
+  return [...staged, ...stageFreeBsdManagedHandoffNativeRuntime(directory)];
 }

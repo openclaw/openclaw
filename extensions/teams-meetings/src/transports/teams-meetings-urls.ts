@@ -3,7 +3,9 @@ import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-run
 type TeamsMeetingIdentity = { kind: "work"; key: string } | { kind: "consumer"; key: string };
 
 function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentity | undefined {
-  // Keep this function self-contained: the browser runs its serialized source.
+  // Keep this parsing logic in sync with the inline browser-context mirror in
+  // teams-meetings-page-scripts.ts (pageIdentitySource): that copy cannot import this
+  // function because it must be self-contained JS executed inside the Teams tab.
   // URL parsing otherwise silently drops controls; reject rather than repair.
   if (
     !url ||
@@ -92,24 +94,13 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
       const launcherMatch = launcherTarget?.match(/^\/_#\/meet\/([^/?#]+)(?:\?(.+))?$/i);
       let lightMeeting: { meetingCode?: unknown; passcode?: unknown } | undefined;
       if (parsed.pathname.toLowerCase() === "/light-meetings/launch") {
-        try {
-          const coordinates = parsed.searchParams.get("coords");
-          const decoded =
-            coordinates && coordinates.length <= 16_384
-              ? JSON.parse(
-                  decodeURIComponent(
-                    Array.from(
-                      atob(coordinates),
-                      (byte) => "%" + byte.charCodeAt(0).toString(16).padStart(2, "0"),
-                    ).join(""),
-                  ),
-                )
-              : undefined;
-          if (decoded && typeof decoded === "object") {
-            lightMeeting = decoded as { meetingCode?: unknown; passcode?: unknown };
-          }
-        } catch {
-          return undefined;
+        const coordinates = parsed.searchParams.get("coords");
+        const decoded =
+          coordinates && coordinates.length <= 16_384
+            ? JSON.parse(Buffer.from(coordinates, "base64").toString("utf8"))
+            : undefined;
+        if (decoded && typeof decoded === "object") {
+          lightMeeting = decoded as { meetingCode?: unknown; passcode?: unknown };
         }
       }
       const match =
@@ -141,26 +132,6 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
   return undefined;
 }
 
-export function teamsMeetingIdentityFunctionSource(meetingUrl?: string): string {
-  const origin = meetingUrl ? new URL(meetingUrl).origin : undefined;
-  return `const meetingIdentity = (rawUrl) => {
-    const identity = (${parseTeamsMeetingIdentity.toString()})(rawUrl);
-    if (identity) return "teams-" + identity.kind + ":" + identity.key;
-    if (${JSON.stringify(origin)} !== undefined) {
-      // Only the known same-origin SPA route may retain an owned in-call marker.
-      // An invalid invitation must not become an anonymous route into that call.
-      try {
-        const page = new URL(rawUrl);
-        if (page.origin === ${JSON.stringify(origin)} && !page.username && !page.password &&
-            /^https:\\/\\/(?:teams\\.microsoft\\.com|teams\\.live\\.com)(?::443)?\\/v2\\/?(?:[?#]|$)/i.test(rawUrl) &&
-            /^\\/v2\\/?$/.test(page.pathname) && !/[\\u0000-\\u0020\\u007f\\\\]/.test(rawUrl)) return undefined;
-      } catch {}
-      return "teams-unrecognized";
-    }
-    return undefined;
-  };`;
-}
-
 export function normalizeTeamsMeetingUrl(input: unknown): string {
   if (typeof input !== "string" || !input.trim()) {
     throw new Error("Microsoft Teams meeting URL is required");
@@ -177,8 +148,8 @@ export function normalizeTeamsMeetingUrl(input: unknown): string {
 }
 
 export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): string | undefined {
-  const identity = parseTeamsMeetingIdentity(url);
-  return identity ? `teams-${identity.kind}:${identity.key}` : undefined;
+  const meetingIdent = parseTeamsMeetingIdentity(url);
+  return meetingIdent ? `teams-${meetingIdent.kind}:${meetingIdent.key}` : undefined;
 }
 
 export function isSameTeamsMeetingUrl(
@@ -200,13 +171,10 @@ export function isRecoverableTeamsMeetingTab(
   if (normalizeTeamsMeetingUrlForReuse(tab.url)) {
     return true;
   }
-  try {
-    const hostname = new URL(tab.url ?? "").hostname.toLowerCase();
-    return (
-      (hostname === "login.microsoftonline.com" || hostname.endsWith(".microsoftonline.com")) &&
-      /sign in|microsoft|teams/i.test(tab.title ?? "")
-    );
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(tab.url ?? "")?.hostname.toLowerCase();
+  return Boolean(
+    hostname &&
+    (hostname === "login.microsoftonline.com" || hostname.endsWith(".microsoftonline.com")) &&
+    /sign in|microsoft|teams/i.test(tab.title ?? ""),
+  );
 }

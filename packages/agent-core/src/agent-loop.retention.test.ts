@@ -1,15 +1,24 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../../src/test-utils/node-process.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import type { ContextRetentionResult } from "./agent-loop.retention.test-support.js";
+import { agentCoreRetentionEntrypoints } from "./retention-runtime.test-support.js";
 
-it("releases replaced histories while the next model request is pending", async ({ signal }) => {
+it("releases replaced histories and settled agents through retained tool contexts", async ({
+  signal,
+}) => {
   const result = await runNodeScript(
     [
       "--expose-gc",
-      "--import",
-      "tsx",
-      fileURLToPath(new URL("./agent-loop.retention.test-support.ts", import.meta.url)),
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(agentCoreRetentionEntrypoints.context),
+        resolveTestNodeExecPath(),
+      ),
     ],
     { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
     15_000,
@@ -29,5 +38,12 @@ it("releases replaced histories while the next model request is pending", async 
     observedHistories: 4,
     retained: [],
     completed: true,
+    settledToolContext: {
+      snapshots: 1,
+      agentRetained: false,
+      historyRetained: false,
+      attributionPreserved: true,
+      pendingInput: false,
+    },
   });
 }, 30_000);

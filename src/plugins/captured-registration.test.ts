@@ -101,41 +101,71 @@ describe("captured plugin registration", () => {
     await Promise.resolve();
   });
 
-  it("rejects runtime access while capturing CLI metadata without activating the real runtime", () => {
+  it.each([
+    { mode: "cli-metadata", property: "state" },
+    { mode: "cli-metadata", property: "capabilities" },
+    { mode: "setup-only", property: "capabilities" },
+  ] as const)("rejects runtime $property during $mode capture", ({ mode, property }) => {
     expect(() =>
       capturePluginRegistration({
         id: "captured-cli-plugin",
-        registrationMode: "cli-metadata",
+        registrationMode: mode,
         register(api) {
-          api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+          if (property === "state") {
+            api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+          } else {
+            void api.runtime.capabilities;
+          }
         },
       }),
     ).toThrow(
-      'Plugin "captured-cli-plugin" runtime is intentionally unavailable during "cli-metadata" registration.',
+      `Plugin "captured-cli-plugin" runtime is intentionally unavailable during "${mode}" registration.`,
     );
   });
 
-  it("preserves root machine-output metadata", () => {
+  it.each(["captured", "registry"] as const)("normalizes root CLI metadata (%s)", (mode) => {
     const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
-    const captured = capturePluginRegistration({
-      register(api) {
-        api.registerCli(() => {}, {
-          commands: [" captured-machine ", "captured-machine", "captured-extra"],
-          descriptors: [
-            {
-              name: "captured-machine",
-              description: "Captured machine output",
-              hasSubcommands: true,
-              machineOutput,
-            },
-          ],
-        });
-      },
+    const captured = createCapturedPluginRegistration();
+    const registry = createPluginRegistry({
+      logger: captured.api.logger,
+      runtime: captured.api.runtime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "cli-owner",
+      source: "/fixture/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = mode === "captured" ? captured.api : registry.createApi(record, { config: {} });
+    api.registerCli(() => {}, {
+      commands: [" captured-machine ", "captured-machine", "captured-extra", "invalid command"],
+      descriptors: [
+        {
+          name: " captured-machine ",
+          description: "\u001b[31mCaptured machine output\u001b[0m",
+          hasSubcommands: true,
+          machineOutput,
+        },
+        { name: "invalid descriptor", description: "Excluded", hasSubcommands: false },
+      ],
     });
 
-    expect(captured.cliRegistrars[0]?.commands).toEqual(["captured-machine", "captured-extra"]);
-    const descriptor = captured.cliRegistrars[0]?.descriptors[0];
-    expect(descriptor?.machineOutput).toBe(machineOutput);
+    const registration = (mode === "captured" ? captured : registry.registry).cliRegistrars[0];
+    expect(registration?.commands).toEqual(["captured-machine", "captured-extra"]);
+    expect(registration?.descriptors).toEqual([
+      {
+        name: "captured-machine",
+        description: "Captured machine output",
+        hasSubcommands: true,
+        machineOutput: expect.any(Function),
+      },
+    ]);
+    const descriptor = registration?.descriptors[0];
+    if (mode === "captured") {
+      expect(descriptor?.machineOutput).toBe(machineOutput);
+    }
     expect(
       descriptor?.machineOutput?.({
         argv: ["node", "openclaw", "captured-machine"],
@@ -174,6 +204,13 @@ describe("captured plugin registration", () => {
           }),
           inspect: async () => ({ status: "active" }),
           destroy: async () => {},
+        });
+        api.registerStorageProvider({
+          id: "captured-storage",
+          label: "Captured storage",
+          open: async () => {
+            throw new Error("capture must not open storage");
+          },
         });
         api.registerModelCatalogProvider({
           provider: "captured-provider",
@@ -217,10 +254,6 @@ describe("captured plugin registration", () => {
             tracks: [],
           }),
         });
-        api.registerTextTransforms({
-          input: [{ from: /red basket/g, to: "blue basket" }],
-          output: [{ from: /blue basket/g, to: "red basket" }],
-        });
         api.registerChannel({
           plugin: {
             id: "captured-channel",
@@ -254,6 +287,7 @@ describe("captured plugin registration", () => {
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
+    expect(captured.storageProviders.map((provider) => provider.id)).toEqual(["captured-storage"]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
@@ -264,8 +298,6 @@ describe("captured plugin registration", () => {
     expect(captured.musicGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-music",
     ]);
-    expect(captured.textTransforms).toHaveLength(1);
-    expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
     expect(captured.api.runtime.version).toEqual(expect.any(String));
@@ -300,7 +332,9 @@ describe("captured plugin registration", () => {
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
-    let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
+    let scheduleSessionTurn:
+      | OpenClawPluginApi["session"]["workflow"]["scheduleSessionTurn"]
+      | undefined;
     let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
     const captured = capturePluginRegistration({
       id: "captured-custom-plugin",

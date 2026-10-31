@@ -315,7 +315,10 @@ public actor OpenClawWatchMessageJournal {
     }
 
     public func accepted(owner: OpenClawWatchMessageOwner) async throws -> [OpenClawWatchMessageEntry] {
-        try await self.entries(in: .accepted, owner: owner)
+        let now = Self.nowMs
+        return try await self.entries(owner: owner).filter {
+            $0.phase == .accepted && ($0.expiresAtMs ?? 0) > now
+        }
     }
 
     public func pendingReceipts(owner: OpenClawWatchMessageOwner? = nil) async throws -> [OpenClawWatchMessageEntry] {
@@ -371,16 +374,6 @@ public actor OpenClawWatchMessageJournal {
                 """,
                 arguments: [id])
             return .applied
-        }
-    }
-
-    private func entries(
-        in phase: OpenClawWatchMessagePhase,
-        owner: OpenClawWatchMessageOwner) async throws -> [OpenClawWatchMessageEntry]
-    {
-        let now = Self.nowMs
-        return try await self.entries(owner: owner).filter {
-            $0.phase == phase && ($0.expiresAtMs ?? 0) > now
         }
     }
 

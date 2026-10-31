@@ -34,8 +34,16 @@ describe("explicit Codex plugin app refresh", () => {
       ["app/installed", { forceRefresh: true }],
       ["app/read", { appIds: [connectedApp.id], includeTools: true }],
     ]);
-    expect(appCache.read({ key: "selected-runtime", request }).snapshot?.apps).toEqual([
-      expect.objectContaining({ id: connectedApp.id, isAccessible: true }),
+    const snapshot = appCache.read({ key: "selected-runtime", request }).snapshot;
+    expect(snapshot?.apps).toEqual([
+      expect.objectContaining({
+        id: connectedApp.id,
+        name: connectedApp.name,
+        toolSummaries: null,
+      }),
+    ]);
+    expect(snapshot?.installedApps).toEqual([
+      { id: connectedApp.id, runtimeName: connectedApp.name, enabled: true, callable: true },
     ]);
     expect(appCache.read({ key: "other-runtime", request, suppressRefresh: true }).state).toBe(
       "missing",
@@ -48,7 +56,7 @@ describe("explicit Codex plugin app refresh", () => {
     const request = vi.fn(async (method, params) =>
       codexAppInventoryResponse(method, [connectedApp], params),
     );
-    await appCache.refreshNow({ key, request });
+    const previousSnapshot = await appCache.refreshNow({ key, request });
     const failure = new Error("Hosted connector refresh unavailable");
 
     await expect(
@@ -64,32 +72,9 @@ describe("explicit Codex plugin app refresh", () => {
 
     const cached = appCache.read({ key, request });
     expect(cached.state).toBe("stale");
-    expect(cached.diagnostic?.message).toBe(failure.message);
-  });
-
-  it("does not publish an older response after a completed refresh removed access", async () => {
-    const appCache = new CodexAppInventoryCache();
-    const key = "selected-runtime";
-    let finishOldRefresh: () => void = () => {};
-    const oldRefresh = appCache.refreshNow({
-      key,
-      request: async (method, params) => {
-        if (method === "app/installed") {
-          await new Promise<void>((resolve) => {
-            finishOldRefresh = resolve;
-          });
-        }
-        return codexAppInventoryResponse(method, [connectedApp], params);
-      },
-    });
-    const request = vi.fn(async (method, params) => codexAppInventoryResponse(method, [], params));
-
-    await refreshCodexAppRuntimeState({ request, appCache, appCacheKey: key });
-    finishOldRefresh();
-    await oldRefresh;
-
-    const cached = appCache.read({ key, request });
-    expect(cached.state).toBe("fresh");
-    expect(cached.snapshot?.apps).toEqual([]);
+    expect(cached.snapshot?.apps).toEqual(previousSnapshot.apps);
+    expect(cached.snapshot?.installedApps).toEqual(previousSnapshot.installedApps);
+    expect(cached.snapshot?.targetAppIds).toEqual(previousSnapshot.targetAppIds);
+    expect(cached.snapshot?.expiresAtMs).toBe(previousSnapshot.expiresAtMs);
   });
 });

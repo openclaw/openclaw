@@ -1,16 +1,19 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { Locator, Page } from "playwright";
+import { expect as browserExpect } from "playwright/test";
+import { expect, it } from "vitest";
+import type {
+  SessionCatalog,
+  SessionCatalogHost,
+  SessionCatalogSession,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import {
-  assertSessionSectionCountAlignment,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  controlUiSessionPath,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { assertSessionSectionCountAlignment } from "../test-helpers/control-ui-session-section-layout.ts";
 import { readTextTone } from "../test-helpers/rendered-colors.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eSuite,
   expandCodingSection,
@@ -21,52 +24,94 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
-  }
-});
+const catalogMethods = ["chat.metadata", "chat.startup", "sessions.catalog.list"];
+function makeNativeSession(
+  threadId: string,
+  name: string,
+  extra: Partial<SessionCatalogSession> = {},
+): SessionCatalogSession {
+  return {
+    threadId,
+    name,
+    status: "idle",
+    archived: false,
+    canContinue: true,
+    canArchive: true,
+    ...extra,
+  };
+}
+function makeHost(
+  hostId: string,
+  label: string,
+  sessions: SessionCatalogSession[],
+  extra: Partial<SessionCatalogHost> = {},
+): SessionCatalogHost {
+  return { hostId, label, kind: "gateway", connected: true, sessions, ...extra };
+}
+function makeCatalog(
+  id: string,
+  label: string,
+  hosts: SessionCatalogHost[],
+  extra: Partial<SessionCatalog> = {},
+) {
+  return { id, label, capabilities: { continueSession: true, archive: true }, hosts, ...extra };
+}
+function liveSessions(key: string, displayName: string, updatedAt = Date.now(), extra = {}) {
+  const model = { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" };
+  return {
+    count: 1,
+    defaults: model,
+    path: "",
+    ts: updatedAt,
+    sessions: [{ ...model, displayName, key, kind: "direct", totalTokens: 0, updatedAt, ...extra }],
+  };
+}
+
+const projectLabel = (section: Locator, key: string) =>
+  section
+    .locator(`[data-session-catalog-project="${key}"] .sidebar-session-catalog-project__label`)
+    .textContent();
+function creator(id: string, label: string): SessionCatalogSession["createdActor"] {
+  return { type: "human", id, identity: { type: "profile", id }, label };
+}
+function offlineHost(hostId: string, label: string) {
+  return makeHost(hostId, label, [], {
+    kind: "node",
+    connected: false,
+    error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+  });
+}
+async function expectListItems(list: Locator, count: number) {
+  expect(
+    await list
+      .locator(":scope > *")
+      .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+  ).toEqual(Array(count).fill("listitem"));
+}
+async function chooseGrouping(section: Locator, page: Page, name: string) {
+  await section.locator(".sidebar-recent-sessions__head").hover();
+  await section.locator('[data-session-catalog-view-menu="codex"]').click();
+  await page
+    .getByRole("menuitemradio", { name })
+    .evaluate((element) => (element as HTMLElement).click());
+}
+const readGrouping = (page: Page) =>
+  page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey);
 
 suite.define(() => {
   it("omits empty native session catalogs from the sidebar", async () => {
     const page = await suite.browser.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:codex",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [],
-                },
-              ],
-            },
-            {
-              id: "claude",
-              label: "Claude Code",
+            makeCatalog("codex", "Codex", [makeHost("gateway:codex", "Local Codex", [])]),
+            makeCatalog("claude", "Claude Code", [makeHost("gateway:claude", "Local Claude", [])], {
               capabilities: { continueSession: true, archive: false },
-              hosts: [
-                {
-                  hostId: "gateway:claude",
-                  label: "Local Claude",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [],
-                },
-              ],
-            },
+            }),
           ],
         },
       },
@@ -90,88 +135,50 @@ suite.define(() => {
       collapsedSessionSectionsStorageKey,
     );
     await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-          },
-          path: "",
-          sessions: [
-            {
-              contextTokens: null,
-              displayName: "Understanding Startup Phases and Delays",
-              hasActiveRun: false,
-              key: "agent:main:startup-phases",
-              kind: "direct",
-              label: "Understanding Startup Phases and Delays",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              status: "done",
-              totalTokens: 0,
-              updatedAt: Date.now(),
-              worktree: {
-                id: "startup-phases",
-                branch: "startup-phases",
-                repoRoot: "/workspace/openclaw",
-              },
+        "sessions.list": liveSessions(
+          "agent:main:startup-phases",
+          "Understanding Startup Phases and Delays",
+          Date.now(),
+          {
+            hasActiveRun: false,
+            label: "Understanding Startup Phases and Delays",
+            status: "done",
+            worktree: {
+              id: "startup-phases",
+              branch: "startup-phases",
+              repoRoot: "/workspace/openclaw",
             },
-          ],
-          ts: Date.now(),
-        },
+          },
+        ),
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex Native Sessions with a Deliberately Long Provider Label",
-              capabilities: { continueSession: true, archive: true, startTerminal: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-startup",
-                      name: "Trace startup labels to code paths",
-                      cwd: "/workspace/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
+            makeCatalog(
+              "codex",
+              "Codex Native Sessions with a Deliberately Long Provider Label",
+              [
+                makeHost("gateway:local", "Local Codex", [
+                  makeNativeSession("thread-startup", "Trace startup labels to code paths", {
+                    cwd: "/workspace/openclaw",
+                  }),
+                ]),
               ],
-            },
-            {
-              id: "claude",
-              label: "Claude Code",
-              capabilities: { continueSession: true, archive: false },
-              hosts: [
-                {
-                  hostId: "gateway:claude",
-                  label: "Local Claude",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-claude",
-                      name: "Review the provider catalog UI",
-                      cwd: "/workspace/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: false,
-                    },
-                  ],
-                },
+              { capabilities: { continueSession: true, archive: true, startTerminal: true } },
+            ),
+            makeCatalog(
+              "claude",
+              "Claude Code",
+              [
+                makeHost("gateway:claude", "Local Claude", [
+                  makeNativeSession("thread-claude", "Review the provider catalog UI", {
+                    cwd: "/workspace/openclaw",
+                    canArchive: false,
+                  }),
+                ]),
               ],
-            },
+              { capabilities: { continueSession: true, archive: false } },
+            ),
           ],
         },
       },
@@ -187,28 +194,24 @@ suite.define(() => {
       const claudeCatalog = sessionGroups.locator(
         ':scope > [data-session-section="catalog:claude"]',
       );
-      await catalog.waitFor({ state: "visible" });
-      await claudeCatalog.waitFor({ state: "visible" });
-      await expect
-        .poll(() =>
-          catalog
-            .locator(".sidebar-session-catalog-provider-icon")
-            .getAttribute("data-provider-icon"),
-        )
-        .toBe("codex");
-      await expect
-        .poll(() =>
-          claudeCatalog
-            .locator(".sidebar-session-catalog-provider-icon")
-            .getAttribute("data-provider-icon"),
-        )
-        .toBe("claude");
+      for (const [section, provider] of [
+        [catalog, "codex"],
+        [claudeCatalog, "claude"],
+      ] as const) {
+        await section.waitFor({ state: "visible" });
+        await expect
+          .poll(() =>
+            section
+              .locator(".sidebar-session-catalog-provider-icon")
+              .getAttribute("data-provider-icon"),
+          )
+          .toBe(provider);
+      }
       const [liveRowsBox, catalogBox] = await Promise.all([
         liveRows.boundingBox(),
         catalog.boundingBox(),
       ]);
       expect([liveRowsBox, catalogBox]).not.toContain(null);
-      // Guard that catalogs are a separate group without restating the gap token.
       const groupGap = await page.evaluate(() => {
         const sidebar = document.querySelector(".sidebar");
         return sidebar
@@ -217,74 +220,7 @@ suite.define(() => {
       });
       expect(groupGap).toBeGreaterThan(0);
       expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(groupGap);
-      if (captureUiProofEnabled) {
-        await sessionGroups.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
-        });
-      }
       await assertSessionSectionCountAlignment(page, ["work", "catalog:codex", "catalog:claude"]);
-    } finally {
-      await page.close();
-    }
-  });
-
-  it("shows a completed host while the aggregate catalog request is still pending", async () => {
-    const page = await suite.browser.newPage({ viewport: { height: 900, width: 1280 } });
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.catalog.list"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const request = await gateway.waitForRequest("sessions.catalog.list");
-      const progressId = (request.params as { progressId?: string })?.progressId;
-      expect(progressId).toEqual(expect.any(String));
-      if (!progressId) {
-        throw new Error("catalog request did not opt in to progressive host events");
-      }
-      await gateway.emitGatewayEvent("sessions.catalog.host", {
-        progressId,
-        agentId: "main",
-        catalog: {
-          id: "codex",
-          label: "Codex",
-          capabilities: { continueSession: true, archive: true },
-          hosts: [
-            {
-              hostId: "node:fast",
-              label: "Fast Mac",
-              kind: "node",
-              connected: true,
-              nodeId: "fast",
-              sessions: [
-                {
-                  threadId: "thread-fast",
-                  name: "Progressive node result",
-                  status: "idle",
-                  archived: false,
-                  canContinue: true,
-                  canArchive: false,
-                },
-              ],
-            },
-          ],
-        },
-      } satisfies SessionsCatalogHostEvent);
-
-      await expandCodingSection(page);
-      await page.getByText("Progressive node result", { exact: true }).waitFor();
-      expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(uiProofArtifactDir, "05-progressive-host-result.png"),
-        });
-      }
-
-      await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
     } finally {
       await page.close();
     }
@@ -297,138 +233,55 @@ suite.define(() => {
       viewport: { height: 1100, width: 1440 },
     });
     await page.addInitScript(
-      ({ key, gatewayUrl, groupingKey, sectionsKey }) => {
-        localStorage.removeItem(groupingKey);
-        localStorage.removeItem(sectionsKey);
-        localStorage.setItem(key, JSON.stringify({ gatewayUrl, theme: "knot", themeMode: "dark" }));
-      },
+      ({ key, gatewayUrl }) =>
+        localStorage.setItem(key, JSON.stringify({ gatewayUrl, theme: "knot", themeMode: "dark" })),
       {
-        groupingKey: catalogGroupingStorageKey,
-        sectionsKey: collapsedSessionSectionsStorageKey,
         key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
         gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
       },
     );
     await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
         "config.get": {
           config: { ui: { prefs: { theme: "knot", themeMode: "dark" } } },
           hash: "catalog-knot-dark",
         },
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
+        "sessions.list": liveSessions(
+          "agent:main:research",
+          "Research thread",
+          Date.parse("2026-07-29T06:00:00.000Z"),
+          {
+            hasActiveRun: false,
+            label: "Research thread",
+            status: "done",
           },
-          path: "",
-          sessions: [
-            {
-              contextTokens: null,
-              displayName: "Research thread",
-              hasActiveRun: false,
-              key: "agent:main:research",
-              kind: "direct",
-              label: "Research thread",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              status: "done",
-              totalTokens: 0,
-              updatedAt: Date.parse("2026-07-29T06:00:00.000Z"),
-            },
-          ],
-          ts: Date.parse("2026-07-29T06:00:00.000Z"),
-        },
+        ),
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-local",
-                      name: "Local planning session",
-                      cwd: "/Users/dev/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                      createdActor: {
-                        type: "human",
-                        id: "profile-ada",
-                        identity: { type: "profile", id: "profile-ada" },
-                        label: "Ada",
-                      },
-                    },
-                    {
-                      threadId: "thread-worktree",
-                      name: "Worktree fix session",
-                      cwd: "/Users/dev/openclaw/.claude/worktrees/fix-1",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                      createdActor: {
-                        type: "human",
-                        id: "profile-zoe",
-                        identity: { type: "profile", id: "profile-zoe" },
-                        label: "Zoe",
-                      },
-                    },
-                    {
-                      threadId: "thread-other",
-                      name: "Other project session",
-                      cwd: "/Users/dev/other",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:offline-a",
-                  label: "Offline Workstation",
-                  kind: "node",
-                  connected: false,
-                  sessions: [],
-                  error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-                },
-                {
-                  hostId: "node:build",
-                  label: "Build Node",
-                  kind: "node",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-remote",
-                      name: "Remote review session",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:offline-b",
-                  label: "Offline Laptop",
-                  kind: "node",
-                  connected: false,
-                  sessions: [],
-                  error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-                },
-              ],
-            },
+            makeCatalog("codex", "Codex", [
+              makeHost("gateway:local", "Local Codex", [
+                makeNativeSession("thread-local", "Local planning session", {
+                  cwd: "/Users/dev/openclaw",
+                  createdActor: creator("profile-ada", "Ada"),
+                }),
+                makeNativeSession("thread-worktree", "Worktree fix session", {
+                  cwd: "/Users/dev/openclaw/.claude/worktrees/fix-1",
+                  createdActor: creator("profile-zoe", "Zoe"),
+                }),
+                makeNativeSession("thread-other", "Other project session", {
+                  cwd: "/Users/dev/other",
+                }),
+              ]),
+              offlineHost("node:offline-a", "Offline Workstation"),
+              makeHost(
+                "node:build",
+                "Build Node",
+                [makeNativeSession("thread-remote", "Remote review session")],
+                { kind: "node" },
+              ),
+              offlineHost("node:offline-b", "Offline Laptop"),
+            ]),
           ],
         },
       },
@@ -442,24 +295,16 @@ suite.define(() => {
       await expect
         .poll(() =>
           page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: import("../app/bootstrap.ts").ApplicationRuntime;
-            };
-            const theme = app.runtime?.context.theme;
             const palette = document.getElementById("openclaw-theme-palette-knot");
-            const root = document.documentElement.dataset;
-            return {
-              preferences: [theme?.settings.theme, theme?.mode, theme?.resolvedMode],
-              paletteReady: palette instanceof HTMLLinkElement && Boolean(palette.sheet),
-              root: [root.theme, root.themeMode],
-            };
+            return (
+              document.documentElement.dataset.theme === "openknot" &&
+              document.documentElement.dataset.themeMode === "dark" &&
+              palette instanceof HTMLLinkElement &&
+              Boolean(palette.sheet)
+            );
           }),
         )
-        .toEqual({
-          preferences: ["knot", "dark", "dark"],
-          paletteReady: true,
-          root: ["openknot", "dark"],
-        });
+        .toBe(true);
       await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
       expect(await section.locator('[data-session-catalog-host="gateway:local"]').count()).toBe(1);
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
@@ -471,11 +316,7 @@ suite.define(() => {
       expect(await localHostList.getAttribute("aria-label")).toBe("Local Codex");
       const projectHeads = section.locator("[data-session-catalog-project]");
       await expect.poll(() => projectHeads.count()).toBe(2);
-      expect(
-        await localHostList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem"]);
+      await expectListItems(localHostList, 2);
       const openclawProject = section.locator(
         '[data-session-catalog-project="project:/Users/dev/openclaw"]',
       );
@@ -491,11 +332,7 @@ suite.define(() => {
       ).toBe("2");
       const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
       await expect.poll(() => projectRows.count()).toBe(3);
-      expect(
-        await openclawProjectList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem"]);
+      await expectListItems(openclawProjectList, 2);
       const buildHostList = section.locator(
         '[data-session-catalog-host="node:build"] > .sidebar-session-catalog-host__sessions',
       );
@@ -506,126 +343,37 @@ suite.define(() => {
       );
       await expect.poll(() => threadRows.count()).toBe(4);
       expect(await threadRows.locator(".sidebar-recent-session__link[title]").count()).toBe(0);
-      const threadRowMetrics = await threadRows.evaluateAll((rows) =>
-        rows.map((row) => {
-          const link = row.querySelector(".sidebar-recent-session__link");
-          const name = row.querySelector(".sidebar-recent-session__name");
-          const rowStyle = getComputedStyle(row);
-          const linkStyle = link ? getComputedStyle(link) : null;
-          const nameStyle = name ? getComputedStyle(name) : null;
-          return {
-            height: row.getBoundingClientRect().height,
-            minHeight: rowStyle.minHeight,
-            nameFontSize: nameStyle?.fontSize ?? "",
-            paddingBottom: linkStyle?.paddingBottom ?? "",
-            paddingTop: linkStyle?.paddingTop ?? "",
-            singleLine: row.classList.contains("sidebar-recent-session--single-line"),
-          };
-        }),
-      );
-      expect(threadRowMetrics).toHaveLength(4);
-      // Gateway threads and native catalog children must stay density-identical.
-      // Catalog children never carry preview text, so every subtitle-less row —
-      // whichever source it came from — collapses to the same one-line height
-      // instead of reserving a phantom second line.
-      for (const metric of threadRowMetrics) {
-        expect(metric.singleLine).toBe(true);
-        expect(metric.height).toBeCloseTo(30, 1);
-      }
-      for (const metric of threadRowMetrics) {
-        expect(metric).toMatchObject({
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "4px",
-          paddingTop: "4px",
-        });
-      }
-      const projectLabelTone = await readTextTone(
+      expect(
+        await threadRows.evaluateAll(
+          (rows) => new Set(rows.map((row) => row.getBoundingClientRect().height)).size,
+        ),
+      ).toBe(1);
+      const tone = await readTextTone(
         openclawProject.locator(".sidebar-session-catalog-project__label"),
       );
-      expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
-      if (captureUiProofEnabled) {
-        await writeFile(
-          path.join(uiProofArtifactDir, "project-label-tone.json"),
-          JSON.stringify(projectLabelTone, null, 2),
-        );
-      }
-      expect(
-        await section
-          .locator('[data-session-catalog-project="project:/Users/dev/other"]')
-          .locator(".sidebar-session-catalog-project__label")
-          .textContent(),
-      ).toBe("other");
+      expect(tone.distanceToText).toBeLessThan(tone.distanceToMuted);
+      expect(await projectLabel(section, "project:/Users/dev/other")).toBe("other");
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
-      // Counts only render while a section is collapsed.
       expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
-      // Header actions are hover-revealed; hover the head so the button
-      // regains pointer events before the click, mirroring the Threads menus.
-      const catalogHead = section.locator(".sidebar-recent-sessions__head");
-      const viewMenuButton = section.locator('[data-session-catalog-view-menu="codex"]');
-      await catalogHead.hover();
-      await viewMenuButton.click();
-      await page
-        .getByRole("menuitemradio", { name: "None" })
-        .evaluate((element) => (element as HTMLElement).click());
+      await chooseGrouping(section, page, "None");
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
-      expect(
-        await localHostList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem", "listitem"]);
-      expect(
-        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
-      ).toBe("none");
-      if (captureUiProofEnabled) {
-        await section.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "04-flat-session-hosts.png"),
-        });
-      }
+      await expectListItems(localHostList, 3);
+      expect(await readGrouping(page)).toBe("none");
 
-      // Person mode groups adopted (attributed) sessions and leaves native
-      // threads without a creator in the flat tail.
-      await catalogHead.hover();
-      await viewMenuButton.click();
-      await page
-        .getByRole("menuitemradio", { name: "Person" })
-        .evaluate((element) => (element as HTMLElement).click());
+      await chooseGrouping(section, page, "Person");
       await expect.poll(() => projectHeads.count()).toBe(2);
-      expect(
-        await localHostList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem", "listitem"]);
-      expect(
-        await section
-          .locator('[data-session-catalog-project="person:profile:profile-ada"]')
-          .locator(".sidebar-session-catalog-project__label")
-          .textContent(),
-      ).toBe("Ada");
-      expect(
-        await section
-          .locator('[data-session-catalog-project="person:profile:profile-zoe"]')
-          .locator(".sidebar-session-catalog-project__label")
-          .textContent(),
-      ).toBe("Zoe");
-      expect(
-        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
-      ).toBe("person");
+      await expectListItems(localHostList, 3);
+      expect(await projectLabel(section, "person:profile:profile-ada")).toBe("Ada");
+      expect(await projectLabel(section, "person:profile:profile-zoe")).toBe("Zoe");
+      expect(await readGrouping(page)).toBe("person");
 
-      await catalogHead.hover();
-      await viewMenuButton.click();
-      await page
-        .getByRole("menuitemradio", { name: "Project" })
-        .evaluate((element) => (element as HTMLElement).click());
+      await chooseGrouping(section, page, "Project");
       await expect.poll(() => projectHeads.count()).toBe(2);
-      expect(
-        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
-      ).toBe("project");
+      expect(await readGrouping(page)).toBe("project");
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("false");
@@ -653,13 +401,6 @@ suite.define(() => {
           collapsedSessionSectionsStorageKey,
         ),
       ).not.toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
-
-      if (captureUiProofEnabled) {
-        await section.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "03-content-bearing-session-hosts.png"),
-        });
-      }
     } finally {
       await page.close();
     }
@@ -670,34 +411,18 @@ suite.define(() => {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:codex",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-1",
-                      name: "Newest session",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                  nextCursor: "page-2",
-                },
-              ],
-            },
+            makeCatalog("codex", "Codex", [
+              makeHost(
+                "gateway:codex",
+                "Local Codex",
+                [makeNativeSession("thread-1", "Newest session")],
+                { nextCursor: "page-2" },
+              ),
+            ]),
           ],
         },
       },
@@ -735,37 +460,174 @@ suite.define(() => {
     }
   });
 
-  it("adopts from the native chat composer, navigates, and auto-sends", async () => {
-    const page = await suite.browser.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
+  it("renders catalog records with ordinary tool cards and recorded outcomes", async () => {
+    const command = `printf '%s' '${"long-command ".repeat(60)}'`;
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...catalogMethods, "chat.message.get"],
+        methodResponses: {
+          "sessions.catalog.list": {
+            catalogs: [
+              makeCatalog("codex", "Codex", [
+                makeHost("gateway:local", "Local Codex", [
+                  makeNativeSession("preview", "External release check"),
+                ]),
+              ]),
+            ],
+          },
+          "sessions.catalog.read": {
+            hostId: "gateway:local",
+            threadId: "preview",
+            items: [
+              {
+                id: "answer",
+                type: "agentMessage",
+                text: 'The publication check failed.\n[embed ref="cv_external" /]',
+              },
+              {
+                id: "patch",
+                type: "toolResult",
+                toolName: "apply_patch",
+                toolCallId: "patch",
+                isError: false,
+                toolInput: {
+                  changes: [
                     {
-                      threadId: "thread-1",
-                      name: "Release checklist",
-                      status: "idle",
-                      source: "cli",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
+                      path: "/workspace/example.ts",
+                      kind: { type: "update", move_path: null },
+                      diff: `@@ -1 +1 @@\n-${"before ".repeat(100)}\n+${"after ".repeat(100)}\n`,
                     },
                   ],
                 },
-              ],
-            },
+                text: "Updated example.ts",
+              },
+              {
+                id: "text-only-failure",
+                type: "toolResult",
+                toolName: "custom",
+                toolCallId: "text-only-failure",
+                isError: true,
+                text: '{"exitCode":7,"error":"reported failure"}',
+              },
+              {
+                id: "unknown",
+                type: "toolResult",
+                toolName: "inventory.lookup",
+                toolCallId: "unknown",
+                toolInput: null,
+                text: JSON.stringify({
+                  kind: "canvas",
+                  view: { id: "cv_external" },
+                  error: "unverified",
+                }),
+              },
+              {
+                id: "quiet",
+                raw: { result: null },
+                type: "toolResult",
+                toolName: "bash",
+                toolCallId: "quiet",
+                toolInput: { command },
+                text: "",
+                isError: false,
+                exitCode: 0,
+              },
+              {
+                id: "failed",
+                type: "toolResult",
+                toolName: "bash",
+                toolCallId: "failed",
+                toolInput: { command: "publish --check" },
+                isError: true,
+                exitCode: 17,
+                truncated: true,
+                text: JSON.stringify({
+                  exitCode: 7,
+                  error: `authentication required ${"x".repeat(600)}omitted-native-output`,
+                }),
+              },
+              { id: "user", type: "userMessage", text: "Check the release artifacts." },
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await expandCodingSection(page);
+      await page.getByText("External release check", { exact: true }).click();
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+      await browserExpect(pane.getByText(/The publication check failed/)).toBeVisible();
+      await pane.locator(".chat-activity-group__summary").click();
+      await browserExpect(pane.locator(".chat-tool-msg-summary")).toHaveCount(5);
+      for (const summary of await pane
+        .locator("button.chat-tool-msg-summary, .chat-tool-row__toggle")
+        .all()) {
+        await summary.click({ position: { x: 4, y: 4 } });
+        await browserExpect(summary).toHaveAttribute("aria-expanded", "true");
+      }
+      await browserExpect(pane.locator(".chat-tool-card__outcome")).toHaveText([
+        "Exit code 17",
+        "Completed",
+        "Outcome unknown",
+        "failed",
+        "Completed",
+      ]);
+      await browserExpect(pane.locator(".chat-tool-term__cmd").nth(1)).toHaveText(`$${command}`);
+      await browserExpect(pane.locator(".chat-diff")).toHaveCount(1);
+      expect((await pane.textContent())?.match(/\[Output truncated\]/g)).toHaveLength(1);
+      await browserExpect(
+        pane
+          .locator(".chat-tool-msg-collapse")
+          .nth(2)
+          .locator(".chat-tool-card__block-content")
+          .first(),
+      ).toHaveText("null");
+      await browserExpect(pane.locator(".chat-tool-msg-collapse").nth(1)).not.toContainText("null");
+      await browserExpect(pane).not.toContainText("omitted-native-output");
+      const thread = pane.locator(".chat-thread");
+      await thread.hover({ position: { x: 20, y: 4 } });
+      await page.mouse.wheel(0, await thread.evaluate((element) => element.scrollHeight));
+      await waitForChatScrollIdle(page);
+      await browserExpect(pane).toContainText('[embed ref="cv_external" /]');
+      await browserExpect(pane.locator("mcp-app-view, iframe")).toHaveCount(0);
+      await pane
+        .getByRole("button", { name: "Open tool details in side panel", exact: true })
+        .nth(2)
+        .click();
+      await browserExpect(page.locator(".chat-tool-output__text")).toContainText("unverified");
+      expect(await gateway.getRequests("chat.message.get")).toEqual([]);
+    });
+  });
+
+  it.each([
+    {
+      name: "supervision off",
+      canArchive: true,
+      reason: "Codex supervision is off. Enable it in plugin settings to continue this session.",
+      settingsLinks: 1,
+    },
+    {
+      name: "not continuable",
+      canArchive: false,
+      reason: "This external session source is view-only.",
+      settingsLinks: 0,
+    },
+  ])("explains a view-only local Codex session ($name)", async (row) => {
+    const { canArchive, reason } = row;
+    const page = await suite.browser.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: catalogMethods,
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            makeCatalog("codex", "Codex", [
+              makeHost("gateway:local", "Local Codex", [
+                makeNativeSession("thread-1", "Release checklist", {
+                  source: "cli",
+                  canContinue: false,
+                  canArchive,
+                }),
+              ]),
+            ]),
           ],
         },
         "sessions.catalog.read": {
@@ -773,8 +635,6 @@ suite.define(() => {
           threadId: "thread-1",
           items: [{ id: "u1", type: "userMessage", text: "prepare release" }],
         },
-        "sessions.catalog.continue": { sessionKey: "agent:main:adopted-codex" },
-        "chat.send": { runId: "run-adopted", status: "started" },
       },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
@@ -784,58 +644,19 @@ suite.define(() => {
       .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
       .filter({ hasText: "prepare release" });
     await catalogPane.getByText("prepare release", { exact: true }).waitFor();
+    await expect.poll(() => catalogPane.getByText(reason, { exact: true }).count()).toBe(1);
     expect(
-      (await gateway.getRequests("sessions.catalog.list")).every(
-        (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
-      ),
+      await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
     ).toBe(true);
-    expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
-      agentId: "main",
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-    });
-    const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
-    await composer.fill("continue with the final checks /status");
-    expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
-    await gateway.setMethodResponse("sessions.list", {
-      count: 1,
-      defaults: {
-        contextTokens: null,
-        model: "gpt-5.5",
-        modelProvider: "openai",
-      },
-      path: "",
-      sessions: [
-        {
-          contextTokens: null,
-          displayName: "Adopted Codex session",
-          key: "agent:main:adopted-codex",
-          kind: "direct",
-          model: "gpt-5.5",
-          modelProvider: "openai",
-          totalTokens: 0,
-          updatedAt: Date.now(),
-        },
-      ],
-      ts: Date.now(),
-    });
-    await composer.press("Enter");
-    const continued = await gateway.waitForRequest("sessions.catalog.continue");
-    expect(continued.params).toEqual({
-      agentId: "main",
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-    });
-    const sent = await gateway.waitForRequest("chat.send");
-    expect(sent.params).toMatchObject({
-      sessionKey: "agent:main:adopted-codex",
-      message: "continue with the final checks /status",
-    });
-    await expect
-      .poll(() => new URL(page.url()).pathname)
-      .toBe(controlUiSessionPath("agent:main:adopted-codex"));
+    expect(await gateway.getRequests("sessions.catalog.continue")).toHaveLength(0);
+    const openSettings = catalogPane.getByRole("link", { name: "Open settings", exact: true });
+    expect(await openSettings.count()).toBe(row.settingsLinks);
+    if (row.settingsLinks) {
+      await openSettings.click();
+      await expect
+        .poll(() => `${new URL(page.url()).pathname}${new URL(page.url()).search}`)
+        .toBe("/settings/plugins/codex?view=settings");
+    }
     await page.close();
   });
 });

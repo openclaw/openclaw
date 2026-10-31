@@ -1,4 +1,4 @@
-import { SANDBOX_RENAME_NO_REPLACE_PYTHON } from "./fs-bridge-native-mutation-python.js";
+import { GUEST_FILESYSTEM_RENAME_NO_REPLACE_PYTHON } from "@openclaw/fs-safe/guest";
 
 const REMOVE_OWNED_STAGE = [
   "def remove_owned_stage(staging):",
@@ -25,7 +25,7 @@ const REMOVE_OWNED_STAGE = [
 
 export const PUBLISH_REMOTE_WORKSPACE = [
   "import ctypes, errno, os, shutil, stat, sys",
-  SANDBOX_RENAME_NO_REPLACE_PYTHON,
+  GUEST_FILESYSTEM_RENAME_NO_REPLACE_PYTHON,
   REMOVE_OWNED_STAGE,
   "staging, destination = sys.argv[1:]",
   "parent = os.path.dirname(destination)",
@@ -37,7 +37,7 @@ export const PUBLISH_REMOTE_WORKSPACE = [
   "        rename_no_replace(parent_fd, os.path.basename(staging), parent_fd, os.path.basename(destination))",
   "    except OSError as error:",
   "        if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):",
-  "            raise OSError(error.errno, 'atomic no-replace directory publication failed; a supported remote rename primitive and writable parent directory are required: ' + str(error), destination) from error",
+  "            raise OSError(error.errno, 'remote workspace directory publication failed; check directory rename support and parent permissions: ' + str(error), destination) from error",
   "        winner = os.lstat(os.path.basename(destination), dir_fd=parent_fd)",
   "        if not stat.S_ISDIR(winner.st_mode):",
   "            raise",

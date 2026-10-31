@@ -1,3 +1,4 @@
+import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_DELEGATION_INSTRUCTIONS = `You are OpenClaw's realtime voice layer. You have no tools of your own.
@@ -11,16 +12,11 @@ Context on the speakable channel is your answer to deliver naturally in your own
 export const OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS = `Delegate status, cancellation, redirects, and follow-up requests to the client using the caller's request, even while another delegation is active.
 Wait for the host control result before answering each new request: it must be fresh and for this voice call, even if shared history appears to answer it. Do not answer these requests yourself or rewrite them into a progress claim.
 Shared conversation history may describe other calls or completed work; it does not establish this call's live ownership or status.
-Only that fresh result establishes whether this call's work is active, completed, or cancelled. Do not add your own acknowledgement or progress claims; a delegation or task receipt is not evidence of progress.
+Only that fresh result establishes whether this call's work is active, completed, or cancelled. Do not invent acknowledgments or progress claims. When the host explicitly requests a natural launch acknowledgment, keep it brief and provisional; a delegation or task receipt is not evidence of progress.
 Current host-provided task receipts and control results are not new requests: speak them exactly as instructed, without delegating them.`;
 
-export type OpenAIQuicksilverTranscriptEntry = {
-  role: "user" | "assistant";
-  text: string;
-};
-
 export function buildOpenAIQuicksilverBackgroundContext(
-  boundedItems: readonly OpenAIQuicksilverTranscriptEntry[],
+  boundedItems: readonly RealtimeVoiceAgentConsultTranscriptEntry[],
   maxBytes: number,
 ): string {
   for (let start = 0; start < boundedItems.length; start += 1) {
@@ -59,7 +55,7 @@ function escapeXmlText(value: string): string {
 
 export function buildOpenAIQuicksilverDelegationPrompt(params: {
   input: string;
-  transcript: readonly OpenAIQuicksilverTranscriptEntry[];
+  transcript: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
 }): string {
   const input = escapeXmlText(params.input);
   const transcript = params.transcript

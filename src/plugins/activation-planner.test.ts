@@ -1,501 +1,130 @@
-/** Tests manifest activation planning for commands, providers, channels, and capabilities. */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { resolveManifestActivationPluginIds } from "./activation-planner.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture as owner } from "./plugin-metadata.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
-}));
-
+const loadRegistry = vi.hoisted(() => vi.fn());
+// mock-isolation: Plan synthetic manifest records without discovering installed plugins.
 vi.mock("./plugin-registry-contributions.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
-    mocks.loadPluginManifestRegistryForPluginRegistry(...args),
+  loadPluginManifestRegistryForPluginRegistry: loadRegistry,
 }));
 
-let resolveManifestActivationPluginIds: typeof import("./activation-planner.js").resolveManifestActivationPluginIds;
-let resolveManifestActivationPlan: typeof import("./activation-planner.js").resolveManifestActivationPlan;
+type PlanParams = Parameters<typeof resolveManifestActivationPluginIds>[0];
+const manifests = [
+  owner({
+    id: "memory-core",
+    commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
+  }),
+  owner({ id: "device-pair", commandAliases: [{ name: "pair", kind: "runtime-slash" }] }),
+  owner({
+    id: "browser",
+    cliCommands: [{ name: "browser", description: "Manage the browser", hasSubcommands: true }],
+  }),
+  owner({
+    id: "openai",
+    providers: ["openai"],
+    activation: { onAgentHarnesses: ["codex"] },
+    providerEndpoints: [{ endpointClass: "openai-public", hosts: ["api.openai.com"] }],
+    setup: { providers: [{ id: "openai" }] },
+  }),
+  owner({
+    id: "custom-harness-plugin",
+    origin: "workspace",
+    activation: { onAgentHarnesses: ["custom-harness"] },
+  }),
+  owner({
+    id: "load-path-harness-plugin",
+    origin: "config",
+    activation: { onAgentHarnesses: ["load-path-harness"] },
+  }),
+  owner({
+    id: "demo-channel",
+    origin: "workspace",
+    channels: ["telegram"],
+    hooks: ["before-agent-start"],
+    contracts: { tools: ["web-search"] },
+    activation: { onRoutes: ["webhook"], onCommands: ["demo-tools"] },
+  }),
+];
 
-describe("activation planner", () => {
-  beforeAll(async () => {
-    ({ resolveManifestActivationPlan, resolveManifestActivationPluginIds } =
-      await import("./activation-planner.js"));
-  });
+function ids(trigger: PlanParams["trigger"], options: Omit<PlanParams, "trigger"> = {}) {
+  return resolveManifestActivationPluginIds({ trigger, manifestRecords: manifests, ...options });
+}
 
-  beforeEach(() => {
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "memory-core",
-          commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled",
-        },
-        {
-          id: "device-pair",
-          commandAliases: [{ name: "pair", kind: "runtime-slash" }],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled",
-        },
-        {
-          id: "browser",
-          cliCommands: [
-            {
-              name: "browser",
-              description: "Manage the browser",
-              hasSubcommands: true,
-            },
-          ],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled",
-        },
-        {
-          id: "openai",
-          providers: ["openai"],
-          activation: {
-            onAgentHarnesses: ["codex"],
-          },
-          setup: {
-            providers: [{ id: "openai" }],
-          },
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled",
-        },
-        {
-          id: "custom-harness-plugin",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          activation: {
-            onAgentHarnesses: ["custom-harness"],
-          },
-          origin: "workspace",
-        },
-        {
-          id: "load-path-harness-plugin",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          activation: {
-            onAgentHarnesses: ["load-path-harness"],
-          },
-          origin: "config",
-        },
-        {
-          id: "demo-channel",
-          channels: ["telegram"],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: ["before-agent-start"],
-          contracts: {
-            tools: ["web-search"],
-          },
-          activation: {
-            onRoutes: ["webhook"],
-            onCommands: ["demo-tools"],
-          },
-          origin: "workspace",
-        },
-      ],
-      diagnostics: [],
-    });
-  });
+it("loads manifest ownership when no prepared records are supplied", () => {
+  loadRegistry.mockReturnValue({ plugins: manifests, diagnostics: [] });
+  expect(
+    resolveManifestActivationPluginIds({ trigger: { kind: "command", command: "memory" } }),
+  ).toEqual(["memory-core"]);
+});
 
-  it("keeps ids-only command planning stable", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "command",
-          command: "memory",
-        },
-      }),
-    ).toEqual(["memory-core"]);
+it.each<[PlanParams["trigger"], string[]]>([
+  [{ kind: "command", command: "browser" }, ["browser"]],
+  [{ kind: "command", command: "pair" }, ["device-pair"]],
+  [{ kind: "command", command: "demo-tools" }, ["demo-channel"]],
+  [{ kind: "capability", capability: "provider" }, ["openai"]],
+  [{ kind: "capability", capability: "tool" }, ["demo-channel"]],
+  [{ kind: "capability", capability: "hook" }, ["demo-channel"]],
+  [{ kind: "agentHarness", runtime: "codex" }, ["openai"]],
+  [{ kind: "route", route: "webhook" }, ["demo-channel"]],
+  [{ kind: "provider", provider: "openai" }, ["openai"]],
+  [{ kind: "provider", provider: "openai-public" }, ["openai"]],
+  [{ kind: "channel", channel: "telegram" }, ["demo-channel"]],
+])("selects manifest owners for %j", (trigger, expected) => {
+  expect(ids(trigger)).toEqual(expected);
+});
 
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "command",
-          command: "browser",
-        },
-      }),
-    ).toEqual(["browser"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "command",
-          command: "pair",
-        },
-      }),
-    ).toEqual(["device-pair"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "command",
-          command: "demo-tools",
-        },
-      }),
-    ).toEqual(["demo-channel"]);
-  });
-
-  it("does not activate manifest-triggered plugins that are disabled in config", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        config: {
-          plugins: {
-            entries: {
-              "memory-core": { enabled: false },
-            },
-          },
-        },
-        trigger: {
-          kind: "command",
-          command: "memory",
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it("plans manifest-owned custom harnesses and respects their activation policy", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "agentHarness",
-          runtime: "custom-harness",
-        },
-      }),
-    ).toEqual(["custom-harness-plugin"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        config: {
-          plugins: {
-            entries: {
-              "custom-harness-plugin": { enabled: false },
-            },
-          },
-        },
-        trigger: {
-          kind: "agentHarness",
-          runtime: "custom-harness",
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it("requires canonical ids for explicit manifest owner trust", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        config: {
-          plugins: {
-            allow: ["legacy-custom-harness-plugin"],
-          },
-        },
-        trigger: {
-          kind: "agentHarness",
-          runtime: "custom-harness",
-        },
-        requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual([]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        config: {
-          plugins: {
-            allow: ["custom-harness-plugin"],
-          },
-        },
-        trigger: {
-          kind: "agentHarness",
-          runtime: "custom-harness",
-        },
-        requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual(["custom-harness-plugin"]);
-  });
-
-  it("treats load-path manifest owners as explicitly trusted for activation planning", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "agentHarness",
-          runtime: "load-path-harness",
-        },
-        requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual(["load-path-harness-plugin"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        config: {
-          plugins: {
-            deny: ["load-path-harness-plugin"],
-          },
-        },
-        trigger: {
-          kind: "agentHarness",
-          runtime: "load-path-harness",
-        },
-        requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "agentHarness",
-          runtime: "codex",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "channel",
-          channel: "telegram",
-        },
-      }),
-    ).toEqual(["demo-channel"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "route",
-          route: "webhook",
-        },
-      }),
-    ).toEqual(["demo-channel"]);
-  });
-
-  it("keeps ids-only capability planning stable", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "capability",
-          capability: "provider",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "capability",
-          capability: "tool",
-        },
-      }),
-    ).toEqual(["demo-channel"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "capability",
-          capability: "hook",
-        },
-      }),
-    ).toEqual(["demo-channel"]);
-  });
-
-  it("returns a richer activation plan with planner-hint reasons", () => {
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "command",
-          command: "demo-tools",
-        },
-      }),
-    ).toEqual({
-      trigger: {
-        kind: "command",
-        command: "demo-tools",
-      },
-      pluginIds: ["demo-channel"],
-      entries: [
-        {
-          pluginId: "demo-channel",
-          origin: "workspace",
-          reasons: ["activation-command-hint"],
-        },
-      ],
-      diagnostics: [],
-    });
-
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "agentHarness",
-          runtime: "codex",
-        },
-      }).entries,
-    ).toEqual([
+it.each<[string, NonNullable<PlanParams["config"]>["plugins"], boolean, boolean]>([
+  ["custom-harness", {}, false, true],
+  ["custom-harness", { entries: { "custom-harness-plugin": { enabled: false } } }, false, false],
+  ["custom-harness", { allow: ["legacy-custom-harness-plugin"] }, true, false],
+  ["custom-harness", { allow: ["custom-harness-plugin"] }, true, true],
+  ["load-path-harness", {}, true, true],
+  ["load-path-harness", { deny: ["load-path-harness-plugin"] }, true, false],
+])("applies %s activation policy %j with explicit trust=%s", (runtime, plugins, trust, allowed) => {
+  expect(
+    ids(
+      { kind: "agentHarness", runtime },
       {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["activation-agent-harness-hint"],
+        config: { plugins },
+        requireExplicitManifestOwnerTrust: trust,
       },
-    ]);
+    ),
+  ).toEqual(allowed ? [`${runtime}-plugin`] : []);
+});
 
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "route",
-          route: "webhook",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "demo-channel",
-        origin: "workspace",
-        reasons: ["activation-route-hint"],
-      },
-    ]);
-  });
+it("selects capabilities from explicit hints", () => {
+  const manifestRecords = [
+    owner({
+      id: "explicit-provider",
+      origin: "workspace",
+      activation: { onCapabilities: ["provider"], onProviders: ["custom-provider"] },
+    }),
+  ];
+  expect(ids({ kind: "capability", capability: "provider" }, { manifestRecords })).toEqual([
+    "explicit-provider",
+  ]);
+});
 
-  it("returns manifest-owner reasons when activation hints are absent", () => {
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
-      },
-    ]);
+it("keeps unique sorted ids", () => {
+  const manifestRecords: PluginManifestRecord[] = [
+    owner({ id: "z-owner", activation: { onProviders: [" OPENAI "] } }),
+    owner({
+      id: "duplicate",
+      origin: "workspace",
+      providers: ["openai"],
+      setup: { providers: [{ id: "OPENAI" }] },
+    }),
+    owner({ id: "a-owner", providers: ["OPENAI"] }),
+    owner({ id: "duplicate", origin: "config", activation: { onProviders: ["openai"] } }),
+  ];
+  expect(ids({ kind: "provider", provider: " OpenAI " }, { manifestRecords })).toEqual([
+    "a-owner",
+    "duplicate",
+    "z-owner",
+  ]);
+});
 
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "channel",
-          channel: "telegram",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "demo-channel",
-        origin: "workspace",
-        reasons: ["manifest-channel-owner"],
-      },
-    ]);
-  });
-
-  it("returns capability reasons from explicit hints and manifest ownership", () => {
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "explicit-provider",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          activation: {
-            onCapabilities: ["provider"],
-            onProviders: ["custom-provider"],
-          },
-          origin: "workspace",
-        },
-        {
-          id: "owned-tool",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          contracts: {
-            tools: ["custom-tool"],
-          },
-          origin: "workspace",
-        },
-      ],
-      diagnostics: [],
-    });
-
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "capability",
-          capability: "provider",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "explicit-provider",
-        origin: "workspace",
-        reasons: ["activation-capability-hint", "activation-provider-hint"],
-      },
-    ]);
-
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "capability",
-          capability: "tool",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "owned-tool",
-        origin: "workspace",
-        reasons: ["manifest-tool-contract"],
-      },
-    ]);
-  });
-
-  it("treats explicit empty plugin scopes as scoped-empty", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-        onlyPluginIds: [],
-      }),
-    ).toStrictEqual([]);
-  });
+it("treats explicit empty plugin scopes as scoped-empty", () => {
+  expect(ids({ kind: "provider", provider: "openai" }, { onlyPluginIds: [] })).toStrictEqual([]);
 });

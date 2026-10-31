@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -42,12 +43,7 @@ suite.define(() => {
         assistantName: "Main agent",
         defaultAgentId: "main",
         methodResponses: {
-          "agents.list": {
-            agents: [{ id: "main", name: "Main agent" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "channels.status": {
             ts: Date.now(),
             channelOrder: ["discord"],
@@ -69,10 +65,10 @@ suite.define(() => {
             channelDefaultAccountId: { discord: "default" },
           },
           "config.get": {
-            config: { agents: { entries: { main: { default: true } } } },
+            config: { agents: { entries: { main: {} } } },
             hash: "hash-1",
             issues: [],
-            raw: '{"agents":{"list":[{"id":"main"}]}}',
+            raw: '{"agents":{"entries":{"main":{}}}}',
             valid: true,
           },
         },

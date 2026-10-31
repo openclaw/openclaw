@@ -1,28 +1,16 @@
-/**
- * Tests channel lifecycle hooks and SDK-visible lifecycle dispatch behavior.
- */
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAccountStatusSink,
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
 } from "./channel-lifecycle.core.js";
+import { expectPendingUntilAbort } from "./test-helpers/start-account-lifecycle.js";
 
-type FakeServer = EventEmitter & {
-  close: (callback?: () => void) => void;
-};
-
-function createFakeServer(): FakeServer {
-  const server = new EventEmitter() as FakeServer;
-  server.close = (callback) => {
-    queueMicrotask(() => {
-      server.emit("close");
-      callback?.();
-    });
-  };
-  return server;
+function expectOutcome(task: Promise<unknown>, failure?: Error) {
+  return failure ? expect(task).rejects.toBe(failure) : expect(task).resolves.toBeUndefined();
 }
 
 async function expectTaskPending(task: Promise<unknown>) {
@@ -36,93 +24,119 @@ async function expectTaskPending(task: Promise<unknown>) {
 }
 
 describe("plugin-sdk channel lifecycle helpers", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("binds account id onto status patches", () => {
     const setStatus = vi.fn();
-    const statusSink = createAccountStatusSink({
-      accountId: "default",
-      setStatus,
-    });
-
-    statusSink({ running: true, lastStartAt: 123 });
-
-    expect(setStatus).toHaveBeenCalledWith({
-      accountId: "default",
-      running: true,
-      lastStartAt: 123,
-    });
+    const patch = { running: true, lastStartAt: 123 };
+    createAccountStatusSink({ accountId: "default", setStatus })(patch);
+    expect(setStatus).toHaveBeenCalledWith({ ...patch, accountId: "default" });
   });
 
-  it("resolves waitUntilAbort when signal aborts", async () => {
+  it("rejects when abort cleanup throws", async () => {
     const abort = new AbortController();
-    const task = waitUntilAbort(abort.signal);
-    await expectTaskPending(task);
-
-    abort.abort();
-    await expect(task).resolves.toBeUndefined();
-  });
-
-  it("runs abort cleanup before resolving", async () => {
-    const abort = new AbortController();
-    const onAbort = vi.fn(async () => undefined);
-
-    const task = waitUntilAbort(abort.signal, onAbort);
-    abort.abort();
-
-    await expect(task).resolves.toBeUndefined();
-    expect(onAbort).toHaveBeenCalledOnce();
-  });
-
-  it("keeps passive account lifecycle pending until abort, then stops once", async () => {
-    const abort = new AbortController();
-    const stop = vi.fn();
-    const task = runPassiveAccountLifecycle({
-      abortSignal: abort.signal,
-      start: async () => ({ stop }),
-      stop: async (handle) => {
-        handle.stop();
-      },
+    const failure = new Error("abort cleanup failed");
+    const task = waitUntilAbort(abort.signal, () => {
+      throw failure;
     });
-
-    await expectTaskPending(task);
-    expect(stop).not.toHaveBeenCalled();
-
+    const settled = expect(task).rejects.toBe(failure);
     abort.abort();
-    await expect(task).resolves.toBeUndefined();
-    expect(stop).toHaveBeenCalledOnce();
+    await settled;
   });
 
-  it("keeps server task pending until close, then resolves", async () => {
-    const server = createFakeServer();
-    const task = keepHttpServerTaskAlive({ server });
-    await expectTaskPending(task);
+  it.each(["readiness", "assertion", "startup"] as const)(
+    "joins account startup when its %s check fails",
+    async (failurePhase) => {
+      const startup = createDeferredCore<() => void>();
+      const abort = new AbortController();
+      let settled = false;
+      const stop = vi.fn();
+      const assertAfterAbort = vi.fn();
+      const failure = new Error(`${failurePhase} failed`);
+      const fail = () => {
+        throw failure;
+      };
+      const task = runPassiveAccountLifecycle({
+        abortSignal: abort.signal,
+        start: failurePhase === "startup" ? async () => fail() : () => startup.promise,
+        stop: (unregister) => unregister(),
+      }).finally(() => {
+        settled = true;
+      });
+      const accountOutcome = expectOutcome(task, failurePhase === "startup" ? failure : undefined);
+      try {
+        await expect(
+          expectPendingUntilAbort({
+            abort,
+            task,
+            isSettled: () => settled,
+            waitForStarted: async () => {
+              if (failurePhase === "startup") {
+                return startup.promise.then(() => {});
+              }
+              startup.resolve(stop);
+              if (failurePhase === "readiness") {
+                throw failure;
+              }
+            },
+            assertBeforeAbort: () => {
+              expect(stop).not.toHaveBeenCalled();
+              fail();
+            },
+            assertAfterAbort,
+          }),
+        ).rejects.toBe(failure);
+        expect([abort.signal.aborted, settled]).toEqual([true, true]);
+        expect(stop).toHaveBeenCalledTimes(failurePhase === "startup" ? 0 : 1);
+        expect(assertAfterAbort).not.toHaveBeenCalled();
+      } finally {
+        startup.resolve(stop);
+        abort.abort();
+        await accountOutcome;
+      }
+    },
+  );
 
-    server.close();
-    await expect(task).resolves.toBeUndefined();
-  });
-
-  it("triggers abort hook once and resolves after close", async () => {
-    const server = createFakeServer();
-    const abort = new AbortController();
-    const onAbort = vi.fn(async () => {
-      server.close();
-    });
-
-    const task = keepHttpServerTaskAlive({
-      server,
-      abortSignal: abort.signal,
-      onAbort,
-    });
-
-    abort.abort();
-    await expect(task).resolves.toBeUndefined();
-    expect(onAbort).toHaveBeenCalledOnce();
-  });
+  it.each(["close", "abort", "already-aborted", "throw", "reject"] as const)(
+    "settles server lifecycle after %s",
+    async (mode) => {
+      const server = new EventEmitter();
+      const close = () => server.emit("close");
+      const abort = new AbortController();
+      const failure = new Error("server cleanup failed");
+      const onAbort = vi.fn(() => {
+        if (mode === "abort") {
+          queueMicrotask(close);
+        } else {
+          close();
+        }
+        if (mode === "throw") {
+          throw failure;
+        }
+        if (mode === "reject") {
+          return Promise.reject(failure);
+        }
+        return undefined;
+      });
+      const task = keepHttpServerTaskAlive({
+        server,
+        ...(mode === "close"
+          ? {}
+          : {
+              abortSignal: mode === "abort" ? abort.signal : AbortSignal.abort(),
+              onAbort,
+            }),
+      });
+      if (mode === "close" || mode === "abort") {
+        await expectTaskPending(task);
+        if (mode === "abort") {
+          abort.abort();
+        } else {
+          queueMicrotask(close);
+        }
+      }
+      await expectOutcome(task, mode === "throw" || mode === "reject" ? failure : undefined);
+      if (mode !== "close") {
+        expect(onAbort).toHaveBeenCalledOnce();
+      }
+    },
+  );
 });

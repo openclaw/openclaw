@@ -4,10 +4,7 @@
  * entire gateway/channel stack.
  */
 export { getRuntimeConfig } from "../../../config/config.js";
-export {
-  loadSessionEntryReadOnly as loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../../config/sessions/session-accessor.js";
+export { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 export { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
 export { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 export { resolveContextEngine } from "../../../context-engine/registry.js";
@@ -20,10 +17,13 @@ export {
   ADMIN_SCOPE,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../../../gateway/method-scopes.js";
-export { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-export { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils.js";
+export {
+  getSessionBindingService,
+  listSessionBindingsBySessionAsync,
+} from "../../../infra/outbound/session-binding-service.js";
+export { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-export { resolveProviderRefOwnership } from "../../../plugins/providers.js";
+export { prepareModelChoice } from "../../model-runtime-choice.js";
 export { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 export {
   mergeDeliveryContext,
@@ -31,9 +31,7 @@ export {
 } from "../../../utils/delivery-context.shared.js";
 export { resolveAgentConfig } from "../../agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "../../lanes.js";
-export { readPreparedModelCatalog } from "../../prepared-model-catalog.js";
-export { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 export {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "../../tools/sessions-helpers.js";
+  resolveSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
+} from "../../sandbox/runtime-status.js";

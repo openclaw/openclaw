@@ -1,5 +1,3 @@
-// Exposes private secret file helpers with fs-safe defaults.
-import "./fs-safe-defaults.js";
 import path from "node:path";
 import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
 import {
@@ -22,7 +20,10 @@ export {
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
 
-type SecretFileWriteParams = Parameters<typeof writeSecretFileAtomicImpl>[0];
+// Private secret writes reject directory preservation and keep numeric mode enforcement.
+type SecretFileWriteParams = Omit<Parameters<typeof writeSecretFileAtomicImpl>[0], "dirMode"> & {
+  dirMode?: number;
+};
 
 // fs-safe 0.8 no longer repairs existing directory modes; OpenClaw keeps its
 // documented behavior of tightening its own secret directories before writing.
@@ -113,22 +114,11 @@ export function tryReadSecretFileSync(
 ): string | undefined | CredentialResult<string> {
   if ("credentialDiagnostic" in options) {
     const { credentialDiagnostic, ...readOptions } = options;
-    if (!filePath?.trim()) {
-      return undefined;
+    const result = tryReadSecretFileSync(filePath, label, readOptions, credentialDiagnostic);
+    if (result.status === "configured_unavailable") {
+      credentialDiagnostic.report(result.diagnostic);
     }
-    try {
-      return readSecretFileSyncImpl(filePath, label, readOptions);
-    } catch (error) {
-      if (!(error instanceof FsSafeError)) {
-        throw error;
-      }
-      credentialDiagnostic.report({
-        code: "CREDENTIAL_FILE_UNAVAILABLE",
-        path: credentialDiagnostic.configPath,
-        reason: error.code,
-      });
-      return undefined;
-    }
+    return result.status === "available" ? result.value : undefined;
   }
   if (!diagnostic) {
     return tryReadSecretFileSyncImpl(filePath, label, options);

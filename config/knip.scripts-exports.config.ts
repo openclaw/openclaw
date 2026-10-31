@@ -23,7 +23,16 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 );
 
 const repositoryToolEntries = [
+  // Knip loads this configuration, which consumes the Vite runnerImport compiler.
+  "config/knip.config.ts!",
+  // This compiler projects exact source-derived generated and module-hook imports.
+  "config/knip-dynamic-consumers.mjs!",
+  // ui/config/control-ui-locales.ts invokes the catalogue through Vite's runnerImport.
+  "config/knip-vite-consumers.mjs!",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/workflows/labeler.yml!",
+  ".github/workflows/openclaw-release-publish.yml!",
+  ".github/workflows/plugin-prerelease.yml!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
@@ -31,9 +40,37 @@ const repositoryToolEntries = [
   "scripts/check-openclaw-package-tarball.mts!",
 ] as const;
 
+const sourceTestConsumerEntries = [
+  "src/scripts/docs-link-audit.test.ts!",
+  "src/scripts/ci-changed-scope.contract-fixtures.test.ts!",
+  "src/scripts/ci-changed-scope.control-ui.test.ts!",
+  "src/scripts/ci-changed-scope.git-owner.test.ts!",
+  "src/scripts/ci-changed-scope.native-i18n.test.ts!",
+  "src/scripts/ci-changed-scope.test.ts!",
+  "src/scripts/ci-changed-scope.windows.test.ts!",
+  "src/scripts/ci-ios-screenshot-scope.test.ts!",
+  "src/plugins/prune-docker-plugin-dist.test.ts!",
+  "src/infra/package-update-activation-lifetime.test.ts!",
+] as const;
+
 const config = {
-  ignoreWorkspaces: ["apps/**", "extensions/**", "packages/**", "ui"],
-  ignore: ["scripts/**/*.d.{mts,cts,ts}", "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}"],
+  compilers: productionConfig.compilers,
+  ignoreWorkspaces: [
+    "apps/**",
+    "extensions/**",
+    ...fs
+      .readdirSync("packages")
+      .filter((name) => name !== "gateway-protocol")
+      .map((name) => `packages/${name}`),
+    "ui",
+  ],
+  ignore: [
+    "scripts/**/*.d.{mts,cts,ts}",
+    "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}",
+    // Generated declaration companions; application scans own their executable validators.
+    "packages/gateway-protocol/src/compiled/sender-identity.d.ts",
+    "packages/gateway-protocol/src/compiled/protocol.generated/*.d.ts",
+  ],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
   ignoreIssues: {
@@ -57,8 +94,12 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
+    // Oxlint consumes this required default export through a JSON config path.
+    "tools/solid-lint/index.mjs": ["exports"],
     // Vitest consumes this required default export through the reporter CLI path.
     "scripts/lib/vitest-resource-reporter.mts": ["exports"],
+    // Vitest loads this default class through the report owner's CLI and generated merge config.
+    "scripts/lib/vitest-report-capture.mts": ["exports"],
     // Wrangler consumes the Worker default export and instantiates the Durable
     // Object class by name from wrangler.jsonc; Knip cannot resolve either.
     "scripts/cloudflare/src/index.ts": ["exports"],
@@ -68,15 +109,28 @@ const config = {
   },
   workspaces: {
     ".": {
+      // These opt-in commands pass non-default Vitest configs. Let Knip's
+      // Vitest owner load the configs and their selected suites as real inputs.
+      vitest: {
+        config: [
+          "scripts/control-ui-parity/vitest.config.ts",
+          "scripts/control-ui-retention/vitest.config.ts",
+        ],
+      },
       entry: [
         ...scriptEntries,
         ...repositoryToolEntries,
+        ...sourceTestConsumerEntries,
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        // Core bootstrap packaging consumes the scripts' dist-import scanner.
+        // CLI subprocess fixtures consume the shared native-report collector.
+        "src/cli/cli-process-child.test-helpers.test.ts!",
+        // Core bootstrap packaging and source updates consume shared script owners.
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+        "src/infra/package-dist-inventory.ts!",
         "src/plugin-sdk/api-baseline.ts!",
+        "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -86,9 +140,17 @@ const config = {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        ...sourceTestConsumerEntries,
+        "src/cli/cli-process-child.test-helpers{,.test}.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+        "src/infra/package-dist-inventory.ts!",
         "src/plugin-sdk/api-baseline.ts!",
+        "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
+    },
+    "packages/gateway-protocol": {
+      entry: ["scripts/native-codegen.ts!"],
+      project: ["scripts/native-codegen.ts!"],
     },
   },
 };

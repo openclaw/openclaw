@@ -1,18 +1,46 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { vi } from "vitest";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
-  QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-import type {
-  QaScenarioCommandExecution,
-  runQaTestFileScenarios,
-} from "./test-file-scenario-runner.js";
+import * as commandLifecycle from "./test-file-scenario-command-lifecycle.js";
+import type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
+import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
+
+export async function withQaScenarioCommand<T>(
+  runCommand: typeof commandLifecycle.runQaScenarioCommandLifecycle | undefined,
+  run: () => Promise<T>,
+) {
+  if (!runCommand) {
+    return run();
+  }
+  const command = vi
+    .spyOn(commandLifecycle, "runQaScenarioCommandLifecycle")
+    .mockImplementation(runCommand);
+  try {
+    return await run();
+  } finally {
+    command.mockRestore();
+  }
+}
+
+export async function runQaTestFileScenariosWithCommand({
+  runCommand,
+  ...params
+}: Parameters<typeof runQaTestFileScenarios>[0] & {
+  runCommand?: typeof commandLifecycle.runQaScenarioCommandLifecycle;
+}) {
+  return withQaScenarioCommand(runCommand, () => runQaTestFileScenarios(params));
+}
+
+export const writeFixtureJson = (file: string, value: unknown) =>
+  fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 
 export const QA_TEST_RUNNER_DEFAULTS = {
   providerMode: "mock-openai",
@@ -21,12 +49,7 @@ export const QA_TEST_RUNNER_DEFAULTS = {
 
 export function createScenarioRunnerTestHarness() {
   const tempDirs = createTempDirHarness();
-
-  return {
-    makeTempDir: tempDirs.makeTempDir,
-    makeTempRepo: (prefix: string) => tempDirs.makeTempDir(prefix),
-    cleanup: tempDirs.cleanup,
-  };
+  return { ...tempDirs, makeTempRepo: tempDirs.makeTempDir };
 }
 
 export function makeTestFileScenario(
@@ -60,17 +83,11 @@ export function makeTestFileScenario(
 }
 
 export function makeDockerE2eScenario(id: string, lane: string): QaSeedScenarioWithSource {
-  const scenario = makeTestFileScenario("script", "test/e2e/qa-lab/runtime/docker-e2e-lane.ts");
-  if (scenario.execution.kind !== "script") {
-    throw new Error("expected script scenario");
-  }
+  const file = "test/e2e/qa-lab/runtime/docker-e2e-lane.ts";
   return {
-    ...scenario,
+    ...makeTestFileScenario("script", file),
     id,
-    execution: {
-      ...scenario.execution,
-      args: ["--lane", lane],
-    },
+    execution: { kind: "script", path: file, args: ["--lane", lane] },
   };
 }
 
@@ -84,6 +101,15 @@ export async function writeDockerCandidateManifest(
   }
   await fs.writeFile(manifestArg.slice("--prepare-only=".length), `${JSON.stringify(manifest)}\n`);
   return { exitCode: 0, stdout: "", stderr: "" };
+}
+
+export function resolveScriptAttemptOutputDir(command: QaScenarioCommandExecution) {
+  const index = command.args.indexOf("--artifact-base");
+  const artifactBase = command.args[index + 1];
+  if (index < 0 || !artifactBase) {
+    throw new Error("script fixture did not receive its owned artifact directory");
+  }
+  return path.dirname(artifactBase);
 }
 
 export async function writeNativeVitestReport(
@@ -112,43 +138,29 @@ export async function writeNativeVitestReport(
     counts.testName ??
     (testNamePatternIndex < 0 ? undefined : command.args[testNamePatternIndex + 1]) ??
     "executes the requested scenario";
-  await fs.writeFile(
-    reportArg.slice("--outputFile.json=".length),
-    JSON.stringify({
-      numFailedTests: counts.failed ?? 0,
-      numPassedTests: counts.passed,
-      success: (counts.failed ?? 0) === 0,
-      testResults: [
-        {
-          name: path.resolve(command.cwd, counts.testFilePath ?? requestedTestPath ?? "unknown"),
-          status: counts.passed > 0 ? "passed" : "skipped",
-          assertionResults:
-            counts.passed > 0
-              ? [
-                  {
-                    ancestorTitles: counts.ancestorTitles ?? [],
-                    fullName: [...(counts.ancestorTitles ?? []), testName].join(" "),
-                    title: testName,
-                    status: "passed",
-                  },
-                ]
-              : [],
-        },
-      ],
-    }),
-    "utf8",
-  );
+  const { passed, failed = 0, ancestorTitles = [] } = counts;
+  const assertion = {
+    ancestorTitles,
+    fullName: [...ancestorTitles, testName].join(" "),
+    title: testName,
+    status: "passed",
+  };
+  const testResult = {
+    name: path.resolve(command.cwd, counts.testFilePath ?? requestedTestPath ?? "unknown"),
+    status: passed > 0 ? "passed" : "skipped",
+    assertionResults: passed > 0 ? [assertion] : [],
+  };
+  await writeFixtureJson(reportArg.slice("--outputFile.json=".length), {
+    numFailedTests: failed,
+    numPassedTests: passed,
+    success: failed === 0,
+    testResults: [testResult],
+  });
 }
-
-type ScriptEvidenceArtifact = {
-  kind: string;
-  path: string;
-  source?: string;
-};
 
 type ScriptProducerEvidenceParams = {
   additionalEntries?: QaEvidenceSummaryJson["entries"];
-  artifacts?: ScriptEvidenceArtifact[];
+  artifacts?: { kind: string; path: string; source?: string }[];
   coverage?: QaEvidenceSummaryJson["entries"][number]["coverage"];
   failureReason?: string;
   producerId?: string;
@@ -161,7 +173,7 @@ export function buildScriptProducerEvidence(
 ): QaEvidenceSummaryJson {
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
-    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+    schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
     evidenceMode: "full",
     ...(params.profile ? { profile: params.profile } : {}),
@@ -214,27 +226,13 @@ export async function writeScriptProducerEvidence(
       : path.join(scenarioArtifactBase, "run-1");
   const evidencePath = path.join(evidenceDir, QA_EVIDENCE_FILENAME);
   await fs.mkdir(evidenceDir, { recursive: true });
-  await fs.writeFile(
-    evidencePath,
-    `${JSON.stringify(buildScriptProducerEvidence(params), null, 2)}\n`,
-    "utf8",
-  );
+  await writeFixtureJson(evidencePath, buildScriptProducerEvidence(params));
   const latestRun = params.latestRun ?? "absolute";
   if (latestRun !== "none") {
-    await fs.writeFile(
-      path.join(scenarioArtifactBase, "latest-run.json"),
-      `${JSON.stringify(
-        {
-          qaEvidence:
-            latestRun === "relative"
-              ? path.relative(scenarioArtifactBase, evidencePath)
-              : evidencePath,
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    await writeFixtureJson(path.join(scenarioArtifactBase, "latest-run.json"), {
+      qaEvidence:
+        latestRun === "relative" ? path.relative(scenarioArtifactBase, evidencePath) : evidencePath,
+    });
   }
   return { evidenceDir, evidencePath, scenarioArtifactBase };
 }

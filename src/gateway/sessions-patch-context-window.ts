@@ -1,19 +1,26 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
-import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import {
+  findModelCatalogEntry,
+  type ModelCatalogEntry,
+  type ModelCatalogSnapshot,
+} from "../agents/model-catalog.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 
 export function* applySessionContextWindowPatch(params: {
-  defaultModel: string;
-  defaultProvider: string;
+  resolveDefaultModel: () => ModelRef;
   loadModelCatalog: () => Generator<
     void,
     ModelCatalogEntry[] | undefined,
-    ModelCatalogEntry[] | undefined
+    ModelCatalogSnapshot | undefined
   >;
+  runtimeId: (provider: string, model: string, entry: SessionEntry) => string;
+  routeVariants: () => readonly ModelCatalogEntry[] | undefined;
   next: SessionEntry;
   patch: SessionsPatchParams;
-}): Generator<void, { ok: true } | { ok: false; error: string }, ModelCatalogEntry[] | undefined> {
+}): Generator<void, { ok: true } | { ok: false; error: string }, ModelCatalogSnapshot | undefined> {
   if ("contextWindow" in params.patch) {
     const previous = params.next.contextWindow;
     const raw = params.patch.contextWindow;
@@ -29,7 +36,11 @@ export function* applySessionContextWindowPatch(params: {
       delete params.next.contextBudgetStatus;
     }
   }
-  if (!("contextWindow" in params.patch) && !("model" in params.patch)) {
+  if (
+    !("contextWindow" in params.patch) &&
+    !("model" in params.patch) &&
+    !("agentRuntime" in params.patch)
+  ) {
     return { ok: true };
   }
   const selected = normalizeOptionalString(params.next.contextWindow);
@@ -37,11 +48,18 @@ export function* applySessionContextWindowPatch(params: {
     delete params.next.contextWindow;
     return { ok: true };
   }
-  const provider = params.next.providerOverride ?? params.defaultProvider;
-  const model = params.next.modelOverride ?? params.defaultModel;
+  const provider = params.next.providerOverride ?? params.resolveDefaultModel().provider;
+  const model = params.next.modelOverride ?? params.resolveDefaultModel().model;
   const catalog = yield* params.loadModelCatalog();
-  const catalogEntry = catalog
+  const logical = catalog
     ? findModelCatalogEntry(catalog, { provider, modelId: model })
+    : undefined;
+  const catalogEntry = logical
+    ? selectModelCatalogRuntimeEntry({
+        entry: logical,
+        routeVariants: params.routeVariants() ?? catalog ?? [],
+        runtimeId: params.runtimeId(provider, model, params.next),
+      }).entry
     : undefined;
   if (catalogEntry?.contextWindows?.some((option) => option.id === selected)) {
     return { ok: true };

@@ -4,6 +4,7 @@ import type {
   CronAddJobResultSchema,
   CronAddParamsSchema,
   CronAddResultSchema,
+  CronBindParamsSchema,
   CronDeliveryPreviewSchema,
   CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
@@ -22,6 +23,44 @@ import type {
 } from "./cron.js";
 
 export type CronJob = Static<typeof CronJobSchema>;
+/** Definition-free row returned by cron.list when compact is true. */
+export type CronCompactJob = Pick<
+  CronJob,
+  | "id"
+  | "name"
+  | "declarationKey"
+  | "displayName"
+  | "owner"
+  | "agentId"
+  | "enabled"
+  | "updatedAtMs"
+  | "streamExecutionHost"
+> &
+  Pick<
+    CronJob["state"],
+    | "lastMeaningfulResult"
+    | "lastDurationMs"
+    | "lastTriggerEvalAtMs"
+    | "runningAtMs"
+    | "autoDisabled"
+    | "lastDelivered"
+    | "lastDeliveryStatus"
+    | "lastDeliveryError"
+    | "deliverySuppressionReason"
+    | "lastFailureNotificationDelivered"
+    | "lastFailureNotificationDeliveryStatus"
+    | "lastFailureNotificationDeliveryError"
+  > & {
+    nextRunAt: string | null;
+    nextRunAtMs: number | null;
+    scheduleKind: CronJob["schedule"]["kind"];
+    schedule?: Extract<CronJob["schedule"], { kind: "at" | "every" | "cron" }>;
+    trigger?: true;
+    lastRunAt: string | null;
+    lastRunAtMs: number | null;
+    lastRunStatus: NonNullable<CronJob["state"]["lastRunStatus"]> | null;
+    lastRunError: string | null;
+  };
 export type CronListParams = Static<typeof CronListParamsSchema>;
 export type CronStatusParams = Static<typeof CronStatusParamsSchema>;
 export type CronGetParams = Static<typeof CronGetParamsSchema>;
@@ -32,6 +71,7 @@ export type CronDeliveryPreview = Static<typeof CronDeliveryPreviewSchema>;
 export type CronDeclarativeAddResult = Static<typeof CronDeclarativeAddResultSchema>;
 export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
 export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
+export type CronBindParams = Static<typeof CronBindParamsSchema>;
 export type CronRunParams = Static<typeof CronRunParamsSchema>;
 export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
 export type CronScratchGetParams = Static<typeof CronScratchGetParamsSchema>;

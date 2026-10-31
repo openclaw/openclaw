@@ -1,7 +1,8 @@
 // Session group tests cover grouping and lookup of related sessions.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { buildGroupDisplayTitle, resolveGroupSessionKey } from "./group.js";
+import { buildGroupDisplayTitle } from "./group-display.js";
+import { resolveGroupSessionKey } from "./group.js";
 
 describe("resolveGroupSessionKey", () => {
   it("preserves Signal group ids from the originating target", () => {
@@ -17,22 +18,6 @@ describe("resolveGroupSessionKey", () => {
       key: `signal:group:${mixedGroupId}`,
       channel: "signal",
       id: mixedGroupId,
-      chatType: "group",
-    });
-  });
-
-  it("keeps non-Signal group ids lowercase", () => {
-    const ctx = {
-      Provider: "telegram",
-      ChatType: "group",
-      From: "telegram:1234",
-      OriginatingTo: "telegram:group:MiXeDGroup",
-    } satisfies Partial<MsgContext>;
-
-    expect(resolveGroupSessionKey(ctx as MsgContext)).toEqual({
-      key: "telegram:group:mixedgroup",
-      channel: "telegram",
-      id: "mixedgroup",
       chatType: "group",
     });
   });

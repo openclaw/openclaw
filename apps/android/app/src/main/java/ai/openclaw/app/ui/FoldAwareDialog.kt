@@ -47,7 +47,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 
@@ -67,7 +66,7 @@ internal fun FoldAwareDialog(
   val dismiss by rememberUpdatedState(onDismissRequest)
   val outsideEnabled by rememberUpdatedState(dismissOnClickOutside)
 
-  Dialog(
+  AppDialog(
     onDismissRequest = onDismissRequest,
     properties =
       DialogProperties(
@@ -82,32 +81,8 @@ internal fun FoldAwareDialog(
     val geometry = rememberOverlayWindowGeometry(activity, activityView, LocalView.current)
     Layout(
       modifier =
-        Modifier.fillMaxSize().pointerInput(Unit) {
-          awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            val initialBounds = promptBounds
-            if (!initialBounds.contains(down.position)) {
-              down.consume()
-              var tap = !initialBounds.isEmpty
-              do {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                if (event.changes.size != 1 || promptBounds != initialBounds) tap = false
-                for (change in event.changes) {
-                  if (change.isConsumed || initialBounds.contains(change.position) ||
-                    (change.position - down.position).getDistance() > viewConfiguration.touchSlop
-                  ) {
-                    tap = false
-                  }
-                  change.consume()
-                }
-                if (event.changes.all { !it.pressed } && tap &&
-                  event.changes.single().changedToUpIgnoreConsumed() && outsideEnabled
-                ) {
-                  dismiss()
-                }
-              } while (event.changes.any { it.pressed })
-            }
-          }
+        Modifier.fillMaxSize().dismissOnOutsideTap(Unit, { promptBounds }) {
+          if (outsideEnabled) dismiss()
         },
       content = {
         Box(
@@ -149,6 +124,35 @@ internal fun FoldAwareDialog(
     }
   }
 }
+
+internal fun Modifier.dismissOnOutsideTap(
+  key: Any?,
+  bounds: () -> Rect,
+  onDismiss: () -> Unit,
+): Modifier =
+  pointerInput(key) {
+    awaitEachGesture {
+      val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+      val initialBounds = bounds()
+      if (!initialBounds.contains(down.position)) {
+        down.consume()
+        var tap = !initialBounds.isEmpty
+        do {
+          val event = awaitPointerEvent(PointerEventPass.Initial)
+          if (event.changes.size != 1 || bounds() != initialBounds) tap = false
+          for (change in event.changes) {
+            if (change.isConsumed || initialBounds.contains(change.position) ||
+              (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+            ) {
+              tap = false
+            }
+            change.consume()
+          }
+          if (event.changes.all { !it.pressed } && tap && event.changes.single().changedToUpIgnoreConsumed()) onDismiss()
+        } while (event.changes.any { it.pressed })
+      }
+    }
+  }
 
 @Composable
 internal fun FoldAwarePrompt(

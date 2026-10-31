@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 355143,
-  "reason": "Integrated Control UI changes since the 2026-09-11 baseline (initial catalog snapshot on connect, read-only session sharing, dashboard embedding, and dependency updates) now measure 355143 B on main (+603 B, 0.17%); an independent exact-head build measured 355143 B (within the 64 B build-variance allowance); fixed 358400 B cap and existing allowances retained.",
-  "updatedAt": "2026-09-13"
+  "startupJsGzipBytes": 88830,
+  "reason": "Integrated long-tail candidate measures 88,830 B startup gzip, 46 B above its exact base, with unchanged 277,773 B raw JS, three JS requests and one CSS request. Twenty interleaved pairs reduce Skills desktop visit and filter CPU by about 70%; record the measured candidate after main integration.",
+  "updatedAt": "2026-10-31"
 }

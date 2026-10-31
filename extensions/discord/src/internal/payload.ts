@@ -1,4 +1,3 @@
-// Discord plugin module implements payload behavior.
 import {
   ComponentType,
   MessageFlags,
@@ -34,6 +33,13 @@ export type TopLevelComponents = {
   isV2?: boolean;
   serialize: () => unknown;
 };
+
+export function asSerializableComponent<T extends { type: ComponentType }>(component: T) {
+  return {
+    isV2: component.type !== ComponentType.ActionRow,
+    serialize: () => component,
+  };
+}
 
 export function hasDiscordV2Components(components?: MessagePayloadObject["components"]): boolean {
   return Boolean(

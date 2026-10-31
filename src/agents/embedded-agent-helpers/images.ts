@@ -1,7 +1,6 @@
-/**
- * Sanitizes historical embedded-agent message images and empty content blocks.
- */
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
@@ -11,28 +10,24 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";
+// Weak content roots survive rebuilt tool-result envelopes without retaining sessions.
+// Image outcomes remain owned by tool-images: backend failures must stay retryable.
+const imageFreeReplayContent: WeakMap<ContentBlock[], ContentBlock[]>[] = [];
 
-function dropEmptyTextBlocks<T>(content: T[]): T[] {
+function dropEmptyTextBlocks<T>(content: T[], preserveSignedText = false): T[] {
   return content.filter((block) => {
-    const rec = block as { type?: unknown; text?: unknown };
+    const rec = block as { type?: unknown; text?: unknown; textSignature?: unknown };
     return (
       !block ||
       typeof block !== "object" ||
       rec.type !== "text" ||
       typeof rec.text !== "string" ||
-      rec.text.trim().length > 0
+      rec.text.trim().length > 0 ||
+      (preserveSignedText && typeof rec.textSignature === "string" && rec.textSignature.length > 0)
     );
   });
 }
 
-function ensureNonEmptyContent<T>(content: T[]): T[] {
-  if (content.length > 0) {
-    return content;
-  }
-  return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
-}
-
-/** Resize/remove unsafe image payloads while keeping transcript turns valid. */
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -57,16 +52,23 @@ export async function sanitizeSessionMessagesImages(
   const imageSanitization = {
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
+    // Replay does not rewrite stored images, even after a successful reply.
+    verifyDecodability: true,
   };
-  const shouldSanitizeToolCallIds = options?.sanitizeToolCallIds === true;
-  // We sanitize historical session messages because Anthropic can reject a request
-  // if the transcript contains oversized base64 images (default max side 1200px).
-  const sanitizedIds = shouldSanitizeToolCallIds
-    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
-        preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
-        duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
-      })
-    : messages;
+  const sanitizeImages = (content: ContentBlock[]) =>
+    sanitizeContentBlocksImages(content, label, imageSanitization);
+  const sanitizedIds =
+    options?.sanitizeToolCallIds === true
+      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
+        })
+      : messages;
+  const assistantPolicy =
+    1 |
+    (options?.preserveSignatures ? 2 : 0) |
+    (options?.sanitizeThoughtSignatures?.allowBase64Only ? 4 : 0) |
+    (options?.sanitizeThoughtSignatures?.includeCamelCase ? 8 : 0);
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
@@ -74,46 +76,58 @@ export async function sanitizeSessionMessagesImages(
       continue;
     }
 
-    const role = (msg as { role?: unknown }).role;
-    if (role === "toolResult") {
-      const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
-      const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
-      const nextContent = await sanitizeContentBlocksImages(content, label, imageSanitization);
-      out.push({ ...toolMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
+    if (msg.role !== "toolResult" && msg.role !== "user" && msg.role !== "assistant") {
+      out.push(msg);
       continue;
     }
-
-    if (role === "user") {
-      const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
-      const content = userMsg.content;
-      if (Array.isArray(content)) {
-        const nextContent = await sanitizeContentBlocksImages(content, label, imageSanitization);
-        out.push({ ...userMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
-        continue;
+    if (!Array.isArray(msg.content) && msg.role !== "toolResult") {
+      out.push(msg);
+      continue;
+    }
+    const content = (Array.isArray(msg.content) ? msg.content : []) as ContentBlock[];
+    const policy =
+      msg.role === "assistant" ? assistantPolicy | (msg.stopReason === "error" ? 2 : 0) : 0;
+    const cache = (imageFreeReplayContent[policy] ??= new WeakMap());
+    let nextContent = cache.get(content);
+    if (!nextContent) {
+      if (msg.role === "assistant") {
+        const stripped =
+          policy & 2
+            ? content
+            : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures);
+        // Signed empty Responses text still occupies an ordered provider input item.
+        nextContent = await sanitizeImages(dropEmptyTextBlocks(stripped, true));
+      } else {
+        nextContent = dropEmptyTextBlocks(await sanitizeImages(content));
+      }
+      if (msg.role !== "assistant" && nextContent.length === 0) {
+        nextContent = [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }];
+      }
+      if (
+        nextContent.length === content.length &&
+        nextContent.every((block, index) => block === content[index])
+      ) {
+        nextContent = content;
+      }
+      if (
+        (isOwnedTranscriptPayload(content) || isDeeplyFrozenPlainData(content)) &&
+        !content.some((block) => block?.type === "image")
+      ) {
+        cache.set(content, nextContent === content ? content : freezeJsonSnapshot(nextContent));
       }
     }
-
-    if (role === "assistant") {
-      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      const content = assistantMsg.content;
-      if (Array.isArray(content)) {
-        const strippedContent =
-          assistantMsg.stopReason === "error" || options?.preserveSignatures
-            ? content // Keep signatures for Antigravity Claude
-            : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
-        const finalContent = (await sanitizeContentBlocksImages(
-          dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
-          label,
-          imageSanitization,
-        )) as unknown as typeof assistantMsg.content;
-        if (finalContent.length > 0 || assistantMsg.providerReplay) {
-          out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
-        }
-        continue;
+    if (msg.role === "assistant") {
+      const finalContent = nextContent as typeof msg.content;
+      if (finalContent.length > 0 || msg.providerReplay) {
+        out.push(
+          finalContent === msg.content && !msg.providerReplay
+            ? msg
+            : replaceCompactionReplayOwnerContent(msg, finalContent),
+        );
       }
+    } else {
+      out.push(nextContent === msg.content ? msg : { ...msg, content: nextContent });
     }
-
-    out.push(msg);
   }
   return out;
 }

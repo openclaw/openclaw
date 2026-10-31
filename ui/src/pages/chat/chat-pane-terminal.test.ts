@@ -1,343 +1,240 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { flush } from "solid-js";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import { gatewayHelloForMethods as desktopHello } from "../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture as gateway } from "./chat-application-context.test-support.ts";
+import {
+  runPaneHeaderAction,
+  activePlacementSession,
+  createPaneHeaderWorkspaceFixture,
+  createTestChatPane,
+  getPaneTestRuntime,
+} from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
+import {
+  openNativeMenu,
+  renderPaneHeaderInto,
+  selectNativeMenu,
+} from "./components/chat-pane-header.test-support.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
-function desktopHello(methods: string[], scopes: string[]): GatewayHelloOk {
-  return {
-    type: "hello-ok",
-    protocol: 3,
-    auth: { role: "operator", scopes },
-    features: { methods },
-  };
+async function openPanelMenu(container: HTMLElement, readyValue?: string) {
+  const menu = container.querySelector<HTMLElement>(".chat-pane__layout-menu");
+  expect(menu).not.toBeNull();
+  await openNativeMenu(menu!, readyValue);
+  return menu!;
 }
 
-describe("chat pane terminal action", () => {
-  it.each(["session", "owner", "target", "client", "reconnect"] as const)(
-    "closes terminal continuation after a %s ownership change",
-    async (change) => {
-      const client = { gatewayUrl: "wss://gateway.example/control" } as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-      const row = {
-        key: "bare-session",
-        agentId: "row-agent",
-        kind: "direct",
-        updatedAt: 0,
-      } satisfies GatewaySessionRow;
-      const replacementRow = { ...row, key: "other-session" };
-      const container = document.createElement("div");
-      const paint = (selected: GatewaySessionRow) =>
-        render(
-          pane.renderPaneHeader(
-            createSessionWorkspaceProps(state),
-            createBackgroundTasksProps(state),
-            selected,
-            false,
-            undefined,
-            false,
-            null,
-          ),
-          container,
-        );
+async function selectPanel(container: HTMLElement, value: string) {
+  const menu = await openPanelMenu(container, value);
+  const item = menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
+  if (!item) {
+    throw new Error(`Expected Layout panel action: ${value}`);
+  }
+  item.click();
+  await waitForSolid(() =>
+    expect(menu.querySelector(".oc-menu")?.matches(":popover-open")).toBe(false),
+  );
+}
 
-      await pane.handleHeaderSessionAction({ kind: "continue-in-terminal" }, row);
-      paint(row);
-      const command =
+function directSession(key: string, agentId?: string): GatewaySessionRow {
+  return { key, agentId, kind: "direct", updatedAt: 0 };
+}
+
+function createTerminalPane(client = gateway(), compact = false) {
+  const { pane, state } = createTestChatPane({
+    client,
+    sessions: createSessionCapabilityFixture(),
+  });
+  getPaneTestRuntime(pane).mergedChrome = compact;
+  getPaneTestRuntime(pane).compact = compact;
+  const container = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => container.remove());
+  const paint = (
+    row: GatewaySessionRow | undefined,
+    workspace = createPaneHeaderWorkspaceFixture(state),
+  ) => {
+    renderPaneHeaderInto(
+      pane.renderPaneHeader(workspace, row, false, undefined, false, null),
+      container,
+    );
+    flush();
+  };
+  const panelActionIds = () =>
+    [...container.querySelectorAll('.chat-pane__layout-menu button[role^="menuitem"]')].map(
+      (item) => item.getAttribute("data-value"),
+    );
+  const topButton = (label: string) =>
+    container.querySelector(`button[aria-label="${label}"]:not([role^="menuitem"])`);
+  const session = directSession(state.sessionKey);
+  return { pane, state, container, paint, panelActionIds, topButton, session };
+}
+
+it.each(["session", "owner", "target", "client", "reconnect"] as const)(
+  "closes terminal continuation after a %s ownership change",
+  async (change) => {
+    const client = gateway({ gatewayUrl: "wss://gateway.example/control" });
+    const { pane, container, paint } = createTerminalPane(client);
+    const row = directSession("bare-session", "row-agent");
+
+    await runPaneHeaderAction(pane, { kind: "continue-in-terminal" }, row);
+    paint(row);
+    const command = await waitForSolid(() => {
+      const text =
         container.querySelector(".continue-in-terminal-dialog .login-gate__command code")
           ?.textContent ?? "";
-      expect(command).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
-      expect(decodeResumeHandoff(command.slice("openclaw resume --handoff ".length))).toEqual({
-        version: 1,
-        sessionKey: "agent:row-agent:bare-session",
-        gatewayUrl: "wss://gateway.example/control",
-      });
+      expect(text).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
+      return text;
+    });
+    expect(decodeResumeHandoff(command.slice("openclaw resume --handoff ".length))).toEqual({
+      version: 1,
+      sessionKey: "agent:row-agent:bare-session",
+      gatewayUrl: "wss://gateway.example/control",
+    });
 
-      if (change === "owner") {
-        paint({ ...row, agentId: "other-agent" });
-      } else if (change === "target") {
-        pane.context.gateway.connection.gatewayUrl = "wss://other.example/control";
-        paint(row);
-        pane.context.gateway.connection.gatewayUrl = "ws://example.test";
-      } else if (change === "client") {
-        pane.context.gateway.snapshot.client = {
-          gatewayUrl: "wss://replacement.example/control",
-        } as GatewayBrowserClient;
-        paint(row);
-        pane.context.gateway.snapshot.client = client;
-      } else if (change === "reconnect") {
-        pane.connectionGeneration += 1;
-        paint(row);
-        pane.connectionGeneration -= 1;
-      } else {
-        paint(replacementRow);
-      }
-
-      expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    if (change === "owner") {
+      paint({ ...row, agentId: "other-agent" });
+    } else if (change === "target") {
+      pane.context.gateway.connection.gatewayUrl = "wss://other.example/control";
       paint(row);
-      expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
-    },
-  );
-
-  it("disables terminal continuation with query-specific guidance", () => {
-    const client = {
-      gatewayUrl: "wss://gateway.example/control?route=alpha",
-    } as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const row = {
-      key: "main",
-      agentId: "alpha",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
-
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        row,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
-    );
-
-    const menu = container.querySelector<
-      HTMLElement & {
-        actionDisabledReasons: Record<string, string>;
-      }
-    >("openclaw-chat-header-session-menu");
-    expect(menu?.actionDisabledReasons["continue-in-terminal"]).toBe(
-      "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
-    );
-  });
-
-  it("exposes the terminal as a side-panel tab only when available", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const session = {
-      key: state.sessionKey,
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    state.terminalAvailable = true;
-    const container = document.createElement("div");
-    const renderHeader = () =>
-      render(
-        pane.renderPaneHeader(
-          {
-            ...createSessionWorkspaceProps(state),
-            onToggleTerminal: state.terminalAvailable
-              ? () => state.updateSidebarLayout(openSlot(state.sidebarLayout, "terminal"))
-              : undefined,
-          },
-          createBackgroundTasksProps(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
-    const panelActions = () =>
-      container.querySelector<
-        HTMLElement & { panelActions: Array<{ id: string; onActivate: () => void }> }
-      >("openclaw-chat-header-session-menu")?.panelActions ?? [];
-
-    renderHeader();
-    expect(container.querySelector('[aria-label="Toggle terminal"]')).toBeNull();
-    panelActions()
-      .find((action) => action.id === "terminal")
-      ?.onActivate();
-    expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toContain("terminal");
-
-    state.terminalAvailable = false;
-    renderHeader();
-    expect(panelActions().some((action) => action.id === "terminal")).toBe(false);
-  });
-
-  it("exposes Desktop as a side-panel action only for observable session targets", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const localSession = {
-      key: state.sessionKey,
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
-    const renderHeader = (session: GatewaySessionRow | undefined) => {
-      render(
-        pane.renderPaneHeader(
-          createSessionWorkspaceProps(state),
-          createBackgroundTasksProps(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
-    };
-    const panelActionIds = () =>
-      container
-        .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
-          "openclaw-chat-header-session-menu",
-        )
-        ?.panelActions.map((action) => action.id) ?? [];
-    const snapshot = pane.context.gateway.snapshot;
-    snapshot.hello = desktopHello([], ["operator.admin"]);
-    renderHeader(localSession);
-    expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
-
-    snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
-    const onToggleDesktop = vi.fn();
-    const renderDesktopHeader = (session: GatewaySessionRow | undefined) => {
-      render(
-        pane.renderPaneHeader(
-          { ...createSessionWorkspaceProps(state), onToggleDesktop },
-          createBackgroundTasksProps(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
-    };
-    {
-      const targetCases: Array<{
-        name: string;
-        session: GatewaySessionRow;
-      }> = [
-        { name: "local", session: localSession },
-        {
-          name: "cloud",
-          session: {
-            ...localSession,
-            execNode: "stale-node",
-            placement: {
-              state: "active",
-              environmentId: "worker-desktop-1",
-            } as GatewaySessionRow["placement"],
-          },
-        },
-        {
-          name: "node",
-          session: { ...localSession, execNode: "  paired-node  " },
-        },
-      ];
-      for (const testCase of targetCases) {
-        renderDesktopHeader(testCase.session);
-        expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
-        expect(panelActionIds(), testCase.name).toContain("desktop");
-        const menu = container.querySelector<
-          HTMLElement & { panelActions: Array<{ id: string; onActivate: () => void }> }
-        >("openclaw-chat-header-session-menu");
-        menu?.panelActions.find((action) => action.id === "desktop")?.onActivate();
-        expect(onToggleDesktop, testCase.name).toHaveBeenCalledTimes(1);
-        onToggleDesktop.mockClear();
-      }
-
-      for (const placement of [
-        { state: "requested" },
-        { state: "reclaimed", environmentId: "former-worker" },
-      ]) {
-        renderDesktopHeader({
-          ...localSession,
-          execNode: "must-not-fall-back",
-          placement: placement as GatewaySessionRow["placement"],
-        });
-        expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
-        expect(panelActionIds()).not.toContain("desktop");
-      }
-
-      renderDesktopHeader(undefined);
-      expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
-      expect(panelActionIds()).not.toContain("desktop");
-
-      snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
-      renderDesktopHeader(localSession);
-      expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+      pane.context.gateway.connection.gatewayUrl = "ws://example.test";
+    } else if (change === "client") {
+      pane.context.gateway.snapshot.client = gateway({
+        gatewayUrl: "wss://replacement.example/control",
+      });
+      paint(row);
+      pane.context.gateway.snapshot.client = client;
+    } else if (change === "reconnect") {
+      pane.connectionGeneration += 1;
+      paint(row);
+      pane.connectionGeneration -= 1;
+    } else {
+      paint({ ...row, key: "other-session" });
     }
+
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    paint(row);
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+  },
+);
+
+it("disables terminal continuation with query-specific guidance", async () => {
+  const client = gateway({
+    gatewayUrl: "wss://gateway.example/control?route=alpha",
   });
+  const { container, paint } = createTerminalPane(client);
+  const row = directSession("main", "alpha");
+  paint(row);
 
-  it("keeps Browser and Tasks reachable in the topbar", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const session = {
-      key: state.sessionKey,
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
-    const onToggleTasks = vi.fn();
-    const backgroundTasks = {
-      ...createBackgroundTasksProps(state),
-      onToggleCollapsed: onToggleTasks,
-    };
-    const renderHeader = () =>
-      render(
-        pane.renderPaneHeader(
-          createSessionWorkspaceProps(state),
-          backgroundTasks,
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
-    const panelActionIds = () =>
-      container
-        .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
-          "openclaw-chat-header-session-menu",
-        )
-        ?.panelActions.map((action) => action.id) ?? [];
+  const menu = container.querySelector<HTMLElement>("openclaw-chat-header-session-menu")!;
+  await selectNativeMenu(menu, "submenu:advanced");
+  await selectNativeMenu(menu, "submenu:open-in");
+  const continuation = await waitForSolid(() => {
+    const item = menu.querySelector<HTMLButtonElement>('[data-value="continue-in-terminal"]');
+    expect(item).not.toBeNull();
+    return item!;
+  });
+  expect(continuation.disabled).toBe(true);
+  expect(continuation.title).toBe(
+    "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+  );
+});
 
-    state.browserPanelAvailable = false;
-    renderHeader();
-    expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
-    expect(panelActionIds()).not.toContain("browser");
-    container.querySelector<HTMLButtonElement>(".chat-tasks-toggle")?.click();
-    expect(onToggleTasks).toHaveBeenCalledOnce();
+it("offers Terminal in the compact fallback only when available", async () => {
+  const { state, container, paint, session, panelActionIds, topButton } = createTerminalPane(
+    undefined,
+    true,
+  );
+  state.terminalAvailable = true;
+  const renderHeader = () =>
+    paint(session, {
+      ...createPaneHeaderWorkspaceFixture(state),
+      onToggleTerminal: state.terminalAvailable
+        ? () => state.updateSidebarLayout(openSlot(state.sidebarLayout, "terminal"))
+        : undefined,
+    });
 
-    state.browserPanelAvailable = true;
-    const onToggleBrowser = vi.fn();
-    render(
-      pane.renderPaneHeader(
-        { ...createSessionWorkspaceProps(state), onToggleBrowser },
-        backgroundTasks,
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
+  renderHeader();
+  expect(topButton("Toggle terminal")).toBeNull();
+  await selectPanel(container, "terminal");
+  expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toContain("terminal");
+
+  state.terminalAvailable = false;
+  renderHeader();
+  expect(panelActionIds().includes("terminal")).toBe(false);
+});
+
+it("offers Desktop in the compact fallback only for observable session targets", async () => {
+  const fixture = createTerminalPane(undefined, true);
+  const { pane, state, container, paint } = fixture;
+  const { session: localSession, panelActionIds, topButton } = fixture;
+  const snapshot = pane.context.gateway.snapshot;
+  snapshot.hello = desktopHello([], ["operator.admin"]);
+  paint(localSession);
+  await openPanelMenu(container);
+  expect(topButton("Toggle desktop panel")).toBeNull();
+  expect(panelActionIds()).not.toContain("desktop");
+
+  snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
+  const onToggleDesktop = vi.fn();
+  const renderDesktopHeader = (session: GatewaySessionRow | undefined) =>
+    paint(session, { ...createPaneHeaderWorkspaceFixture(state), onToggleDesktop });
+  const targetCases: Array<[string, GatewaySessionRow]> = [
+    ["local", localSession],
+    ["cloud", { ...activePlacementSession(localSession.key), execNode: "stale-node" }],
+    ["node", { ...localSession, execNode: "  paired-node  " }],
+  ];
+  for (const [name, session] of targetCases) {
+    renderDesktopHeader(session);
+    await openPanelMenu(container);
+    expect(topButton("Toggle desktop panel")).toBeNull();
+    expect(panelActionIds(), name).toContain("desktop");
+    await selectPanel(container, "desktop");
+    expect(onToggleDesktop, name).toHaveBeenCalledTimes(1);
+    onToggleDesktop.mockClear();
+  }
+
+  for (const placement of [
+    { state: "requested" },
+    { state: "reclaimed", environmentId: "former-worker" },
+    undefined,
+  ]) {
+    renderDesktopHeader(
+      placement && {
+        ...localSession,
+        execNode: "must-not-fall-back",
+        placement: placement as GatewaySessionRow["placement"],
+      },
     );
-    container.querySelector<HTMLButtonElement>(".chat-browser-panel-toggle")?.click();
-    expect(onToggleBrowser).toHaveBeenCalledOnce();
-    expect(panelActionIds()).toContain("browser");
-    container
-      .querySelector<HTMLElement & { panelActions: Array<{ id: string; onActivate: () => void }> }>(
-        "openclaw-chat-header-session-menu",
-      )
-      ?.panelActions.find((action) => action.id === "browser")
-      ?.onActivate();
-    expect(onToggleBrowser).toHaveBeenCalledTimes(2);
-  });
+    await openPanelMenu(container);
+    expect(topButton("Toggle desktop panel")).toBeNull();
+    expect(panelActionIds()).not.toContain("desktop");
+  }
+
+  snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
+  renderDesktopHeader(localSession);
+  await openPanelMenu(container);
+  expect(topButton("Toggle desktop panel")).toBeNull();
+  expect(panelActionIds()).not.toContain("desktop");
+});
+
+it("keeps Browser reachable through the compact fallback", async () => {
+  const { state, container, paint, session, panelActionIds } = createTerminalPane(undefined, true);
+  state.browserPanelAvailable = false;
+  paint(session);
+  await openPanelMenu(container);
+  expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
+  expect(panelActionIds()).not.toContain("browser");
+
+  state.browserPanelAvailable = true;
+  const onToggleBrowser = vi.fn();
+  paint(session, { ...createPaneHeaderWorkspaceFixture(state), onToggleBrowser });
+  await openPanelMenu(container);
+  expect(panelActionIds()).toContain("browser");
+  await selectPanel(container, "browser");
+  await waitForSolid(() => expect(onToggleBrowser).toHaveBeenCalledOnce());
 });

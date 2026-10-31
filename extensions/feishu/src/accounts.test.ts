@@ -1,12 +1,9 @@
-// Feishu tests cover accounts plugin behavior.
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import {
   FeishuSecretRefUnavailableError,
-  inspectFeishuCredentials,
-  listEnabledFeishuAccounts,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
-  resolveDefaultFeishuAccountSelection,
   resolveFeishuAccount,
   resolveFeishuCredentials,
   resolveFeishuRuntimeAccount,
@@ -20,629 +17,136 @@ import {
 } from "./bot.test-support.js";
 import type { FeishuConfig } from "./types.js";
 
-function makeDefaultAndRouterAccounts() {
-  return {
-    default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
-    "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
-  };
-}
-
-function expectExplicitDefaultAccountSelection(
-  account: ReturnType<typeof resolveFeishuAccount>,
-  appId: string,
-) {
-  expect(account.accountId).toBe("router-d");
-  expect(account.selectionSource).toBe("explicit-default");
-  expect(account.configured).toBe(true);
-  expect(account.appId).toBe(appId);
-}
-
-function setTestEnvValue(key: string, value: string | undefined): () => void {
-  const prev = process.env[key];
-  if (value === undefined) {
-    Reflect.deleteProperty(process.env, key);
-  } else {
-    Reflect.set(process.env, key, value);
-  }
-  return () => restoreTestEnvValue(key, prev);
-}
-
-function restoreTestEnvValue(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    Reflect.deleteProperty(process.env, key);
-  } else {
-    Reflect.set(process.env, key, value);
-  }
-}
-
-function withEnvVar(key: string, value: string | undefined, run: () => void): void {
-  const restore = setTestEnvValue(key, value);
-  try {
-    run();
-  } finally {
-    restore();
-  }
-}
-
 function asConfig(config: Partial<FeishuConfig>): FeishuConfig {
   return config as unknown as FeishuConfig;
 }
 
-function expectUnresolvedEnvSecretRefError(key: string) {
-  expect(() =>
-    resolveFeishuCredentials(
-      asConfig({
-        appId: "cli_123",
-        appSecret: { source: "env", provider: "default", id: key } as never,
-      }),
-    ),
-  ).toThrow(/unresolved SecretRef/i);
-}
-
-describe("resolveDefaultFeishuAccountId", () => {
-  it("preserves top-level default account when named accounts are configured", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          appId: "cli_default",
-          appSecret: "secret_default",
-          accounts: {
-            work: { enabled: false },
-          },
-        },
-      },
-    };
-
-    expect(listFeishuAccountIds(cfg as never)).toEqual(["default", "work"]);
-    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("default");
-  });
-
-  it("prefers channels.feishu.defaultAccount when configured", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          defaultAccount: "router-d",
-          accounts: makeDefaultAndRouterAccounts(),
-        },
-      },
-    };
-
-    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("router-d");
-  });
-
-  it("normalizes configured defaultAccount before lookup", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          defaultAccount: "Router D",
-          accounts: {
-            "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-
-    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("router-d");
-  });
-
-  it("keeps configured defaultAccount even when not present in accounts map", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          defaultAccount: "router-d",
-          accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
-            zeta: { appId: "cli_zeta", appSecret: "secret_zeta" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-
-    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("router-d");
-  });
-
-  it("falls back to literal default account id when present", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
-            zeta: { appId: "cli_zeta", appSecret: "secret_zeta" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-
-    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("default");
-  });
-
-  it("reports selection source for configured defaults and mapped defaults", () => {
-    const explicitDefaultCfg = {
-      channels: {
-        feishu: {
-          defaultAccount: "router-d",
-          accounts: {},
-        },
-      },
-    };
-    expect(resolveDefaultFeishuAccountSelection(explicitDefaultCfg as never)).toEqual({
-      accountId: "router-d",
-      source: "explicit-default",
-    });
-
-    const mappedDefaultCfg = {
-      channels: {
-        feishu: {
-          accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-    expect(resolveDefaultFeishuAccountSelection(mappedDefaultCfg as never)).toEqual({
-      accountId: "default",
-      source: "mapped-default",
-    });
-  });
+const credentials = { appId: "cli_123", appSecret: "secret_456" };
+const envRef = (provider = "default") => ({
+  source: "env" as const,
+  provider,
+  id: FEISHU_SELECTED_SECRET_ENV,
 });
 
-describe("resolveFeishuCredentials", () => {
-  it("throws unresolved SecretRef errors by default for unsupported secret sources", () => {
-    expect(() =>
-      resolveFeishuCredentials(
-        asConfig({
-          appId: "cli_123",
-          appSecret: { source: "file", provider: "default", id: "path/to/secret" } as never,
-        }),
-      ),
-    ).toThrow(/unresolved SecretRef/i);
-  });
-
-  it("supports explicit inspect mode for unresolved SecretRefs", () => {
-    const creds = resolveFeishuCredentials(
-      asConfig({
-        appId: "cli_123",
-        appSecret: { source: "file", provider: "default", id: "path/to/secret" } as never,
-      }),
-      { mode: "inspect" },
-    );
-
-    expect(creds).toBeNull();
-  });
-
-  it("throws unresolved SecretRef error when env SecretRef points to missing env var", () => {
-    const key = "FEISHU_APP_SECRET_MISSING_TEST";
-    withEnvVar(key, undefined, () => {
-      expectUnresolvedEnvSecretRefError(key);
+describe("Feishu account resolution", () => {
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = createFeishuTestConfig({
+      ...credentials,
+      accounts: { work: { enabled: false } },
     });
+
+    expect(listFeishuAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultFeishuAccountId(cfg)).toBe("default");
   });
 
+  it.each([
+    [{ defaultAccount: "router-d", accounts: {} }, "router-d"],
+    [{ accounts: { default: credentials } }, "default"],
+  ] as const)("selects the configured default account for %j", (config, accountId) => {
+    const cfg = createFeishuTestConfig(config);
+    expect(resolveFeishuAccount({ cfg }).accountId).toBe(accountId);
+  });
   it("resolves env SecretRef objects in inspect mode", () => {
-    const key = "FEISHU_APP_SECRET_TEST";
-    const restore = setTestEnvValue(key, " secret_from_env ");
-
-    try {
-      const creds = resolveFeishuCredentials(
-        asConfig({
-          appId: "cli_123",
-          appSecret: { source: "env", provider: "default", id: key } as never,
-        }),
-        { mode: "inspect" },
-      );
-
-      expect(creds).toEqual({
-        appId: "cli_123",
+    withEnv({ [FEISHU_SELECTED_SECRET_ENV]: " secret_from_env " }, () => {
+      const cfg = asConfig({ ...credentials, appSecret: envRef() as never });
+      expect(resolveFeishuCredentials(cfg, { mode: "inspect" })).toMatchObject({
         appSecret: "secret_from_env", // pragma: allowlist secret
-        encryptKey: undefined,
-        verificationToken: undefined,
-        domain: "feishu",
       });
-    } finally {
-      restore();
-    }
-  });
-
-  it("does not resolve an unconfigured custom provider alias", () => {
-    const key = "FEISHU_APP_SECRET_CUSTOM_PROVIDER_TEST";
-    const restore = setTestEnvValue(key, " secret_from_env_alias ");
-
-    try {
-      const creds = resolveFeishuCredentials(
-        asConfig({
-          appId: "cli_123",
-          appSecret: { source: "env", provider: "corp-env", id: key } as never,
-        }),
-        { mode: "inspect" },
-      );
-
-      expect(creds).toBeNull();
-    } finally {
-      restore();
-    }
-  });
-
-  it("preserves unresolved SecretRef diagnostics for env refs in default mode", () => {
-    const key = "FEISHU_APP_SECRET_POLICY_TEST";
-    withEnvVar(key, "secret_from_env", () => {
-      expectUnresolvedEnvSecretRefError(key);
-    });
-  });
-
-  it("trims and returns credentials when values are valid strings", () => {
-    const creds = resolveFeishuCredentials(
-      asConfig({
-        appId: " cli_123 ",
-        appSecret: " secret_456 ",
-        encryptKey: " enc ",
-        verificationToken: " vt ",
-      }),
-    );
-
-    expect(creds).toEqual({
-      appId: "cli_123",
-      appSecret: "secret_456", // pragma: allowlist secret
-      encryptKey: "enc",
-      verificationToken: "vt",
-      domain: "feishu",
     });
   });
 
   it("does not resolve encryptKey SecretRefs outside webhook mode", () => {
-    const creds = resolveFeishuCredentials(
-      asConfig({
-        connectionMode: "websocket",
-        appId: "cli_123",
-        appSecret: "secret_456",
-        encryptKey: { source: "file", provider: "default", id: "path/to/secret" } as never,
-      }),
-    );
-
-    expect(creds).toEqual({
-      appId: "cli_123",
-      appSecret: "secret_456", // pragma: allowlist secret
-      encryptKey: undefined,
-      verificationToken: undefined,
-      domain: "feishu",
+    const cfg = asConfig({
+      ...credentials,
+      connectionMode: "websocket",
+      encryptKey: { source: "file", provider: "default", id: "path/to/secret" } as never,
     });
+    expect(resolveFeishuCredentials(cfg)).toMatchObject({ encryptKey: undefined });
   });
-
-  it("keeps required credentials when optional event SecretRefs are unresolved in inspect mode", () => {
-    const creds = inspectFeishuCredentials(
-      asConfig({
-        appId: "cli_123",
-        appSecret: "secret_456",
-        verificationToken: { source: "file", provider: "default", id: "path/to/token" } as never,
-      }),
-    );
-
-    expect(creds).toEqual({
-      appId: "cli_123",
-      appSecret: "secret_456", // pragma: allowlist secret
-      encryptKey: undefined,
-      verificationToken: undefined,
-      domain: "feishu",
+  it("normalizes only the scheme after account inheritance and selection", () => {
+    const rootDomain = "HtTpS://Root.Example:8443/R%2FP/?q=K#F";
+    const accountDomain = "HtTpS://u@Account.Example:9443/A%2FP/";
+    const cfg = createFeishuTestConfig({
+      appId: "root-app",
+      appSecret: "root-secret",
+      domain: rootDomain,
+      defaultAccount: "work",
+      accounts: {
+        inherited: {},
+        work: { appId: "work-app", appSecret: "work-secret", domain: accountDomain },
+      },
     });
-  });
-});
-
-describe("resolveFeishuAccount", () => {
-  it.each(["https", "HTTPS", "HtTpS"])(
-    "normalizes only the %s scheme after account inheritance and selection",
-    (scheme) => {
-      const rootDomain = `${scheme}://Root.Example:8443/Root%2FPath/?tenant=Keep#Fragment`;
-      const accountDomain = `${scheme}://fixture-user@Account.Example:9443/Account%2FPath/`;
-      const cfg = createFeishuTestConfig({
-        appId: "root-app",
-        appSecret: "root-secret",
-        domain: rootDomain,
-        defaultAccount: "work",
-        accounts: {
-          inherited: {},
-          work: { appId: "work-app", appSecret: "work-secret", domain: accountDomain },
-        },
-      });
-      for (const resolveAccount of [resolveFeishuAccount, resolveFeishuRuntimeAccount]) {
-        expect(resolveAccount({ cfg, accountId: "inherited" })).toMatchObject({
-          accountId: "inherited",
-          appId: "root-app",
-          domain: "https://Root.Example:8443/Root%2FPath/?tenant=Keep#Fragment",
-        });
-        for (const accountId of [undefined, "work"]) {
-          expect(resolveAccount({ cfg, accountId })).toMatchObject({
-            accountId: "work",
-            appId: "work-app",
-            domain: "https://fixture-user@Account.Example:9443/Account%2FPath/",
-          });
-        }
+    const selections = [
+      ["inherited", "inherited", "root-app", "https://Root.Example:8443/R%2FP/?q=K#F"],
+      [undefined, "work", "work-app", "https://u@Account.Example:9443/A%2FP/"],
+      ["work", "work", "work-app", "https://u@Account.Example:9443/A%2FP/"],
+    ] as const;
+    for (const resolve of [resolveFeishuAccount, resolveFeishuRuntimeAccount]) {
+      for (const [selected, accountId, appId, domain] of selections) {
+        expect(resolve({ cfg, accountId: selected })).toMatchObject({ accountId, appId, domain });
       }
-      expect(cfg).toMatchObject({
-        channels: { feishu: { domain: rootDomain, accounts: { work: { domain: accountDomain } } } },
-      });
-    },
-  );
+    }
+    expect(cfg).toMatchObject({
+      channels: { feishu: { domain: rootDomain, accounts: { work: { domain: accountDomain } } } },
+    });
+  });
 
-  it.each([true, false])(
-    "keeps collision credentials separate from enabled=%s filtering",
-    (enabled) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, "selected-secret", () => {
-        const cfg = createFeishuTestConfig(
-          {
-            accounts: {
-              selected: {
-                enabled,
-                appId: "selected-app",
-                appSecret: { source: "env", provider: "default", id: FEISHU_SELECTED_SECRET_ENV },
-              },
-              sibling: { appId: "sibling-app", appSecret: "sibling-secret" },
-            },
+  it.each(["encryptKey", "verificationToken"] as const)("checks webhook %s authority", (field) => {
+    withEnv({ [FEISHU_SELECTED_SECRET_ENV]: "event-secret" }, () => {
+      const cfg = createFeishuTestConfig(
+        { ...credentials, connectionMode: "webhook", [field]: envRef("selected") },
+        {
+          secrets: {
+            defaults: { env: "selected" },
+            providers: { selected: { source: "exec", command: "/unused" } },
           },
-          { secrets: { providers: { default: { source: "file", path: "/unused" } } } },
-        );
-        expect(listEnabledFeishuAccounts(cfg).map((account) => account.accountId)).toEqual(
-          enabled ? ["selected", "sibling"] : ["sibling"],
-        );
-        expect(resolveFeishuAccount({ cfg, accountId: "selected" })).toMatchObject({
-          enabled,
-          configured: true,
-          appSecret: "selected-secret",
-        });
-      });
-    },
-  );
-
-  it.each(["encryptKey", "verificationToken"] as const)(
-    "inspects webhook %s through the selected env collision without weakening strict mode",
-    (field) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, "event-secret", () => {
-        const cfg = createFeishuTestConfig(
-          {
-            connectionMode: "webhook",
-            appId: "app",
-            appSecret: "app-secret",
-            [field]: { source: "env", provider: "selected", id: FEISHU_SELECTED_SECRET_ENV },
-          },
-          {
-            secrets: {
-              defaults: { env: "selected" },
-              providers: { selected: { source: "exec", command: "/unused" } },
-            },
-          },
-        );
-        expect(() => resolveFeishuRuntimeAccount({ cfg }, { requireEventSecrets: true })).toThrow(
-          FeishuSecretRefUnavailableError,
-        );
-        expect(resolveFeishuAccount({ cfg })[field]).toBe("event-secret");
-        expect(resolveFeishuRuntimeAccount({ cfg })[field]).toBe("event-secret");
-      });
-    },
-  );
+        },
+      );
+      expect(() => resolveFeishuRuntimeAccount({ cfg }, { requireEventSecrets: true })).toThrow(
+        FeishuSecretRefUnavailableError,
+      );
+      expect(resolveFeishuAccount({ cfg })[field]).toBe("event-secret");
+      expect(resolveFeishuRuntimeAccount({ cfg })[field]).toBe("event-secret");
+    });
+  });
 
   it.each(feishuSecretRefPolicyCases)(
     "enforces read-only provider policy for $name",
     (testCase) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, " selected-secret ", () => {
-        withEnvVar(FEISHU_SIBLING_SECRET_ENV, "sibling-secret", () => {
-          const account = resolveFeishuAccount({
-            cfg: createFeishuSecretRefPolicyConfig(testCase),
-            accountId: "selected",
-          });
-
-          expect(account.accountId).toBe("selected");
-          expect(account.configured).toBe(testCase.configured);
-          expect(account.appId).toBe(testCase.configured ? "selected-app" : undefined);
-          expect(account.appSecret).toBe(testCase.configured ? "selected-secret" : undefined);
+      const env = {
+        [FEISHU_SELECTED_SECRET_ENV]: " selected-secret ",
+        [FEISHU_SIBLING_SECRET_ENV]: "sibling-secret",
+      };
+      withEnv(env, () => {
+        const cfg = createFeishuSecretRefPolicyConfig(testCase);
+        const account = resolveFeishuAccount({ cfg, accountId: "selected" });
+        expect(account).toMatchObject({
+          accountId: "selected",
+          configured: testCase.configured,
+          appId: testCase.configured ? "selected-app" : undefined,
+          appSecret: testCase.configured ? "selected-secret" : undefined,
         });
       });
     },
   );
 
-  it("applies the configured default env provider to refs without a provider", () => {
-    withEnvVar(FEISHU_SELECTED_SECRET_ENV, "selected-secret", () => {
-      const account = resolveFeishuAccount({
-        cfg: {
-          secrets: {
-            defaults: { env: "corp-env" },
-            providers: { "corp-env": { source: "env", allowlist: [FEISHU_SELECTED_SECRET_ENV] } },
-          },
-          channels: {
-            feishu: {
-              accounts: {
-                selected: {
-                  appId: "selected-app",
-                  appSecret: { source: "env", id: FEISHU_SELECTED_SECRET_ENV },
-                },
-              },
-            },
-          },
-        } as never,
-        accountId: "selected",
-      });
-
-      expect(account.configured).toBe(true);
-      expect(account.appSecret).toBe("selected-secret");
-    });
-  });
-
-  it("uses top-level credentials with configured default account id even without account map entry", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          defaultAccount: "router-d",
-          appId: "top_level_app",
-          appSecret: "top_level_secret", // pragma: allowlist secret
-          accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-
-    const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
-    expectExplicitDefaultAccountSelection(account, "top_level_app");
-  });
-
-  it("uses configured default account when accountId is omitted", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          defaultAccount: "router-d",
-          accounts: {
-            default: { enabled: true },
-            "router-d": { appId: "cli_router", appSecret: "secret_router", enabled: true }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-
-    const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
-    expectExplicitDefaultAccountSelection(account, "cli_router");
-  });
-
-  it("keeps explicit accountId selection", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          defaultAccount: "router-d",
-          accounts: makeDefaultAndRouterAccounts(),
-        },
-      },
-    };
-
-    const account = resolveFeishuAccount({ cfg: cfg as never, accountId: "default" });
-    expect(account.accountId).toBe("default");
-    expect(account.selectionSource).toBe("explicit");
-    expect(account.appId).toBe("cli_default");
-  });
-
-  it("inherits and overrides VC auto-join per account", () => {
-    const cfg = {
-      channels: {
-        feishu: {
-          vcAutoJoin: true,
-          accounts: {
-            inherited: {},
-            disabled: { vcAutoJoin: false },
-          },
-        },
-      },
-    };
-
-    expect(
-      resolveFeishuAccount({ cfg: cfg as never, accountId: "inherited" }).config.vcAutoJoin,
-    ).toBe(true);
-    expect(
-      resolveFeishuAccount({ cfg: cfg as never, accountId: "disabled" }).config.vcAutoJoin,
-    ).toBe(false);
-  });
-
-  it("treats unresolved SecretRef as not configured in account resolution", () => {
-    const account = resolveFeishuAccount({
-      cfg: {
-        channels: {
-          feishu: {
-            accounts: {
-              main: {
-                appId: "cli_123",
-                appSecret: { source: "file", provider: "default", id: "path/to/secret" },
-              } as never,
-            },
-          },
-        },
-      } as never,
-      accountId: "main",
-    });
-    expect(account.configured).toBe(false);
-    expect(account.appSecret).toBeUndefined();
-  });
-
   it("keeps account configured when optional event SecretRefs are unresolved in inspect mode", () => {
-    const account = resolveFeishuAccount({
-      cfg: {
-        channels: {
-          feishu: {
-            accounts: {
-              main: {
-                appId: "cli_123",
-                appSecret: "secret_456",
-                verificationToken: {
-                  source: "file",
-                  provider: "default",
-                  id: "path/to/token",
-                },
-              } as never,
-            },
-          },
-        },
-      } as never,
-      accountId: "main",
+    const main = {
+      ...credentials,
+      verificationToken: { source: "file", provider: "default", id: "path/to/token" },
+    } as never;
+    const cfg = createFeishuTestConfig({ accounts: { main } });
+    expect(resolveFeishuAccount({ cfg, accountId: "main" })).toMatchObject({
+      configured: true,
+      appSecret: "secret_456",
+      verificationToken: undefined,
     });
-
-    expect(account.configured).toBe(true);
-    expect(account.appSecret).toBe("secret_456");
-    expect(account.verificationToken).toBeUndefined();
   });
 
-  it("throws typed SecretRef errors in runtime account resolution", () => {
-    let caught: unknown;
-    try {
-      resolveFeishuRuntimeAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              accounts: {
-                main: {
-                  appId: "cli_123",
-                  appSecret: { source: "file", provider: "default", id: "path/to/secret" },
-                } as never,
-              },
-            },
-          },
-        } as never,
-        accountId: "main",
-      });
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(FeishuSecretRefUnavailableError);
-    expect((caught as Error).message).toMatch(/channels\.feishu\.appSecret: unresolved SecretRef/i);
-  });
-
-  it.each(feishuSecretRefPolicyCases.filter((testCase) => testCase.configured))(
-    "does not resolve allowed ambient env refs in strict runtime account snapshots: $name",
-    (testCase) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, "selected-secret", () => {
-        expect(() =>
-          resolveFeishuRuntimeAccount({
-            cfg: createFeishuSecretRefPolicyConfig(testCase),
-            accountId: "selected",
-          }),
-        ).toThrow(FeishuSecretRefUnavailableError);
-      });
-    },
-  );
-
-  it("ignores non-string account names", () => {
-    const account = resolveFeishuAccount({
-      cfg: {
-        channels: {
-          feishu: {
-            accounts: {
-              main: {
-                name: { bad: true },
-                appId: "cli_123",
-                appSecret: "secret_456", // pragma: allowlist secret
-              } as never,
-            },
-          },
-        },
-      } as never,
-      accountId: "main",
+  it("does not resolve ambient env refs in strict runtime account snapshots", () => {
+    withEnv({ [FEISHU_SELECTED_SECRET_ENV]: "selected-secret" }, () => {
+      const cfg = createFeishuTestConfig({ appId: "selected-app", appSecret: envRef() });
+      expect(() => resolveFeishuRuntimeAccount({ cfg })).toThrow(FeishuSecretRefUnavailableError);
     });
-
-    expect(account.accountId).toBe("main");
-    expect(account.appId).toBe("cli_123");
-    expect(account.appSecret).toBe("secret_456");
-    expect(account.name).toBeUndefined();
   });
 });

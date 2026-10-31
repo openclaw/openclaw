@@ -1,13 +1,22 @@
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
+import {
+  readSessionMethodAccess,
+  sessionAccessRowForBatch,
+  type SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionMenuActionKind } from "./session-menu.ts";
+import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
+import { sessionPlacementActionReason } from "./session-placement-action.ts";
 
-type SessionMenuAccessRow = {
-  key: string;
-  sessionId?: string;
-  archived?: boolean;
+registerSessionOrganizationSharedEnglish();
+
+type SessionMenuAccessRow = Pick<
+  GatewaySessionRow,
+  "key" | "sessionId" | "archived" | "sharingRole"
+> & {
   pinnable?: boolean;
 };
 
@@ -16,45 +25,70 @@ export function sessionMenuReasons(params: {
   session: SessionMenuAccessRow;
   batchRows?: readonly SessionMenuAccessRow[] | null;
   cloudWorkerStopAction?: CloudWorkerStopAction | null;
+  placementRow?: GatewaySessionRow;
+  requiredProfile?: string;
 }): Partial<Record<SessionMenuActionKind, string>> {
   const { snapshot, session, batchRows = null, cloudWorkerStopAction } = params;
-  const reason = (request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }) => {
+  const reason = (request: SessionMethodAccessRequest) => {
     const access = readSessionMethodAccess(snapshot, request);
     return access.allowed ? undefined : access.reason;
   };
-  const patchReason = reason({
-    method: "sessions.patch",
-    params: { key: session.key, label: null },
+  const involvementReason = reason({
+    method: "sessions.setInvolvement",
+    requiredScope: "operator.read",
+    sessionScope: true,
   });
-  const batchPatchReason = (patch: Record<string, unknown>) => {
-    if (!batchRows) {
-      return patchReason;
-    }
-    const access = readSessionMethodAccess(snapshot, {
-      method: "sessions.patchMany",
-      params: {
-        targets: batchRows.map((row) => ({
-          key: row.key,
-          ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
-        })),
-        patch,
-      },
+  const patchReason = (patch: Record<string, unknown>, sessionScope = false) =>
+    reason({
+      method: "sessions.patch",
+      params: { key: session.key, ...patch },
+      sessionScope,
+      session,
+      allowDeferred: true,
     });
-    if (access.allowed) {
-      return undefined;
+  const renameReason = patchReason({ label: null }, true);
+  const promotionReason = !session.sessionId?.trim()
+    ? "Session lifecycle action requires a durable session identity."
+    : patchReason({ sidebarRoot: true }, true);
+  const iconReason = patchReason({ icon: null });
+  const colorReason = patchReason({ color: null });
+  const communicationReason = patchReason({ communication: null });
+  const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
+  const batchPatchReason = (patch: Record<string, unknown>, sessionScope = false) => {
+    if (!batchRows) {
+      return patchReason(patch, sessionScope);
     }
-    return access.cause === "method-unavailable" ? patchReason : access.reason;
+    return reason({
+      method: "sessions.patchMany",
+      sessionScope,
+      session: batchSession,
+      params: { patch },
+    });
   };
-  const unreadReason = batchPatchReason({ unread: true });
+  const unreadReason = batchPatchReason({ unread: true }, true);
   const categoryReason = batchPatchReason({ category: null });
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
     ? "Session lifecycle action requires a durable session identity."
-    : batchPatchReason({ archived: true });
+    : batchRows &&
+        snapshot?.phase === "connected" &&
+        !snapshot.deferredIntentCount &&
+        !snapshot.deferredIntentDraining
+      ? batchPatchReason({ archived: true }, true)
+      : lifecycleRows
+          .map((row) =>
+            reason({
+              method: "sessions.patch",
+              params: { key: row.key, archived: !row.archived },
+              sessionScope: true,
+              session: row,
+              allowDeferred: true,
+            }),
+          )
+          .find((value) => value !== undefined);
+  const snoozeReason = !session.sessionId?.trim()
+    ? "Session lifecycle action requires a durable session identity."
+    : patchReason({ snoozedUntil: null }, true);
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
@@ -63,6 +97,7 @@ export function sessionMenuReasons(params: {
     .map((row) =>
       reason({
         method: "sessions.delete",
+        allowDeferred: true,
         params: {
           key: row.key,
           ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
@@ -76,21 +111,26 @@ export function sessionMenuReasons(params: {
     : reason({
         method: "sessions.create",
         params: { parentSessionKey: session.key, fork: true },
+        sessionScope: true,
+        session,
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
+  const placementReason = params.placementRow
+    ? sessionPlacementActionReason(snapshot, params.placementRow, params.requiredProfile)
+    : undefined;
   return {
-    ...(patchReason
-      ? {
-          "toggle-pin": patchReason,
-          rename: patchReason,
-          "set-icon": patchReason,
-          "set-color": patchReason,
-        }
-      : {}),
+    ...(placementReason ? { "move-session": placementReason } : {}),
+    ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),
+    ...(renameReason ? { rename: renameReason } : {}),
+    ...(iconReason ? { "set-icon": iconReason } : {}),
+    ...(colorReason ? { "set-color": colorReason } : {}),
+    ...(communicationReason ? { "set-communication": communicationReason } : {}),
     ...(session.pinnable === false ? { "toggle-pin": t("sessionsView.pinRootSessionsOnly") } : {}),
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
+    ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),
     ...(categoryReason ? { "move-to-group": categoryReason } : {}),
     ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
+    ...(promotionReason ? { "move-to-top-level": promotionReason } : {}),
     ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(forkReason ? { fork: forkReason } : {}),
     ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),

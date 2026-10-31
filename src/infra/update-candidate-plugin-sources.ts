@@ -3,6 +3,54 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolvePluginDoctorContractArtifact } from "../plugins/doctor-contract-artifact.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
+import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
+import { inspectPluginSourceDependenciesAsync } from "../plugins/plugin-generation-worker.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+
+/** The candidate-state subprocess already isolates this synchronous source inspection. */
+export function inspectUpdateCandidatePluginSource(
+  entry: { pluginId: string; rootDir: string; entryFile: string },
+  warnings: string[],
+  dependencyLookupBoundary?: Parameters<typeof inspectPluginSourceDependencies>[1],
+) {
+  try {
+    return inspectPluginSourceDependencies([entry], dependencyLookupBoundary);
+  } catch (error) {
+    return handleSourceInspectionError(error, entry, warnings);
+  }
+}
+
+/** Doctor runs on the serving process; source acquisition belongs to its preparation worker. */
+export async function inspectUpdateCandidatePluginSourceAsync(
+  entry: { pluginId: string; rootDir: string; entryFile: string },
+  warnings: string[],
+  dependencyLookupBoundary?: Parameters<typeof inspectPluginSourceDependenciesAsync>[1],
+) {
+  try {
+    return await inspectPluginSourceDependenciesAsync([entry], dependencyLookupBoundary);
+  } catch (error) {
+    return handleSourceInspectionError(error, entry, warnings);
+  }
+}
+
+function handleSourceInspectionError(
+  error: unknown,
+  entry: { pluginId: string; entryFile: string },
+  warnings: string[],
+): undefined {
+  if (!(error instanceof SyntaxError)) {
+    throw error;
+  }
+  if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+    warnings.push(
+      `Update checks could not inspect plugin ${entry.pluginId} (${entry.entryFile}): ${error.message}. Continuing without dependency inspection for this entry.`.slice(
+        0,
+        UPDATE_RUN_TEXT_LIMIT,
+      ),
+    );
+  }
+  return undefined;
+}
 
 /** Snapshot the executable surfaces their owners can demand during candidate validation. */
 export function resolveUpdateCandidatePluginSourceEntries(
@@ -10,27 +58,29 @@ export function resolveUpdateCandidatePluginSourceEntries(
   config: OpenClawConfig,
 ) {
   const plugins = normalizePluginsConfig(config.plugins);
-  const entries = new Map<string, { rootDir: string; entryFile: string }>();
+  const entries = new Map<string, { pluginId: string; rootDir: string; entryFile: string }>();
   for (const candidate of candidates) {
     if (candidate.format === "bundle") {
       continue;
     }
     const manifest = loadPluginManifest(candidate.rootDir);
+    const pluginId =
+      candidate.effectivePluginId ?? (manifest.ok ? manifest.manifest.id : candidate.idHint);
     const enabled = resolveEffectiveEnableState({
-      id: candidate.effectivePluginId ?? (manifest.ok ? manifest.manifest.id : candidate.idHint),
+      id: pluginId,
       origin: candidate.origin,
       config: plugins,
       rootConfig: config,
     }).enabled;
     const packageManifest = candidate.packageManifest;
+    const addEntry = (entryFile: string, rootDir = candidate.rootDir) => {
+      entries.set(entryFile, { pluginId, rootDir, entryFile });
+    };
     if (enabled) {
-      entries.set(candidate.source, { rootDir: candidate.rootDir, entryFile: candidate.source });
+      addEntry(candidate.source);
     }
     if (candidate.setupSource && (enabled || packageManifest?.setupFeatures?.configPromotion)) {
-      entries.set(candidate.setupSource, {
-        rootDir: candidate.rootDir,
-        entryFile: candidate.setupSource,
-      });
+      addEntry(candidate.setupSource);
     }
     if (
       !manifest.ok ||
@@ -46,10 +96,7 @@ export function resolveUpdateCandidatePluginSourceEntries(
       packageManifest,
     });
     if (doctor) {
-      entries.set(doctor.modulePath, {
-        rootDir: doctor.boundaryRoot,
-        entryFile: doctor.modulePath,
-      });
+      addEntry(doctor.modulePath, doctor.boundaryRoot);
     }
   }
   return [...entries.values()];

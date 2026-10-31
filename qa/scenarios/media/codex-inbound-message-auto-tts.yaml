@@ -23,7 +23,7 @@ scenario:
     - test/e2e/qa-lab/runtime/media-talk-gateway.ts
     - src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts
     - extensions/codex/src/app-server/dynamic-tool-build.ts
-    - src/infra/outbound/message-action-tts.ts
+    - src/infra/outbound/message-action-send.ts
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/media-talk-gateway.ts

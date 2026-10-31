@@ -1,4 +1,3 @@
-// Matrix plugin module implements threads behavior.
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 
 type MatrixThreadReplies = "off" | "inbound" | "always";
@@ -11,7 +10,6 @@ export function resolveMatrixThreadSessionKeys(params: {
   baseSessionKey: string;
   threadId?: string | null;
   parentSessionKey?: string;
-  useSuffix?: boolean;
 }): { sessionKey: string; parentSessionKey?: string } {
   return resolveThreadSessionKeys({
     ...params,

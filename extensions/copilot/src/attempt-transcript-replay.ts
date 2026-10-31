@@ -6,6 +6,11 @@ export type AttemptTranscriptMessage =
   | NonNullable<TranscriptRecorder["message"]>
   | Extract<AgentMessage, { role: "assistant" | "toolResult" }>;
 
+export function readIdempotencyKey(message: object): string | undefined {
+  const key = "idempotencyKey" in message ? message.idempotencyKey : undefined;
+  return typeof key === "string" && key ? key : undefined;
+}
+
 export function userText(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -77,5 +82,37 @@ export function isCompleteToolGroup(
     results.every(
       (message, index) => message.role === "toolResult" && message.toolCallId === order[index],
     )
+  );
+}
+
+export function isSameUserTurn(
+  candidate: Exclude<AgentMessage, { role: "user" }> | TranscriptRecorder["message"],
+  current: TranscriptRecorder["message"],
+  currentRunUserKey: string,
+): boolean {
+  if (candidate?.role !== "user" || !current) {
+    return false;
+  }
+  if (candidate === current) {
+    return true;
+  }
+  const candidateKey = candidate.idempotencyKey;
+  const currentKey = current.idempotencyKey;
+  if (candidateKey !== undefined || currentKey !== undefined) {
+    if (candidateKey !== undefined && currentKey !== undefined) {
+      return candidateKey === currentKey;
+    }
+    if (
+      candidateKey === undefined ||
+      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
+    ) {
+      return false;
+    }
+  }
+  // The embedded-runner boundary identifies the active user as the last user
+  // and stamps it with this recorder timestamp; historical turns are ineligible.
+  return (
+    candidate.timestamp === current.timestamp &&
+    userText(candidate.content) === userText(current.content)
   );
 }

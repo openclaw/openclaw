@@ -6,14 +6,23 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, test } from "vitest";
 import { digestClawHubSkillTree } from "../../src/skills/lifecycle/skill-tree-digest.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
+const testNodeExecPath = resolveTestNodeExecPath();
 const checkerSource = path.resolve(
   process.env.OPENCLAW_TEST_RELEASE_VALIDATION_CHECKER ??
     ".agents/skills/openclaw-release-validation/scripts/check-update.mjs",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const writeJson = (file: string, value: unknown) => writeFile(file, JSON.stringify(value));
+const updateCommand = ["openclaw", "skills", "update", "@openclaw/release-validation", "--global"];
+
+function expectNoUpdate(result: Awaited<ReturnType<typeof runChecker>>, status: string) {
+  expect(result.status).toBe(status);
+  expect(result.update).toBeUndefined();
+}
 
 async function runChecker(
   scriptPath: string,
@@ -35,12 +44,9 @@ async function runChecker(
     };\n`,
   );
   const { stdout } = await execFileAsync(
-    process.execPath,
+    testNodeExecPath,
     ["--import", pathToFileURL(preloadPath).href, scriptPath],
-    {
-      env: { ...process.env, ...envOverrides },
-      maxBuffer: 1024 * 1024,
-    },
+    { env: { ...process.env, ...envOverrides }, maxBuffer: 1024 * 1024 },
   );
   return JSON.parse(stdout) as {
     localModifications: boolean;
@@ -65,6 +71,7 @@ test.each([".clawhub", ".clawdhub"])(
     }
     const scriptPath = path.join(scriptDirectory, "check-update.mjs");
     await writeFile(scriptPath, await readFile(checkerSource));
+    const check = (env?: NodeJS.ProcessEnv) => runChecker(scriptPath, workspace, env);
 
     const fileTreeSha256 = await digestClawHubSkillTree(skillDirectory);
     const skillFile = {
@@ -73,144 +80,80 @@ test.each([".clawhub", ".clawdhub"])(
     };
     await mkdir(path.join(skillDirectory, metadataDirectory));
     const originPath = path.join(skillDirectory, metadataDirectory, "origin.json");
+    const receipt = { installedAt: 1, ownerHandle: "openclaw", skillFile, fileTreeSha256 };
     const origin = {
+      ...receipt,
       version: 1,
       registry: "https://clawhub.ai",
       slug: "release-validation",
-      ownerHandle: "openclaw",
       installedVersion: "0.1.6",
-      installedAt: 1,
-      skillFile,
-      fileTreeSha256,
     };
-    await writeFile(originPath, JSON.stringify(origin));
+    await writeJson(originPath, origin);
     await mkdir(path.join(workspace, metadataDirectory));
     const lockPath = path.join(workspace, metadataDirectory, "lock.json");
-    const lockEntry = {
-      version: "0.1.6",
-      installedAt: 1,
-      ownerHandle: "openclaw",
-      skillFile,
-      fileTreeSha256,
-    };
-    await writeFile(
-      lockPath,
-      JSON.stringify({
-        version: 1,
-        skills: {
-          "release-validation": lockEntry,
-        },
-      }),
-    );
+    const lockEntry = { ...receipt, version: "0.1.6" };
+    const writeLock = (entry: unknown, file = lockPath) =>
+      writeJson(file, { version: 1, skills: { "release-validation": entry } });
+    await writeLock(lockEntry);
 
-    const clean = await runChecker(scriptPath, workspace);
-    expect(clean).toMatchObject({
+    expect(await check()).toMatchObject({
       localModifications: false,
       status: "update-available",
-      update: {
-        command: ["openclaw", "skills", "update", "@openclaw/release-validation", "--global"],
-      },
+      update: { command: updateCommand },
     });
 
     const stateLink = path.join(fixture, "state-link");
     await symlink(workspace, stateLink, process.platform === "win32" ? "junction" : "dir");
-    const throughStateLink = await runChecker(scriptPath, workspace, {
-      OPENCLAW_STATE_DIR: stateLink,
-    });
-    expect(throughStateLink.update?.command).toContain("--global");
-
-    const throughConfigPath = await runChecker(scriptPath, workspace, {
-      OPENCLAW_STATE_DIR: "",
-      OPENCLAW_CONFIG_PATH: path.join(workspace, "custom-openclaw.json"),
-    });
-    expect(throughConfigPath.update?.command).toContain("--global");
-
-    const throughTildeState = await runChecker(scriptPath, workspace, {
-      OPENCLAW_HOME: fixture,
-      OPENCLAW_STATE_DIR: "~/workspace",
-    });
-    expect(throughTildeState.update?.command).toContain("--global");
+    for (const env of [
+      { OPENCLAW_STATE_DIR: stateLink },
+      {
+        OPENCLAW_STATE_DIR: "",
+        OPENCLAW_CONFIG_PATH: path.join(workspace, "custom-openclaw.json"),
+      },
+      { OPENCLAW_HOME: fixture, OPENCLAW_STATE_DIR: "~/workspace" },
+    ]) {
+      expect((await check(env)).update?.command).toContain("--global");
+    }
 
     await writeFile(path.join(skillDirectory, "assets", "worksheet.md"), "locally edited\n");
-    const modified = await runChecker(scriptPath, workspace);
-    expect(modified).toMatchObject({
+    expect(await check()).toMatchObject({
       localModifications: true,
       status: "update-available",
-      update: {
-        command: [
-          "openclaw",
-          "skills",
-          "update",
-          "@openclaw/release-validation",
-          "--global",
-          "--force",
-        ],
-      },
+      update: { command: [...updateCommand, "--force"] },
     });
 
-    await writeFile(
-      originPath,
-      JSON.stringify({
-        ...origin,
-        registry: " https://clawhub.ai/ ",
-        ownerHandle: " OpenClaw ",
-      }),
-    );
-    const normalized = await runChecker(scriptPath, workspace);
-    expect(normalized.status).toBe("update-available");
-    expect(normalized.update).toBeDefined();
+    await writeJson(originPath, {
+      ...origin,
+      registry: " https://clawhub.ai/ ",
+      ownerHandle: " OpenClaw ",
+    });
+    expect(await check()).toMatchObject({
+      status: "update-available",
+      update: expect.any(Object),
+    });
 
-    const { ownerHandle: _ownerHandle, ...ownerlessOrigin } = origin;
-    await writeFile(originPath, JSON.stringify(ownerlessOrigin));
-    const ownerless = await runChecker(scriptPath, workspace);
-    expect(ownerless.status).toBe("different-source");
-    expect(ownerless.update).toBeUndefined();
-
-    await writeFile(originPath, JSON.stringify(origin));
-    await writeFile(
-      lockPath,
-      JSON.stringify({
-        version: 1,
-        skills: { "release-validation": { ...lockEntry, ownerHandle: "other-owner" } },
-      }),
-    );
-    const mismatched = await runChecker(scriptPath, workspace);
-    expect(mismatched.status).toBe("untracked");
-    expect(mismatched.update).toBeUndefined();
-
-    const { fileTreeSha256: _tree, skillFile: _skillFile, ...legacyLockEntry } = lockEntry;
-    await writeFile(
-      lockPath,
-      JSON.stringify({ version: 1, skills: { "release-validation": legacyLockEntry } }),
-    );
-    const preDigest = await runChecker(scriptPath, workspace);
-    expect(preDigest.status).toBe("untracked");
-    expect(preDigest.update).toBeUndefined();
-
-    await writeFile(originPath, JSON.stringify(origin));
-    await writeFile(
-      lockPath,
-      JSON.stringify({ version: 1, skills: { "release-validation": lockEntry } }),
-    );
+    for (const [originOverride, lockOverride, status] of [
+      [{ ownerHandle: undefined }, {}, "different-source"],
+      [{}, { ownerHandle: "other-owner" }, "untracked"],
+      [{}, { fileTreeSha256: undefined, skillFile: undefined }, "untracked"],
+    ] as const) {
+      await writeJson(originPath, { ...origin, ...originOverride });
+      await writeLock({ ...lockEntry, ...lockOverride });
+      expectNoUpdate(await check(), status);
+    }
+    await writeLock(lockEntry);
     const primaryOriginPath = path.join(skillDirectory, ".clawhub", "origin.json");
     await mkdir(path.dirname(primaryOriginPath), { recursive: true });
     await writeFile(primaryOriginPath, "{not json");
-    const malformedOrigin = await runChecker(scriptPath, workspace);
-    expect(malformedOrigin.status).toBe("check-failed");
-    expect(malformedOrigin.update).toBeUndefined();
+    expectNoUpdate(await check(), "check-failed");
 
-    await writeFile(primaryOriginPath, JSON.stringify(origin));
+    await writeJson(primaryOriginPath, origin);
     const primaryLockPath = path.join(workspace, ".clawhub", "lock.json");
     await mkdir(path.dirname(primaryLockPath), { recursive: true });
-    await writeFile(primaryLockPath, JSON.stringify({ version: 2, skills: {} }));
-    const malformedLock = await runChecker(scriptPath, workspace);
-    expect(malformedLock.status).toBe("check-failed");
-    expect(malformedLock.update).toBeUndefined();
+    await writeJson(primaryLockPath, { version: 2, skills: {} });
+    expectNoUpdate(await check(), "check-failed");
 
-    await writeFile(
-      primaryLockPath,
-      JSON.stringify({ version: 1, skills: { "release-validation": lockEntry } }),
-    );
+    await writeLock(lockEntry, primaryLockPath);
     await writeFile(path.join(skillDirectory, "assets", "worksheet.md"), "original\n");
     const linkedWorkspace = path.join(fixture, "linked-workspace");
     await mkdir(path.join(linkedWorkspace, "skills"), { recursive: true });
@@ -220,15 +163,11 @@ test.each([".clawhub", ".clawdhub"])(
       process.platform === "win32" ? "junction" : "dir",
     );
     await mkdir(path.join(linkedWorkspace, ".clawhub"));
-    await writeFile(
-      path.join(linkedWorkspace, ".clawhub", "lock.json"),
-      JSON.stringify({ version: 1, skills: { "release-validation": lockEntry } }),
-    );
+    await writeLock(lockEntry, path.join(linkedWorkspace, ".clawhub", "lock.json"));
     const symlinkedRoot = await runChecker(
       path.join(linkedWorkspace, "skills", "release-validation", "scripts", "check-update.mjs"),
       linkedWorkspace,
     );
-    expect(symlinkedRoot.status).toBe("check-failed");
-    expect(symlinkedRoot.update).toBeUndefined();
+    expectNoUpdate(symlinkedRoot, "check-failed");
   },
 );

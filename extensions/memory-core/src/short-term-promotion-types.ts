@@ -12,6 +12,7 @@ import type {
   ShortTermDreamingStatsEntry,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT;
@@ -81,40 +82,18 @@ export type ShortTermLockEntry = {
   ownerStartTime?: number;
 };
 
-type PromotionComponents = {
-  frequency: number;
-  relevance: number;
-  diversity: number;
-  recency: number;
-  consolidation: number;
-  conceptual: number;
-};
-
-export type PromotionCandidate = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  source: "memory";
-  snippet: string;
-  recallCount: number;
+export type PromotionCandidate = Omit<
+  ShortTermRecallEntry,
+  "dailyCount" | "groundedCount" | "totalScore" | "queryHashes" | "userQueryHashes"
+> & {
   dailyCount?: number;
   groundedCount?: number;
   signalCount: number;
   avgScore: number;
-  maxScore: number;
   uniqueQueries: number;
-  claimHash?: string;
-  projectKey?: string;
-  promotedAt?: string;
-  firstRecalledAt: string;
-  lastRecalledAt: string;
   ageDays: number;
   score: number;
-  recallDays: string[];
-  conceptTags: string[];
-  components: PromotionComponents;
-  provenance?: MemoryEntryProvenance;
+  components: PromotionWeights;
 };
 
 export type ShortTermAuditSummary = MemoryShortTermAuditSummary<ConceptTagScriptCoverage>;
@@ -125,37 +104,36 @@ export type RepairShortTermPromotionArtifactsResult = Omit<
   "removedOverflowEntries"
 > & { removedOverflowEntries: number };
 
-export type RankShortTermPromotionOptions = {
-  workspaceDir: string;
-  limit?: number;
+export type PromotionThresholdOptions = {
   minScore?: number;
   minRecallCount?: number;
   minUniqueQueries?: number;
   maxAgeDays?: number;
+};
+
+export type RankShortTermPromotionOptions = PromotionThresholdOptions & {
+  workspaceDir: string;
+  limit?: number;
   includePromoted?: boolean;
   recencyHalfLifeDays?: number;
-  weights?: Partial<PromotionWeights>;
   nowMs?: number;
 };
 
-export type ApplyShortTermPromotionsOptions = {
+export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
   agentId?: string;
   workspaceAgentIds?: readonly string[];
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   candidates: PromotionCandidate[];
   limit?: number;
-  minScore?: number;
-  minRecallCount?: number;
-  minUniqueQueries?: number;
-  maxAgeDays?: number;
   nowMs?: number;
   timezone?: string;
   /**
    * Maximum size of MEMORY.md on disk after a promotion write, in
    * characters. When the post-write size would exceed this budget, the
-   * oldest auto-promotion sections are compacted out before write so the
-   * file stays bounded and bootstrap injection keeps reaching new
-   * sessions. Pass `0` to disable compaction. Defaults to
+   * oldest auto-promotion sections may be compacted out, within
+   * `maxPriorEntryLossFraction`, so the file stays bounded and bootstrap
+   * injection keeps reaching new sessions. Pass `0` to disable compaction. Defaults to
    * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
    */
   memoryFileMaxChars?: number;
@@ -166,10 +144,12 @@ export type ApplyShortTermPromotionsOptions = {
    * metadata.
    */
   maxPromotedSnippetTokens?: number;
+  /** Maximum fraction of prior entries a promotion write may remove. */
   maxPriorEntryLossFraction?: number;
   consolidation?: {
     subagent?: import("./dreaming-narrative.js").DreamingCompletion;
     model?: string;
+    timeoutMs?: number;
     logger: {
       info: (message: string) => void;
       warn: (message: string) => void;
@@ -190,6 +170,7 @@ export type PromotionRejectionCategory =
   | "selection limit"
   | "source rehydration"
   | "source changed"
+  | "memory budget"
   | "candidate changed";
 
 export type ApplyShortTermPromotionsResult = {

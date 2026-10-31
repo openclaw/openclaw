@@ -8,7 +8,9 @@ scenario:
   execution:
     kind: flow
     channel: slack
-    timeoutMs: 8000
+    # Leave the fixed negative-observation window enough time to run its
+    # structured-log verifier before the enclosing flow deadline expires.
+    timeoutMs: 20000
     retryCount: 1
     suiteIsolation: isolated
 flow:

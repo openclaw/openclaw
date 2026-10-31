@@ -2,17 +2,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  closeAuthProfileReadPool,
-  resolveAuthProfileDatabasePath,
-} from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import * as configRuntime from "../config/config.js";
+import * as configRuntime from "../config/runtime-snapshot.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import { acquireStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { captureEnv } from "./env.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv, withEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type ConfigRuntimeResettable = typeof configRuntime & {
@@ -36,7 +34,9 @@ type OpenClawTestStateOptions = {
   scenario?: OpenClawTestStateScenario;
   agentEnv?: "clear" | "main";
   applyEnv?: boolean;
+  prepareProfileCatalog?: boolean;
   env?: Record<string, string | undefined>;
+  verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
   gateway?: {
     port?: number;
     token?: string;
@@ -76,6 +76,8 @@ const ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
   "OPENCLAW_SERVICE_REPAIR_POLICY",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ] as const;
 
 function resetConfigRuntimeStateForTest(): void {
@@ -266,7 +268,8 @@ function createSpawnEnv(envVars: Record<string, string | undefined>): NodeJS.Pro
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<string> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.chmod(path.dirname(filePath), 0o700);
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   return filePath;
 }
@@ -305,13 +308,17 @@ export async function createOpenClawTestState(
       extraEnv: options.env ?? {},
     });
     const env = createSpawnEnv(envVars);
-    const snapshot = captureEnv(uniqueStrings([...ENV_KEYS, ...Object.keys(envVars)]));
+    const capturedEnvKeys = new Set([...ENV_KEYS, ...Object.keys(envVars)]);
+    const snapshots = [captureEnv([...capturedEnvKeys])];
     let envApplied = false;
     let releasePromise: Promise<void> | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const restoreAppliedEnv = () => {
       if (envApplied) {
-        snapshot.restore();
+        for (const snapshot of snapshots) {
+          snapshot.restore();
+        }
         resetConfigRuntimeStateForTest();
         envApplied = false;
       }
@@ -334,23 +341,53 @@ export async function createOpenClawTestState(
         writeJsonFile(path.join(paths.stateDir, relativePath), value),
       writeText: async (relativePath, value) => {
         const filePath = path.join(paths.stateDir, relativePath);
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+        await fs.chmod(path.dirname(filePath), 0o700);
         await fs.writeFile(filePath, value, "utf8");
         return filePath;
       },
-      writeAuthProfiles: (store, agentId = "main") => {
+      writeAuthProfiles: async (store, agentId = "main") => {
         const targetAgentDir = agentDir(agentId);
-        saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
-          filterExternalAuthProfiles: false,
-          syncExternalCli: false,
+        // Fixture persistence does not need native plugin discovery.
+        const [{ createAuthProfileStoreRuntime }, { createExternalAuthRuntime }] =
+          await Promise.all([
+            import("../agents/auth-profiles/store.js"),
+            import("../agents/auth-profiles/external-auth.js"),
+          ]);
+        const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
+          createExternalAuthRuntime(
+            () => [],
+            async (_params, run) => run(),
+          ),
+        );
+        withEnv(env, () => {
+          const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(env));
+          try {
+            lease.run(() =>
+              saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
+                filterExternalAuthProfiles: false,
+                syncExternalCli: false,
+              }),
+            );
+          } finally {
+            lease.release();
+          }
         });
-        return Promise.resolve(resolveAuthProfileDatabasePath(targetAgentDir));
+        return resolveAuthProfileDatabasePath(targetAgentDir);
       },
       applyEnv: () => {
         if (releasePromise || cleanupPromise) {
           throw new Error("Cannot apply a released OpenClaw test state");
         }
         resetConfigRuntimeStateForTest();
+        // envVars is mutable; capture late keys before their first application.
+        const newKeys = Object.keys(envVars).filter((key) => !capturedEnvKeys.has(key));
+        if (newKeys.length > 0) {
+          snapshots.push(captureEnv(newKeys));
+          for (const key of newKeys) {
+            capturedEnvKeys.add(key);
+          }
+        }
         // A later write can throw after earlier keys changed; restoration still owns them.
         envApplied = true;
         for (const [key, value] of Object.entries(envVars)) {
@@ -366,8 +403,8 @@ export async function createOpenClawTestState(
       // including failure, so no concurrent caller can restore selectors early.
       restoreEnv: () =>
         (releasePromise ??= Promise.resolve().then(async () => {
-          await cleanupSessionStateForTest({ stateDir: paths.stateDir });
-          closeAuthProfileReadPool({ kind: "root", rootPath: paths.stateDir });
+          releaseProfileCatalog?.();
+          await cleanupSessionStateForTest({ stateDir: paths.stateDir, rootPath: root });
           restoreAppliedEnv();
         })),
       cleanup: () =>
@@ -378,10 +415,13 @@ export async function createOpenClawTestState(
     };
     rollbackEnv = restoreAppliedEnv;
 
-    await fs.mkdir(paths.stateDir, { recursive: true });
-    await fs.mkdir(paths.workspaceDir, { recursive: true });
-    if (layout !== "state-only") {
-      await fs.mkdir(paths.home, { recursive: true });
+    for (const dir of [
+      paths.stateDir,
+      paths.workspaceDir,
+      ...(layout === "state-only" ? [] : [paths.home]),
+    ]) {
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.chmod(dir, 0o700);
     }
     if (config !== undefined) {
       await writeJsonFile(paths.configPath, config);
@@ -391,11 +431,30 @@ export async function createOpenClawTestState(
       state.applyEnv();
     }
 
+    if (options.prepareProfileCatalog) {
+      try {
+        const { prepareUserProfileCatalogForTest } = await import("./user-profile-catalog.js");
+        const catalog = await prepareUserProfileCatalogForTest({ env });
+        releaseProfileCatalog = catalog.release;
+      } catch (error) {
+        await state.cleanup();
+        throw error;
+      }
+    }
+
     return state;
   } catch (error) {
     // Acquisition has no session/auth work to drain or close. Only undo this fixture.
-    rollbackEnv?.();
-    await removeRoot();
+    // Restore selectors synchronously before the verifier can yield.
+    const rollback = (async () => {
+      rollbackEnv?.();
+      await removeRoot();
+    })();
+    if (options.verifyCleanup) {
+      await options.verifyCleanup(() => rollback);
+    } else {
+      await rollback;
+    }
     throw error;
   }
 }
@@ -405,11 +464,25 @@ export async function withOpenClawTestState<T>(
   fn: (state: OpenClawTestState) => Promise<T>,
 ): Promise<T> {
   const state = await createOpenClawTestState(options);
-  const work = new AsyncWorkScope();
-  try {
-    return await work.track(() => fn(state));
-  } finally {
-    await work.drain();
-    await state.cleanup();
+  const failures = new Set<unknown>();
+  const work = new AsyncWorkScope(failures);
+  const [outcome] = await Promise.allSettled([work.track(() => fn(state))]);
+  await work.drain();
+  if ([...failures].some(hasUnjoinedWork)) {
+    // Promise settlement does not prove that an external child released its inputs.
+    try {
+      await state.restoreEnv();
+    } catch (error) {
+      failures.add(error);
+    }
+    const retained = [...failures];
+    throw retained.length === 1
+      ? retained[0]
+      : new AggregateError(retained, `Fixture cleanup unverified; retained ${state.root}`);
   }
+  await state.cleanup();
+  if (outcome.status === "rejected") {
+    throw outcome.reason;
+  }
+  return outcome.value;
 }

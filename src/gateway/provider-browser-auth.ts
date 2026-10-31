@@ -1,8 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
 import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { renderOAuthPage } from "../shared/oauth-page.js";
+import { isLoopbackHost } from "./net.js";
+import { isGatewayHostBrowserOrigin } from "./origin-check.js";
+import type { GatewayWsBrowserOrigin } from "./server/ws-types.js";
 import { getTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 
 export const PROVIDER_OAUTH_CALLBACK_PATH = "/oauth/provider/callback";
@@ -29,25 +34,62 @@ const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
 export class ProviderBrowserSignInUnavailableError extends Error {
   constructor() {
     super(
-      "Browser sign-in needs a secure Gateway address reachable from your browser. Enable Gateway Tailscale Serve, then retry /login; or use the CLI sign-in flow.",
+      "Browser sign-in needs a secure Gateway address reachable from your browser. Open the dashboard on this Gateway's HTTPS address or its local loopback address, then retry; or use the CLI sign-in flow.",
     );
   }
+}
+
+export class ProviderBrowserSignInError extends Error {
+  constructor(readonly reason: "declined" | "expired") {
+    super(
+      reason === "expired"
+        ? "Browser sign-in expired. Retry /login."
+        : "Provider sign-in was declined. Retry /login when you are ready.",
+    );
+    this.name = "ProviderBrowserSignInError";
+  }
+}
+
+export function resolveBrowserAuthOrigin(
+  browser: GatewayWsBrowserOrigin | undefined,
+  signal: AbortSignal = getGatewayRestartDrainSignal(),
+) {
+  const published = getTailscalePublishedOrigin();
+  if (!browser || browser.origin === published?.origin) {
+    return published;
+  }
+  if (browser.origin && isGatewayHostBrowserOrigin(browser)) {
+    const url = new URL(browser.origin);
+    // The authenticated browser connection already passed Gateway origin policy.
+    // Its served HTTPS origin also covers operator-managed reverse proxies.
+    if (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && browser.isLocalClient && isLoopbackHost(url.hostname))
+    ) {
+      return { origin: url.origin, signal };
+    }
+  }
+  return undefined;
 }
 
 export function createProviderBrowserAuthSession(params: {
   signal?: AbortSignal;
   openUrl: (url: string) => Promise<void>;
+  browserOrigin?: GatewayWsBrowserOrigin;
 }) {
   const lifetime = new AbortController();
+  const browserOriginSignal = params.browserOrigin
+    ? resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal)?.signal
+    : undefined;
   const signal = AbortSignal.any([
     lifetime.signal,
     getGatewayRestartDrainSignal(),
     ...(params.signal ? [params.signal] : []),
+    ...(browserOriginSignal ? [browserOriginSignal] : []),
   ]);
-  let origin: ReturnType<typeof getTailscalePublishedOrigin>;
+  let origin: ReturnType<typeof resolveBrowserAuthOrigin>;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let expiresAt: number | undefined;
-  let authorizationStarted = false;
   const originClosed = () =>
     lifetime.abort(
       new Error("Browser sign-in ended because the Gateway address changed. Retry /login."),
@@ -56,29 +98,48 @@ export function createProviderBrowserAuthSession(params: {
     signal.throwIfAborted();
     origin?.signal.throwIfAborted();
     if (expiresAt !== undefined && Date.now() >= expiresAt) {
-      throw new Error("Browser sign-in expired. Retry /login.");
+      throw new ProviderBrowserSignInError("expired");
     }
   };
-  const authorize: Authorization = async ({ state, timeoutMs, buildAuthorizationUrl }) => {
+  const authorizePrepared = async <Result = never>({
+    timeoutMs,
+    prepare,
+  }: {
+    timeoutMs: number;
+    prepare: (
+      redirectUrl: string,
+    ) =>
+      | { state: string; authorizationUrl: string }
+      | { result: Result }
+      | Promise<{ state: string; authorizationUrl: string } | { result: Result }>;
+  }): Promise<AuthorizationResult | Result> => {
     assertCurrent();
-    const published = getTailscalePublishedOrigin();
+    const published = resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal);
     if (!published) {
       throw new ProviderBrowserSignInUnavailableError();
     }
-    if (authorizationStarted || !state || pendingAuthorizations.has(state)) {
+    if (origin) {
       throw new Error("Browser sign-in requires a unique authorization state.");
     }
-    authorizationStarted = true;
     origin = published;
     origin.signal.addEventListener("abort", originClosed, { once: true });
     deadline = setTimeout(
-      () => lifetime.abort(new Error("Browser sign-in expired. Retry /login.")),
+      () => lifetime.abort(new ProviderBrowserSignInError("expired")),
       timeoutMs,
     );
     deadline.unref();
+    expiresAt = Date.now() + timeoutMs;
+    const prepared = await prepare(new URL(PROVIDER_OAUTH_CALLBACK_PATH, published.origin).href);
+    assertCurrent();
+    if ("result" in prepared) {
+      return prepared.result;
+    }
+    const { state } = prepared;
+    if (!state || pendingAuthorizations.has(state)) {
+      throw new Error("Browser sign-in requires a unique authorization state.");
+    }
     const callback = createDeferredCore<AuthorizationResult>();
-    const callbackExpiresAt = Date.now() + timeoutMs;
-    expiresAt = callbackExpiresAt;
+    const callbackExpiresAt = expiresAt;
     const requestSignal = signal;
     const onAbort = () => callback.reject(requestSignal.reason);
     const pending: PendingAuthorization = {
@@ -90,9 +151,7 @@ export function createProviderBrowserAuthSession(params: {
     pendingAuthorizations.set(state, pending);
     requestSignal.addEventListener("abort", onAbort, { once: true });
     try {
-      const authorizationUrl = new URL(
-        buildAuthorizationUrl(new URL(PROVIDER_OAUTH_CALLBACK_PATH, origin.origin).href),
-      );
+      const authorizationUrl = new URL(prepared.authorizationUrl);
       if (
         authorizationUrl.protocol !== "https:" ||
         authorizationUrl.username ||
@@ -106,7 +165,7 @@ export function createProviderBrowserAuthSession(params: {
       ]);
       assertCurrent();
       if (!pending.isCurrent()) {
-        throw new Error("Browser sign-in expired. Retry /login.");
+        throw new ProviderBrowserSignInError("expired");
       }
       return result;
     } finally {
@@ -116,8 +175,17 @@ export function createProviderBrowserAuthSession(params: {
       }
     }
   };
+  const authorize: Authorization = ({ state, timeoutMs, buildAuthorizationUrl }) =>
+    authorizePrepared({
+      timeoutMs,
+      prepare: (redirectUrl) => ({ state, authorizationUrl: buildAuthorizationUrl(redirectUrl) }),
+    });
   return {
+    get available() {
+      return Boolean(resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal));
+    },
     authorize,
+    authorizePrepared,
     signal,
     assertCurrent,
     close: () => {
@@ -133,9 +201,13 @@ function respond(res: ServerResponse, status: number, message: string): void {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  res.setHeader("Content-Security-Policy", OAUTH_PAGE_CSP);
   res.end(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Provider sign-in</title><body><main><h1>${message}</h1><p>Return to OpenClaw for the sign-in result.</p></main></body></html>`,
+    renderOAuthPage({
+      title: "Provider sign-in",
+      heading: message,
+      message: "Return to OpenClaw for the sign-in result.",
+    }),
   );
 }
 
@@ -154,7 +226,7 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   if (!state || !pending || !pending.isCurrent()) {
     if (state && pending) {
       pendingAuthorizations.delete(state);
-      pending.reject(new Error("Browser sign-in expired. Retry /login."));
+      pending.reject(new ProviderBrowserSignInError("expired"));
     }
     respond(res, 410, "This sign-in link expired or was already used.");
     return true;
@@ -163,17 +235,19 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   const denied = url.searchParams.has("error");
   if (
     url.searchParams.getAll("state").length !== 1 ||
-    (denied ? Boolean(code) : !code || url.searchParams.getAll("code").length !== 1)
+    url.searchParams.getAll("iss").length > 1 ||
+    (denied ? Boolean(code) : !code?.trim() || url.searchParams.getAll("code").length !== 1)
   ) {
     respond(res, 400, "Invalid sign-in response.");
     return true;
   }
   pendingAuthorizations.delete(state);
   if (denied) {
-    pending.reject(new Error("Provider sign-in was declined. Retry /login when you are ready."));
+    pending.reject(new ProviderBrowserSignInError("declined"));
     respond(res, 400, "Sign-in was not completed.");
   } else {
-    pending.accept({ code: code!, state });
+    const iss = url.searchParams.get("iss");
+    pending.accept({ code: code!, state, ...(iss === null ? {} : { iss }) });
     respond(res, 200, "Sign-in response received.");
   }
   return true;

@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
+import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { agentsSetIdentityCommand } from "./agents.commands.identity.js";
-import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 async function avatarConfig(home: string): Promise<OpenClawConfig> {
   const image = await fs.readFile(path.resolve("extensions/nextcloud-talk/assets/icon.png"));
   return {
-    meta: { lastTouchedVersion: VERSION, migrations: { modelPolicyAllowlist: true } },
+    meta: {
+      lastTouchedVersion: VERSION,
+      migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
+    },
     gateway: { mode: "local" },
     agents: {
       ownership: "explicit",
@@ -31,6 +34,7 @@ async function avatarConfig(home: string): Promise<OpenClawConfig> {
 }
 
 describe("agent identity persistence", () => {
+  afterEach(() => vi.restoreAllMocks());
   it.each(["cli", "gateway"] as const)(
     "%s persists a smaller avatar without changing other fields",
     async (owner) => {
@@ -39,7 +43,8 @@ describe("agent identity persistence", () => {
         const configPath = await writeOpenClawConfig(home, before);
         const avatar = "https://example.test/avatar.png";
         if (owner === "cli") {
-          await agentsSetIdentityCommand({ agent: "avatar", avatar }, createThrowingTestRuntime());
+          vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+          await agentsSetIdentityCommand({ agent: "avatar", avatar });
         } else {
           await updateAgentConfigEntry({ agentId: "avatar", identity: { avatar } });
         }

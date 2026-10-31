@@ -49,12 +49,12 @@ export function createPluginCacheSdk() {
   return {
     hosts: new Map<string, PluginSdkHostFacts>(),
     contexts: new Map<string, PreparedPluginAliases>(),
+    roots: new Set<string>(),
     packageNames: new Map<string, string | null>(),
     packageSearches: new Map<string, { first?: string | null; all?: string[] }>(),
     argvDirectories: new Map<string, string[]>(),
     devSourceRoots: new Map<string, string | null>(),
     runtimeModules: new Map<string, PluginRuntimeModuleResolution>(),
-    usableDistArtifacts: new Map<string, boolean>(),
     normalizedJitiAliases: new Map<string, PluginSdkAliasMap>(),
     aliasFacts: new WeakMap<
       PluginSdkAliasMap,
@@ -69,6 +69,13 @@ export function createPluginCacheSdk() {
         { resolveAlias: (specifier: string) => string | undefined; order?: number }
       >(),
       nextSdkProviderOrder: 0,
+      parents: new Map<
+        string,
+        {
+          roots: Set<string>;
+          targets: Map<string, string | undefined>;
+        }
+      >(),
       aliases: new Map<string, Array<{ parentRoot: string; target: string }>>(),
       registeredHosts: new Set<string>(),
       hostRoots: new Map<string, string>(),
@@ -80,6 +87,14 @@ export function createPluginCacheSdk() {
 }
 
 export type PluginCacheSdk = ReturnType<typeof createPluginCacheSdk>;
+
+export function cachePluginSdkAliases(cache: PluginCacheSdk, aliases: PreparedPluginAliases) {
+  cache.contexts.set(aliases.cacheKey, aliases);
+  for (const root of aliases.sdkRoots) {
+    cache.roots.add(root);
+  }
+  return aliases;
+}
 
 export function getPluginSdkHostFacts(
   cache: PluginCacheSdk,
@@ -94,6 +109,16 @@ export function getPluginSdkHostFacts(
       workspaceAliasesByMode: new Map(),
     };
     cache.hosts.set(packageRoot, facts);
+  }
+  return facts;
+}
+
+export function getPluginSdkAliasFacts(sdk: PluginCacheSdk, aliasMap: PluginSdkAliasMap) {
+  const cache = sdk.aliasFacts;
+  let facts = cache.get(aliasMap);
+  if (!facts) {
+    facts = {};
+    cache.set(aliasMap, facts);
   }
   return facts;
 }

@@ -6,7 +6,7 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import { resolveModelAuthLabel } from "./model-auth-label.js";
+import { resolveModelAuthLabelAsync } from "./model-auth-label.js";
 
 describe("personal account auth labels", () => {
   it.each([false, true])(
@@ -56,14 +56,16 @@ describe("personal account auth labels", () => {
           };
 
           expect(
-            resolveModelAuthLabel({
+            await resolveModelAuthLabelAsync({
               ...params,
               sessionEntry: { authProfileOverride: authProfileId },
             }),
           ).toBe("api-key (personal account)");
-          expect(resolveModelAuthLabel(params)).toBe("api-key (personal-provider:shared)");
+          expect(await resolveModelAuthLabelAsync(params)).toBe(
+            "api-key (personal-provider:shared)",
+          );
           expect(
-            resolveModelAuthLabel({
+            await resolveModelAuthLabelAsync({
               ...params,
               sessionEntry: {
                 authProfileOverride: `personal:${owner.id}:00000000-0000-0000-0000-000000000000`,
@@ -71,7 +73,7 @@ describe("personal account auth labels", () => {
             }),
           ).toBe("api-key (personal-provider:shared)");
           expect(
-            resolveModelAuthLabel({
+            await resolveModelAuthLabelAsync({
               ...params,
               provider: "other-provider",
               sessionEntry: { authProfileOverride: authProfileId },

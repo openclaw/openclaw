@@ -1,0 +1,616 @@
+import type { JSX as SolidJSX } from "@solidjs/web";
+import { onSettled, Show, untrack } from "solid-js";
+import {
+  formatDocumentTitle,
+  isSettingsNavigationRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
+import "../components/app-topbar-solid.tsx";
+import "../components/assistant-panel-solid.tsx";
+import type { RouteId } from "../app-routes.ts";
+import "../components/resizable-divider.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
+import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
+import { askBrandLabel } from "../components/theme-brand-label.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
+import { subscribeI18n } from "../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import {
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+  resolveUiKnownSelectedGlobalAgentId,
+} from "../lib/sessions/session-key.ts";
+import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
+import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
+import type { ShellOwnedElements } from "./app-shell-components.ts";
+import {
+  ShellGatewayOwner,
+  type OutboxStoreRuntime,
+  type ShellGatewayHost,
+  type StoredOutboxScopeHost,
+} from "./app-shell-gateway.ts";
+import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navigation.ts";
+import { ShellPresentation } from "./app-shell-presentation.ts";
+import "./app-shell-locale-recovery.ts";
+import { createShellViewCallbacks } from "./app-shell-view-callbacks.ts";
+import { readShellView } from "./app-shell-view-state.ts";
+import { ApplicationShell, type ShellViewHost } from "./app-shell-view.tsx";
+import type { ApplicationRuntime } from "./bootstrap.ts";
+import type { ApplicationContext } from "./context.ts";
+import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
+import type { SolidReadinessShell } from "./control-ui-readiness-solid.ts";
+import type { ControlUiReadiness, ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
+import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
+import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
+import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
+import { setSettingsChangeListener } from "./settings.ts";
+import { ShellLayoutOwner } from "./shell-layout-owner.ts";
+import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
+
+export class ShellOwner
+  extends ShellPresentation
+  implements ShellChromeHost, ShellGatewayHost, ShellNavigationHost, ShellViewHost
+{
+  runtime: ApplicationRuntime | undefined;
+  readiness: ControlUiReadiness | undefined;
+  onboarding = false;
+  private readonly cleanups: Array<() => void> = [];
+  readonly shellLayout = new ShellLayoutOwner();
+  readonly renderedShellElements = new RouteElements();
+  // Gates lazy-action replay on the element being rendered; while the shell is
+  // still splash-gated, replaying would loop through the open handlers forever.
+  readonly queryRenderedElement = (tagName: string): Element | null =>
+    [...Object.values(this.elements), this.terminalPanel].find(
+      (element) => element?.isConnected && element.localName === tagName,
+    ) ??
+    this.renderedShellElements.renderedElement(tagName) ??
+    this.routeOutlet?.renderedElement?.(tagName) ??
+    null;
+  queryRenderedElements<K extends keyof HTMLElementTagNameMap>(tag: K): HTMLElementTagNameMap[K][];
+  queryRenderedElements(tag: string): HTMLElement[];
+  queryRenderedElements(tag: string): HTMLElement[] {
+    return this.renderedShellElements
+      .renderedElements(tag)
+      .concat(this.routeOutlet?.renderedElements?.(tag) ?? []);
+  }
+  readonly elements: ShellOwnedElements = {};
+  commandPaletteTarget: CommandPaletteTargetDetail | undefined;
+  navDrawerTrigger: HTMLElement | null = null;
+  shellElement?: HTMLElement;
+  routeOutlet?: ControlUiReadinessOutlet;
+  terminalPanel?: HTMLElement & { readonly available?: boolean };
+  navDrawerElement?: HTMLElement;
+  navBackdropElement?: HTMLElement;
+  contentElement?: HTMLElement;
+  toastElement?: HTMLElement;
+  // Desktop and modal navigation are two slots for the same live sidebar.
+  // Moving its element preserves session controllers and the resident pet
+  // instead of resetting their lifecycle at every responsive breakpoint.
+  readonly navigationSidebar: ShellChromeHost["navigationSidebar"] &
+    Partial<
+      Pick<
+        AppSidebarElement,
+        "navigationVisible" | "updateComplete" | "findSidebarHovercardRowByKey"
+      >
+    > = document.createElement("openclaw-app-sidebar");
+  // Where "Back to app" / Escape leaves the settings takeover; falls back to
+  // chat (the app default route) when settings was the entry point.
+  lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
+  custodianMinimizeRequestId = 0;
+  lastConcreteRouteId: RouteId | undefined;
+  lastLocalePrefSignature: string | null = null;
+  outboxStoreRuntime: OutboxStoreRuntime | null = null;
+  get storedOutboxes() {
+    const context = this.context;
+    return context ? this.outboxStoreRuntime?.read(this.storedOutboxScopeHost(context)) : undefined;
+  }
+  private outboxStoreUnsubscribe: (() => void) | null = null;
+  readonly outboxStoreImport = createIdleImport(
+    () =>
+      import("../lib/chat/outbox-store-projection.ts").then((module) =>
+        module.createStoredChatOutboxReader(),
+      ),
+    (runtime) => this.installOutboxStoreRuntime(runtime),
+  );
+  private lastNativeNavState: NativeNavState | undefined;
+  didConsiderNativeRouteRestore = false;
+  pendingNativeNewSession = false;
+  readonly shellNavigation = new ShellNavigationOwner(this);
+  private readonly shellChrome = new ShellChromeOwner(this);
+  private readonly shellGateway = new ShellGatewayOwner(this);
+  readonly viewCallbacks = createShellViewCallbacks(this);
+
+  get context(): ApplicationContext | undefined {
+    return this.runtime?.context;
+  }
+
+  get onboardingMode(): boolean {
+    const routeSearch = this.routeState.location?.search;
+    return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
+  }
+
+  get workspaceChromeVisible(): boolean {
+    const routeId = this.routeState.routeId;
+    // Hidden workspace chrome must not preload its sidebar and panel graphs.
+    return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
+  }
+
+  storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
+    const gatewaySnapshot = context.gateway.snapshot;
+    return {
+      client: gatewaySnapshot.client,
+      connected: gatewaySnapshot.phase === "connected",
+      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
+      assistantAgentId: gatewaySnapshot.assistantAgentId,
+      agentsList: context.agents.state.agentsList,
+      hello: gatewaySnapshot.hello,
+    };
+  }
+
+  private chatTitleContext(
+    context: ApplicationContext,
+    outboxScopeHost: StoredOutboxScopeHost,
+  ): string {
+    const sessionKey = this.activeSessionKey;
+    // An agent's main chat is its identity, so use its roster label when available.
+    const parsed = parseAgentSessionKey(sessionKey);
+    const mainAgentId = isUiGlobalSessionKey(sessionKey)
+      ? resolveUiKnownSelectedGlobalAgentId(outboxScopeHost)
+      : parsed?.rest === resolveUiConfiguredMainKey(outboxScopeHost)
+        ? normalizeAgentId(parsed.agentId)
+        : undefined;
+    const agent = mainAgentId
+      ? context.agents.state.agentsList?.agents.find(
+          (candidate) => normalizeAgentId(candidate.id) === mainAgentId,
+        )
+      : undefined;
+    return agent
+      ? normalizeAgentLabel(agent)
+      : resolveSessionDisplayName(
+          sessionKey,
+          context.sessions.presentation.result?.sessions.find(
+            (session) => session.key === sessionKey,
+          ),
+        );
+  }
+
+  constructor(
+    public element: HTMLElement,
+    runtime?: ApplicationRuntime,
+    readiness?: ControlUiReadiness,
+    onboarding = false,
+  ) {
+    super();
+    this.runtime = runtime;
+    this.readiness = readiness;
+    this.onboarding = onboarding;
+  }
+
+  get isConnected() {
+    return this.element.isConnected;
+  }
+
+  replaceRuntime(runtime: ApplicationRuntime): void {
+    if (runtime.context !== this.context) {
+      this.shellChrome.abandonPendingLazyActionForContext();
+      this.resetShellState();
+    }
+    this.runtime = runtime;
+  }
+
+  override invalidate(): void {
+    this.readiness?.invalidate();
+    super.invalidate();
+  }
+
+  connect(): void {
+    const context = this.context;
+    this.resumePresentation();
+    // Lazy definitions invalidate commit receipts before queued actions can replay.
+    const runtime = this.runtime;
+    if (context && runtime) {
+      const watch = (
+        source: { subscribe(listener: () => void): () => void },
+        synchronize?: () => void,
+      ) => {
+        const publish = () => {
+          synchronize?.();
+          this.invalidate();
+        };
+        this.cleanups.push(source.subscribe(publish));
+        publish();
+      };
+      // This synchronous owner consumes events directly; Solid views project its revision.
+      watch(context.gateway, () => {
+        this.shellChrome.synchronizeCommandPaletteScope();
+        this.shellGateway.synchronizeGateway(context.gateway.snapshot);
+        this.publishStoredOutboxSessionFacts();
+      });
+      watch(context.config);
+      watch(context.navigation);
+      watch(context.agentSelection);
+      watch(context.settingsAgentSelection);
+      watch(context.agents, () => {
+        this.publishStoredOutboxSessionFacts();
+        this.ensureAgentsList(context.gateway.snapshot, context.agents);
+      });
+      watch(context.overlays);
+      watch({ subscribe: subscribeI18n });
+      watch(context.theme);
+      watch(context.runtimeConfig, () => {
+        void this.shellGateway
+          .ensureRuntimeConfig(context.gateway.snapshot, context.runtimeConfig)
+          .catch(() => undefined);
+        void this.shellGateway.reconcileServerUiPrefs(context.runtimeConfig);
+      });
+      const updateRoute = () => {
+        const next = selectShellRouteState(runtime.router.getState());
+        if (!equalShellRouteState(this.routeState, next)) {
+          this.shellNavigation.updateRouteState(next);
+        } else if (this.routeState.sessionUrlPending !== next.sessionUrlPending) {
+          // URL eligibility can settle without a route change. Do not replay recovery.
+          this.routeState = next;
+          this.shellNavigation.synchronizeSessionUrl();
+        }
+      };
+      this.cleanups.push(runtime.router.subscribe(updateRoute));
+      this.shellNavigation.updateRouteState(selectShellRouteState(runtime.router.getState()));
+      // Optional owners publish shell properties through the same commit lifecycle.
+      for (const source of [context.plugins, context.agentIdentity, context.nativeDeviceSettings]) {
+        if (source) {
+          this.cleanups.push(source.subscribe(() => this.invalidate()));
+        }
+      }
+      this.cleanups.push(
+        context.gateway.subscribeEvents(this.handleGatewayEvent),
+        this.shellGateway.observeSessions(context.sessions, () => this.syncDocumentTitle()),
+        // Recovery can retire the selected session before the next shell commit.
+        context.placementStartup.subscribe(() =>
+          this.shellNavigation.recoverDeletedActiveSession(),
+        ),
+      );
+      let active = true;
+      const startedAt = Date.now();
+      const idle = createIdleImport(
+        () => import("./app-shell-idle.runtime.ts"),
+        ({ connectShellIdle }) => {
+          if (active) {
+            this.cleanups.push(connectShellIdle(this, context, startedAt));
+          }
+        },
+      );
+      idle.schedule();
+      this.cleanups.push(() => {
+        active = false;
+        idle.dispose();
+      });
+      if (this.pendingNativeNewSession) {
+        this.pendingNativeNewSession = false;
+        this.handleNativeNewSession();
+      }
+    }
+    if (this.outboxStoreRuntime) {
+      this.installOutboxStoreRuntime(this.outboxStoreRuntime);
+    }
+    this.outboxStoreImport.schedule();
+    this.shellChrome.connect();
+    // Write-through of synced display prefs to config ui.prefs. Server-applied
+    // deltas are suppressed so a reconcile never echoes back to the gateway.
+    setSettingsChangeListener((previous, next) => {
+      if (isApplyingServerUiPrefs()) {
+        return;
+      }
+      const prefs = changedServerUiPrefs(previous, next);
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (prefs && runtimeConfig) {
+        pushServerUiPrefs(runtimeConfig, prefs, {
+          profile: this.context?.gateway.snapshot,
+          afterCommit: ({ needsRefresh, retainedLocal }) => {
+            void this.shellGateway.reconcileCommittedServerUiPrefs(
+              runtimeConfig,
+              needsRefresh,
+              retainedLocal,
+            );
+          },
+        });
+      }
+    });
+  }
+
+  disconnect(): void {
+    this.suspendPresentation();
+    for (const cleanup of this.cleanups.splice(0).toReversed()) {
+      cleanup();
+    }
+    this.shellLayout.dispose();
+    this.shellChrome.disconnect();
+    syncControlUiSystemChrome(false, false);
+    this.outboxStoreImport.dispose();
+    this.outboxStoreUnsubscribe?.();
+    this.outboxStoreUnsubscribe = null;
+    this.lastLocalePrefSignature = null;
+    setSettingsChangeListener(null);
+    this.shellChrome.preservePendingLazyActionForReload();
+    this.resetShellState();
+  }
+
+  private installOutboxStoreRuntime(runtime: OutboxStoreRuntime) {
+    this.outboxStoreRuntime = runtime;
+    runtime.invalidate();
+    if (!this.isConnected) {
+      return;
+    }
+    this.outboxStoreUnsubscribe?.();
+    // Outbox receipts publish native session facts and schedule the shell commit.
+    this.outboxStoreUnsubscribe = runtime.subscribe(this.refreshStoredOutboxPresentation);
+    this.refreshStoredOutboxPresentation();
+  }
+
+  private publishStoredOutboxSessionFacts() {
+    this.context?.nativeConversation?.publishSessionFacts(this.storedOutboxes?.sessions ?? null);
+  }
+
+  private readonly refreshStoredOutboxPresentation = () => {
+    this.publishStoredOutboxSessionFacts();
+    this.invalidate();
+  };
+
+  private resetShellState() {
+    this.resetConnectionFeedback();
+    this.outboxStoreRuntime?.invalidate();
+    this.navDrawerOpen = false;
+    this.desktopNavigationExpanded = false;
+    this.navDrawerTrigger = null;
+    this.lastWorkspaceLocation = null;
+    this.activeSessionKey = "";
+    this.settingsSearchQuery = "";
+    this.commandPaletteTarget = undefined;
+    this.shellGateway.reset();
+  }
+
+  private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(
+    this.shellGateway,
+  );
+
+  async handleSettingsSearchQueryChange(nextQuery: string): Promise<void> {
+    this.settingsSearchQuery = nextQuery;
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (!runtimeConfig || !nextQuery.trim()) {
+      return;
+    }
+    try {
+      await runtimeConfig.ensureLoaded();
+      if (this.context?.runtimeConfig === runtimeConfig) {
+        await runtimeConfig.ensureSchemaLoaded();
+      }
+    } catch {
+      // Runtime config state owns the visible load error; search stays usable.
+    }
+  }
+
+  readonly toggleNavigationSurface = this.shellChrome.toggleNavigationSurface;
+
+  readonly closeNavDrawer = this.shellChrome.closeNavDrawer;
+
+  readonly resizeNavigation = this.shellChrome.resizeNavigation;
+
+  readonly handleNativeNewSession = this.shellChrome.handleNativeNewSession;
+  get pendingDebugOverlayMode() {
+    return this.shellChrome.pendingDebugOverlayMode;
+  }
+  readonly togglePendingDebugOverlayMode = this.shellChrome.togglePendingDebugOverlayMode.bind(
+    this.shellChrome,
+  );
+  get pendingShellAction() {
+    return this.shellChrome.pendingShellAction;
+  }
+  readonly isShellComponentRequested = this.shellChrome.isShellComponentRequested;
+  get terminalActivationReady(): boolean {
+    return this.shellChrome.terminalActivationReady;
+  }
+  readonly cancelShellComponentRequest = this.shellChrome.cancelShellComponentRequest;
+  readonly retryPendingLazyAction = this.shellChrome.retryPendingLazyAction.bind(this.shellChrome);
+  readonly shellComponentMounted = (element: HTMLElement): void => {
+    // Bridge refs precede insertion; replay only after its native listeners settle.
+    queueMicrotask(() => {
+      if (this.isConnected && element.isConnected) {
+        this.invalidate();
+        this.readiness?.invalidate();
+      }
+    });
+  };
+  readonly openPalette = this.shellChrome.openPalette;
+  readonly closePendingPalette = this.shellChrome.closePendingPalette;
+  get commandPaletteLoading() {
+    return this.shellChrome.commandPaletteLoading;
+  }
+  readonly refreshControlUi = (): Promise<boolean> => {
+    const context = this.context;
+    if (!context) {
+      return Promise.resolve(false);
+    }
+    return retryStaleChunkReloadWhenReachable({
+      timeoutMs: 0,
+      ...createGatewayControlUiReloadOptions(
+        context.gateway,
+        () => this.context === context && context.overlays.snapshot.controlUiRefreshRequired,
+      ),
+    });
+  };
+  readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
+  readonly restorePendingLazyAction = this.shellChrome.restorePendingLazyAction;
+  readonly nativeNavCollapsed = this.shellChrome.nativeNavCollapsed;
+  /** Session publications update the title directly; renders capture route and
+   * locale changes. Preserve the static boot title before the first route. */
+  private syncDocumentTitle() {
+    const routeId = this.routeState.routeId;
+    const context = this.context;
+    if (!routeId || !context) {
+      return;
+    }
+    const outboxScopeHost = this.storedOutboxScopeHost(context);
+    let primaryContext = routeId === "custodian" ? askBrandLabel() : titleForRoute(routeId);
+    if (isSessionRouteId(routeId) && this.activeSessionKey) {
+      primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
+    }
+    const { phase } = context.gateway.snapshot;
+    let title = formatDocumentTitle({
+      context: primaryContext,
+      brandName: context.theme.branding.brandName,
+      attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
+    });
+    const environment = context.config?.current.environment;
+    if (environment) {
+      title += ` · ${environment.label}`;
+    }
+    if (document.title !== title) {
+      document.title = title;
+    }
+  }
+
+  override afterCommit(): void {
+    this.commitPresentation();
+    if (this.context && this.runtime) {
+      const state = readShellView(this);
+      this.syncConnectionFeedback(state.gatewayStatus.kind);
+      this.mobileGatewayStatus = state.mobileGatewayStatus;
+      if (!state.settingsTakeover && !state.nativeEmbed) {
+        Object.assign(this.navigationSidebar, state.sidebarProperties, {
+          gatewayStatus: state.gatewayStatus,
+          connectionRecovery: this.connectionRecovery,
+          connectionFlagVisible: this.connectionFlagVisible,
+          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+        });
+      }
+    }
+    this.syncDocumentTitle();
+    // Theme and breakpoint owners sync their changes; route/runtime changes
+    // can change whether the committed shell uses the chat background.
+    syncControlUiSystemChrome(
+      false,
+      this.shellElement?.isConnected === true &&
+        this.shellElement.classList.contains("shell--chat"),
+    );
+    // Render-gated pending lazy actions replay on the update that first
+    // renders their element, independent of further context updates.
+    this.restorePendingLazyAction();
+    // Chat owns its route island and the drawer input exposed by its custom element.
+    const chatPage = this.routeOutlet?.renderedElement?.("openclaw-chat-page");
+    if (chatPage) {
+      chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
+      chatPage.gatewayStatus = this.mobileGatewayStatus;
+    }
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    if (this.workspaceChromeVisible) {
+      this.shellChrome.panels.restore();
+    }
+    if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
+      this.shellChrome.requestShellComponent("approvals");
+    }
+    const navState = {
+      collapsed: this.nativeNavCollapsed(),
+      width: context.navigation.snapshot.navWidth,
+    } satisfies NativeNavState;
+    if (
+      navState.collapsed === this.lastNativeNavState?.collapsed &&
+      navState.width === this.lastNativeNavState.width
+    ) {
+      return;
+    }
+    this.lastNativeNavState = navState;
+    // Shipped Mac app builds without web chrome still consume this bridge.
+    postNativeNavState(navState);
+  }
+
+  ensureAgentsList(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+    agents = this.context?.agents,
+  ) {
+    void this.shellGateway.ensureAgentsList(snapshot, agents).catch(() => undefined);
+  }
+}
+
+export type OpenClawShellProps = {
+  runtime: ApplicationRuntime;
+  getReadiness?: () => ControlUiReadiness | undefined;
+  onboarding?: boolean;
+  onShell?: (shell: SolidReadinessShell | undefined) => void;
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-app-shell": HTMLAttributes<HTMLElement> & {
+        "onOpenclaw-route-element"?: (event: RouteElementEvent) => void;
+      };
+    }
+  }
+}
+
+export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
+  return (
+    <Show when={props.runtime} keyed>
+      {(runtime): SolidJSX.Element => {
+        const element = document.createElement("openclaw-app-shell");
+        const initialShellOptions = untrack(() => ({
+          readiness: props.getReadiness?.(),
+          onboarding: props.onboarding,
+        }));
+        const owner = new ShellOwner(
+          element,
+          runtime,
+          initialShellOptions.readiness,
+          initialShellOptions.onboarding,
+        );
+        const view = <ApplicationShell host={owner} />;
+        onSettled(() => {
+          const initialOnShell = props.onShell;
+          owner.connect();
+          const unmountPresentation = owner.mountPresentation();
+          initialOnShell?.(owner);
+          return () => {
+            // A disconnect preserves reload intent; a replacement context retires it first.
+            if (props.runtime.context !== runtime.context) {
+              owner.replaceRuntime(props.runtime);
+            }
+            unmountPresentation();
+            owner.disconnect();
+            initialOnShell?.(undefined);
+          };
+        });
+        return (
+          <openclaw-app-shell
+            onOpenclaw-route-element={owner.renderedShellElements.register}
+            ref={(host) => {
+              owner.element = host;
+              // The optional observer reads committed owner facts without rendering the shell again.
+              Object.defineProperties(host, {
+                readiness: {
+                  get: () => owner.readiness,
+                  set: (value: ControlUiReadiness | undefined) => {
+                    owner.readiness = value;
+                  },
+                },
+                updateComplete: { get: () => owner.updateComplete },
+                navigationSidebar: { get: () => owner.navigationSidebar },
+                activeSessionKey: { get: () => owner.activeSessionKey },
+              });
+            }}
+          >
+            {view}
+          </openclaw-app-shell>
+        );
+      }}
+    </Show>
+  );
+}

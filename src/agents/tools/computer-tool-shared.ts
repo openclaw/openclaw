@@ -13,7 +13,7 @@ export const MAX_WAIT_SECONDS = 100;
 export const MAX_HOLD_SECONDS = 10;
 export const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
 
-export type ComputerToolAction = ComputerUseV2ActionName;
+export type ComputerToolAction = ComputerUseV2ActionName | "take_control";
 
 const COMPUTER_OBSERVATION_ACTIONS = new Set<string>([
   "screenshot",
@@ -58,7 +58,24 @@ export type ComputerToolTransport = {
   }) => Promise<unknown>;
 };
 
-export type ComputerTarget = { nodeId: string; screenIndex: number };
+export type ComputerHost =
+  | { host: "gateway" }
+  | { host: "node"; nodeId: string; environmentId?: string };
+
+export type ComputerTarget = ComputerHost & { screenIndex: number };
+
+export function computerHostKey(target: ComputerHost): string {
+  return target.host === "gateway" ? "gateway" : `node:${target.nodeId}`;
+}
+
+export function computerTargetDetails(target: ComputerHost) {
+  return target.host === "gateway"
+    ? { target: "gateway" as const }
+    : {
+        node: target.nodeId,
+        ...(target.environmentId ? { environmentId: target.environmentId } : {}),
+      };
+}
 
 export type ComputerFrame = {
   target: ComputerTarget;
@@ -71,12 +88,10 @@ export type ScreenshotCapture = {
   base64: string;
   displayFrameId: string;
   mimeType: string;
-  width?: number;
-  height?: number;
 };
 
 export type ComputerObservationState = {
-  nodeId: string;
+  targetKey: string;
   providerGeneration: string;
   observationId: string;
   imageCoordinates?:

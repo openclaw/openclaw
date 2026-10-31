@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   boundCodeModeError,
   captureCodeModeOutput,
@@ -6,8 +6,177 @@ import {
   CodeModeOutputState,
   toCodeModeJsonSafe,
 } from "./code-mode-json.js";
+import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
+import { toolResultFitsBudget } from "./tool-result-limits.js";
+import { serializeToolSearchControlResult } from "./tool-search-control-result.js";
+
+function reference(bytes: number, preview: string, id = "result_synthetic") {
+  return { id, bytes, count: 1, shape: "object", preview, previewTruncated: true };
+}
 
 describe("Code Mode JSON normalization", () => {
+  it.each(["output", "error"])("bounds serialization work for oversized %s", (channel) => {
+    const text = "x".repeat(64_000);
+    const state = new CodeModeOutputState(65_536, {
+      maxChars: 16_000,
+      maxContextChars: 32_000,
+    });
+    if (channel === "output") {
+      state.append(captureCodeModeOutput([{ type: "text", text }], 65_536));
+    }
+    const stringify = JSON.stringify;
+    const parse = JSON.parse;
+    let serializedChars = 0;
+    let parsedChars = 0;
+    let serializations = 0;
+    const stringSpy = vi.spyOn(globalThis, "String");
+    const spy = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+      serializations++;
+      const json = stringify(...args);
+      serializedChars += json?.length ?? 0;
+      return json;
+    });
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+      parsedChars += args[0].length;
+      return parse(...args);
+    });
+    let result;
+    let stringConversions: number;
+    try {
+      result = state.takeResult(
+        { status: channel === "error" ? "failed" : "completed" },
+        channel === "error" ? { error: text } : {},
+      );
+    } finally {
+      stringConversions = stringSpy.mock.calls.length;
+      stringSpy.mockRestore();
+      spy.mockRestore();
+      parseSpy.mockRestore();
+    }
+    expect(JSON.stringify(result)).toHaveLength(16_000);
+    // Trials measure captured JSON and changed prefix intervals, not whole envelopes.
+    expect(serializedChars).toBeLessThan(210_000);
+    expect(serializations).toBeLessThanOrEqual(5);
+    // Rejected complete channels must not be decoded before selecting their bounded prefix.
+    expect(parsedChars).toBeLessThan(16_000);
+    // Decimal marker widths must not allocate one string per prefix byte.
+    expect(stringConversions).toBeLessThan(100);
+  });
+
+  it.each([
+    [false, false, false, false],
+    [false, false, false, true],
+    [true, false, false, false],
+    [false, true, false, false],
+    [false, false, true, false],
+    [true, true, true, false],
+    [true, true, true, true],
+  ])("matches serialized budgets for channel combination %#", (output, value, error, retained) => {
+    for (const repeat of [1, 1_024]) {
+      const text = 'a"\\\n\r\b\f\t\0é中🌍\ud800z\udfff·꜀ˇ𝍠𠀀\u2028'.repeat(repeat);
+      const maxBytes = 8_192;
+      const state = new CodeModeOutputState(maxBytes);
+      if (output) {
+        state.append(captureCodeModeOutput([{ text }, text], maxBytes));
+      }
+      const params = {
+        ...(value ? { value: captureCodeModeValue({ text }, maxBytes) } : {}),
+        ...(error ? { error: text } : {}),
+        valueGuidance: "Return less data.",
+        ...(retained ? { reference: reference(Buffer.byteLength(text), text.slice(0, 128)) } : {}),
+      };
+      const metadata = {
+        status: "completed",
+        [text.slice(0, 8)]: { detail: text.slice(0, 128) },
+        output: "overwritten",
+        value: "metadata value",
+        error: "metadata error",
+      };
+      // Exercise the production projector directly, without a test-only budget API.
+      const project = state["createProjector"](params, metadata);
+      // Descending and ascending probes cover reuse of measured prefix intervals.
+      for (const limit of [maxBytes, 0, 1, maxBytes - 1, 128, 4_096, 512]) {
+        const measured = project(limit, "budget");
+        const json = serializeToolSearchControlResult(
+          { ...metadata, ...project(limit).channels },
+          true,
+        );
+        expect(measured, `repeat=${repeat}, limit=${limit}`).toEqual({
+          chars: estimateToolResultTextChars(json),
+          contextChars: estimateToolResultTextChars(json, { minimumRawWeight: 2 }),
+        });
+      }
+    }
+  });
+
+  it("rejects a model budget that cannot fit the status envelope", () => {
+    const state = new CodeModeOutputState(128, { maxChars: 0, maxContextChars: 0 });
+    expect(() => state.takeResult({ status: "completed" })).toThrow(
+      "Model tool-result budget cannot fit Code Mode status",
+    );
+  });
+
+  it("projects owned channels over metadata without losing unrelated fields", () => {
+    const state = new CodeModeOutputState(1_024);
+    state.append(captureCodeModeOutput(["output"], 1_024));
+    expect(
+      state.takeResult(
+        {
+          status: "completed",
+          telemetry: { calls: 1 },
+          output: "stale",
+          value: "stale",
+          error: "stale",
+        },
+        { value: captureCodeModeValue("value", 1_024), error: "diagnostic" },
+      ),
+    ).toEqual({
+      status: "completed",
+      telemetry: { calls: 1 },
+      output: ["output"],
+      value: "value",
+      error: "diagnostic",
+    });
+  });
+
+  it.each(["capacity", "undeliverable reference"])(
+    "preserves successful output when %s guidance exceeds the model budget",
+    (failure) => {
+      const value = captureCodeModeValue({ text: "data".repeat(1_000) }, 4_096);
+      const budget = { maxChars: 160, maxContextChars: 2_048 };
+      const metadata = { status: "completed" };
+      const original = new CodeModeOutputState(1_024, budget).takeResult(metadata, { value });
+      expect(original).toMatchObject({ status: "completed", value: { truncated: true } });
+      const release = vi.fn();
+      const output = new CodeModeOutputState(1_024, budget).takeResult(
+        metadata,
+        { value },
+        false,
+        () =>
+          failure === "capacity"
+            ? {
+                reason:
+                  "Not retained: result-store capacity exceeded. Delete references or return less data.",
+              }
+            : {
+                reference: reference(
+                  4_011,
+                  "sample",
+                  "result_00000000-0000-0000-0000-000000000000",
+                ),
+                release,
+              },
+      );
+      expect(output).toMatchObject({
+        status: "completed",
+        value: { truncated: true, guidance: expect.stringContaining("Not retained") },
+      });
+      expect(output.value).not.toHaveProperty("reference");
+      expect(toolResultFitsBudget(JSON.stringify(output), budget)).toBe(true);
+      expect(release).toHaveBeenCalledTimes(failure === "capacity" ? 0 : 1);
+    },
+  );
+
   it.each([
     { limit: 20, prefix: "" },
     { limit: 24, prefix: 'a"' },
@@ -86,11 +255,6 @@ describe("Code Mode JSON normalization", () => {
 
     const second = state.takeResult({ status: "completed" }, { value: captured });
     expect(second).toMatchObject({ value: normalized, output: [] });
-    state.append(captureCodeModeOutput([{ type: "text", text: "next" }], 65_536));
-    expect(
-      state.takeResult({ status: "completed" }, { value: captureCodeModeValue(null, 65_536) })
-        .value,
-    ).toBeNull();
   });
 
   it("retains cycle fallbacks and normalizes each output entry with the root toJSON key", () => {

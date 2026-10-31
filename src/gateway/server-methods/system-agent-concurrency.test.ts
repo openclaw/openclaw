@@ -75,6 +75,7 @@ describe("openclaw.chat concurrency", () => {
     expect(getCommandLaneSnapshot(CommandLane.SystemAgent)).toMatchObject({
       activeCount: 2,
       queuedCount: 0,
+      maxConcurrent: Number.MAX_SAFE_INTEGER,
     });
     expect(secondHandle).not.toHaveBeenCalled();
     releaseFirst.resolve();

@@ -1,16 +1,18 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   exceedsApprovalTextLimit,
   sanitizeExecApprovalWarningTextWithStatus,
 } from "../../infra/exec-approval-text-sanitize.js";
 import { evaluateShellAllowlistWithAuthorization } from "../../infra/exec-approvals-allowlist.js";
 import {
-  loadExecApprovals,
+  readExecApprovalsSnapshotAsync,
   recordAllowlistMatchesUse,
   resolveExecApprovalsFromFile,
   type ExecAsk,
+  type ExecApprovalUsageAuthorization,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
 import { buildAuthorizedShellCommandFromPlan } from "../../infra/exec-authorization-render.js";
@@ -25,8 +27,11 @@ import {
   revalidateSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../../infra/system-run-approval-binding.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
+import { withGatewayToolApprovalOwner } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import { cliBackendLog } from "./log.js";
 
 type CliNativeToolApprovalOutcome =
   | { kind: "allow"; grantAlways: boolean; updatedInput?: Record<string, unknown> }
@@ -136,14 +141,17 @@ export async function requestCliNativeToolApproval(params: {
       typeof params.toolInput.command === "string"
         ? params.toolInput.command
         : undefined;
-    let autoAllow: (() => CliNativeToolApprovalOutcome) | undefined;
+    let autoAllow: (() => Promise<CliNativeToolApprovalOutcome>) | undefined;
     if (
       params.ask === "on-miss" &&
       params.pluginId === "claude-cli" &&
       bashCommand &&
       params.agentId
     ) {
-      const file = loadExecApprovals();
+      const policyContext = captureOpenClawStateWorkerContext();
+      const file = (await readExecApprovalsSnapshotAsync(policyContext)).file;
+      params.abortSignal?.throwIfAborted();
+      params.assertActive?.();
       const { allowlist } = resolveExecApprovalsFromFile({ file, agentId: params.agentId });
       const analysis = await evaluateShellAllowlistWithAuthorization({
         command: bashCommand,
@@ -177,24 +185,32 @@ export async function requestCliNativeToolApproval(params: {
                   : (candidates[miss]?.sourceStep.text ?? "no classified executable"),
             };
       if (rendered.ok) {
-        autoAllow = () => {
-          params.abortSignal?.throwIfAborted();
-          params.assertActive?.();
+        autoAllow = async () => {
+          const assertCurrent = () => {
+            params.abortSignal?.throwIfAborted();
+            params.assertActive?.();
+          };
+          assertCurrent();
+          const authorization: ExecApprovalUsageAuthorization = {
+            source: "current-policy",
+            security: "allowlist",
+            ask: params.ask,
+            allowlistSatisfied: true,
+          };
           // Require current grants even when the caller policy is full with prompting.
-          recordAllowlistMatchesUse({
-            approvals: file,
-            agentId: params.agentId,
-            matches: analysis.allowlistMatches,
-            command: bashCommand,
-            resolvedPath:
-              candidates[0]?.sourceSegment.resolution?.execution.resolvedPath ?? undefined,
-            authorization: {
-              source: "current-policy",
-              security: "allowlist",
-              ask: params.ask,
-              allowlistSatisfied: true,
+          const assertPolicyCurrent = await recordAllowlistMatchesUse(
+            {
+              assertCurrent,
+              agentId: params.agentId,
+              matches: analysis.allowlistMatches,
+              command: bashCommand,
+              resolvedPath: candidates[0]?.sourceSegment.resolution?.execution.resolvedPath,
+              authorization,
             },
-          });
+            policyContext,
+          );
+          assertCurrent();
+          assertPolicyCurrent();
           logVerbose("Claude CLI native Bash auto-allowed via exec allowlist");
           return {
             kind: "allow",
@@ -217,18 +233,21 @@ export async function requestCliNativeToolApproval(params: {
         env: autoAllow ? params.env : (params.bindingEnv ?? params.env),
       });
       if (!prepared.ok) {
+        const message =
+          prepared.reason === "unsupported-command-shape"
+            ? `${prepared.message}\nNo approval request was created for this attempt; this is not a user denial. Retry a supported direct executable/script command with explicit paths through the normal approval flow.`
+            : prepared.message;
         return {
           kind: "deny",
           reason: "operand-binding",
-          message: sanitizeExecApprovalWarningTextWithStatus(
-            `${prepared.message}\n${description.text}`,
-          ).text,
+          message: sanitizeExecApprovalWarningTextWithStatus(`${message}\n${description.text}`)
+            .text,
         };
       }
       mutableFileBinding = prepared.binding.operands.length > 0 ? prepared.binding : undefined;
     }
     if (autoAllow) {
-      return autoAllow();
+      return await autoAllow();
     }
     if (
       bashCommand &&
@@ -246,28 +265,33 @@ export async function requestCliNativeToolApproval(params: {
       description.truncated
         ? ["allow-once", "deny"]
         : ["allow-once", "allow-always", "deny"];
+    // Agent-runtime callers must name the backend as the signed approval owner.
     const requestResult = await racePromiseWithAbortSignal(
-      callGatewayTool<{ id?: string; decision?: unknown }>(
-        "plugin.approval.request",
-        { timeoutMs: gatewayTimeoutMs },
-        {
-          pluginId: params.pluginId,
-          toolName: params.toolName,
-          toolCallId: params.toolCallId,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          title: truncateUtf16Safe(
-            `${params.pluginId} native tool: ${params.toolName}`,
-            PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+      withGatewayToolApprovalOwner(
+        params.pluginId,
+        async () =>
+          await callGatewayTool<{ id?: string; decision?: unknown }>(
+            "plugin.approval.request",
+            { timeoutMs: gatewayTimeoutMs },
+            {
+              pluginId: params.pluginId,
+              toolName: params.toolName,
+              toolCallId: params.toolCallId,
+              agentId: params.agentId,
+              sessionKey: params.sessionKey,
+              title: truncateUtf16Safe(
+                `${params.pluginId} native tool: ${params.toolName}`,
+                PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+              ),
+              description: description.text,
+              detail: truncatePluginApprovalDetail(description.compact),
+              severity: "warning",
+              allowedDecisions,
+              timeoutMs,
+              twoPhase: true,
+            },
+            { expectFinal: false, signal: params.abortSignal },
           ),
-          description: description.text,
-          detail: truncatePluginApprovalDetail(description.compact),
-          severity: "warning",
-          allowedDecisions,
-          timeoutMs,
-          twoPhase: true,
-        },
-        { expectFinal: false, signal: params.abortSignal },
       ),
       params.abortSignal,
     );
@@ -312,7 +336,13 @@ export async function requestCliNativeToolApproval(params: {
       return { kind: "allow", grantAlways: decision === "allow-always" };
     }
     return { kind: "deny", reason: decision === "deny" ? "user" : "unavailable" };
-  } catch {
+  } catch (error) {
+    // Still fail closed, but keep Gateway rejections visible to operators.
+    if (!params.abortSignal?.aborted) {
+      cliBackendLog.warn(
+        `native tool approval unavailable for ${params.toolName}: ${formatErrorMessage(error)}`,
+      );
+    }
     return { kind: "deny", reason: "unavailable" };
   }
 }

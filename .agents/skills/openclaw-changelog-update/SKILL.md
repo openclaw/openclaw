@@ -8,8 +8,10 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 Use this for changelog rewrites and GitHub release-note source text. For regular
 beta/stable, prepare complete notes before final-source qualification when
 possible; Code SHA may then also be Release SHA. Editorial work may overlap
-Code validation. If notes change afterward, a genuine CHANGELOG-only descendant
-may use the existing product-evidence reuse policy. For
+Code validation. Do not rerun it per validation-recovery backport; when backports
+replace the Code SHA, rerun it once after the final Code SHA is green, as a
+genuine CHANGELOG-only descendant under the existing product-evidence reuse
+policy ([timing](../release-openclaw-maintainer/references/preparation.md#changelog-and-release-notes)). For
 extended-stable, run it before final exact-head validation and tagging. Do not
 rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
@@ -17,10 +19,10 @@ ordering, grouping, and attribution discipline.
 
 ## Goal
 
-Rebuild the target `CHANGELOG/YYYY.M.PATCH.md` release section from a complete, generated
+Rebuild the target `CHANGELOG/<version>.md` release section from a complete, generated
 history manifest, not stale draft notes. Produce grouped user-facing release
 notes sorted by user interest while preserving every relevant issue/PR ref and
-every human `Thanks @...` attribution.
+every verified human `Thanks @...` attribution.
 
 `CHANGELOG.md` is the generated release index. The shared owner
 `scripts/lib/release-changelog.mjs` resolves release sections and contribution
@@ -42,9 +44,23 @@ of this skill; initial generation must never overwrite them.
 
 ## Inputs
 
-- Target base version: `YYYY.M.PATCH`, without beta suffix.
-- Base tag: last reachable shipped release tag, usually the previous stable or
-  the previous beta train requested by the operator. It must be an ancestor of
+- Target version: exact `YYYY.M.PATCH-beta.N` for a beta delta; `YYYY.M.PATCH`
+  for cumulative stable notes. Beta entries and records are separate frozen
+  artifacts, never copies of the stable-base section.
+- Beta base tag: capture the version currently selected by public npm
+  `openclaw@beta` before publication, not the last GitHub prerelease or the
+  highest beta-suffixed version. The selector may name a stable version also
+  selected by `latest`. Omit `--base` (or use `--base npm-beta`) with an exact
+  beta version to resolve it once; preserve the resolved tag from the generated
+  manifest and reuse that explicit `--base` for edits, verification and recovery.
+  If npm already selects the candidate or a newer version, generation refuses
+  to guess historical selector state; supply the previously captured tag. When
+  that tag is not an ancestor (for example a stable closeout forward-port), the
+  verifier uses its reachable merge base and subtracts the captured shipped
+  tag's cumulative PR record through `--shipped-ref` semantics. The manifest and
+  record retain both boundaries; replay with the captured tag to resolve the
+  same range, never select an older GitHub beta instead.
+- Stable base tag: last reachable shipped stable release tag. It must be an ancestor of
   the target; a newer but divergent tag is not a valid history boundary. Use
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
@@ -78,11 +94,19 @@ of this skill; initial generation must never overwrite them.
    node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
+     --release-branch <canonical-release-branch> \
      --main-ref origin/main \
      --version <YYYY.M.PATCH> \
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
      --write-ledger
    ```
+
+   For beta generation, use `--version YYYY.M.PATCH-beta.N` and omit `--base`
+   on the first inventory run. Start an exact-version section with Highlights,
+   Changes and Fixes using the shared writer; generate the delta manifest, then
+   write prose for that range only. Subsequent runs use the captured npm baseline
+   tag explicitly (not only a divergent range's merge-base SHA). Do not query npm again after publication or overwrite the
+   cumulative stable entry. Regenerate cumulative stable notes at stable prep.
 
    Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
    release commits cannot carry provenance metadata. These use the same exact
@@ -92,7 +116,7 @@ of this skill; initial generation must never overwrite them.
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
    rewrites at the same target avoid repeated network discovery. Use
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
-<path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
+   <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
    Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
    in active source are classified separately only when issue/PR resolution
@@ -101,6 +125,7 @@ of this skill; initial generation must never overwrite them.
    contribution record remains a strict issue/PR requirement. Confirmed runs
    appear as `workflowRuns` in verification output and the manifest, never as
    PR associations or contributor credit.
+   Only GitHub `NOT_FOUND` references confined to contextual commit-body text, absent from subjects, closing references, provenance, and notes/records, and below the highest resolved number may be omitted and reported as manifest `unavailableReferences` without credit.
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
@@ -155,14 +180,14 @@ of this skill; initial generation must never overwrite them.
      are editorial input, not public ledger rows; infer material user outcomes
      from subject, body, touched files, tests, and nearby commits
 
-4. Rewrite one stable-base section only:
-   - use `## YYYY.M.PATCH`
-   - do not create beta-specific headings
+4. Rewrite one selected release section only:
+   - beta: `## YYYY.M.PATCH-beta.N`, containing only changes since the captured npm beta baseline
+   - stable: `## YYYY.M.PATCH`, cumulative since the previous stable baseline
    - do not leave a stale `## Unreleased` section above the target release
    - if `Unreleased` contains release-bound notes, fold them into the target
      section instead of deleting them
 5. Section shape:
-   - `### Highlights`: 5-8 bullets, broad user wins first
+   - `### Highlights`: 5-8 bullets for stable, 0-8 for a beta delta; do not invent highlights for small hotfix betas
      - include only a clear user-visible capability or workflow unlock, a
        material reliability/safety fix, a broad cross-surface improvement, or
        a release-defining integration/compatibility milestone
@@ -178,7 +203,17 @@ of this skill; initial generation must never overwrite them.
    - `### Complete contribution record`: generated PR-first record after the
      grouped prose; it is the exhaustive accounting surface, not a second
      release summary
-6. Preserve attribution:
+6. Preserve verified attribution:
+   - PR authorship comes from the canonical GitHub PR, never the release commit
+     author, committer, or backport operator. Resolve coauthors from that PR's
+     original merge commit; release-carrier trailers and contextual mentions
+     do not establish credit on another PR
+   - rebuild generated thanks from PR, original coauthor, and linked-reporter
+     evidence. Seeds retain membership and references, not unverified old
+     thanks. Regeneration replaces stale generated credit in records and grouped
+     prose; verification rejects both missing and unsupported credit
+   - when a vanished PR meets the existing exact-SHA recovery contract, retain
+     its recorded thanks as historical credit without inventing a PR author
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
      its PR ref and `Thanks @author`, even when the PR had no linked issue
@@ -227,10 +262,9 @@ of this skill; initial generation must never overwrite them.
      that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - initial release generation keeps its existing credit policy: never thank
-     bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`.
-     The separately approved post-docs GitHub body uses its complete verified
-     human roster, including `@steipete` when credited
+   - credit verified human authors, including maintainers such as `@steipete`.
+     Never thank bots, known automation accounts such as `@steipete-oai`,
+     `@claude`, `@codex`, `@openclaw`, or `@clawsweeper`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -267,10 +301,12 @@ of this skill; initial generation must never overwrite them.
   as shipped, when a source PR is absent from the contribution record, when
   direct commits are rendered as a public record dump, when non-editorial
   PRs appear in grouped prose, or when an eligible PR author or known
-  co-author is missing from that PR's `Thanks @...` credit. It also fails
-  before history collection when `--base` is not an ancestor of `--target`,
-  when `### Highlights` has fewer than five or more than eight top-level
-  bullets, or when the existing prose/record names a PR outside the source
+  co-author is missing from that PR's `Thanks @...` credit, or unsupported
+  credit appears in its record or represented editorial bullet. It also fails
+  before history collection when `--base` is not an ancestor of `--target`
+  (except beta release tags normalized to merge-base plus shipped-record subtraction),
+  when `### Highlights` violates the selected stable (5-8) or beta (0-8)
+  top-level bullet budget, or when the existing prose/record names a PR outside the source
   range. Only an explicit `--seed-ref` may add historical PR inventory; an
   explicit repeatable `--shipped-ref` may subtract PRs proven present in a
   prior shipped tag
@@ -289,19 +325,23 @@ of this skill; initial generation must never overwrite them.
     --release-tag v<YYYY.M.PATCH> \
     --check-github
   ```
-- add one `--release-tag` for every beta and stable page in the train; a
-  `### Release verification` tail is permitted, but any other body drift
-  fails the check
+- verify each beta page with its exact beta version, captured base and target;
+  verify stable and extended-stable with their own source section and range.
+  Extended-stable verification also requires
+  `--regular-stable-version <current-regular-stable-version>` so the canonical
+  release notice is checked against its immutable regular-stable context.
+  Never compare multiple beta pages against one cumulative stable section.
+  A `### Release verification` tail is permitted; other body drift fails.
 - `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
-  complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
+  complete selected version section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, the body must contain
   that exact section including its heading
 - when the complete source section exceeds either limit, the renderer keeps the exact
   grouped editorial notes through the line before
   `### Complete contribution record`, then emits that heading with a stable
   link to the full contribution record in the tag-pinned
-  `CHANGELOG/records/YYYY.M.PATCH.md` (historical monolithic tags retain their
+  `CHANGELOG/records/<version>.md` (historical monolithic tags retain their
   original `CHANGELOG.md` record link).
   Never truncate a bullet or partial record, and never hand-author a different
   compact form
@@ -322,7 +362,7 @@ of this skill; initial generation must never overwrite them.
   full parent/attempt and its exact publication bytes for both roles
 - only when notes change after Code qualification, require
   `git diff --name-only <code-sha>..<release-sha>` to include
-  `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its matching record, and
+  `CHANGELOG/<version>.md` and only that entry, its matching record, and
   `CHANGELOG.md` before optionally using `split-changelog-release-v1`. Additions
   or modifications of the selected entry/record are allowed; renames, deletions,
   other releases, and docs source changes are not. Historical root-only receipts
@@ -372,11 +412,14 @@ workflow for their verification.
 
 ## Extended-Stable Variant
 
-Extended-stable has one release commit and no GitHub Release body. After version
-prep and approved backports, regenerate `## YYYY.M.P` with the regular manifest
-and original-main-PR provenance rules. Land it by PR, then validate the final
-branch tip before tagging. Re-audit after a product backport; a tooling-only
-repair needs no changelog entry. Never rewrite a published tag or changelog.
+Extended-stable has one release commit and one canonical GitHub Release body.
+After version prep and approved backports, regenerate `CHANGELOG/YYYY.M.P.md`
+with the regular manifest and original-main-PR provenance rules. Land it by PR, then
+validate the final branch tip before tagging. The release closeout renders that
+tag-owned section into the shared draft before the parent pipeline publishes
+the non-Latest release page. Re-audit after a product
+backport; a tooling-only repair needs no changelog entry. Never rewrite a
+published tag or changelog.
 
 ## Quota / API Outage Rule
 

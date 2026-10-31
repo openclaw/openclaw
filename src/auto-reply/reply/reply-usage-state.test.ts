@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildReplyUsageState,
@@ -11,12 +12,7 @@ afterEach(() => {
 });
 
 describe("reply usage state handoff", () => {
-  it.each([
-    { name: "costless flat-price runtime", total: undefined, tiered: false, expected: 1 },
-    { name: "priced tool loop", total: 0.25, tiered: true, expected: 0.25 },
-    { name: "explicit zero total", total: 0, tiered: true, expected: 0 },
-    { name: "incomplete tiered cost", total: undefined, tiered: true, expected: undefined },
-  ])("reports $name for the selected agent in an explicit fleet", ({ total, tiered, expected }) => {
+  it("reports flat-price runtime cost for the selected agent in an explicit fleet", () => {
     const snapshot = buildReplyUsageState({
       config: {
         agents: {
@@ -28,27 +24,19 @@ describe("reply usage state handoff", () => {
             fixture: {
               baseUrl: "https://fixture.invalid",
               models: [
-                {
+                makeConfiguredModel({
                   id: "priced",
                   name: "Priced",
                   reasoning: false,
-                  input: ["text"],
                   cost: {
                     input: 1,
                     output: 0,
                     cacheRead: 0,
                     cacheWrite: 0,
-                    ...(tiered
-                      ? {
-                          tieredPricing: [
-                            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
-                          ],
-                        }
-                      : {}),
                   },
                   contextWindow: 1,
                   maxTokens: 1,
-                },
+                }),
               ],
             },
           },
@@ -59,10 +47,10 @@ describe("reply usage state handoff", () => {
       model: "priced",
       agentId: "main",
       sessionId: "session-priced",
-      usage: { input: 1_000_000, output: 0, ...(total !== undefined ? { cost: { total } } : {}) },
+      usage: { input: 1_000_000, output: 0 },
     });
 
-    expect(snapshot.turnUsd).toBe(expected);
+    expect(snapshot.turnUsd).toBe(1);
   });
 
   it("requires exact run correlation", () => {

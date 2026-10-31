@@ -26,7 +26,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           containerPrefix: "openclaw-sbx-",
           workdir: "/workspace",
           readOnlyRoot: true,
@@ -36,7 +36,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
           capDrop: ["ALL"],
           env: { LANG: "C.UTF-8" },
           setupCommand: "apt-get update && apt-get install -y git curl jq",
-          pidsLimit: 256,
+          pidsLimit: 1024,
           memory: "1g",
           memorySwap: "2g",
           cpus: 1,
@@ -67,7 +67,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         },
         browser: {
           enabled: false,
-          image: "openclaw-sandbox-browser:bookworm-slim",
+          image: "openclaw-sandbox-browser:trixie-slim",
           network: "openclaw-sandbox-browser",
           cdpPort: 9222,
           cdpSourceRange: "172.21.0.1/32",
@@ -109,7 +109,11 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
 }
 ```
 
-Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none` network/etc.) are the actual OpenClaw defaults, not just illustrative values.
+Defaults shown above (`off`/`docker`/`agent`/`none`/`trixie-slim` image/`none` network/etc.) are the actual OpenClaw defaults, not just illustrative values.
+
+Sandbox pruning runs as background housekeeping after runtime preparation, at most once every five minutes. The housekeeping loop continues between turns, so idle and age limits still take effect after a turn releases its runtime. Runtimes and browser containers held by an active turn or managed workspace preparation are retained even when their idle or age limit has expired. A new start waits for cleanup only when that cleanup already owns the same runtime scope or workspace.
+
+Docker and Podman tool and browser containers default to a PID limit of 1024. Explicit global or per-agent `docker.pidsLimit` values override it; shared scope uses only global values.
 
 <Accordion title="Sandbox details">
 
@@ -143,7 +147,7 @@ Plugin-managed backends keep runtime-specific settings under their plugin entrie
 **SSH backend behavior:**
 
 - seeds the remote workspace once after create or recreate
-- then keeps the remote SSH workspace canonical
+- then uses the remote SSH workspace as the source of truth
 - routes `exec`, file tools, and media paths over SSH
 - does not sync remote changes back to the host automatically
 - does not support sandbox browser containers
@@ -191,8 +195,8 @@ Plugin-managed backends keep runtime-specific settings under their plugin entrie
 
 **OpenShell mode:**
 
-- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays canonical
-- `remote`: seed remote once when the sandbox is created, then keep the remote workspace canonical
+- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays the source of truth
+- `remote`: seed remote once when the sandbox is created, then use the remote workspace as the source of truth
 
 In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
 Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.
@@ -206,6 +210,10 @@ Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecyc
 Codex app-server turns in an active OpenClaw sandbox use this same egress setting for their native code-mode network access.
 
 **Inbound attachments** are staged into `media/inbound/*` in the active workspace.
+The per-file staging limit is at least 50 MiB. Explicitly raising
+`agents.defaults.mediaMaxMb` or the incoming channel/account's `mediaMaxMb` also
+raises this limit; account settings override channel settings. Local workspace
+copies stream from disk. SSH and remote workspace transfers still buffer each file.
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 

@@ -1,4 +1,7 @@
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
+import type { SpawnRequesterConversationSource } from "../../spawn-requester-origin.js";
 import type { SpawnedToolContext } from "../../spawned-context.js";
 import type {
   SpawnSubagentContextMode,
@@ -14,6 +17,7 @@ export type SpawnSubagentParams = {
   taskName?: string;
   thinking?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   collect?: boolean;
   outputSchema?: Record<string, unknown>;
   groupId?: string;
@@ -22,6 +26,10 @@ export type SpawnSubagentParams = {
   /** Canonical request hash checked before reusing a host-reserved collector. */
   swarmLaunchRequestFingerprint?: string;
   cwd?: string;
+  projectId?: string;
+  worktree?: boolean;
+  worktreeName?: string;
+  worktreeBaseRef?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
@@ -29,7 +37,10 @@ export type SpawnSubagentParams = {
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
+  /** The child's rendered prompt omits its model, agent/session identity and workspace path. */
+  blind?: boolean;
   expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   attachments?: Array<{
     name: string;
     content: string;
@@ -39,27 +50,33 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = SpawnedToolContext & {
-  onSpawnEffectsStart?: () => void;
-  agentSessionKey?: string;
-  requesterTurnRunId?: string;
-  /** Separate key used only for completion routing, not sandbox policy. */
-  completionOwnerKey?: string;
-  /** Active requester sandbox classification, preserved separately from the durable lineage key.
-   * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
-  sandboxed?: boolean;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  currentMessageId?: string | number;
-  requesterAgentIdOverride?: string;
-  requesterRunId?: string;
-  /** Private invocation fence, consumed only before registration transfers ownership. */
-  assertActive?: () => void;
-};
+export type SpawnSubagentContext = SpawnedToolContext &
+  SpawnRequesterConversationSource & {
+    onSpawnEffectsStart?: () => void;
+    agentSessionKey?: string;
+    /** Trusted parent tool construction facts; never read from model arguments. */
+    senderIsOwner?: boolean;
+    expectedParentSessionId?: string;
+    requesterTurnRunId?: string;
+    /** Host-only SDK provenance, never accepted from model/plugin spawn arguments. */
+    nativePluginOwner?: import("../registry/subagent-registry.types.js").SubagentRunRecord["nativePluginOwner"];
+    /** Host-captured plugin profile, never read from tool arguments. */
+    subagentProfile?: import("../../../plugins/subagent-profile.types.js").RegisteredSubagentProfile;
+    /** Separate key used only for completion routing, not sandbox policy. */
+    completionOwnerKey?: string;
+    /** Active requester sandbox classification, preserved separately from the durable lineage key.
+     * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
+    sandboxed?: boolean;
+    agentChannel?: string;
+    agentAccountId?: string;
+    currentMessageId?: string | number;
+    requesterAgentIdOverride?: string;
+    requesterRunId?: string;
+    /** Private invocation fence, consumed only before registration transfers ownership. */
+    assertActive?: SessionSourceAssertion;
+    /** Cancels initial preparation only; accepted children own their execution lifetime. */
+    signal?: AbortSignal;
+  };
 
 export type SpawnSubagentResult = {
   childSessionKey?: string;
@@ -67,13 +84,18 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  label?: string;
+  groupId?: string;
   expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;
   /** Provider prefix parsed from resolvedModel when the ref includes one. */
   resolvedProvider?: string;
   modelApplied?: boolean;
+  /** Session Access applied to the child; omitted when the child uses its model default. */
+  cyberAccessProgram?: CyberAccessProgram;
   error?: string;
   attachments?: {
     count: number;
@@ -85,3 +107,7 @@ export type SpawnSubagentResult = {
   | { status: "accepted"; context: SpawnSubagentContextMode }
   | { status: "forbidden" | "error"; context?: never }
 );
+
+export function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
+  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
+}

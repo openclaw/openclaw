@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Parallels smoke commands with the verified 27.0.0 guest-exec ABI.
+"""Run Parallels smoke commands with verified 27.0.0 and 27.0.2 guest-exec ABIs.
 
 Usage: parallels-exec.py [--timeout-ms N] -- exec VM [--current-user] COMMAND...
 Like prlctl, COMMAND arguments are joined with spaces; callers own shell quoting,
@@ -17,13 +17,17 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import sys
 import time
 
 APP = Path("/Applications/Parallels Desktop.app/Contents")
-# This digest identifies the verified 27.0.0 CLI and its installed SDK ABI.
-CLI_HASH = "759030a682c31ae71878ab71f1bf1560957ff89308c9de621d1b9bee4b9fcd80"
+# These digests identify the verified CLIs and their installed SDK ABI.
+CLI_HASHES = {
+    "759030a682c31ae71878ab71f1bf1560957ff89308c9de621d1b9bee4b9fcd80",  # 27.0.0
+    "aa112c4e83bb63ae4fe88ef3fbc76aeba643cb7e1fcd3acdc12f00b4ac3d45b3",  # 27.0.2
+}
 DEFAULT_TIMEOUT_MS = 1_800_000
 MAX_TIMEOUT_MS = (1 << 31) - 1
 CLEANUP_TIMEOUT_MS = 5_000
@@ -32,7 +36,9 @@ PRIVILEGED = b"531582ac-3dce-446f-8c26-dd7e3384dcf4"
 CURRENT_USER = b"4a5533a7-31c6-4d7a-a400-1f330dc57a9d"
 # PrlCommandsFlags.h: PACF_MAX=10, UUID=1<<(10+1), NAME=1<<(10+2).
 # GetVmConfig searches UUID first, then name when both flags are supplied.
-VM_SEARCH_FLAGS = (1 << 11) | (1 << 12)
+VM_SEARCH_BY_NAME = 1 << 12
+VM_SEARCH_FLAGS = (1 << 11) | VM_SEARCH_BY_NAME
+PRL_ERR_VM_UUID_NOT_FOUND = -105
 H, R, U, S, I = C.c_void_p, C.c_int, C.c_uint32, C.c_char_p, C.c_int
 HP = C.POINTER(H)
 
@@ -40,6 +46,12 @@ HP = C.POINTER(H)
 def checked(code: int | None, operation: str) -> None:
     if code:
         raise RuntimeError(f"{operation}: SDK error 0x{code & 0xffffffff:08x}")
+
+
+class JobError(RuntimeError):
+    def __init__(self, code: int):
+        super().__init__(f"job operation: SDK error 0x{code & 0xffffffff:08x}")
+        self.code = code
 
 
 def uses_verified_sdk() -> bool:
@@ -59,7 +71,7 @@ def uses_verified_sdk() -> bool:
         digest = hashlib.sha256((APP / "MacOS/prlctl").read_bytes()).hexdigest()
     except OSError:
         return False
-    return digest == CLI_HASH
+    return digest in CLI_HASHES
 
 
 class GuestSdk:
@@ -146,7 +158,8 @@ class GuestSdk:
         checked(self.api.PrlJob_Wait(job, self.remaining_timeout_ms()), "PrlJob_Wait")
         result = R()
         checked(self.api.PrlJob_GetRetCode(job, C.byref(result)), "PrlJob_GetRetCode")
-        checked(result.value, "job operation")
+        if result.value:
+            raise JobError(result.value)
 
     def finish(self, job):
         self.wait(self.own(job))
@@ -173,7 +186,16 @@ class GuestSdk:
         checked(self.api.PrlLoginParams_SetFlags(login, 4), "LoginParams_SetFlags")
         self.finish(self.api.PrlSrv_LoginLocalWithParams(server, login))
         self.resources.callback(self.cleanup, self.cleanup_job, self.api.PrlSrv_Logoff, server)
-        vm = self.result(self.api.PrlSrv_GetVmConfig(server, vm_name.encode(), VM_SEARCH_FLAGS))
+        identifier = vm_name
+        if re.fullmatch(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", identifier):
+            identifier = f"{{{identifier}}}"
+        try:
+            vm = self.result(self.api.PrlSrv_GetVmConfig(server, identifier.encode(), VM_SEARCH_FLAGS))
+        except JobError as error:
+            if identifier == vm_name or error.code != PRL_ERR_VM_UUID_NOT_FOUND:
+                raise
+            # Match the CLI's literal-name lookup only after the braced UUID was absent.
+            vm = self.result(self.api.PrlSrv_GetVmConfig(server, vm_name.encode(), VM_SEARCH_BY_NAME))
         self.finish(self.api.PrlVm_TerminalConnect(vm, 0))
         self.resources.callback(self.cleanup, self.api.PrlVm_TerminalDisconnect, vm)
         return vm

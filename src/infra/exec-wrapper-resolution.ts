@@ -1,5 +1,3 @@
-// Wrapper resolution facade for executable tokens, dispatch wrappers, and shell
-// multiplexers used by exec approval policy.
 export { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 export {
   extractEnvAssignmentKeysFromDispatchWrappers,

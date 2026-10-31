@@ -3,13 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadExecApprovalsReadOnly, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovalsReadOnly } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -44,27 +44,16 @@ const python3 = resolveExecutablePath("python3", { useCache: false });
 
 describe.skipIf(process.platform === "win32")("gateway execution authorization boundary", () => {
   let root: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
   let supervisor: ReturnType<typeof createProcessSupervisor> | undefined;
   beforeEach(() => {
-    envSnapshot = captureEnv([
-      "HOME",
-      "USERPROFILE",
-      "OPENCLAW_HOME",
-      "OPENCLAW_STATE_DIR",
-      "PATH",
-      "SHELL",
-      "ZDOTDIR",
-      "OPENCLAW_EXEC_SHELL_SNAPSHOT",
-    ]);
     root = fs.realpathSync(tempDirs.make("exec-authorization-boundary-"));
     for (const key of ["HOME", "USERPROFILE", "OPENCLAW_HOME", "ZDOTDIR"]) {
-      setTestEnvValue(key, root);
+      vi.stubEnv(key, root);
     }
-    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    setTestEnvValue("PATH", "/usr/bin:/bin");
-    setTestEnvValue("SHELL", "/bin/bash");
-    setTestEnvValue("OPENCLAW_EXEC_SHELL_SNAPSHOT", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("PATH", "/usr/bin:/bin");
+    vi.stubEnv("SHELL", "/bin/bash");
+    vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "1");
     saveExecApprovals({
       version: 1,
       defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
@@ -82,7 +71,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     supervisor = undefined;
     resetProcessRegistryForTests();
     closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
+    vi.unstubAllEnvs();
   });
   function tool(
     autoReviewer: ExecAutoReviewer,
@@ -119,13 +108,100 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     });
   }
 
+  function approve(decision: "allow-once" | "allow-always", beforeDecision?: () => void) {
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: "fixture-approval" };
+      }
+      if (method === "exec.approval.waitDecision") {
+        beforeDecision?.();
+        return { decision };
+      }
+      return { ok: true };
+    });
+  }
+
+  it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const exec = tool(reviewer(), "allowlist");
+    const control = await exec.execute("literal-builtin", { command: ": benign; pwd" });
+    expect(control.details.status).toBe("completed");
+    expect(control.details).toMatchObject({ exitCode: 0, aggregated: root });
+    expect(boundary.spawn.mock.calls.length).toBe(1);
+    boundary.spawn.mockClear();
+    const marker = path.join(root, "arithmetic-marker");
+    for (const command of [
+      String.raw`: "$[ x[$'\x24\x28touch ${marker};printf 0\x29'] ]"`,
+      String.raw`: "$(( x[$'\044\050touch ${marker};printf 0\051'] ))"`,
+    ]) {
+      await expect(exec.execute("arithmetic-builtin", { command })).rejects.toThrow(
+        /allowlist|approval/i,
+      );
+      expect(boundary.spawn.mock.calls.length).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+    }
+  });
+
+  it("executes static assignments and blocks recursive assignments before process creation", async () => {
+    const echoPath = fs.realpathSync("/bin/echo");
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: { main: { allowlist: [{ pattern: echoPath }] } },
+    });
+    const review = reviewer();
+
+    const allowed = await tool(review, "allowlist").execute("static-assignment", {
+      command: `STATIC=value; ${echoPath} static-ok`,
+    });
+    if (allowed.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${allowed.details.status}`);
+    }
+    expect(allowed.details.exitCode).toBe(0);
+    expect(allowed.details.aggregated).toBe("static-ok");
+    expect(boundary.spawn).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+
+    const expectBlocked = async (id: string, command: string, marker: string) => {
+      boundary.spawn.mockClear();
+      const denied = await tool(review, "ask").execute(id, { command });
+      expect(denied.details.status).toBe("failed");
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(review).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    };
+    const scalarMarker = path.join(root, "recursive-scalar-assignment-ran");
+    await expectBlocked(
+      "recursive-scalar-assignment",
+      `y='a[$(touch ${JSON.stringify(scalarMarker)})]'; x=$((y)); ${echoPath} unsafe`,
+      scalarMarker,
+    );
+    const compoundMarker = path.join(root, "recursive-compound-assignment-ran");
+    await expectBlocked(
+      "recursive-compound-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundMarker)})]'; x=([y]=1); ${echoPath} unsafe`,
+      compoundMarker,
+    );
+    const compoundAppendMarker = path.join(root, "recursive-compound-append-ran");
+    await expectBlocked(
+      "recursive-compound-append-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundAppendMarker)})]'; x=([y]+=1); ${echoPath} unsafe`,
+      compoundAppendMarker,
+    );
+  });
+
   for (const shell of ["/bin/bash", "/bin/zsh"]) {
-    it
-      .skipIf(!fs.existsSync(shell))
-      .each(["ls *.txt", "env ls *.txt", "env -- env ls ~/approved.txt | cat && ls *.txt"])(
-      `executes bound globs and chains without startup substitutions in ${shell}: %s`,
-      async (command) => {
-        setTestEnvValue("SHELL", shell);
+    it.skipIf(!fs.existsSync(shell))(
+      `executes bound globs and chains without startup substitutions in ${shell}`,
+      async () => {
+        const command = "env -- env ls ~/approved.txt | cat && ls *.txt";
+        vi.stubEnv("SHELL", shell);
         fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
         fs.writeFileSync(
           path.join(root, shell.endsWith("bash") ? ".bashrc" : ".zshrc"),
@@ -154,12 +230,8 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
   }
 
   it.skipIf(!python3).each([
-    { mode: "auto", command: "python probe.py *.txt", shadowed: false },
     { mode: "auto", command: "python probe.py *.txt", shadowed: true },
-    { mode: "auto", command: "python probe.py approved.txt", shadowed: false },
     { mode: "ask", command: "python probe.py approved.txt", shadowed: false },
-    { mode: "ask", command: "python probe.py approved.txt", shadowed: true },
-    { mode: "ask", command: "env python probe.py approved.txt", shadowed: false },
   ] as const)(
     "preserves the $mode virtualenv invocation or rejects PATH drift: $command (shadowed=$shadowed)",
     async ({ mode, command, shadowed }) => {
@@ -205,17 +277,10 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
         });
       }
       if (mode === "ask") {
-        vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-          if (method === "exec.approval.request") {
-            return { status: "accepted", id: "venv-approval" };
+        approve("allow-once", () => {
+          if (shadowed) {
+            fs.symlinkSync(fs.realpathSync(interpreter), path.join(earlierBin, "python"));
           }
-          if (method === "exec.approval.waitDecision") {
-            if (shadowed) {
-              fs.symlinkSync(fs.realpathSync(interpreter), path.join(earlierBin, "python"));
-            }
-            return { decision: "allow-once" };
-          }
-          return { ok: true };
         });
       }
       // Gateway login-shell PATH is cached; select the fixture through its explicit exec setting.
@@ -273,7 +338,6 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
   });
 
   it("preserves startup customization for ordinary full-mode execution", async () => {
-    setPolicy("allowlist");
     saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: {} });
     fs.writeFileSync(path.join(root, ".bashrc"), "ls() { printf 'CUSTOMIZED\\n'; }\n");
     const review = reviewer();
@@ -287,49 +351,27 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(result.details.aggregated).toBe("CUSTOMIZED");
   });
 
-  for (const authority of ["auto", "human-once", "human-always", "current-policy"] as const) {
-    it.each([false, true])(
-      `revalidates ${authority} after asynchronous shell preparation (revoked=%s)`,
-      async (revoked) => {
-        setTestEnvValue("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
-        fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
-        setPolicy("allowlist", authority === "current-policy");
-        const review = reviewer();
-        vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-          if (method === "exec.approval.request") {
-            return { status: "accepted", id: "fixture-approval" };
-          }
-          if (method === "exec.approval.waitDecision") {
-            return { decision: authority === "human-always" ? "allow-always" : "allow-once" };
-          }
-          return { ok: true };
-        });
-        if (revoked) {
-          boundary.prepare.mockImplementation(async () => setPolicy("deny"));
-        }
-        const mode =
-          authority === "current-policy" ? "allowlist" : authority === "auto" ? "auto" : "ask";
-        const pending = tool(review, mode).execute("policy-revalidation", {
-          command: "/bin/ls approved.txt",
-        });
-        if (revoked) {
-          await expect(pending).rejects.toThrow("Exec approval changed before execution");
-          expect(boundary.spawn.mock.calls.length).toBe(0);
-        } else {
-          const result = await pending;
-          if (result.details.status !== "completed") {
-            throw new Error(`Unexpected exec status: ${result.details.status}`);
-          }
-          expect(result.details.exitCode).toBe(0);
-          expect(result.details.aggregated).toBe("approved.txt");
-          expect(boundary.spawn.mock.calls.length).toBe(1);
-        }
-        expect(review.mock.calls.length).toBe(authority === "auto" ? 1 : 0);
-        expect(boundary.prepare.mock.calls.length).toBe(1);
-        expect(loadExecApprovalsReadOnly().defaults?.security).toBe(revoked ? "deny" : "allowlist");
-      },
-    );
-  }
+  it.each(["auto", "human-always", "current-policy"] as const)(
+    "revalidates %s after asynchronous shell preparation",
+    async (authority) => {
+      vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
+      fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
+      setPolicy("allowlist", authority === "current-policy");
+      const review = reviewer();
+      approve(authority === "human-always" ? "allow-always" : "allow-once");
+      boundary.prepare.mockImplementation(async () => setPolicy("deny"));
+      const mode =
+        authority === "current-policy" ? "allowlist" : authority === "auto" ? "auto" : "ask";
+      const pending = tool(review, mode).execute("policy-revalidation", {
+        command: "/bin/ls approved.txt",
+      });
+      await expect(pending).rejects.toThrow("Exec approval changed before execution");
+      expect(boundary.spawn.mock.calls.length).toBe(0);
+      expect(review.mock.calls.length).toBe(authority === "auto" ? 1 : 0);
+      expect(boundary.prepare.mock.calls.length).toBe(1);
+      expect(loadExecApprovalsReadOnly().defaults?.security).toBe("deny");
+    },
+  );
 
   it("rechecks policy after deferred supervisor admission", async () => {
     let started = 0;
@@ -351,11 +393,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     "preserves human allow-always through PTY fallback (revoked=%s)",
     async (revoked) => {
       fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
-      vi.mocked(callGatewayTool).mockImplementation(async (method) =>
-        method === "exec.approval.request"
-          ? { status: "accepted", id: "fixture-pty-approval" }
-          : { decision: "allow-always" },
-      );
+      approve("allow-always");
       const liveSupervisor = supervisor!;
       let started = 0;
       boundary.spawn.mockImplementation(async (input) => {

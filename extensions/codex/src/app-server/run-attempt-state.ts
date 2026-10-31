@@ -3,49 +3,93 @@ import {
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { CodexAppServerRpcError } from "./client.js";
+import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
+import { isCodexInferenceTransportFailure } from "./inference-transport.js";
 import { isJsonObject } from "./protocol.js";
-import type {
-  CodexAppServerBindingIdentity,
-  CodexAppServerBindingStore,
+import {
+  assertCodexBindingMayBeReplaced,
+  clearCodexBindingForClient,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
+  type CodexBindingAuthority,
 } from "./session-binding.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client-lifecycle.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+
+/** Called only after a native failure and its output projection have settled. */
+export function retireCodexTransportAfterFailure(
+  {
+    client,
+    thread,
+  }: { client: CodexAppServerClient; thread: CodexAppServerThreadLifecycleBinding },
+  error: unknown,
+): void {
+  if (
+    thread.connectionScope === "supervision" ||
+    thread.ringZeroClientInstanceId !== undefined ||
+    thread.ringZeroConfigFingerprint !== undefined ||
+    !isCodexInferenceTransportFailure(error)
+  ) {
+    return;
+  }
+  // Optional recovery must preserve process-only Incognito history and sibling
+  // ownership, even when no shared-client lease keeps that history alive.
+  if (hasCodexAppServerSiblingThreadWork(client, thread.threadId)) {
+    return;
+  }
+  // Detach future acquisitions without replaying completed tools.
+  const retired = retireSharedCodexAppServerClientIfCurrent(client);
+  if (retired) {
+    embeddedAgentLog.warn("codex inference transport retired after settled failure", {
+      reason: "parent_local_transport_failure",
+      stage: "turn_settled",
+      activeLeases: retired.activeLeases,
+      closed: retired.closed,
+    });
+  }
+}
+
+export function canClearCodexBindingForRecovery(
+  thread: NonNullable<Parameters<typeof assertCodexBindingMayBeReplaced>[0]>,
+  expectedSessionRuntimeOwnership: boolean,
+  operation: string,
+): boolean {
+  if (expectedSessionRuntimeOwnership) {
+    // Optional recovery preserves both native ownership and the completed turn's outcome.
+    embeddedAgentLog.warn(
+      "codex app-server preserved native binding instead of recovery rotation",
+      {
+        threadId: thread.threadId,
+        operation,
+      },
+    );
+    return false;
+  }
+  assertCodexBindingMayBeReplaced(thread, operation);
+  return true;
+}
 
 export async function clearCodexBindingAfterInvalidImagePayload(
   bindingStore: CodexAppServerBindingStore,
   identity: CodexAppServerBindingIdentity,
-  fields: { phase: string; threadId?: string; turnId?: string; error?: string },
+  fields: { phase: string; threadId: string; clientId?: string; turnId?: string; error?: string },
+  authority: CodexBindingAuthority,
   expected?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"],
 ): Promise<void> {
-  const currentBinding = bindingStore.read(identity);
-  const expectedThreadId = fields.threadId ?? currentBinding?.threadId;
-  if (!expectedThreadId) {
-    return;
-  }
-  if (currentBinding && currentBinding.threadId !== expectedThreadId) {
-    embeddedAgentLog.warn(
-      "codex app-server image payload error detected for unbound thread; preserving thread binding",
-      { ...fields, boundThreadId: currentBinding.threadId },
-    );
-    return;
-  }
-  if (expected || currentBinding?.connectionScope === "supervision") {
+  if (expected) {
     embeddedAgentLog.warn(
       "codex app-server image payload error detected for native-owned thread; preserving binding",
       fields,
     );
     return;
   }
-  embeddedAgentLog.warn(
-    "codex app-server image payload error detected; clearing thread binding",
-    fields,
-  );
-  await bindingStore.mutate(identity, { kind: "clear", threadId: expectedThreadId });
-}
-
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+  const cleared = await clearCodexBindingForClient(bindingStore, identity, fields, authority);
+  embeddedAgentLog.warn("codex app-server image payload recovery completed", {
+    ...fields,
+    bindingCleared: cleared,
+  });
 }
 
 export function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
@@ -56,13 +100,8 @@ export function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
   if (!params.contextEngineActive || params.thread.lifecycle.action !== "resumed") {
     return false;
   }
-  const message = formatErrorMessage(params.error);
-  return (
-    /ran out of room in the model'?s context window/iu.test(message) ||
-    /context window/iu.test(message) ||
-    /context length/iu.test(message) ||
-    /maximum context/iu.test(message) ||
-    /too many tokens/iu.test(message)
+  return /context (?:window|length)|maximum context|too many tokens/iu.test(
+    formatErrorMessage(params.error),
   );
 }
 
@@ -76,10 +115,6 @@ export function isCodexActiveCompactTurnError(error: unknown): boolean {
     ? codexErrorInfo.activeTurnNotSteerable
     : undefined;
   return activeTurn?.turnKind === "compact";
-}
-
-export function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function prependCurrentInboundContext(

@@ -1,11 +1,10 @@
-// Preinstall Package Manager Warning tests cover preinstall package manager warning script behavior.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import lifecyclePaths from "../../scripts/e2e/lib/bun-only-runtime/preinstall-lifecycle-paths.json" with { type: "json" };
 import {
-  createPackageManagerWarningMessage,
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
   nodeVersionSatisfiesPackageEngine,
@@ -15,72 +14,66 @@ import {
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
-import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
+const lifecyclePrefix = [
+  "/work/openclaw/node_modules/.bin",
+  "/work/node_modules/.bin",
+  "/node_modules/.bin",
+];
+const probe = (options: Parameters<typeof probePackageCliNodeRuntime>[0]) =>
+  probePackageCliNodeRuntime({
+    cwd: "/work/openclaw",
+    access: () => {},
+    platform: "linux",
+    bunVersion: "1.4.3",
+    ...options,
+  });
+const enforce = (
+  options: Parameters<typeof enforceSupportedNodeRuntime>[0],
+  reportError = vi.fn(),
+) => enforceSupportedNodeRuntime({ engine: EXPECTED_NODE_ENGINE_RANGE, ...options }, reportError);
+function expectRejectedProbe(options: Parameters<typeof probe>[0]) {
+  const run = vi.fn();
+  expect(probe({ ...options, run })).toBeNull();
+  expect(run).not.toHaveBeenCalled();
+}
+function runtimeReply(execPath: string, version: string, bunVersion: string | null = null) {
+  return { status: 0, stdout: JSON.stringify({ version, bunVersion, execPath }) };
+}
+function expectPathRuntime(options: Parameters<typeof probe>[0], execPath: string) {
+  const version = (command: string) => (command === "/opt/node/bin/node" ? "24.22.1" : "24.14.1");
+  expect(probe({ ...options, run: (command) => runtimeReply(command, version(command)) })).toEqual({
+    execPath,
+    version: version(execPath),
+    bunVersion: null,
+  });
+}
 
 describe("install runtime enforcement", () => {
-  it("reads the canonical package engine range", () => {
+  it.each([
+    ["v24.22.1+local.1", true],
+    ["24.16.0", true],
+    ["26.1.0", true],
+    ["24.22.1", true],
+    ["27.0.0", true],
+    ["27.0.0-nightly20261018f88a1d25e9", true],
+    ["24.22.1-rc.1", false],
+    ["27.0.0-nightly..1", false],
+  ] as const)("enforces the package engine for Node %s", (version, accepted) => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
-  });
-
-  it.each(NODE_RELEASE_VERSION_CASES)("matches the CLI runtime guard for Node %s", (version) => {
     expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
       isSupportedNodeVersion(version),
     );
-  });
-
-  it.each([
-    "24.16.0-rc.1",
-    "25.9.1-nightly.20260714",
-    "24.15",
-    "24.16.0+",
-    "24.16.0+local..1",
-    "garbage24.16.0suffix",
-    "24.16.0suffix",
-  ])("rejects non-release Node version %s", (version) => {
-    expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(false);
-  });
-
-  it("accepts SemVer build metadata on a supported Node release", () => {
-    expect(nodeVersionSatisfiesPackageEngine("24.16.0+local.1", EXPECTED_NODE_ENGINE_RANGE)).toBe(
-      true,
-    );
-  });
-
-  it("blocks unsupported Node before package replacement", () => {
     const reportError = vi.fn();
     expect(
-      enforceSupportedNodeRuntime(
-        {
-          version: "24.14.1",
-          engine: EXPECTED_NODE_ENGINE_RANGE,
-          execPath: "/opt/node/bin/node",
-        },
-        reportError,
-      ),
-    ).toBe(false);
-    expect(reportError).toHaveBeenCalledWith(
-      expect.stringContaining("this OpenClaw release requires Node"),
-    );
-    expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node 24.14.1"));
-  });
-
-  it("allows supported Node without an error", () => {
-    const reportError = vi.fn();
-    expect(
-      enforceSupportedNodeRuntime(
-        {
-          version: "24.16.0",
-          engine: EXPECTED_NODE_ENGINE_RANGE,
-          execPath: "/opt/node/bin/node",
-        },
-        reportError,
-      ),
-    ).toBe(true);
-    expect(reportError).not.toHaveBeenCalled();
+      enforce({ version, bunVersion: null, execPath: "/opt/node/bin/node" }, reportError),
+    ).toBe(accepted);
+    expect(reportError).toHaveBeenCalledTimes(accepted ? 0 : 1);
   });
 
   it("exits nonzero when the packed entrypoint sees an unsupported runtime", () => {
@@ -88,311 +81,283 @@ describe("install runtime enforcement", () => {
     const scriptsDir = join(root, "scripts");
     mkdirSync(join(scriptsDir, "lib"), { recursive: true });
     const scriptPath = join(scriptsDir, "preinstall-package-manager-warning.mjs");
-    copyFileSync(
-      new URL("../../scripts/preinstall-package-manager-warning.mjs", import.meta.url),
-      scriptPath,
-    );
-    copyFileSync(
-      new URL("../../scripts/lib/package-lifecycle-marker.mjs", import.meta.url),
-      join(scriptsDir, "lib", "package-lifecycle-marker.mjs"),
-    );
-    copyFileSync(
-      new URL("../../node-version.mjs", import.meta.url),
-      join(root, "node-version.mjs"),
-    );
+    for (const file of [
+      "scripts/preinstall-package-manager-warning.mjs",
+      "scripts/lib/package-lifecycle-marker.mjs",
+      "node-version.mjs",
+      "runtime-process-scripts.generated.mjs",
+    ]) {
+      copyFileSync(new URL(`../../${file}`, import.meta.url), join(root, file));
+    }
     writeFileSync(join(root, "package.json"), JSON.stringify({ engines: { node: ">=999.0.0" } }));
 
-    const result = spawnSync(process.execPath, [scriptPath], { encoding: "utf8" });
+    const result = spawnSync(testNodeExecPath, [scriptPath], { encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("requires Node >=999.0.0");
-    expect(result.stderr).toContain(`detected Node ${process.versions.node}`);
+    const nodeVersion = spawnSync(testNodeExecPath, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    expect(result.stderr).toContain(`detected Node ${nodeVersion}`);
   });
 
-  it("allows Bun package lifecycle scripts when the installed CLI will use supported Node", () => {
-    const reportError = vi.fn();
-    expect(
-      enforceSupportedNodeRuntime(
-        {
-          version: "24.14.1",
-          bunVersion: "1.3.0",
-          engine: EXPECTED_NODE_ENGINE_RANGE,
-          execPath: "/opt/bun/bin/bun",
-          probeNodeRuntime: () => ({
-            version: "24.16.0",
-            bunVersion: null,
-            execPath: "/opt/node/bin/node",
-          }),
+  it.each([
+    { name: "no marker", launcher: "" },
+    { name: "matching shim", accepted: true },
+    { name: "foreign shim", shimMatchesBun: false },
+    {
+      name: "affected launcher",
+      bun: "1.4.3",
+      error: "Bun launcher /opt/bun/bin/bun requires Bun 1.4.4+",
+    },
+    { name: "relative launcher", launcher: "bin/bun" },
+    { name: "old persistent Node", persistent: "old-node", error: "detected Node 24.14.1" },
+    {
+      name: "supported persistent Node",
+      bun: "1.4.2",
+      persistent: "supported-node",
+      accepted: true,
+    },
+    { name: "persistent Bun before Node", bun: "1.4.2", persistent: "same-bun" },
+  ])(
+    "enforces the explicit Bun launcher contract: $name",
+    ({
+      launcher = "/opt/bun/bin/bun",
+      bun = "1.4.4",
+      persistent,
+      shimMatchesBun = true,
+      accepted = false,
+      error = "detected Node missing",
+    }) => {
+      const shimDirectory = "bun-node-ddfce5d01";
+      const reportError = vi.fn();
+      const run = vi.fn(
+        (
+          _command: string,
+          _args: string[],
+          options: { env: NodeJS.ProcessEnv; timeout: number },
+        ) => {
+          expect(options.env).not.toHaveProperty("NODE_OPTIONS");
+          expect(options.env).not.toHaveProperty("Node_Options");
+          expect(options.timeout).toBe(10_000);
+          const isNode = _command === "/opt/node/bin/node";
+          return runtimeReply(
+            _command,
+            isNode ? (persistent === "old-node" ? "24.14.1" : "24.22.1") : "24.3.0",
+            isNode ? null : bun,
+          );
         },
-        reportError,
-      ),
-    ).toBe(true);
-    expect(reportError).not.toHaveBeenCalled();
-  });
-
-  it("blocks Bun package lifecycle scripts when the installed CLI will use old Node", () => {
-    const reportError = vi.fn();
-    expect(
-      enforceSupportedNodeRuntime(
+      );
+      const result = enforce(
         {
-          bunVersion: "1.3.0",
-          engine: EXPECTED_NODE_ENGINE_RANGE,
-          probeNodeRuntime: () => ({
-            version: "24.14.1",
-            bunVersion: null,
-            execPath: "/opt/node/bin/node",
-          }),
-        },
-        reportError,
-      ),
-    ).toBe(false);
-    expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node 24.14.1"));
-  });
-
-  it("blocks Bun package lifecycle scripts when no real Node follows its shim", () => {
-    const reportError = vi.fn();
-    expect(
-      enforceSupportedNodeRuntime(
-        {
-          bunVersion: "1.3.0",
-          engine: EXPECTED_NODE_ENGINE_RANGE,
-          probeNodeRuntime: () => null,
-        },
-        reportError,
-      ),
-    ).toBe(false);
-    expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node missing"));
-  });
-
-  it("strips only Bun's cwd-to-root lifecycle PATH prefix", () => {
-    const candidates: string[] = [];
-    const runtime = probePackageCliNodeRuntime({
-      cwd: "/work/openclaw",
-      pathEnv: [
-        "/work/openclaw/node_modules/.bin",
-        "/work/node_modules/.bin",
-        "/node_modules/.bin",
-        "/opt/node/bin",
-      ].join(":"),
-      platform: "linux",
-      run: (command) => {
-        candidates.push(command);
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            version: "24.16.0",
-            bunVersion: null,
-            execPath: "/opt/node/bin/node",
-          }),
-        };
-      },
-    });
-
-    expect(candidates).toEqual(["/opt/node/bin/node"]);
-    expect(runtime).toEqual({
-      version: "24.16.0",
-      bunVersion: null,
-      execPath: "/opt/node/bin/node",
-    });
-  });
-
-  it("checks an inherited node_modules/.bin entry after Bun's prefix", () => {
-    const candidates: string[] = [];
-    const runtime = probePackageCliNodeRuntime({
-      cwd: "/work/openclaw",
-      pathEnv: [
-        "/work/openclaw/node_modules/.bin",
-        "/work/node_modules/.bin",
-        "/node_modules/.bin",
-        "/opt/tools/node_modules/.bin",
-        "/opt/node/bin",
-      ].join(":"),
-      platform: "linux",
-      run: (command) => {
-        candidates.push(command);
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            version: "24.14.1",
-            bunVersion: null,
-            execPath: command,
-          }),
-        };
-      },
-    });
-
-    expect(candidates).toEqual(["/opt/tools/node_modules/.bin/node"]);
-    expect(runtime?.version).toBe("24.14.1");
-  });
-
-  it("checks a duplicate lifecycle-looking entry inherited in the original PATH", () => {
-    const candidates: string[] = [];
-    const runtime = probePackageCliNodeRuntime({
-      cwd: "/work/openclaw",
-      pathEnv: [
-        "/work/openclaw/node_modules/.bin",
-        "/work/node_modules/.bin",
-        "/node_modules/.bin",
-        "/work/openclaw/node_modules/.bin",
-        "/opt/node/bin",
-      ].join(":"),
-      platform: "linux",
-      run: (command) => {
-        candidates.push(command);
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            version: "24.14.1",
-            bunVersion: null,
-            execPath: command,
-          }),
-        };
-      },
-    });
-
-    expect(candidates).toEqual(["/work/openclaw/node_modules/.bin/node"]);
-    expect(runtime?.version).toBe("24.14.1");
-  });
-
-  it("fails closed when Bun's lifecycle PATH prefix cannot be proven", () => {
-    const run = vi.fn();
-    expect(
-      probePackageCliNodeRuntime({
-        cwd: "/work/openclaw",
-        pathEnv: ["/unproven/node_modules/.bin", "/opt/node/bin"].join(":"),
-        platform: "linux",
-        run,
-      }),
-    ).toBeNull();
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("fails closed on a Bun-backed candidate from the original PATH", () => {
-    const candidates: string[] = [];
-    expect(
-      probePackageCliNodeRuntime({
-        cwd: "/work/openclaw",
-        pathEnv: [
-          "/work/openclaw/node_modules/.bin",
-          "/work/node_modules/.bin",
-          "/node_modules/.bin",
-          "/opt/bun-wrapper",
-          "/opt/node/bin",
-        ].join(":"),
-        platform: "linux",
-        run: (command) => {
-          candidates.push(command);
-          return {
-            status: 0,
-            stdout: JSON.stringify({
-              version: "24.16.0",
-              bunVersion: "1.3.14",
+          bunVersion: "1.4.3",
+          probeNodeRuntime: () =>
+            probe({
               execPath: "/opt/bun/bin/bun",
+              realpath: (candidate) =>
+                (candidate === `/tmp/${shimDirectory}/node` && shimMatchesBun) ||
+                candidate === "/opt/bun/bin/node"
+                  ? "/opt/bun/bin/bun"
+                  : candidate,
+              env: {
+                OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher,
+                NODE_OPTIONS: "--require=fixture.cjs",
+                Node_Options: "--require=other-fixture.cjs",
+              },
+              pathEnv: [
+                ...lifecyclePrefix,
+                ...(persistent === "same-bun" ? ["/opt/bun/bin", "/opt/node/bin"] : []),
+                `/tmp/${shimDirectory}`,
+                ...(persistent === "old-node" || persistent === "supported-node"
+                  ? ["/opt/node/bin"]
+                  : []),
+              ].join(":"),
+              run,
             }),
-          };
         },
-      }),
-    ).toBeNull();
-    expect(candidates).toEqual(["/opt/bun-wrapper/node"]);
+        reportError,
+      );
+      expect(result).toBe(accepted);
+      if (!accepted) {
+        expect(reportError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(error));
+      } else {
+        expect(reportError).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "never spawns absent or nonexecutable Node candidates: persistent supported Node",
+    () => {
+      const cwd = tempDirs.make("openclaw-preinstall-path-");
+      const noExecute = join(cwd, "no-execute");
+      const dangling = join(cwd, "dangling");
+      const notDirectory = join(cwd, "not-a-directory");
+      const nodeDir = join(cwd, "persistent");
+      const launcher = join(cwd, "bun");
+      for (const directory of [noExecute, dangling, nodeDir]) {
+        mkdirSync(directory);
+      }
+      writeFileSync(join(noExecute, "node"), "not executable", { mode: 0o644 });
+      writeFileSync(notDirectory, "not a directory");
+      symlinkSync(join(cwd, "missing-node"), join(dangling, "node"));
+      writeFileSync(launcher, "Bun fixture", { mode: 0o755 });
+      const executable = join(nodeDir, "node");
+      writeFileSync(executable, "Node fixture", { mode: 0o755 });
+      const prefix: string[] = [];
+      for (let directory = cwd; ; directory = dirname(directory)) {
+        prefix.push(join(directory, "node_modules", ".bin"));
+        if (dirname(directory) === directory) {
+          break;
+        }
+      }
+      const run = vi.fn((command: string) =>
+        command === executable
+          ? runtimeReply(executable, "24.22.1")
+          : { error: Object.assign(new Error("absent executable"), { code: "ENOENT" }) },
+      );
+      const reportError = vi.fn();
+      expect(
+        enforceSupportedNodeRuntime(
+          {
+            bunVersion: "1.4.3",
+            engine: EXPECTED_NODE_ENGINE_RANGE,
+            probeNodeRuntime: () =>
+              probePackageCliNodeRuntime({
+                cwd,
+                bunVersion: "1.4.3",
+                env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher },
+                pathEnv: [
+                  ...prefix,
+                  join(cwd, "missing"),
+                  noExecute,
+                  notDirectory,
+                  dangling,
+                  nodeDir,
+                ].join(":"),
+                run,
+              }),
+          },
+          reportError,
+        ),
+      ).toBe(true);
+      expect(run.mock.calls.map(([command]) => command)).toEqual([executable]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "runs a declared probe file and removes it after completion",
+    () => {
+      let probeFile = "";
+      const result = probe({
+        cwd: "/",
+        pathEnv: ["/node_modules/.bin", dirname(testNodeExecPath)].join(":"),
+        run: (command, args, options) => {
+          expect(command).toBe(testNodeExecPath);
+          expect(args).toHaveLength(1);
+          probeFile = args[0] ?? "";
+          expect(probeFile).toMatch(/package-cli-node-probe\.mjs$/u);
+          return spawnSync(command, args, options);
+        },
+      });
+      expect(result).toEqual({
+        version: expect.stringMatching(/^\d+\.\d+\.\d+/u),
+        bunVersion: null,
+        execPath: testNodeExecPath,
+      });
+      expect(existsSync(probeFile)).toBe(false);
+    },
+  );
+
+  it.each(lifecyclePaths)("checks a duplicate inherited entry: $name", (layout) => {
+    expectPathRuntime(
+      {
+        bunVersion: layout.bunVersion,
+        env: layout.env,
+        pathEnv: [
+          ...layout.prefix,
+          "/work/openclaw/node_modules/.bin",
+          "/opt/node/bin",
+          ...layout.suffix,
+        ].join(":"),
+      },
+      "/work/openclaw/node_modules/.bin/node",
+    );
   });
 
-  it.each(["", ".", "relative/bin"])(
-    "fails closed before a relative PATH component %j",
-    (relativeEntry) => {
-      const run = vi.fn();
-      expect(
-        probePackageCliNodeRuntime({
-          cwd: "/work/openclaw",
+  it.each([["/work/node_modules/.bin"], ["/work/node_modules/.bin", "/node_modules/.bin"]])(
+    "preserves inherited ancestor bins before later Node paths: %j",
+    (...inherited) => {
+      expectPathRuntime(
+        {
+          bunVersion: "1.4.4",
+          env: { npm_config_local_prefix: "/work" },
           pathEnv: [
             "/work/openclaw/node_modules/.bin",
+            ...inherited,
+            "/opt/node/bin",
             "/work/node_modules/.bin",
             "/node_modules/.bin",
-            relativeEntry,
-            "/opt/node/bin",
           ].join(":"),
-          platform: "linux",
-          run,
-        }),
-      ).toBeNull();
-      expect(run).not.toHaveBeenCalled();
+        },
+        "/work/node_modules/.bin/node",
+      );
     },
   );
 
-  it.each(["\\tools", "/tools"])(
+  it.each(["1.4.3", "1.4.4"])(
+    "preserves an inherited ancestor suffix in a prefix-only Bun %s lifecycle",
+    (bunVersion) => {
+      expectPathRuntime(
+        {
+          bunVersion,
+          env: { npm_config_local_prefix: "/work/openclaw" },
+          pathEnv: [
+            ...lifecyclePrefix,
+            "/opt/node/bin",
+            "/work/node_modules/.bin",
+            "/node_modules/.bin",
+          ].join(":"),
+        },
+        "/opt/node/bin/node",
+      );
+    },
+  );
+
+  it.each([
+    ["/unproven/node_modules/.bin", "/opt/node/bin"],
+    ["/work/openclaw/node_modules/.bin", "/opt/node/bin", "/node_modules/.bin"],
+    [
+      "/work/openclaw/node_modules/.bin",
+      "/opt/node/bin",
+      "/node_modules/.bin",
+      "/work/node_modules/.bin",
+    ],
+  ])("fails closed when the lifecycle directories cannot be proven: %j", (...entries) => {
+    expectRejectedProbe({ pathEnv: entries.join(":") });
+  });
+
+  it.each(["."])("fails closed before a relative PATH component %j", (relativeEntry) => {
+    expectRejectedProbe({
+      pathEnv: [...lifecyclePrefix, relativeEntry, "/opt/node/bin"].join(":"),
+    });
+  });
+
+  it.each(["/tools"])(
     "fails closed before a Windows root-relative PATH component %j",
     (relativeEntry) => {
-      const run = vi.fn();
-      expect(
-        probePackageCliNodeRuntime({
-          cwd: "C:\\work\\openclaw",
-          pathEnv: [
-            "C:\\work\\openclaw\\node_modules\\.bin",
-            "C:\\work\\node_modules\\.bin",
-            "C:\\node_modules\\.bin",
-            relativeEntry,
-            "C:\\node",
-          ].join(";"),
-          platform: "win32",
-          run,
-        }),
-      ).toBeNull();
-      expect(run).not.toHaveBeenCalled();
+      expectRejectedProbe({
+        cwd: "C:\\work\\openclaw",
+        pathEnv: [
+          "C:\\work\\openclaw\\node_modules\\.bin",
+          "C:\\work\\node_modules\\.bin",
+          "C:\\node_modules\\.bin",
+          relativeEntry,
+          "C:\\node",
+        ].join(";"),
+        platform: "win32",
+      });
     },
   );
-
-  it("removes NODE_OPTIONS case-insensitively from a Windows probe", () => {
-    let childEnv: NodeJS.ProcessEnv | undefined;
-    expect(
-      probePackageCliNodeRuntime({
-        cwd: "C:\\work\\openclaw",
-        env: {
-          PATH: [
-            "C:\\work\\openclaw\\node_modules\\.bin",
-            "C:\\work\\node_modules\\.bin",
-            "C:\\node_modules\\.bin",
-            "C:\\node",
-          ].join(";"),
-          NODE_OPTIONS: "--require=first.cjs",
-          Node_Options: "--require=second.cjs",
-          OPENCLAW_PROBE_SENTINEL: "preserved",
-        },
-        platform: "win32",
-        run: (_command, _args, options) => {
-          childEnv = options.env;
-          return {
-            status: 0,
-            stdout: JSON.stringify({
-              version: "24.16.0",
-              bunVersion: null,
-              execPath: "C:\\node\\node.exe",
-            }),
-          };
-        },
-      }),
-    ).toEqual({
-      version: "24.16.0",
-      bunVersion: null,
-      execPath: "C:\\node\\node.exe",
-    });
-    expect(childEnv).toEqual({
-      PATH: [
-        "C:\\work\\openclaw\\node_modules\\.bin",
-        "C:\\work\\node_modules\\.bin",
-        "C:\\node_modules\\.bin",
-        "C:\\node",
-      ].join(";"),
-      OPENCLAW_PROBE_SENTINEL: "preserved",
-    });
-  });
-
-  it("removes the legacy install guard after runtime validation", () => {
-    const markerUrl = new URL("file:///tmp/openclaw-install-guard");
-    const remove = vi.fn();
-    const reportError = vi.fn();
-
-    expect(removeLegacyPackageInstallGuard({ markerUrl, remove }, reportError)).toBe(true);
-    expect(remove).toHaveBeenCalledWith(markerUrl, { force: true });
-    expect(reportError).not.toHaveBeenCalled();
-  });
 
   it("fails installation when the legacy install guard cannot be removed", () => {
     const reportError = vi.fn();
@@ -415,79 +380,13 @@ describe("install runtime enforcement", () => {
 });
 
 describe("detectLifecyclePackageManager", () => {
-  it("prefers npm_config_user_agent when present", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_config_user_agent: "npm/11.4.1 node/v22.20.0 darwin arm64",
-      }),
-    ).toBe("npm");
-  });
-
-  it("falls back to npm_execpath when user agent is missing", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_execpath: "/Users/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
-      }),
-    ).toBe("pnpm");
-  });
-
-  it("detects npm cli launchers from npm_execpath", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_execpath: "C:\\Tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
-      }),
-    ).toBe("npm");
-  });
-
-  it("detects yarnpkg launchers from npm_execpath", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_execpath: "C:\\Tools\\corepack\\yarnpkg.cmd",
-      }),
-    ).toBe("yarn");
-  });
-
-  it("detects versioned Yarn release launchers from npm_execpath", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_execpath: "/work/project/.yarn/releases/yarn-4.5.0.cjs",
-      }),
-    ).toBe("yarn");
-  });
-
-  it("detects Yarn Berry release launchers from npm_execpath", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_execpath: "/work/project/.yarn/releases/yarn-berry.cjs",
-      }),
-    ).toBe("yarn");
-  });
-
-  it("ignores package manager names in npm_execpath parent directories", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_execpath: "/tmp/npm-cache/bin/yarn.js",
-      }),
-    ).toBe("yarn");
-  });
-
-  it("ignores untrusted user-agent tokens with control characters", () => {
-    expect(
-      detectLifecyclePackageManager({
-        npm_config_user_agent: "\u001bnpm/11.4.1 node/v22.20.0 darwin arm64",
-        npm_execpath: "/Users/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
-      }),
-    ).toBe("pnpm");
-  });
-});
-
-describe("createPackageManagerWarningMessage", () => {
-  it("returns null for pnpm", () => {
-    expect(createPackageManagerWarningMessage("pnpm")).toBeNull();
-  });
-
-  it("warns for npm installs", () => {
-    expect(createPackageManagerWarningMessage("npm")).toContain("prefer: corepack pnpm install");
+  it.each([
+    ["C:\\Tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js", "npm"],
+    ["C:\\Tools\\corepack\\yarnpkg.cmd", "yarn"],
+    ["/work/project/.yarn/releases/yarn-4.5.0.cjs", "yarn"],
+    ["/tmp/npm-cache/bin/yarn.js", "yarn"],
+  ])("detects %s without interpreting its parent directories", (npm_execpath, manager) => {
+    expect(detectLifecyclePackageManager({ npm_execpath })).toBe(manager);
   });
 });
 
@@ -505,6 +404,7 @@ describe("warnIfNonPnpmLifecycle", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     const [message] = expectDefined(warn.mock.calls[0], "package manager warning call");
     expect(message).toContain("detected npm");
+    expect(message).toContain("prefer: corepack pnpm install");
   });
 
   it("stays quiet for pnpm", () => {

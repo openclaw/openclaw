@@ -1,6 +1,5 @@
-/** Channel recovery replies preserve decisions from the real account lifecycle owner. */
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import "../secrets/runtime-telegram.test-support.ts";
@@ -11,15 +10,13 @@ import {
   resetConfigRuntimeState,
   writeConfigFile,
 } from "../config/config.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectWebchatClient,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
@@ -35,320 +32,216 @@ type TestAccount = {
   token?: string;
 };
 
-async function rpcReqWithActiveRuntime(ws: WebSocket, method: string, params: unknown) {
+const gatewayConfig = {
+  mode: "local",
+  bind: "loopback",
+  auth: { mode: "none" },
+  reload: { mode: "off" },
+} as const;
+const secret = (id: string): SecretRef => ({ source: "env", provider: "default", id });
+const waitForAbort = ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+  new Promise<void>((resolve) => {
+    abortSignal.addEventListener("abort", () => resolve(), { once: true });
+  });
+
+function installChannel(
+  config: ChannelPlugin<TestAccount>["config"],
+  gateway: ChannelPlugin<TestAccount>["gateway"],
+) {
+  const plugin: ChannelPlugin<TestAccount> = {
+    ...createChannelTestPluginBase({ id: "telegram" }),
+    config,
+    gateway,
+  };
+  setTestPluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
+}
+
+function expectStarted(response: unknown, accountId: string, retryReason?: string) {
+  const outcome =
+    retryReason === undefined ? { status: "handed-off" } : { status: "retry", reason: retryReason };
+  expect(response).toMatchObject({ ok: true, payload: { accountId, started: true, outcome } });
+}
+
+async function startActiveAccount(ws: WebSocket, accountId: string) {
   const id = randomUUID();
-  const response = onceMessage<{
-    type: "res";
-    id: string;
-    ok: boolean;
-    payload?: Record<string, unknown>;
-    error?: { message?: string; code?: string; details?: unknown };
-  }>(ws, (value) => value?.type === "res" && value.id === id);
-  ws.send(JSON.stringify({ type: "req", id, method, params }));
+  const response = onceMessage(ws, (value) => value?.type === "res" && value.id === id);
+  const params = { channel: "telegram", accountId };
+  ws.send(JSON.stringify({ type: "req", id, method: "channels.start", params }));
   return await response;
 }
 
-describe("channels.start account outcomes", () => {
-  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+let socket: WebSocket | undefined;
 
-  afterEach(async () => {
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_SKIP_CHANNELS", undefined);
+  vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", undefined);
+});
+
+afterEach(async () => {
+  socket?.close();
+  socket = undefined;
+  try {
     await server?.close();
+  } finally {
     server = undefined;
     setActiveDegradedSecretOwners([]);
-  });
+    vi.unstubAllEnvs();
+  }
+});
 
-  it("starts config-backed accounts manually while breaker suppression remains active", async () => {
-    await withEnvAsync(
-      {
-        BREAKER_RESOLVED_CHANNEL_TOKEN: "resolved-channel-token",
-        BREAKER_MISSING_CHANNEL_TOKEN: undefined,
-        TELEGRAM_BOT_TOKEN: "ambient-token-must-not-win",
-        OPENCLAW_SKIP_CHANNELS: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
+async function startSuppressedGateway() {
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  server = await startTestGatewayServer(portClaim, {
+    auth: { mode: "none" },
+    channelAutostartSuppression: { reason: "crash-loop-breaker", message: "synthetic safe mode" },
+  });
+  socket = await connectWebchatClient({ port: portClaim.port, scopes: ["operator.admin"] });
+  return socket;
+}
+
+it("starts config-backed accounts manually while breaker suppression remains active", async () => {
+  vi.stubEnv("BREAKER_RESOLVED_CHANNEL_TOKEN", "resolved-channel-token");
+  vi.stubEnv("BREAKER_MISSING_CHANNEL_TOKEN", undefined);
+  vi.stubEnv("TELEGRAM_BOT_TOKEN", "ambient-token-must-not-win");
+  const startAccount = vi.fn(waitForAbort);
+  installChannel(
+    {
+      listAccountIds: (config) => Object.keys(config.channels?.telegram?.accounts ?? {}),
+      defaultAccountId: () => "plaintext",
+      resolveAccount: (config, accountId) => {
+        const id = accountId ?? "plaintext";
+        const configured = config.channels?.telegram?.accounts?.[id];
+        return {
+          accountId: id,
+          enabled: configured?.enabled !== false,
+          token: typeof configured?.botToken === "string" ? configured.botToken : undefined,
+        };
       },
-      async () => {
-        const startAccount = vi.fn(
-          async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
-            await new Promise<void>((resolve) => {
-              abortSignal.addEventListener("abort", () => resolve(), { once: true });
-            }),
-        );
-        const resolveAccount: ChannelPlugin<TestAccount>["config"]["resolveAccount"] = (
-          config,
+      isEnabled: (account) => account.enabled !== false,
+      isConfigured: (account) => Boolean(account.token),
+    },
+    { startAccount },
+  );
+  // Authored SecretRefs belong in the source fixture, before runtime config resolution.
+  await writeJsonAtomic(
+    (await readConfigFileSnapshot()).path,
+    {
+      gateway: gatewayConfig,
+      secrets: { providers: { default: { source: "env" } } },
+      channels: {
+        telegram: {
+          enabled: true,
+          healthMonitor: { enabled: false },
+          accounts: {
+            plaintext: { botToken: "plaintext-channel-token" },
+            resolved: { botToken: secret("BREAKER_RESOLVED_CHANNEL_TOKEN") },
+            unavailable: { botToken: secret("BREAKER_MISSING_CHANNEL_TOKEN") },
+          },
+        },
+      },
+    },
+    { durable: false, trailingNewline: true },
+  );
+  resetConfigRuntimeState();
+  const ws = await startSuppressedGateway();
+  expect(startAccount).not.toHaveBeenCalled();
+
+  const start = (accountId: string) => startActiveAccount(ws, accountId);
+  expectStarted(await start("plaintext"), "plaintext");
+  await vi.waitFor(() => expect(startAccount).toHaveBeenCalledOnce());
+  expectStarted(await start("resolved"), "resolved");
+  await expect(start("unavailable")).resolves.toMatchObject({
+    ok: false,
+    error: { code: "UNAVAILABLE" },
+  });
+  expect(
+    startAccount.mock.calls.map(([{ accountId, account }]) => [accountId, account.token]),
+  ).toEqual([
+    ["plaintext", "plaintext-channel-token"],
+    ["resolved", "resolved-channel-token"],
+  ]);
+});
+
+it("reports skips and in-flight ownership while manual recovery bypasses the breaker", async () => {
+  const [stopEntered, releaseStop] = [createDeferred(), createDeferred()] as const;
+  const [firstStart, secondStart] = [createDeferred(), createDeferred()] as const;
+  const starts = [firstStart, secondStart];
+  const startAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
+    starts.shift()?.resolve();
+    await waitForAbort(context);
+  });
+  const stopAccount = vi.fn(async () => {
+    stopEntered.resolve();
+    await releaseStop.promise;
+  });
+  installChannel(
+    {
+      listAccountIds: () => ["disabled", "healthy", "unconfigured", "cold"],
+      defaultAccountId: () => "healthy",
+      resolveAccount: (_config, accountId) => ({ accountId: accountId ?? "healthy" }),
+      isEnabled: (account) => account.accountId !== "disabled",
+      isConfigured: (account) => account.accountId !== "unconfigured",
+    },
+    { startAccount, stopAccount },
+  );
+  await writeConfigFile({
+    gateway: gatewayConfig,
+    channels: { telegram: { enabled: true, healthMonitor: { enabled: false } } },
+  });
+  const ws = await startSuppressedGateway();
+  const start = (accountId?: string) =>
+    rpcReq(ws, "channels.start", { channel: "telegram", accountId });
+  try {
+    expect(startAccount).not.toHaveBeenCalled();
+    const invalidOverride = await rpcReq(ws, "channels.start", {
+      channel: "telegram",
+      manual: true,
+    });
+    expect(invalidOverride).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    for (const accountId of ["disabled", "unconfigured"]) {
+      expect(await start(accountId)).toMatchObject({
+        ok: true,
+        payload: {
+          channel: "telegram",
           accountId,
-        ) => {
-          const id = accountId ?? "plaintext";
-          const configured = config.channels?.telegram?.accounts?.[id];
-          return {
-            accountId: id,
-            enabled: configured?.enabled !== false,
-            token: typeof configured?.botToken === "string" ? configured.botToken : undefined,
-          };
-        };
-        const plugin: ChannelPlugin<TestAccount> = {
-          ...createChannelTestPluginBase({ id: "telegram" }),
-          config: {
-            listAccountIds: (config) => Object.keys(config.channels?.telegram?.accounts ?? {}),
-            defaultAccountId: () => "plaintext",
-            resolveAccount,
-            isEnabled: (account) => account.enabled !== false,
-            isConfigured: (account) => Boolean(account.token),
-          },
-          gateway: { startAccount },
-        };
-        setTestPluginRegistry(
-          createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
-        );
-        // Authored SecretRefs belong in the source fixture, before runtime config resolution.
-        await writeJsonAtomic(
-          (await readConfigFileSnapshot()).path,
-          {
-            gateway: {
-              mode: "local",
-              bind: "loopback",
-              auth: { mode: "none" },
-              reload: { mode: "off" },
-            },
-            secrets: { providers: { default: { source: "env" } } },
-            channels: {
-              telegram: {
-                enabled: true,
-                healthMonitor: { enabled: false },
-                accounts: {
-                  plaintext: { botToken: "plaintext-channel-token" },
-                  resolved: {
-                    botToken: {
-                      source: "env",
-                      provider: "default",
-                      id: "BREAKER_RESOLVED_CHANNEL_TOKEN",
-                    } satisfies SecretRef,
-                  },
-                  unavailable: {
-                    botToken: {
-                      source: "env",
-                      provider: "default",
-                      id: "BREAKER_MISSING_CHANNEL_TOKEN",
-                    } satisfies SecretRef,
-                  },
-                },
-              },
-            },
-          },
-          { durable: false, trailingNewline: true },
-        );
-        resetConfigRuntimeState();
-        const port = await getGatewayTestPort();
-        server = await startTestGatewayServer(port, {
-          auth: { mode: "none" },
-          channelAutostartSuppression: {
-            reason: "crash-loop-breaker",
-            message: "synthetic safe mode",
-          },
-        });
-        const runtimeConfig = getRuntimeConfigSnapshot();
-        expect(runtimeConfig?.channels?.telegram?.accounts?.plaintext?.botToken).toBe(
-          "plaintext-channel-token",
-        );
-        expect(runtimeConfig?.channels?.telegram?.accounts?.resolved?.botToken).toBe(
-          "resolved-channel-token",
-        );
-        expect(runtimeConfig?.channels?.telegram?.accounts?.unavailable?.botToken).toMatchObject({
-          source: "env",
-          provider: "default",
-          id: "BREAKER_MISSING_CHANNEL_TOKEN",
-        });
-        expect(startAccount).not.toHaveBeenCalled();
-
-        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-        try {
-          const plaintext = await rpcReqWithActiveRuntime(ws, "channels.start", {
-            channel: "telegram",
-            accountId: "plaintext",
-          });
-          expect(plaintext, JSON.stringify(plaintext)).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "plaintext",
-              started: true,
-              outcome: { status: "handed-off" },
-            },
-          });
-          await vi.waitFor(() => expect(startAccount).toHaveBeenCalledOnce());
-          expect(
-            startAccount.mock.calls.map(([context]) => ({
-              accountId: context.accountId,
-              token: context.account.token,
-            })),
-          ).toEqual(
-            expect.arrayContaining([{ accountId: "plaintext", token: "plaintext-channel-token" }]),
-          );
-
-          const resolved = await rpcReqWithActiveRuntime(ws, "channels.start", {
-            channel: "telegram",
-            accountId: "resolved",
-          });
-          expect(resolved, JSON.stringify(resolved)).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "resolved",
-              started: true,
-              outcome: { status: "handed-off" },
-            },
-          });
-
-          const unavailable = await rpcReqWithActiveRuntime(ws, "channels.start", {
-            channel: "telegram",
-            accountId: "unavailable",
-          });
-          expect(unavailable).toMatchObject({
-            ok: false,
-            error: { code: "UNAVAILABLE" },
-          });
-          expect(startAccount).toHaveBeenCalledTimes(2);
-        } finally {
-          ws.close();
-        }
+          started: false,
+          outcome: { status: "skipped", reason: accountId },
+        },
+      });
+    }
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: "telegram:cold",
+        state: "unavailable",
+        paths: ["channels.telegram.accounts.cold.botToken"],
+        refKeys: ["env:default:SYNTHETIC_MISSING_CHANNEL_TOKEN"],
+        reason: "secret reference was not found",
       },
-    );
-  });
-
-  it("reports skips and in-flight ownership while manual recovery bypasses the breaker", async () => {
-    await withEnvAsync(
-      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
-      async () => {
-        const stopEntered = createDeferred();
-        const releaseStop = createDeferred();
-        const firstStart = createDeferred();
-        const secondStart = createDeferred();
-        const starts = [firstStart, secondStart];
-        const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-          starts.shift()?.resolve();
-          await new Promise<void>((resolve) => {
-            abortSignal.addEventListener("abort", () => resolve(), { once: true });
-          });
-        });
-        const stopAccount = vi.fn(async () => {
-          stopEntered.resolve();
-          await releaseStop.promise;
-        });
-        const plugin: ChannelPlugin<TestAccount> = {
-          ...createChannelTestPluginBase({ id: "telegram" }),
-          config: {
-            listAccountIds: () => ["disabled", "healthy", "unconfigured", "cold"],
-            defaultAccountId: () => "healthy",
-            resolveAccount: (_config, accountId) => ({ accountId: accountId ?? "healthy" }),
-            isEnabled: (account) => account.accountId !== "disabled",
-            isConfigured: (account) => account.accountId !== "unconfigured",
-          },
-          gateway: { startAccount, stopAccount },
-        };
-        setTestPluginRegistry(
-          createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
-        );
-        await writeConfigFile({
-          gateway: {
-            mode: "local",
-            bind: "loopback",
-            auth: { mode: "none" },
-            reload: { mode: "off" },
-          },
-          channels: { telegram: { enabled: true, healthMonitor: { enabled: false } } },
-        });
-        const port = await getGatewayTestPort();
-        server = await startTestGatewayServer(port, {
-          auth: { mode: "none" },
-          channelAutostartSuppression: {
-            reason: "crash-loop-breaker",
-            message: "synthetic safe mode",
-          },
-        });
-        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-        try {
-          expect(startAccount).not.toHaveBeenCalled();
-          const invalidOverride = await rpcReq(ws, "channels.start", {
-            channel: "telegram",
-            manual: true,
-          });
-          expect(invalidOverride).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-          for (const accountId of ["disabled", "unconfigured"]) {
-            const result = await rpcReq(ws, "channels.start", { channel: "telegram", accountId });
-            expect(result).toMatchObject({
-              ok: true,
-              payload: {
-                channel: "telegram",
-                accountId,
-                started: false,
-                outcome: { status: "skipped", reason: accountId },
-              },
-            });
-          }
-          setActiveDegradedSecretOwners([
-            {
-              ownerKind: "account",
-              ownerId: "telegram:cold",
-              state: "unavailable",
-              paths: ["channels.telegram.accounts.cold.botToken"],
-              refKeys: ["env:default:SYNTHETIC_MISSING_CHANNEL_TOKEN"],
-              reason: "secret reference was not found",
-            },
-          ]);
-          const cold = await rpcReq(ws, "channels.start", {
-            channel: "telegram",
-            accountId: "cold",
-          });
-          expect(cold).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-          expect(startAccount).not.toHaveBeenCalled();
-          const started = await rpcReq(ws, "channels.start", { channel: "telegram" });
-          expect(started).toMatchObject({
-            ok: true,
-            payload: { accountId: "healthy", started: true, outcome: { status: "handed-off" } },
-          });
-          await firstStart.promise;
-          const repeated = await rpcReq(ws, "channels.start", { channel: "telegram" });
-          expect(repeated).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "healthy",
-              started: true,
-              outcome: { status: "retry", reason: "task-owned" },
-            },
-          });
-          expect(startAccount).toHaveBeenCalledOnce();
-          const stopping = rpcReq(ws, "channels.stop", {
-            channel: "telegram",
-            accountId: "healthy",
-          });
-          await stopEntered.promise;
-          const blocked = await rpcReq(ws, "channels.start", {
-            channel: "telegram",
-            accountId: "healthy",
-          });
-          expect(blocked).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "healthy",
-              started: true,
-              outcome: { status: "retry", reason: "stop-in-flight" },
-            },
-          });
-          expect(startAccount).toHaveBeenCalledOnce();
-          releaseStop.resolve();
-          expect(await stopping).toMatchObject({ ok: true, payload: { stopped: true } });
-          const restarted = await rpcReq(ws, "channels.start", {
-            channel: "telegram",
-            accountId: "healthy",
-          });
-          expect(restarted).toMatchObject({
-            ok: true,
-            payload: { accountId: "healthy", started: true, outcome: { status: "handed-off" } },
-          });
-          await secondStart.promise;
-          expect(startAccount).toHaveBeenCalledTimes(2);
-        } finally {
-          releaseStop.resolve();
-          ws.close();
-        }
-      },
-    );
-  });
+    ]);
+    await expect(start("cold")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE" },
+    });
+    expect(startAccount).not.toHaveBeenCalled();
+    expectStarted(await start(), "healthy");
+    await firstStart.promise;
+    expectStarted(await start(), "healthy", "task-owned");
+    expect(startAccount).toHaveBeenCalledOnce();
+    const stopping = rpcReq(ws, "channels.stop", {
+      channel: "telegram",
+      accountId: "healthy",
+    });
+    await stopEntered.promise;
+    expectStarted(await start("healthy"), "healthy", "stop-in-flight");
+    expect(startAccount).toHaveBeenCalledOnce();
+    releaseStop.resolve();
+    expect(await stopping).toMatchObject({ ok: true, payload: { stopped: true } });
+    expectStarted(await start("healthy"), "healthy");
+    await secondStart.promise;
+    expect(startAccount).toHaveBeenCalledTimes(2);
+  } finally {
+    releaseStop.resolve();
+  }
 });

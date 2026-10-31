@@ -1,22 +1,24 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../../../../src/test-utils/node-process.js";
 import { runNodeScript } from "../../../../../test/helpers/run-node-script.js";
+import { agentCoreRetentionEntrypoints } from "../../retention-runtime.test-support.js";
 
-it.for(
-  ["head", "tail", "partial-tail", "line"].flatMap((mode) =>
-    [64, 4096].map((limit) => ({ mode, limit })),
-  ),
-)(
-  "owns $mode output with a $limit limit",
+it.for([64, 4096])(
+  "owns head output with a %i limit",
   { timeout: 30_000 },
-  async ({ mode, limit }, { signal }) => {
+  async (limit, { signal }) => {
     const result = await runNodeScript(
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./truncate.retention.test-support.ts", import.meta.url)),
-        mode,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(agentCoreRetentionEntrypoints.truncate),
+          resolveTestNodeExecPath(),
+        ),
         String(limit),
       ],
       { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },

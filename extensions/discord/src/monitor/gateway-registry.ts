@@ -1,5 +1,4 @@
-// Discord plugin module implements gateway registry behavior.
-import type { GatewayPlugin } from "../internal/gateway.js";
+import type { GatewayPluginContract } from "../internal/plugin-contract.js";
 
 /**
  * Module-level registry of active Discord GatewayPlugin instances.
@@ -7,32 +6,27 @@ import type { GatewayPlugin } from "../internal/gateway.js";
  * and the gateway WebSocket (needed for operations like updatePresence).
  * Follows the same pattern as presence-cache.ts.
  */
-const gatewayRegistry = new Map<string, GatewayPlugin>();
+const gatewayRegistry = new Map<string, GatewayPluginContract>();
 
 // Sentinel key for the default (unnamed) account. Uses a prefix that cannot
 // collide with user-configured account IDs.
 const DEFAULT_ACCOUNT_KEY = "\0__default__";
 
-function resolveAccountKey(accountId?: string): string {
-  return accountId ?? DEFAULT_ACCOUNT_KEY;
+export function registerGateway(
+  accountId: string | undefined,
+  gateway: GatewayPluginContract,
+): void {
+  gatewayRegistry.set(accountId ?? DEFAULT_ACCOUNT_KEY, gateway);
 }
 
-/** Register a GatewayPlugin instance for an account. */
-export function registerGateway(accountId: string | undefined, gateway: GatewayPlugin): void {
-  gatewayRegistry.set(resolveAccountKey(accountId), gateway);
-}
-
-/** Unregister a GatewayPlugin instance for an account. */
 export function unregisterGateway(accountId?: string): void {
-  gatewayRegistry.delete(resolveAccountKey(accountId));
+  gatewayRegistry.delete(accountId ?? DEFAULT_ACCOUNT_KEY);
 }
 
-/** Get the GatewayPlugin for an account. Returns undefined if not registered. */
-export function getGateway(accountId?: string): GatewayPlugin | undefined {
-  return gatewayRegistry.get(resolveAccountKey(accountId));
+export function getGateway(accountId?: string): GatewayPluginContract | undefined {
+  return gatewayRegistry.get(accountId ?? DEFAULT_ACCOUNT_KEY);
 }
 
-/** Clear all registered gateways (for testing). */
 export function clearGateways(): void {
   gatewayRegistry.clear();
 }

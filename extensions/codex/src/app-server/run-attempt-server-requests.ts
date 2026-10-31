@@ -1,21 +1,17 @@
+import {
+  inferToolMetaFromArgs,
+  projectAgentToolActivity,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
-import {
-  emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
-  emitDynamicToolTerminalDiagnostic,
-} from "./dynamic-tool-diagnostics.js";
+import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
-  hasPendingDynamicToolTerminalDiagnostic,
-  isDynamicToolTerminalDiagnosticEvent,
-  isMatchingDynamicToolTerminalDiagnostic,
   resolveDynamicToolCallTimeoutMs,
-  shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
@@ -27,14 +23,13 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
-  inferCodexDynamicToolMeta,
   isCodexCommandBearingToolCall,
   resolveCodexToolProgressDetailMode,
-  sanitizeCodexToolArguments,
+  asCodexToolArguments,
 } from "./tool-progress-normalization.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 
@@ -45,7 +40,7 @@ const DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES = [
 ] as const;
 
 export function createCodexAttemptServerRequestController(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   waitForNativeItems: CodexAttemptNotificationController["waitForNativeTerminalItems"],
@@ -73,7 +68,7 @@ export function createCodexAttemptServerRequestController(
   } = turnRuntime;
   const {
     emitExecutionPhaseOnce,
-    scheduleTurnReleaseAfterTerminalDynamicTool,
+    recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
   } = lifecycle;
   let refreshDrain: ReturnType<typeof createDeferred<void>> | undefined;
@@ -112,6 +107,7 @@ export function createCodexAttemptServerRequestController(
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
     requestSignal: AbortSignal = new AbortController().signal,
+    setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
   ) => {
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
@@ -147,19 +143,13 @@ export function createCodexAttemptServerRequestController(
         if (approvalResult.kind === "handled") {
           return approvalResult.response;
         }
-        return await userInputBridgeRef.current?.handleElicitationRequest({
-          id: request.id,
-          params: request.params,
-        });
+        return await userInputBridgeRef.current?.handleElicitationRequest(request, signal);
       }
       if (request.method === "item/tool/requestUserInput") {
         if (scope.turnId === turnId) {
           markCurrentTurnRequestProgress();
         }
-        return await userInputBridgeRef.current?.handleRequest({
-          id: request.id,
-          params: request.params,
-        });
+        return await userInputBridgeRef.current?.handleRequest(request, signal);
       }
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
@@ -187,6 +177,15 @@ export function createCodexAttemptServerRequestController(
       }
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
+        if (call.tool === "autoreview") {
+          setExecutionTimeoutMs?.(
+            resolveDynamicToolCallTimeoutMs({
+              call,
+              config: params.config,
+              parentTimeoutMs: params.timeoutMs,
+            }),
+          );
+        }
         markCurrentTurnRequestProgress();
         const response = await replayedExecution;
         await settlePluginRuntimeRefresh(turnId);
@@ -202,24 +201,35 @@ export function createCodexAttemptServerRequestController(
         name: call.tool,
         arguments: call.arguments,
       });
+      const hideFromChannelProgress = toolBridge.hideFromChannelProgressForTool(call.tool);
       projector?.recordDynamicToolCall({
         callId: call.callId,
+        namespace: call.namespace,
         tool: call.tool,
         arguments: call.arguments,
+        hideFromChannelProgress,
       });
       emitExecutionPhaseOnce(`tool:${call.callId}`, {
         phase: "tool_execution_started",
         tool: call.tool,
         toolCallId: call.callId,
       });
-      const toolMeta = inferCodexDynamicToolMeta(
-        call,
-        resolveCodexToolProgressDetailMode(params.toolProgressDetail),
-      );
-      const toolArgs = sanitizeCodexToolArguments(call.arguments);
+      const toolMeta = inferToolMetaFromArgs(call.tool, call.arguments, {
+        detailMode: resolveCodexToolProgressDetailMode(params.toolProgressDetail),
+      });
+      const toolArgs = asCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
-      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
+      const shouldEmitDynamicToolProgress =
+        shouldEmitTranscriptToolProgress(call.tool) && hideFromChannelProgress !== true;
       if (shouldEmitDynamicToolProgress) {
+        const activity = projectAgentToolActivity({
+          toolCallId: call.callId,
+          name: call.tool,
+          phase: "start",
+          args: toolArgs,
+          meta: toolMeta,
+        });
+        void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         void emitCodexAppServerEvent(params, {
           stream: "tool",
           data: {
@@ -233,21 +243,25 @@ export function createCodexAttemptServerRequestController(
           },
         });
       }
-      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
+      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({
+        call,
+        config: params.config,
+        toolBridge,
+        parentTimeoutMs: params.timeoutMs,
+      });
+      setExecutionTimeoutMs?.(dynamicToolTimeoutMs);
       const toolStartedAt = Date.now();
+      const diagnostics = createCodexDynamicToolDiagnostics({
+        call,
+        agentId: sessionAgentId,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
       let terminalDiagnosticObserved = false;
       const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
         (event) => {
-          if (
-            isDynamicToolTerminalDiagnosticEvent(event) &&
-            isMatchingDynamicToolTerminalDiagnostic({
-              event,
-              call,
-              runId: params.runId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-            })
-          ) {
+          if (diagnostics.matchesTerminal(event)) {
             terminalDiagnosticObserved = true;
           }
         },
@@ -258,13 +272,7 @@ export function createCodexAttemptServerRequestController(
           // Publish the execution claim before persistence yields, so a replay
           // cannot become another owner of this call's progress or result.
           await projector?.transcriptCheckpoint.flush();
-          emitDynamicToolStartedDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          });
+          diagnostics.started();
           const response = await handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
@@ -327,6 +335,14 @@ export function createCodexAttemptServerRequestController(
         }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+          const activity = projectAgentToolActivity({
+            toolCallId: call.callId,
+            name: call.tool,
+            phase: "result",
+            args: response.executedArguments ?? call.arguments,
+            result: toTranscriptToolResult(progressResponse),
+            isError: !protocolResponse.success,
+          });
           void emitCodexAppServerEvent(params, {
             stream: "tool",
             data: {
@@ -340,61 +356,27 @@ export function createCodexAttemptServerRequestController(
               result: toTranscriptToolResult(progressResponse),
             },
           });
+          void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         }
-        if (
-          !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
-        ) {
-          emitDynamicToolTerminalDiagnostic({
-            response,
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            durationMs: toolDurationMs,
-          });
+        if (!terminalDiagnosticObserved && !diagnostics.hasPendingTerminal()) {
+          diagnostics.terminal(response, toolDurationMs);
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (params.pluginRuntimeRefreshPending?.()) {
           await settlePluginRuntimeRefresh(turnId);
-        } else if (response.terminate === true && response.success) {
-          scheduleTurnReleaseAfterTerminalDynamicTool({
-            call,
-            response,
-            durationMs: toolDurationMs,
-          });
-        } else if (!shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(response)) {
-          scheduleTerminalDynamicToolReleaseCheck();
         } else {
-          state.currentTurnHadNonTerminalDynamicToolResult = true;
-          state.pendingTerminalDynamicToolRelease = undefined;
+          recordDynamicToolResult({ call, response, durationMs: toolDurationMs });
         }
         return protocolResponse as JsonValue;
       } catch (error) {
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (
-          !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
-        ) {
-          emitDynamicToolErrorDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            durationMs: Math.max(0, Date.now() - toolStartedAt),
-          });
+        recordDynamicToolResult({
+          call,
+          response: { contentItems: [], success: false },
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+        });
+        if (!terminalDiagnosticObserved && !diagnostics.hasPendingTerminal()) {
+          diagnostics.error(Math.max(0, Date.now() - toolStartedAt));
         }
         await settlePluginRuntimeRefresh(turnId);
         throw error;

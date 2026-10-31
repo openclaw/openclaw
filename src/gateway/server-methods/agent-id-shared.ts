@@ -1,5 +1,4 @@
-// Shared agent-id resolution for gateway handlers that accept optional agent ids
-// and must reject unknown explicit ids consistently.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   AgentSelectionRequiredError,
@@ -8,19 +7,33 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import type { RespondFn } from "./types.js";
 
-/**
- * Shared agent-id resolver for request handlers that accept optional agent ids.
- */
+export function resolveConfiguredAgentIdOrRespondError(
+  rawAgentId: string,
+  cfg: OpenClawConfig,
+  respond: RespondFn,
+): string | null {
+  const normalized = normalizeAgentIdStrict(rawAgentId);
+  if (normalized.ok && listAgentIds(cfg).includes(normalized.value)) {
+    return normalized.value;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, `agent "${rawAgentId}" not found`),
+  );
+  return null;
+}
+
 export function resolveAgentIdOrRespondError(params: {
   rawAgentId: unknown;
   respond: RespondFn;
   cfg: OpenClawConfig;
-  normalize: (rawAgentId: unknown) => string | undefined;
 }) {
   const knownAgents = listAgentIds(params.cfg);
-  const requestedAgentId = params.normalize(params.rawAgentId) ?? "";
+  const requestedAgentId = normalizeOptionalString(params.rawAgentId) ?? "";
   let agentId: string;
   try {
     agentId =

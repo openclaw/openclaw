@@ -1,123 +1,94 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { AssistantMessage, Context, Model } from "@openclaw/ai";
+import type { AssistantMessage, Context } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
 import { formatAssistantErrorText } from "../../src/agents/embedded-agent-helpers/error-text.js";
+import { recoverAfterTransportDrop } from "../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
 import {
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "../../src/agents/failover-error.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
+import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
+import { sleepWithAbort } from "../../src/infra/backoff.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "../helpers/gateway-integration-fixtures.js";
+import { loadBundledProviderPlugin } from "../helpers/media-generation/bundled-provider-builders.js";
+
+vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/infra/backoff.js")>()),
+  sleepWithAbort: vi.fn(async () => {}),
+}));
 
 let providerOwner: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 beforeAll(async () => {
-  const { default: openrouterPlugin } = await loadBundledPluginFacade<{
-    default: Parameters<typeof registerSingleProviderPlugin>[0];
-  }>({
-    pluginId: "openrouter",
-    artifactBasename: "index.js",
-  });
-  providerOwner = await registerSingleProviderPlugin(openrouterPlugin);
+  providerOwner = await registerSingleProviderPlugin(await loadBundledProviderPlugin("openrouter"));
 });
 
-const model = {
+const model = makeProviderModelFixture<"openai-completions">({
   id: "example/model",
   name: "OpenRouter mock",
   api: "openai-completions",
   provider: "openrouter",
   baseUrl: "",
-  reasoning: false,
   input: ["text", "image"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 16_000,
   maxTokens: 1_024,
-} satisfies Model<"openai-completions">;
+});
 
-async function runAgainstOpenRouterError(params: {
-  message: string;
-  context: Context;
+async function runAgainstOpenRouter(params: {
+  message?: string;
+  context?: Context;
   status?: number;
-}): Promise<{ reason: string | null; requestBody: string }> {
+  event?: { choices: { index: number; delta: object; finish_reason: string }[]; error?: object };
+}) {
   let requestBody = "";
+  let requestCount = 0;
   const server = createServer((request, response) => {
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      requestBody += chunk;
-    });
-    request.on("end", () => {
-      const status = params.status ?? 404;
-      response.writeHead(status, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { code: status, message: params.message } }));
-    });
+    requestCount += 1;
+    void (async () => {
+      requestBody += await readRequestText(request);
+      if (params.event) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(`data: ${JSON.stringify(params.event)}\n\ndata: [DONE]\n\n`);
+      } else {
+        const status = params.status ?? 404;
+        respondJson(response, { error: { code: status, message: params.message } }, status);
+      }
+    })().catch((error: unknown) =>
+      response.destroy(error instanceof Error ? error : new Error(String(error))),
+    );
   });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const baseUrl = `${await listenLoopback(server)}/api/v1`;
   try {
-    const address = server.address() as AddressInfo;
-    const result = await streamOpenAICompletions(
-      { ...model, baseUrl: `http://127.0.0.1:${address.port}/api/v1` },
-      params.context,
-      { apiKey: ["test", "key"].join("-") },
+    const assistant = await streamOpenAICompletions(
+      { ...model, baseUrl },
+      params.context ?? { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { apiKey: "test-key" },
     ).result();
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(params.message);
-    return { reason: classifyAssistantFailoverReason(result, { providerOwner }), requestBody };
+    expect(assistant.stopReason).toBe("error");
+    if (params.message) {
+      expect(assistant.errorMessage).toContain(params.message);
+    }
+    return {
+      assistant,
+      requestBody,
+      requestCount,
+      reason: classifyAssistantFailoverReason(assistant, { providerOwner }),
+    };
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
-}
-
-async function runAgainstOpenRouterStream(event: Record<string, unknown>) {
-  const server = createServer((request, response) => {
-    request.resume();
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address() as AddressInfo;
-    return await streamOpenAICompletions(
-      { ...model, baseUrl: `http://127.0.0.1:${address.port}/api/v1` },
-      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-      { apiKey: ["test", "key"].join("-") },
-    ).result();
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-}
-
-function makeOpenRouterStreamEvent(params: {
-  finishReason: string;
-  error?: { code: number; message: string; metadata: { error_type: string } };
-}): Record<string, unknown> {
-  return {
-    id: "gen-test",
-    object: "chat.completion.chunk",
-    created: 1,
-    model: model.id,
-    choices: [{ index: 0, delta: {}, finish_reason: params.finishReason }],
-    ...(params.error ? { error: params.error } : {}),
-  };
 }
 
 function expectFallbackBoundary(
   result: AssistantMessage,
-  expected: { reason: "server_error" | "timeout"; status: number },
+  expected: { reason: "server_error" | "timeout" | "rate_limit"; status: number },
 ): void {
   const reason = classifyAssistantFailoverReason(result, { providerOwner });
   expect(reason).toBe(expected.reason);
@@ -125,71 +96,116 @@ function expectFallbackBoundary(
     throw new Error("expected streamed provider error to be classified");
   }
   expect(resolveFailoverStatus(reason)).toBe(expected.status);
+  if (reason === "rate_limit") {
+    return;
+  }
 
-  const errorMessage = result.errorMessage;
-  if (!errorMessage) {
-    throw new Error("expected streamed provider error message");
+  expect(
+    resolveModelFallbackError(new Error(result.errorMessage), {
+      provider: model.provider,
+      model: model.id,
+    }),
+  ).toMatchObject({ kind: "failover", error: expected });
+}
+
+function recover(assistant: AssistantMessage) {
+  vi.mocked(sleepWithAbort).mockClear();
+  return recoverAfterTransportDrop({ assistant, providerOwner, noTools: true, replaySafe: true });
+}
+
+function expectRetryEffects(fixture: Awaited<ReturnType<typeof recover>>, count: number) {
+  for (const effect of [
+    fixture.continueFromCurrentTranscript,
+    fixture.markOwnedTranscriptRetry,
+    fixture.onAgentEvent,
+    sleepWithAbort,
+  ]) {
+    expect.soft(effect).toHaveBeenCalledTimes(count);
   }
-  const fallback = resolveModelFallbackError(new Error(errorMessage), {
-    provider: model.provider,
-    model: model.id,
-  });
-  expect(fallback.kind).toBe("failover");
-  if (fallback.kind === "failover") {
-    expect(fallback.error).toMatchObject(expected);
-  }
+  expect.soft(fixture.failoverRetryController.transientRetryCount).toBe(count);
 }
 
 describe("OpenRouter runtime error classification", () => {
-  it("keeps a bare streamed finish_reason error eligible for server failover", async () => {
-    const result = await runAgainstOpenRouterStream(
-      makeOpenRouterStreamEvent({ finishReason: "error" }),
-    );
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Provider finish_reason: error",
+  it.each([
+    "Prompt tokens limit exceeded: 24338 > 16443. To increase, visit https://example.invalid/organizations/synthetic/settings/keys and adjust the key's total limit",
+    "This request requires more credits, or fewer max_tokens. You requested up to 2048 tokens, but can only afford 1954. To increase, visit https://example.invalid/organizations/synthetic/settings/keys and adjust the key's total limit",
+  ])("does not retry an HTTP 402 key budget rejection: %s", async (message) => {
+    const result = await runAgainstOpenRouter({ status: 402, message });
+    expect(result.assistant).toMatchObject({
+      provider: model.provider,
+      model: model.id,
+      errorCode: "402",
+      errorMessage: `402 ${message}`,
     });
-    expectFallbackBoundary(result, { reason: "server_error", status: 500 });
-    expect(formatAssistantErrorText(result)).toBe("Provider finish_reason: error");
+    expect(JSON.parse(result.assistant.errorBody!)).toMatchObject({ code: 402, message });
+    expect(result.requestCount).toBe(1);
+    const fixture = await recover(result.assistant);
+    expect.soft(result.reason).toBe("billing");
+    expect.soft(fixture.recovery).toEqual({ action: "proceed" });
+    expectRetryEffects(fixture, 0);
   });
 
-  it("keeps a streamed network_error in the timeout lane", async () => {
-    const result = await runAgainstOpenRouterStream(
-      makeOpenRouterStreamEvent({ finishReason: "network_error" }),
-    );
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Provider finish_reason: network_error",
+  it("keeps genuine HTTP 429 recovery at fifteen same-model retries", async () => {
+    const result = await runAgainstOpenRouter({
+      status: 429,
+      message: "Rate limit exceeded",
     });
-    expectFallbackBoundary(result, { reason: "timeout", status: 408 });
-  });
-
-  it("preserves a structured streamed rate-limit classification", async () => {
-    const result = await runAgainstOpenRouterStream(
-      makeOpenRouterStreamEvent({
-        finishReason: "error",
-        error: {
-          code: 429,
-          message: "Rate limit exceeded",
-          metadata: { error_type: "rate_limit_exceeded" },
-        },
-      }),
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("Rate limit exceeded");
-    const reason = classifyAssistantFailoverReason(result, { providerOwner });
-    expect(reason).toBe("rate_limit");
-    if (!reason) {
-      throw new Error("expected structured rate-limit error to be classified");
+    const fixture = await recover(result.assistant);
+    expect(result.reason).toBe("rate_limit");
+    const retryState = {
+      action: "retry",
+      lastRetryFailoverReason: "rate_limit",
+    };
+    expect(fixture.recovery).toMatchObject(retryState);
+    for (let retry = 2; retry <= 15; retry++) {
+      expect(await fixture.recover()).toMatchObject(retryState);
     }
-    expect(resolveFailoverStatus(reason)).toBe(429);
+    expect(await fixture.recover()).toEqual({ action: "proceed" });
+    expectRetryEffects(fixture, 15);
+    expect(fixture.onAgentEvent).toHaveBeenLastCalledWith({
+      stream: "run_status",
+      data: expect.objectContaining({
+        phase: "retrying",
+        reason: "rate_limit",
+        attempt: 16,
+        maxAttempts: 16,
+      }),
+    });
+  });
+
+  it.each([
+    ["error", "server_error", 500, undefined],
+    ["network_error", "timeout", 408, undefined],
+    [
+      "error",
+      "rate_limit",
+      429,
+      {
+        code: 429,
+        message: "Rate limit exceeded",
+        metadata: { error_type: "rate_limit_exceeded" },
+      },
+    ],
+  ] as const)("classifies streamed %s as %s", async (finishReason, reason, status, error) => {
+    const { assistant: result } = await runAgainstOpenRouter({
+      event: {
+        choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+        ...(error ? { error } : {}),
+      },
+    });
+    const errorMessage = `Provider finish_reason: ${finishReason}`;
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: error ? expect.stringContaining(error.message) : errorMessage,
+    });
+    expectFallbackBoundary(result, { reason, status });
+    if (finishReason === "error" && !error) {
+      expect(formatAssistantErrorText(result)).toBe(errorMessage);
+    }
   });
 
   it("treats an image-capability 404 as a terminal format failure", async () => {
-    const result = await runAgainstOpenRouterError({
+    const result = await runAgainstOpenRouter({
       message: "No endpoints found that support image input",
       context: {
         messages: [
@@ -215,22 +231,11 @@ describe("OpenRouter runtime error classification", () => {
     });
   });
 
-  it("keeps a genuine missing-model 404 eligible for model fallback", async () => {
-    const result = await runAgainstOpenRouterError({
-      message: "No endpoints found for missing/model.",
-      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-    });
-
-    expect(result.reason).toBe("model_not_found");
-  });
-
-  it("applies OpenRouter billing policy to an HTTP 403 key-limit error", async () => {
-    const result = await runAgainstOpenRouterError({
-      status: 403,
-      message: "Key limit exceeded",
-      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-    });
-
-    expect(result.reason).toBe("billing");
+  it.each([
+    [404, "No endpoints found for missing/model.", "model_not_found"],
+    [403, "Key limit exceeded", "billing"],
+  ] as const)("classifies HTTP %s %s as %s", async (status, message, reason) => {
+    const result = await runAgainstOpenRouter({ status, message });
+    expect(result.reason).toBe(reason);
   });
 });

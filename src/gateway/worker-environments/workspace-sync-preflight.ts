@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { workspaceInventoryError } from "./workspace-inventory-error.js";
 import {
   createWorkspaceGitTransferList,
   runWorkspaceInventoryCommandToFile,
   settleWorkspaceInventoryCommands,
-  workspaceInventoryError,
 } from "./workspace-sync-inventory.js";
 
 async function readBoundedGitValue(filePath: string): Promise<string> {
@@ -19,9 +19,8 @@ async function readBoundedGitValue(filePath: string): Promise<string> {
 export async function preflightWorkerWorkspace(params: {
   localPath: string;
   signal?: AbortSignal;
-  timeoutMs?: number;
 }): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? 10 * 60_000;
+  const timeoutMs = 10 * 60_000;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
   const temporaryDirectory = await fs.mkdtemp(
@@ -51,7 +50,7 @@ export async function preflightWorkerWorkspace(params: {
     ]);
     if ((await fs.realpath(reportedRoot)) !== canonicalRoot) {
       throw workspaceInventoryError(
-        "Cloud worker dispatch requires the canonical managed Git worktree root",
+        "Cloud worker dispatch requires the actual managed Git worktree root",
       );
     }
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit)) {

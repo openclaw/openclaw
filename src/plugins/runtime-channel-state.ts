@@ -1,4 +1,3 @@
-// Stores active plugin channel registry state for the current runtime.
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
@@ -9,8 +8,6 @@ type GlobalChannelRegistryState = typeof globalThis & {
   };
 };
 
-type GlobalChannelRegistryRuntimeState = GlobalChannelRegistryState[typeof PLUGIN_REGISTRY_STATE];
-
 export type ActivePluginChannelRegistrySnapshot = {
   registry: ActivePluginChannelRegistry | null;
   version: number;
@@ -20,9 +17,9 @@ let activePluginChannelRegistrySnapshot: ActivePluginChannelRegistrySnapshot | u
 
 /** Returns a snapshot of the process-root plugin registry. */
 export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginChannelRegistrySnapshot {
-  const state: GlobalChannelRegistryRuntimeState = (globalThis as GlobalChannelRegistryState)[
-    PLUGIN_REGISTRY_STATE
-  ];
+  const state: GlobalChannelRegistryState[typeof PLUGIN_REGISTRY_STATE] = (
+    globalThis as GlobalChannelRegistryState
+  )[PLUGIN_REGISTRY_STATE];
   const registry = state?.activeRegistry ?? null;
   const version = state?.activeVersion ?? 0;
   const cached = activePluginChannelRegistrySnapshot;
