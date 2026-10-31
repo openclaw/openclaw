@@ -77,7 +77,7 @@ export async function withPairedDeviceRecords<T>(
       invalidatePairedCardRendererCache();
     }
     return outcome.value;
-  });
+  }, "devicePairing.migrate");
 }
 
 export function listDevicePairing(baseDir?: string) {
@@ -113,7 +113,7 @@ export async function requestDevicePairing(
     refreshDevicePairingResolutionWaiters(pairing.request, pairing.expiresAtMs, baseDir);
     onPending?.(pairing);
     return pairing;
-  });
+  }, "devicePairing.request");
 }
 
 export async function rejectDevicePairing(requestId: string, baseDir?: string) {
@@ -126,7 +126,7 @@ export async function rejectDevicePairing(requestId: string, baseDir?: string) {
       publishDevicePairingResolution(rejected, "rejected", baseDir);
     }
     return rejected;
-  });
+  }, "devicePairing.reject");
 }
 
 export async function removePairedDevice(deviceId: string, baseDir?: string) {
@@ -264,6 +264,6 @@ export function recordPairedDeviceAccess(
         );
       }
     }
-  }).finally(() => reconnects.delete(key));
+  }, "devicePairing.updateMetadata").finally(() => reconnects.delete(key));
   return entry.done;
 }

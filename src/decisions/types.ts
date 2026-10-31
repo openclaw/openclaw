@@ -1,37 +1,4 @@
-/** Typed decision contract, version 1. */
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
-
-export type DecisionEntry =
-  | string
-  | null
-  | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
-
-export type DecisionQuestion =
-  | {
-      readonly type: "choice";
-      readonly instructions?: DecisionEntry;
-      readonly criteria: Readonly<Record<string, DecisionEntry>>;
-    }
-  | {
-      readonly type: "score";
-      readonly instructions?: DecisionEntry;
-      readonly criteria: readonly DecisionEntry[];
-    }
-  | {
-      readonly type: "boolean";
-      readonly instructions?: DecisionEntry;
-      readonly criteria?: {
-        readonly true?: DecisionEntry;
-        readonly false?: DecisionEntry;
-      } | null;
-    };
+import type { DecisionEntry, DecisionQuestion } from "./input-types.js";
 
 export type DecisionBatch = {
   readonly state: DecisionEntry;
@@ -70,42 +37,3 @@ export type DecisionBatchResult = {
     readonly outputTokens?: number;
   };
 };
-
-export type ProviderFailureReason =
-  | "credentials-unavailable"
-  | "authentication"
-  | "rate-limited"
-  | "transport"
-  | "unsupported-input"
-  | "invalid-response";
-
-export type UnavailableReason =
-  | ProviderFailureReason
-  | "disabled"
-  | "not-configured"
-  | "retiring"
-  | "overloaded"
-  | "circuit-open"
-  | "deadline";
-
-export type ProviderDecisionOutcome =
-  | { readonly status: "ok"; readonly result: DecisionBatchResult }
-  | {
-      readonly status: "unavailable";
-      readonly reason: ProviderFailureReason;
-      /** Validated and bounded by host; does not cause an automatic retry. */
-      readonly retryAfterMs?: number;
-    };
-
-export type DecisionOutcome =
-  | {
-      readonly status: "ok";
-      readonly result: DecisionBatchResult;
-      readonly provenance: {
-        readonly providerId: string;
-        readonly rubricVersion: string;
-        /** Host-owned opaque identity; no secret values or SecretRef IDs. */
-        readonly runtimeGeneration: string;
-      };
-    }
-  | { readonly status: "unavailable"; readonly reason: UnavailableReason };

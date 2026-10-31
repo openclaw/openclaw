@@ -21,6 +21,7 @@ import { createWorkerReconcileTrace } from "./environment-operation.js";
 import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent, failUnallocatedImageIntent } from "./provider-intent.js";
+import { createWorkerLeaseInspection, ORPHANED_LEASE_ERROR } from "./provider-lease-inspection.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
@@ -40,8 +41,6 @@ import {
 } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
-
-const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 
 export function createWorkerProviderLifecycle(
   options: WorkerProviderLifecycleOptions & { ownerSignal: AbortSignal },
@@ -84,6 +83,16 @@ export function createWorkerProviderLifecycle(
     onOwnerStopped: dedicatedLeases.retire,
   });
 
+  const leaseInspection = createWorkerLeaseInspection({
+    ...options,
+    providerFor,
+    dedicatedLeases,
+    lifecycleLease,
+    stopOwner,
+    beginDrain,
+    finishProvenDestroy,
+    finishDestroy,
+  });
   const machineCatalog = createWorkerMachineCatalog(options);
 
   const expirePrepared = async (record: WorkerEnvironmentRecord) =>
@@ -553,39 +562,8 @@ export function createWorkerProviderLifecycle(
     }
     const { status } = inspection;
     const teardownExpected = record.destroyRequestedAtMs !== null || record.state === "destroying";
-    if (status === "destroyed") {
-      const requested =
-        record.destroyRequestedAtMs === null
-          ? await store.requestDestroy({
-              environmentId: record.environmentId,
-              state: record.state,
-              ...(!teardownExpected
-                ? {
-                    terminalState: "failed",
-                    lastError: "Worker environment disappeared before teardown was requested",
-                  }
-                : {}),
-            })
-          : record;
-      const stopped = await stopOwner(requested, "provider-destroyed");
-      const draining = await beginDrain(stopped);
-      await finishProvenDestroy(draining).catch(async (error: unknown) => {
-        await saveError(draining, error);
-      });
-      return;
-    }
-    if (status === "unknown") {
-      // Provider loss fences placement authority before remote cleanup, which may remain
-      // unreachable after node revocation. Preserve its exact attachment until stop is proven.
-      const requested = teardownExpected
-        ? record
-        : await store.requestDestroy({
-            environmentId: record.environmentId,
-            state: record.state,
-            terminalState: "failed",
-            lastError: ORPHANED_LEASE_ERROR,
-          });
-      await finishDestroy(requested, provider).catch(() => undefined);
+    if (status === "destroyed" || status === "unknown") {
+      await leaseInspection.settleLostLease(record, provider, status);
       return;
     }
     if (status === "dormant") {
@@ -690,6 +668,7 @@ export function createWorkerProviderLifecycle(
     });
 
   return {
+    inspectTurnLease: leaseInspection.inspectTurnLease,
     readStartStatus: (record: WorkerEnvironmentRecord) => {
       const entry = startStatuses.get(record.environmentId);
       return record.state === "provisioning" && entry?.ownerEpoch === record.ownerEpoch

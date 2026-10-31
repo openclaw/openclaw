@@ -365,6 +365,8 @@ describe("Control UI build chunking", () => {
     const cronDetail = modulePath("../pages/cron/view-detail.tsx");
     const cronRunLink = modulePath("../../../src/cron/run-link.ts");
     const sessions = modulePath("../pages/sessions/sessions-page.tsx");
+    const welcomeCopy = modulePath("../i18n/locales/en-chat-welcome.ts");
+    const peopleCopy = modulePath("../i18n/locales/en-session-people.ts");
     const hubHeader = modulePath("../components/solid/hub-page-header.tsx");
     const hubTabs = modulePath("../components/solid/hub-tabs.tsx");
     const tabs = modulePath("../components/solid/tabs.tsx");
@@ -401,11 +403,11 @@ describe("Control UI build chunking", () => {
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
-        `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+        `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { welcome } from ${JSON.stringify(welcomeCopy)}; export class NewSession { label = label + welcome; }`,
       ],
       [
         runFrame,
@@ -427,7 +429,7 @@ describe("Control UI build chunking", () => {
       [devices, 'export const page = "devices-page";'],
       [
         sessions,
-        `import { header } from ${JSON.stringify(hubHeader)}; import { workspace } from ${JSON.stringify(settingsWorkspace)}; import { select } from ${JSON.stringify(settingsSelect)}; export function render() { return header() + workspace + select; }`,
+        `import { header } from ${JSON.stringify(hubHeader)}; import { workspace } from ${JSON.stringify(settingsWorkspace)}; import { select } from ${JSON.stringify(settingsSelect)}; import { welcome } from ${JSON.stringify(welcomeCopy)}; import { people } from ${JSON.stringify(peopleCopy)}; export function render() { return header() + workspace + select + welcome + people; }`,
       ],
       [
         hubHeader,
@@ -450,6 +452,8 @@ describe("Control UI build chunking", () => {
       [settingsWorkspace, 'export const workspace = "workspace";'],
       [settingsSelect, 'export const select = "select";'],
       [routeSubtitles, 'export const subtitle = "route";'],
+      [welcomeCopy, 'export const welcome = "welcome-copy";'],
+      [peopleCopy, 'export const people = "people-copy";'],
       [cronRunLink, 'export const runLink = "run-link";'],
       [
         cron,
@@ -539,6 +543,9 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const sessionsChunk = chunks.find((chunk) => sessions in chunk.modules)!;
+    expect(staticImports(sessionsChunk.fileName)).not.toContain(chatChunk.fileName);
+    expect(staticImports(sessionsChunk.fileName)).not.toContain(newSessionChunk.fileName);
     const runChunk = chunks.find((chunk) => runFrame in chunk.modules)!;
     expect([runStream, sourcePreviews].every((id) => id in runChunk.modules)).toBe(true);
     expect(staticImports(chatChunk.fileName)).toContain(runChunk.fileName);

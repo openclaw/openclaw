@@ -8,7 +8,6 @@
   );
 
   position: relative;
-  box-sizing: border-box;
   min-width: 0;
   width: 100%;
   margin-inline: 0;
@@ -28,7 +27,6 @@
     black calc(100% - 24px), rgb(0 0 0 / 88%) calc(100% - 18px), rgb(0 0 0 / 50%) calc(100% - 12px),
     rgb(0 0 0 / 12%) calc(100% - 6px), transparent calc(100% - 2px);
 
-  box-sizing: border-box;
   min-width: 0;
   overflow: hidden;
   scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent;
@@ -93,7 +91,6 @@
     ) [copy] minmax(0, 1fr) [actions] auto;
   align-items: center;
   column-gap: 8px;
-  box-sizing: border-box;
   min-width: 0;
   width: 100%;
   min-height: var(--chat-queue-row-height);
@@ -118,7 +115,6 @@
 .chat-queue__images {
   grid-column: images;
   display: block;
-  box-sizing: border-box;
   width: 24px;
   height: 24px;
   border: 1px solid color-mix(in srgb, var(--text) 24%, var(--panel));
@@ -297,7 +293,6 @@
 }
 
 .chat-queue__edit-input {
-  box-sizing: border-box;
   grid-column: copy;
   min-width: 0;
   min-height: 26px;

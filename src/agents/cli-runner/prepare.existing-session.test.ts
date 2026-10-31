@@ -28,7 +28,6 @@ import {
   createCliRunnerPrepareFixture,
   createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
-  createTestMcpLoopbackServerConfig,
   createWeatherSkillFixture,
 } from "../cli-runner.test-helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../command/claude-cli-project-dir.js";
@@ -110,7 +109,6 @@ beforeEach(() => {
       ownerToken: "fixture-owner",
       nonOwnerToken: "fixture-reader",
     }),
-    createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
     mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: () => true,
@@ -360,6 +358,8 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     await completion.preparedBackend.cleanup?.();
   }
 
+  // Discovery changes only loading hints; it must not override safe prompt drift.
+  config.tools = { ...config.tools, toolSearch: true };
   const drifted = await prepareTurn(false, upgradedBinding, true);
   try {
     expect(drifted.reusableCliSession).toMatchObject({ mode: "reuse-with-drift" });
@@ -374,7 +374,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
   expect(sent[1]?.sessionId).toBe(nativeSessionId);
   expect(sent[1]?.useResume).toBe(true);
   expect(sent[1]?.args).toEqual(expect.arrayContaining(["--resume", nativeSessionId]));
-  for (const turn of sent) {
+  for (const [index, turn] of sent.entries()) {
     expect(turn.args).toEqual(
       expect.arrayContaining(["--strict-mcp-config", "--disable-slash-commands"]),
     );
@@ -389,7 +389,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     expect(turn.toolAvailability).toEqual({
       native: [],
       openClaw: ["read"],
-      ...(toolSearch === false ? {} : { discovery: ["ToolSearch"] }),
+      ...(toolSearch === false && index < 2 ? {} : { discovery: ["ToolSearch"] }),
     });
     expect(turn.systemPrompt).toContain("OPENCLAW_CONTEXT_SURVIVES_UPGRADE");
     expect(turn.systemPrompt).toContain("weather");

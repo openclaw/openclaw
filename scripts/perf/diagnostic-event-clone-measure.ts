@@ -1,18 +1,28 @@
 // Synthetic turn-shaped dispatcher workload; run timing and allocation separately.
+// Runtime phase owner comparison, Node 26.12+ (untraced; four events per turn):
+// node --import ./scripts/tsx.mjs scripts/perf/diagnostic-event-clone-measure.ts --mode phases --turns 5000
+// Two metadata-only listeners; checks emitted content in an untimed turn, then
+// measures thread CPU and cumulative V8 allocation including bounded queue drain.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { writeFileSync, writeSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 import {
+  createQueuedDiagnosticPhaseEmitter,
   emitTrustedDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventInput,
+  type DiagnosticEventPayload,
+  type DiagnosticPhaseSnapshot,
 } from "../../src/infra/diagnostic-events.js";
 import {
   hasDiagnosticTracePropagationConsumer,
@@ -96,7 +106,122 @@ const startAt = parseStrictIntegerOption({
   min: 0,
   label: "start-at",
 });
-assert(["counts", "timing", "allocation", "promotion"].includes(values.mode));
+assert(["counts", "timing", "allocation", "promotion", "phases"].includes(values.mode));
+if (values.mode === "phases") {
+  const phases: DiagnosticPhaseSnapshot[] = [
+    {
+      name: "sessions.catalog.list.planning",
+      startedAt: 10,
+      endedAt: 12,
+      durationMs: 2,
+      details: { threadCpuMs: 0.25 },
+    },
+    {
+      name: "sessions.catalog.list.delivery",
+      startedAt: 12,
+      endedAt: 14,
+      durationMs: 2,
+      details: { threadCpuMs: 0.5 },
+    },
+    {
+      name: "chat.send.preparation",
+      startedAt: 14,
+      endedAt: 20,
+      durationMs: 6,
+      details: { stage: "request" },
+    },
+    {
+      name: "chat.send.dispatch",
+      startedAt: 20,
+      endedAt: 22,
+      durationMs: 2,
+      details: { stage: "startup" },
+    },
+  ];
+  const originalInputs = JSON.stringify(phases);
+  const captured: DiagnosticEventPayload[] = [];
+  let capture = true;
+  let deliveries = 0;
+  for (let index = 0; index < 2; index++) {
+    onTrustedInternalDiagnosticEvent(
+      (event) => {
+        deliveries++;
+        if (capture) {
+          captured.push(event);
+        }
+      },
+      { include: ["diagnostic.phase.completed"] },
+      { includePrivateData: false },
+    );
+  }
+  const emit = createQueuedDiagnosticPhaseEmitter();
+  assert(emit, "Runtime phase listeners must be active");
+  const runPhases = async (count: number) => {
+    for (let turn = 0; turn < count; turn++) {
+      for (const phase of phases) {
+        emit(phase);
+      }
+      if (turn % 32 === 31) {
+        await waitForDiagnosticEventsDrained();
+      }
+    }
+    await waitForDiagnosticEventsDrained();
+  };
+  await runPhases(1);
+  const content = captured.map(({ seq, ts, ...event }) => {
+    assert(Number.isFinite(seq) && Number.isFinite(ts));
+    return event;
+  });
+  assert.deepEqual(
+    content,
+    phases.flatMap((phase) => {
+      const event = { ...phase, type: "diagnostic.phase.completed", trace: undefined };
+      return [event, event];
+    }),
+  );
+  const contentSha256 = createHash("sha256").update(JSON.stringify(content)).digest("hex");
+  capture = false;
+  captured.length = 0;
+  for (let warmup = 0; warmup < 5; warmup++) {
+    await runPhases(turns);
+  }
+  deliveries = 0;
+  if (startAt) {
+    assert(startAt > Date.now(), "missed synchronized start");
+    await delay(startAt - Date.now());
+  }
+  const hostLoadBefore = loadavg();
+  const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  assert(Number.isFinite(allocatedBefore), "Requires Node 26.12+ allocation counters");
+  const cpuBefore = process.threadCpuUsage();
+  const started = performance.now();
+  await runPhases(turns);
+  const wallMs = performance.now() - started;
+  const cpu = process.threadCpuUsage(cpuBefore);
+  const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
+  const events = turns * phases.length;
+  assert.equal(deliveries, events * 2);
+  assert.equal(JSON.stringify(phases), originalInputs);
+  console.log(
+    JSON.stringify({
+      mode: values.mode,
+      node: process.version,
+      profiled: false,
+      turns,
+      events,
+      deliveries,
+      contentSha256,
+      hostLoadBefore,
+      hostLoadAfter: loadavg(),
+      wallMs,
+      cpuMs: (cpu.user + cpu.system) / 1000,
+      cpuUsPerEvent: (cpu.user + cpu.system) / events,
+      allocatedBytes,
+      allocatedBytesPerEvent: allocatedBytes / events,
+    }),
+  );
+  process.exit(0);
+}
 const traceMarker = (phase: string) =>
   writeSync(
     1,

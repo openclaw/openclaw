@@ -321,7 +321,10 @@ Instrumented synchronous work lasting at least 250 ms and unattributed event-loo
 gaps longer than one second produce a `main-thread stall` log with a code-owned
 task label where available. Native launches through the process and command
 runners and PTY helper have fixed task labels; these measure
-the synchronous launch, not the child's running time. On Node 26, a bounded CPU flight
+the synchronous launch, not the child's running time. During active event-loop
+sampling on Node, Promise continuations retain their inherited code-owned task
+labels; their synchronous execution is measured without charging time awaiting I/O.
+On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
 stall interval's top inclusive frames, sample count, and truncation status.
 Several stalls can finish before reporting; only the longest interval is profiled.
@@ -332,7 +335,9 @@ diagnostic profiles. Inclusive counts overlap when a sampled stack contains
 several listed frames; they are not independent durations.
 The `deepest` stacks preserve the sampled leaf and nearest available OpenClaw
 caller, including across dependency frames. `[...]` marks omitted intermediate
-frames. Lower-ranked entries are dropped first to keep each report within 2 KiB;
+frames. If a continuation has no recorded OpenClaw frame, its captured task
+appears as `[async task:...]`, distinct from a sampled call frame. Unnamed work
+remains unattributed. Lower-ranked entries are dropped first to keep each report within 2 KiB;
 `reportTruncated=true` identifies this log-size trimming.
 
 The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),

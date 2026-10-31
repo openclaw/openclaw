@@ -460,6 +460,101 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(true);
   });
 
+  it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {
+    const olderTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands"],
+    });
+    const capableTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands", "ui-agent-github-settings"],
+    });
+
+    expect(JSON.stringify(expectToolNamed(olderTools, "screen").parameters)).not.toContain(
+      "github_identity_settings",
+    );
+    expect(JSON.stringify(expectToolNamed(capableTools, "screen").parameters)).toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(olderTools, "github_identity_status").description).not.toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(capableTools, "github_identity_status").description).toContain(
+      "github_identity_settings",
+    );
+  });
+
+  it("keeps reconnect definitions stable when an internal wake has no requesting client", async () => {
+    using _ = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+      effective: { credentialState: "configured_unavailable", refreshState: "expired" },
+    });
+    const listingClientCaps = ["ui-commands", "ui-agent-github-settings"];
+    const assemble = (clientCaps: string[]) =>
+      createTestOpenClawTools({
+        githubPublicationAvailable: false,
+        listingClientCaps,
+        clientCaps,
+        agentSessionKey: "agent:main:reconnect",
+        wrapBeforeToolCallHook: false,
+      });
+    const connected = assemble(listingClientCaps);
+    const background = assemble([]);
+    for (const name of ["screen", "github_identity_status"]) {
+      const before = expectToolNamed(connected, name);
+      const after = expectToolNamed(background, name);
+      expect(after.parameters).toEqual(before.parameters);
+      expect(after.description).toBe(before.description);
+    }
+    expect(
+      JSON.stringify(
+        await expectToolNamed(connected, "github_identity_status").execute("connected", {}),
+      ),
+    ).toContain("github_identity_settings");
+    expect(
+      JSON.stringify(
+        await expectToolNamed(background, "github_identity_status").execute("background", {}),
+      ),
+    ).toContain("Settings → Agents → Tools");
+  });
+
+  it.each([
+    {
+      name: "screen tool is denied",
+      allow: ["github_identity_status"],
+      actions: undefined,
+      expected: false,
+    },
+    {
+      name: "settings action is denied",
+      allow: ["github_identity_status", "screen"],
+      actions: { screen: ["navigate"] },
+      expected: false,
+    },
+    {
+      name: "settings action remains callable",
+      allow: ["github_identity_status", "screen"],
+      actions: { screen: ["github_identity_settings"] },
+      expected: true,
+    },
+  ])("uses manual reconnect guidance when $name", ({ allow, actions, expected }) => {
+    const tools = createTestOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands", "ui-agent-github-settings"],
+      config: {
+        tools: {
+          gatewayPolicy: { allow, ...(actions ? { actions } : {}) },
+        },
+      },
+    });
+
+    const description = expectToolNamed(tools, "github_identity_status").description;
+    if (expected) {
+      expect(description).toContain("github_identity_settings");
+    } else {
+      expect(description).not.toContain("github_identity_settings");
+    }
+  });
+
   it.each([
     {
       scope: "operator.sessions.write",

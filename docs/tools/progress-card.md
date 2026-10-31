@@ -114,7 +114,7 @@ Tests are running.
 | live flow  | running |
 ```
 
-Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. In the session hovercard, the Agent Notepad pins the bar above the note and shows that label. Other raw HTML is stripped by the Markdown sanitizer.
+Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. The session hovercard shows a compact note and the current step; it omits progress bars. Other raw HTML is stripped by the Markdown sanitizer.
 
 ## Limits
 
@@ -155,7 +155,7 @@ The progress card retains its disclosure choice for the same Gateway, session, a
 
 On mobile, open **Details → Task progress** and use **Show in chat** in the bottom-right **⋯** menu beside Refresh. It hides or restores progress in chat using the same preference as Settings, while keeping the saved card available in Details. New activity, refreshing, and navigation do not turn the preference back on.
 
-The dashboard widget and session hovercard remain separate read-only placements. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session, even when the chat-card preference is off. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm removal with a read or clear response for that session and agent.
+The dashboard widget and session hovercard remain separate read-only placements. Hover a session row in the sidebar or a session-reference link in chat to see its compact task summary, even when the chat-card preference is off. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm removal with a read or clear response for that session and agent.
 
 ### Embedded composer placements
 

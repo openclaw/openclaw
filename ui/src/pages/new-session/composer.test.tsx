@@ -267,6 +267,91 @@ describe("new-session composer keyboard submission", () => {
     },
   );
 
+  it("requests the selected project's skills and drops them after the project changes", async () => {
+    const response = createDeferred<CommandsListResult>();
+    const request = vi.fn(() => response.promise);
+    const context = composerContext({ client: { request } as unknown as GatewayBrowserClient });
+    const { composer, rerenderForProject, composerTextarea } = renderComposer({
+      agentId: "writer",
+      commandProjectId: "project-alpha",
+      context,
+      message: "$",
+    });
+    const textarea = getComposerTextarea(composer);
+    textarea.setSelectionRange(1, 1);
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      agentId: "writer",
+      projectId: "project-alpha",
+      includeArgs: true,
+      scope: "text",
+    });
+    rerenderForProject("project-beta");
+    response.resolve({
+      commands: [
+        {
+          acceptsArgs: true,
+          description: "Alpha project only",
+          name: "alpha_project_only",
+          scope: "both",
+          source: "skill",
+          skillModelVisible: true,
+          textAliases: ["/alpha_project_only"],
+        },
+      ],
+    });
+    await waitForFast(() =>
+      expect(composerTextarea.skillMenu.state.skillCommandRefreshPending).toBe(false),
+    );
+    expect(composer.querySelector(".skill-menu")?.textContent ?? "").not.toContain(
+      "alpha_project_only",
+    );
+    expect(getSkillCommandCompletions("alpha_project_only")).toEqual([]);
+  });
+
+  it("requests the new project's slash catalog while the previous project's is pending", async () => {
+    const first = createDeferred<CommandsListResult>();
+    const second = createDeferred<CommandsListResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const context = composerContext({ client: { request } as unknown as GatewayBrowserClient });
+    const { composer, rerenderForProject } = renderComposer({
+      agentId: "writer",
+      commandProjectId: "project-alpha",
+      context,
+    });
+    const textarea = getComposerTextarea(composer);
+    const command = (name: string) => ({
+      acceptsArgs: false,
+      description: name,
+      name,
+      scope: "both" as const,
+      source: "skill" as const,
+      skillModelVisible: true,
+      textAliases: [`/${name}`],
+    });
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-alpha" }),
+    );
+    rerenderForProject("project-beta");
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-beta" }),
+    );
+    first.resolve({ commands: [command("alpha_only")] });
+    second.resolve({ commands: [command("beta_only")] });
+    await waitForFast(() =>
+      expect(composer.querySelector(".slash-menu")?.textContent ?? "").toContain("/beta_only"),
+    );
+    expect(composer.querySelector(".slash-menu")?.textContent ?? "").not.toContain("/alpha_only");
+  });
+
   it("opens skill mentions and inserts the selected skill with Enter", () => {
     replaceSlashCommands([skill("release_notes")]);
     let message = "";

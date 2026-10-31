@@ -545,24 +545,25 @@ function walkMd(
       context.onMatch([{ slot: cur.slot, value: cur.value }]);
       return;
     }
-    if (next.value === WILDCARD_SINGLE || next.value === WILDCARD_RECURSIVE) {
-      for (const fm of level.ast.frontmatter) {
-        context.onMatch([
-          { slot: cur.slot, value: cur.value },
-          { slot: next.slot, value: fm.key },
-        ]);
+    if (isUnionSeg(next.value)) {
+      for (const alt of parseUnionSeg(next.value) ?? []) {
+        const altSubs = subs.slice();
+        altSubs[i + 1] = { slot: next.slot, value: alt };
+        walkMd(level, altSubs, i, walked, context);
       }
       return;
     }
+    const wildcard = next.value === WILDCARD_SINGLE || next.value === WILDCARD_RECURSIVE;
     const fmKey = unquoteSeg(next.value);
-    const entry = level.ast.frontmatter.find((e) => e.key === fmKey);
-    if (entry === undefined) {
-      return;
+    for (const fm of level.ast.frontmatter) {
+      if (!wildcard && fm.key !== fmKey) {
+        continue;
+      }
+      context.onMatch([
+        { slot: cur.slot, value: cur.value },
+        { slot: next.slot, value: quoteSeg(fm.key) },
+      ]);
     }
-    context.onMatch([
-      { slot: cur.slot, value: cur.value },
-      { slot: next.slot, value: next.value },
-    ]);
     return;
   }
 

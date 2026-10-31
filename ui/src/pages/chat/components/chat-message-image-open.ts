@@ -99,6 +99,22 @@ export async function readImageOriginalBlob(
   return await response.blob();
 }
 
+/** Surfaces without a projected transcript turn navigate the rendered message's images. */
+export function withMessageImageGallery(
+  options: ImageRenderOptions | undefined,
+  images: readonly ImageBlock[],
+): ImageRenderOptions {
+  return {
+    ...options,
+    galleryImages:
+      options?.galleryImages ??
+      ((selected) => ({
+        index: images.indexOf(selected),
+        items: images.map((image) => ({ image, messageId: options?.messageId })),
+      })),
+  };
+}
+
 export function openMessageImage(
   img: ImageBlock,
   previewUrl: string,
@@ -115,19 +131,18 @@ export function openMessageImage(
   }
   const title = imageTitle(img);
   const requestVersion = opts?.onRequestOpenImage?.();
-  const images = opts?.galleryImages;
-  const index = images?.indexOf(img) ?? -1;
+  const gallery = opts?.galleryImages?.(img);
   const onOpenImage = opts?.onOpenImage;
   const open = (item: ImageLightboxItem) => {
     const nextItem = { ...item, width: img.width, height: img.height };
-    if (images && images.length > 1 && index >= 0) {
+    if (gallery && gallery.items.length > 1 && gallery.index >= 0) {
       nextItem.gallery = {
-        index,
-        items: images.map(
-          (image) =>
-            (retryFailed = false) =>
-              loadGalleryImage(image, opts, retryFailed),
-        ),
+        index: gallery.index,
+        items: gallery.items.map(({ image, messageId }) => {
+          // Unidentified siblings (a live stream) must not borrow the opener's media scope.
+          const options = messageId === opts?.messageId ? opts : { ...opts, messageId };
+          return (retryFailed = false) => loadGalleryImage(image, options, retryFailed);
+        }),
       };
     }
     if (requestVersion === undefined) {

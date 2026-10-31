@@ -4,11 +4,13 @@
 }
 
 /* Account identity remains recognizable while a cold profile photo resolves. */
-.sidebar-identity-card .viewer-avatar.is-pending > img {
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar) .viewer-avatar.is-pending > img {
   display: none;
 }
 
-.sidebar-identity-card .viewer-avatar.is-pending > .viewer-avatar__fallback {
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar)
+  .viewer-avatar.is-pending
+  > .viewer-avatar__fallback {
   display: grid;
   visibility: visible;
 }
@@ -795,13 +797,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
-}
-
-.sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
-  width: auto;
-  max-width: 50%;
-  gap: 4px;
-  opacity: 1;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {

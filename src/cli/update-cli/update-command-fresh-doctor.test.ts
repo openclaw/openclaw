@@ -187,6 +187,7 @@ afterEach(() => {
   restoreTempRoot();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("post-plugin update readiness", () => {
@@ -272,6 +273,26 @@ describe("post-plugin update readiness", () => {
         expect(isCurrent).toHaveBeenCalledTimes(1);
       }
       expect(mocks.command).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "runs an older updater's Doctor through the published CLI (served=%s)",
+    async (served) => {
+      // Isolated update-compat workers mark the runtime before loading this module.
+      vi.stubGlobal(Symbol.for("openclaw.updateCompat.olderUpdater") as never, served);
+      const run = runDoctor({
+        opts: { run: { runId: "old-run", env: {}, executorFence: { assertCurrent: vi.fn() } } },
+        doctorCapabilities: { doctorConfigWrites: true, doctorRetirementOnly: true },
+      });
+      if (served) {
+        await run;
+        expect(commandArgs()).toEqual([doctorArgs]);
+      } else {
+        // This runtime never admitted the foreign executor fence.
+        await expect(run).rejects.toThrow("Child continuation requires its live executor.");
+        expect(mocks.command).not.toHaveBeenCalled();
+      }
     },
   );
 

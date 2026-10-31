@@ -35,11 +35,6 @@ export const detailsSnapshotSchema = json.optional(
             running: json.optional(json.boolean),
             state: json.text,
             timezone: json.optional(json.text),
-            result: json.object({
-              summary: json.optional(json.text),
-              checkedAt: json.optional(nonnegative),
-              failed: json.optional(json.boolean),
-            }),
           }),
           10,
         ),
