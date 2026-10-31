@@ -15,6 +15,7 @@ import {
   listSkillCommandsForWorkspace,
   listSkillCommandsForAgents,
   prepareSkillCommandsForAgents,
+  prepareSkillCommandsForWorkspace,
 } from "./chat-commands.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
@@ -224,4 +225,105 @@ describe("skill command discovery through workspace loading", () => {
       });
     },
   );
+
+  it("admits selected-project skill roots to session-bound command discovery", async () => {
+    const root = tempDirs.make("openclaw-session-project-skills-");
+    const workspaceDir = path.join(root, "agent-workspace");
+    const project = path.join(root, "project");
+    await putSkill(path.join(workspaceDir, "skills"), "agent-fixture");
+    await putSkill(path.join(project, "skills"), "project-fixture");
+    await putSkill(path.join(project, ".agents", "skills"), "project-agents-fixture");
+    const cfg = configFor(
+      {
+        main: {
+          workspace: workspaceDir,
+          skills: ["agent-fixture", "project-fixture", "project-agents-fixture"],
+        },
+      },
+      { allowBundled: [] },
+    );
+    await withBundledDir(root, async () => {
+      // Without a session, discovery stays scoped to the agent workspace.
+      expect(skillNames(await prepareSkillCommandsForAgents({ cfg, agentIds: ["main"] }))).toEqual([
+        "agent-fixture",
+      ]);
+      // The session's selected project joins with the same roots the runtime catalog uses.
+      expect(
+        skillNames(
+          await prepareSkillCommandsForAgents({
+            cfg,
+            agentIds: ["main"],
+            sessionEntry: { spawnedCwd: project },
+          }),
+        ),
+      ).toEqual(["agent-fixture", "project-agents-fixture", "project-fixture"]);
+      // Managed worktree sessions resolve their durable skill workspace instead.
+      expect(
+        skillNames(
+          await prepareSkillCommandsForAgents({
+            cfg,
+            agentIds: ["main"],
+            sessionEntry: {
+              worktree: {
+                id: "wt",
+                branch: "main",
+                repoRoot: project,
+                canonicalWorkspaceDir: project,
+              },
+            },
+          }),
+        ),
+      ).toEqual(["agent-fixture", "project-agents-fixture", "project-fixture"]);
+    });
+  });
+
+  it("resolves session project roots for workspace command consumers", async () => {
+    const root = tempDirs.make("openclaw-workspace-session-roots-");
+    const workspaceDir = path.join(root, "agent-workspace");
+    const project = path.join(root, "project");
+    await putSkill(path.join(workspaceDir, "skills"), "agent-fixture");
+    await putSkill(path.join(project, "skills"), "project-fixture");
+    const cfg = configFor(
+      { main: { workspace: workspaceDir, skills: ["agent-fixture", "project-fixture"] } },
+      { allowBundled: [] },
+    );
+    await withBundledDir(root, async () => {
+      // Workspace consumers pass the session entry but no explicit execution workspace.
+      expect(
+        skillNames(
+          await prepareSkillCommandsForWorkspace({
+            cfg,
+            agentId: "main",
+            workspaceDir,
+            sessionEntry: { spawnedCwd: project },
+          } as never),
+        ),
+      ).toEqual(["agent-fixture", "project-fixture"]);
+    });
+  });
+
+  it("keeps the agent allowlist authoritative for project skills in session-bound discovery", async () => {
+    const root = tempDirs.make("openclaw-session-project-allowlist-");
+    const workspaceDir = path.join(root, "agent-workspace");
+    const project = path.join(root, "project");
+    await putSkill(path.join(workspaceDir, "skills"), "agent-fixture");
+    await putSkill(path.join(project, "skills"), "unlisted-project-skill");
+    const cfg = configFor(
+      { main: { workspace: workspaceDir, skills: ["agent-fixture"] } },
+      {
+        allowBundled: [],
+      },
+    );
+    await withBundledDir(root, async () => {
+      expect(
+        skillNames(
+          await prepareSkillCommandsForAgents({
+            cfg,
+            agentIds: ["main"],
+            sessionEntry: { spawnedCwd: project },
+          }),
+        ),
+      ).toEqual(["agent-fixture"]);
+    });
+  });
 });
