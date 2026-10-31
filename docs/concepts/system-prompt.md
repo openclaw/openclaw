@@ -163,7 +163,9 @@ Regenerate with `pnpm prompt:snapshots:gen`; verify drift with `pnpm prompt:snap
 
 ## Workspace bootstrap injection
 
-Agent identity, instructions, and memory are resolved from the configured agent workspace and routed to the prompt surface matching their lifetime. When a session runs from another folder or managed worktree, that folder remains the execution workspace. Its `AGENTS.md` is appended after the configured workspace files as project context; OpenClaw does not load `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md` from the execution folder.
+Sessions with a recorded workspace root, including managed worktrees, resolve bootstrap files from that root. Runs restricted by `workspaceOnly` use their execution workspace. OpenClaw's guarded reads stay inside the selected root; rejected symlink paths and escapes are treated as missing and logged. Other read failures retain their unreadable diagnostics. Missing files never fall back to another checkout or a packaged template: a worktree without `AGENTS.md` has no project instructions, just as when running a harness directly in that directory. Skill discovery remains anchored to the configured agent workspace.
+
+Other sessions resolve agent identity, instructions, and memory from the configured agent workspace. Another execution folder contributes only its `AGENTS.md` as project context after those files; it does not supply `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`. A cwd override alone does not select bootstrap files. Native Codex project-document discovery follows its own documented cwd and permission rules; this bootstrap selection does not change native discovery or configuration.
 
 Turn startup seeds missing bootstrap templates only in the configured agent workspace, never in a separate execution folder. This also applies to spawned child sessions and session-bound cron turns.
 

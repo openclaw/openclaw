@@ -5,8 +5,6 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   clearCronJobActive,
@@ -115,42 +113,36 @@ async function drain(...runs: Promise<unknown>[]) {
   await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
 }
 
-it("does not spend a main-session execution deadline waiting for event adoption", async () => {
-  const { storePath } = fixtures.makeStorePath();
-  const queued = createDeferred();
-  const adoption = createDeferred();
-  const state = createCronRegressionState({
-    storePath,
-    runSessionEvent: async ({ onLaneWait, onExecutionStarted }) => {
-      onLaneWait?.({ waiting: true });
-      queued.resolve();
-      await adoption.promise;
-      onLaneWait?.({ waiting: false });
-      onExecutionStarted?.();
-      return { status: "ok" };
-    },
-    runIsolatedAgentJob: vi.fn(),
-  });
-  const settled = vi.fn();
-  const running = executeJobCoreWithTimeout(
-    state,
-    sessionEventJob("deferred-adoption", { wakeMode: "next-heartbeat" }),
-  ).then((result) => {
-    settled();
-    return result;
-  });
-  try {
-    await queued.promise;
-    // Controller lane admission can exceed Cron's ten-minute execution deadline.
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(settled).not.toHaveBeenCalled();
-    adoption.resolve();
-    await expect(running).resolves.toMatchObject({ status: "ok" });
-  } finally {
-    adoption.resolve();
-    await drain(running);
-  }
-});
+it.each([false, true])(
+  "bounds session adoption even without runner start (lane wait: %s)",
+  async (waiting) => {
+    const runner = pendingRunner();
+    const job = agentJob(`unstarted-session-${waiting}`, 1);
+    job.sessionTarget = "main";
+    const { state, advance, jobState } = await fixture(job, {
+      runSessionEvent: async ({ onLaneWait, abortSignal }) => {
+        onLaneWait?.({ waiting });
+        runner.started.resolve(abortSignal);
+        return await runner.result.promise;
+      },
+    });
+    const timer = onTimer(state);
+    try {
+      const signal = await runner.started.promise;
+      await advance(1_000);
+      expect(signal?.reason).toMatchObject({ name: "TimeoutError" });
+      await timer;
+      expect(jobState().runningAtMs).toBeUndefined();
+      expect(readCronRunRecordsForTests(job.id)).toEqual([
+        expect.objectContaining({ status: "timed_out", error: "cron: job execution timed out" }),
+      ]);
+    } finally {
+      stop(state);
+      runner.result.resolve(done);
+      await drain(timer);
+    }
+  },
+);
 
 it("keeps timed-out cron runs from being overwritten by late cancellation", async () => {
   resetActiveCronTaskRunsForTests();
@@ -386,49 +378,6 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
     }
   },
 );
-
-it("does not spend setup or execution timeout while waiting for cron-nested admission (#41783)", async () => {
-  const job = agentJob("isolated-setup-timeout-lane-wait", 1);
-  const entered = createDeferred();
-  const release = createDeferred();
-  const blocker = enqueueCommandInLane(CommandLane.CronNested, async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  const onIsolatedAgentSetupTimeout = vi.fn();
-  const { state, advance } = await fixture(job, {
-    cleanupTimedOutAgentRun: vi.fn(async () => {}),
-    onIsolatedAgentSetupTimeout,
-    runIsolatedAgentJob: vi.fn(async ({ onLaneWait, onExecutionStarted }) => {
-      onLaneWait?.({ waiting: true });
-      return await enqueueCommandInLane(CommandLane.CronNested, async () => {
-        onLaneWait?.({ waiting: false });
-        onExecutionStarted?.();
-        return { status: "ok" as const, summary: "lane released" };
-      });
-    }),
-  });
-  const timer = onTimer(state);
-  let settled = false;
-  void timer.then(() => {
-    settled = true;
-  });
-  try {
-    await advance(60_100);
-    expect(settled).toBe(false);
-    expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
-    release.resolve();
-    await blocker;
-    await timer;
-    expect(requireJob(state, job.id).state.lastStatus).toBe("ok");
-    expect(requireJob(state, job.id).state.lastError).toBeUndefined();
-  } finally {
-    release.resolve();
-    await blocker;
-    await timer;
-  }
-});
 
 it("gives setup progress the full configured timeout and cleans up an abort-ignoring runner (#93912, #29774)", async () => {
   const job = dueJob("isolated-pre-model-timeout");

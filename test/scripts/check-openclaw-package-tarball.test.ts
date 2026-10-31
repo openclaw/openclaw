@@ -145,7 +145,9 @@ it("extracts a digest-bound package without lifecycle and rejects mismatched byt
     expect(result.status, result.stderr).toBe(mode === "valid" ? 0 : 1);
     if (mode === "valid") {
       expect(readFileSync(join(workspace, "extract/package/package.json"), "utf8")).toBe(manifest);
-      expect(statSync(join(workspace, "extract/package/run.mjs")).mode & 0o777).toBe(0o755);
+      if (process.platform !== "win32") {
+        expect(statSync(join(workspace, "extract/package/run.mjs")).mode & 0o777).toBe(0o755);
+      }
     } else {
       expect(result.stderr).toMatch(
         mode === "digest" ? /snapshot digest\/size mismatch/ : /link|entry type/i,
