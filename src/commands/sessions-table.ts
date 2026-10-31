@@ -2,6 +2,7 @@
  *
  * Cleanup and listing share display labels; terminal-core owns column layout.
  */
+import path from "node:path";
 import { splitGraphemes } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -85,6 +86,18 @@ export function formatSessionAgeCell(updatedAt: number | null | undefined, rich:
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
   const label = sanitizeTerminalText(model ?? "unknown");
   return rich ? theme.info(label) : label;
+}
+
+export function formatSessionWorkspaceCell(
+  workspaceDir: string | null | undefined,
+  rich: boolean,
+): string {
+  if (!workspaceDir) {
+    const label = "-";
+    return rich ? theme.muted(label) : label;
+  }
+  const label = sanitizeTerminalText(path.basename(workspaceDir) || workspaceDir);
+  return rich ? theme.muted(label) : label;
 }
 
 export function formatSessionFlagsCell(

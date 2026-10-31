@@ -217,6 +217,29 @@ describe("sessionsCommand", () => {
     expect(row).toContain("11/1.0m (0%)");
   });
 
+  it("shows the spawned workspace basename in the text table", async () => {
+    const store = await writeStore({
+      "agent:main:main": makeSession("root-session", {
+        spawnedWorkspaceDir: "/home/code/openclaw-wt-181155",
+        model: "test:opus",
+      }),
+      "agent:main:child": makeSession("child-session", {
+        spawnedWorkspaceDir: "/home/code/openclaw-main",
+        model: "test:opus",
+      }),
+      "agent:main:untethered": makeSession("untethered-session", { model: "test:opus" }),
+    });
+    const logs = await readSessionsText(store);
+    const header = logs.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
+    expect(header).toContain("Workspace");
+    const workspaceColumn = singleSessionTableCells(logs)[6];
+    expect(workspaceColumn).toContain("openclaw-wt-181155");
+    expect(workspaceColumn).toContain("openclaw-main");
+    expect(workspaceColumn).toContain("-");
+    expect(logs.find((line) => line.includes("agent:main:child")) ?? "").toContain("openclaw-main");
+    expect(logs.find((line) => line.includes("agent:main:untethered")) ?? "").toContain("-");
+  });
+
   it.each([
     { capacity: 32_768, runtimeId: "openclaw" },
     { capacity: undefined, runtimeId: "openclaw" },
@@ -376,6 +399,16 @@ describe("sessionsCommand", () => {
     const sessionId = "session-\u001B[31mid\r\nforged-id";
     const model = "model-\u001B]0;session-model\u0007🦞\tvariant";
     const store = await writeSession(sessionId, { model }, key);
+
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
+    onTestFinished(() => {
+      if (columns) {
+        Object.defineProperty(process.stdout, "columns", columns);
+      } else {
+        Reflect.deleteProperty(process.stdout, "columns");
+      }
+    });
 
     const logs = await readSessionsText(store);
     const textOutput = logs.join("\n");
