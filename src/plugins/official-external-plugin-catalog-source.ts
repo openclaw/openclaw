@@ -229,8 +229,6 @@ export function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
   });
 }
 
-// Generated source structure is stable; rows remain shared and must be read on each query.
-
 export function dedupeOfficialExternalPluginCatalogEntries(
   entries: OfficialExternalPluginCatalogEntry[],
 ): OfficialExternalPluginCatalogEntry[] {

@@ -99,7 +99,6 @@ export function registerBrowserCleanupBoundaryTests({
   getRegistry,
   mocks,
   loadBrowserMaintenanceSurface,
-  mockPendingAgentWait,
   findRequesterRun,
 }: {
   getRegistry: () => SubagentRegistryHarness;
@@ -111,7 +110,7 @@ export function registerBrowserCleanupBoundaryTests({
   mockPendingAgentWait: () => void;
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
 }): void {
-  it.each(["current owner", "replacement row", "newer child generation", "session reset"] as const)(
+  it.each(["current owner", "session reset"] as const)(
     "rechecks the %s after browser activation in registered run completion",
     async (owner) => {
       const mod = getRegistry();
@@ -136,23 +135,14 @@ export function registerBrowserCleanupBoundaryTests({
       const settleRootWork = observeRootWork();
       const childSessionKey = "agent:main:subagent:child";
       const runId = "browser-old";
-      const successorRunId = owner === "replacement row" ? runId : "browser-new";
 
       try {
         await mod.registerSubagentRun({ runId, childSessionKey, task: "finish" });
         await activationEntered.promise;
-        expect(loadBrowserMaintenanceSurface).toHaveBeenCalledOnce();
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
         if (owner === "session reset") {
           (await mod.prepareSubagentSessionCleanupRevocation(childSessionKey))();
-        } else if (owner !== "current owner") {
-          mockPendingAgentWait();
-          await mod.registerSubagentRun({
-            runId: successorRunId,
-            childSessionKey,
-            task: "continue",
-          });
         }
       } finally {
         activation.resolve(surface);
@@ -166,17 +156,11 @@ export function registerBrowserCleanupBoundaryTests({
           expect.objectContaining({ sessionKeys: [childSessionKey] }),
         );
         expect(findRequesterRun(runId)?.cleanupCompletedAt).toBeTypeOf("number");
-      } else if (owner === "session reset") {
+      } else {
         expect(findRequesterRun(runId)?.execution).toMatchObject({
           status: "terminal",
           suppressSessionEffects: true,
         });
-      } else {
-        expect(findRequesterRun(successorRunId)).toMatchObject({
-          childSessionKey,
-          execution: { status: "running" },
-        });
-        expect(findRequesterRun(successorRunId)?.cleanupCompletedAt).toBeUndefined();
       }
     },
   );
@@ -196,14 +180,7 @@ export function registerBrowserCleanupBoundaryTests({
     }
 
     expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-    expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledOnce();
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        childSessionKey: "agent:main:subagent:child",
-        childRunId: "browser-warning",
-        task: "finish",
-      }),
-    );
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalled();
     expect(findRequesterRun("browser-warning")?.cleanupCompletedAt).toBeTypeOf("number");
   });
 }

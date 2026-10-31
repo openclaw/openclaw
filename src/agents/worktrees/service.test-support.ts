@@ -8,6 +8,7 @@ import { afterAll, assert, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { withWorktreeMutationLease } from "./allocation.js";
+import { git } from "./git-fixture.test-support.js";
 import { insertRegistryWorktree } from "./registry.js";
 import {
   admitWorktreeRunLeaseInDatabase,
@@ -23,9 +24,7 @@ import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
+export { git } from "./git-fixture.test-support.js";
 
 export function makeWorktreeRecord(
   repoRoot: string,

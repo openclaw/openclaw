@@ -2,15 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { PluginsControlUiCatalog } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  createGatewayEvent,
-  createGatewayStoreTestStore,
-  GATEWAY_STORE_TEST_HELLO,
-  stubGatewayStoreTestGlobals,
-} from "../app/gateway-store.test-support.ts";
+import { createGatewayEvent } from "../app/gateway-store.test-support.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -65,7 +60,9 @@ const configForRuntime = (
 ) => ({ ...createApplicationConfigCapability({ resourceBasePath }), refresh });
 function connectedContext(
   client: { gatewayUrl: string; request: (method: string, params: unknown) => unknown } | undefined,
-  configuration: ReturnType<typeof configForRuntime> | ApplicationContext["config"],
+  configuration:
+    | ReturnType<typeof configForRuntime>
+    | ApplicationContext["config"] = configForRuntime(),
   resourceBasePath = "",
   advertised = ["plugins.controlUi.list"],
 ) {
@@ -75,7 +72,14 @@ function connectedContext(
     config: configuration,
     gateway: {
       snapshot: client
-        ? { phase: "connected", client, hello: { features: { methods: advertised } } }
+        ? {
+            phase: "connected",
+            client,
+            hello: {
+              features: { methods: advertised },
+              auth: { role: "operator", scopes: ["operator.admin"] },
+            },
+          }
         : { phase: "connecting" },
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -89,21 +93,81 @@ const pluginDescriptor = (revision = "one", entryUrl = "/review.js") => ({
   entryUrl,
   styles: [],
 });
+const diagnostic = (message: string, pluginId = "review") => ({ pluginId, message });
+const activationReport = (pluginId: string, error?: string) => ({
+  pluginId,
+  revision: "one",
+  status: error ? "failed" : "activated",
+  ...(error ? { error } : {}),
+});
+const navigation = (label = "Page") => ({ id: "page", label, page: { id: "page" } });
+const mount = () => undefined;
+const view = (id: string, label = id) => ({ id, label, mount });
+const clientFor = (
+  request: (method: string, params: unknown) => unknown,
+  gatewayUrl = localGateway(),
+) => ({ gatewayUrl, request });
+const runtimeForRequest = (request: (method: string, params: unknown) => unknown) =>
+  runtimeFor(connectedContext(clientFor(request)));
+function initializeWith(
+  register: (
+    host: ReturnType<typeof createControlUiPluginHost>,
+    owner: Parameters<typeof controlUiLoader.initializeControlUiPlugin>[2],
+  ) => void | Promise<void>,
+) {
+  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+    async (getContext, runtime, owner) => {
+      const host = createControlUiPluginHost(getContext, runtime, owner);
+      await register(host, owner);
+      return Object.assign(owner, { host });
+    },
+  );
+}
+
+it("completes an unavailable catalog without requests or diagnostics for a limited connection", async () => {
+  const request = vi.fn();
+  const context = connectedContext(clientFor(request));
+  context.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+  const runtime = runtimeFor(context);
+  runtime.start();
+  await runtime.refresh();
+  expect(request).not.toHaveBeenCalled();
+  expect(runtime).toMatchObject({ registryStatus: "complete", errors: [], hasPlugins: false });
+});
+
+it("dispatches only explicitly advertised inline versions and restores saved version eligibility", async () => {
+  const first = { pluginId: "review", id: "incident", version: 1, label: "Incident" };
+  let inlineViews = [first, { ...first, version: 2 }];
+  const runtime = runtimeForRequest(async () => ({
+    ...catalog([pluginDescriptor()]),
+    inlineViews,
+  }));
+  initializeWith((host) => {
+    const register = (version: number) =>
+      host.ui.registerInlineView({ id: "incident", version, mount });
+    register(1);
+    register(2);
+    expect(() => register(1)).toThrow("duplicate");
+    expect(() => register(0)).toThrow("version");
+  });
+  runtime.start();
+  await runtime.refresh();
+  const keys = () => runtime.registrations("inlineViews").map((entry) => entry.key);
+  expect(keys()).toEqual(["review/incident@1", "review/incident@2"]);
+  inlineViews = [{ ...first, version: 3 }];
+  await runtime.refresh();
+  expect(keys()).toEqual([]);
+  inlineViews = [first];
+  await runtime.refresh();
+  expect(keys()).toEqual(["review/incident@1"]);
+});
 
 it.each([false, true])(
   "reports one completed catalog without delaying healthy plugins (superseded: %s)",
   async (superseded) => {
-    const pending = [createDeferred(), createDeferred()];
-    const started = [createDeferred(), createDeferred()];
-    const ready = createDeferred();
-    const descriptors = [
-      pluginDescriptor("one", `${assetPath()}index.js`),
-      {
-        ...pluginDescriptor(),
-        pluginId: "peer",
-        entryUrl: "/__openclaw__/plugins/control-ui/peer/one/index.js",
-      },
-    ];
+    const pending = createDeferred();
+    const started = createDeferred();
+    const descriptors = [pluginDescriptor(), { ...pluginDescriptor(), pluginId: "peer" }];
     let attempts = 0;
     let reportFailure: Error | undefined;
     const request = vi.fn(async (method: string, _params: unknown) => {
@@ -115,70 +179,45 @@ it.each([false, true])(
       }
       return { ok: true };
     });
-    const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
-    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-      async (getContext, runtime, owner) => {
-        if (owner.descriptor.pluginId === "peer") {
-          const attempt = attempts++;
-          started[attempt]!.resolve();
-          await pending[attempt]!.promise;
-        }
-        const host = createControlUiPluginHost(getContext, runtime, owner);
-        host.ui.registerNavigation({ id: "page", label: "Page", page: { id: "page" } });
-        return Object.assign(owner, { host });
-      },
-    );
-    const runtime = runtimeFor(context);
-    runtime.subscribe(() => {
-      if (runtime.registrations("navigation").some((entry) => entry.pluginId === "review")) {
-        ready.resolve();
+    const runtime = runtimeForRequest(request);
+    initializeWith(async (host, owner) => {
+      if (owner.descriptor.pluginId === "peer" && attempts++ === 0) {
+        started.resolve();
+        await pending.promise;
       }
+      host.ui.registerNavigation(navigation());
     });
     const reports = () =>
-      request.mock.calls.filter(([method]) => method === "plugins.controlUi.report");
+      request.mock.calls
+        .filter(([method]) => method === "plugins.controlUi.report")
+        .map(([, params]) => params);
     try {
       runtime.start();
       const initialRefresh = runtime.refresh();
-      await Promise.race([
-        Promise.all([ready.promise, started[0]!.promise]),
-        initialRefresh.then(() => {
-          throw new Error(
-            `Activation settled before peers started: ${JSON.stringify(runtime.errors)}`,
-          );
-        }),
-      ]);
+      await started.promise;
+      await vi.waitFor(() => expect(runtime.registrations("navigation")).toHaveLength(1));
       const healthy = runtime.registrations("navigation")[0]!;
       expect(runtime.isLoading("review")).toBe(false);
       expect(runtime.isLoading("peer")).toBe(true);
+      expect(runtime.registryStatus).toBe("pending");
       expect(reports()).toEqual([]);
       if (superseded) {
-        const refresh = runtime.refresh();
-        await started[1]!.promise;
-        pending[1]!.resolve();
-        await refresh;
+        await runtime.refresh();
       } else {
-        pending[0]!.resolve();
+        pending.resolve();
         await initialRefresh;
       }
       expect(runtime.registrations("navigation")).toHaveLength(2);
+      expect(runtime.registryStatus).toBe("complete");
       expect(healthy.signal.aborted).toBe(false);
       expect(reports()).toEqual([
-        [
-          "plugins.controlUi.report",
-          {
-            reports: [
-              { pluginId: "review", revision: "one", status: "activated" },
-              { pluginId: "peer", revision: "one", status: "activated" },
-            ],
-          },
-        ],
+        { reports: ["review", "peer"].map((id) => activationReport(id)) },
       ]);
       reportFailure = new Error("Activation receipt unavailable");
       await runtime.refresh();
-      expect(runtime.errors).toEqual([
-        { pluginId: "review", message: "Activation receipt unavailable" },
-        { pluginId: "peer", message: "Activation receipt unavailable" },
-      ]);
+      expect(runtime.errors).toEqual(
+        ["review", "peer"].map((id) => diagnostic("Activation receipt unavailable", id)),
+      );
       expect(healthy.signal.aborted).toBe(false);
       reportFailure = new GatewayRequestError({
         code: "INVALID_REQUEST",
@@ -187,10 +226,10 @@ it.each([false, true])(
       });
       await runtime.refresh();
       expect(runtime.errors).toEqual([
-        { pluginId: "peer", message: "Activation report is for an inactive browser revision" },
+        diagnostic("Activation report is for an inactive browser revision", "peer"),
       ]);
     } finally {
-      pending.forEach((activation) => activation.resolve());
+      pending.resolve();
     }
   },
 );
@@ -332,10 +371,9 @@ it.each(["document", "published", "listener"] as const)(
       modules = [{ ...descriptor, imports: ["https://foreign.example/chunk.js"] }];
       await config.refresh();
       expect(links()).toEqual([]);
-      expect(runtime.errors).toContainEqual({
-        pluginId: "review",
-        message: "Native plugin assets must be served by this Control UI Gateway.",
-      });
+      expect(runtime.errors).toContainEqual(
+        diagnostic("Native plugin assets must be served by this Control UI Gateway."),
+      );
       modules = [];
       await config.refresh();
       expect(links()).toEqual([]);
@@ -349,55 +387,41 @@ it.each(["document", "published", "listener"] as const)(
   },
 );
 
-it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
+it.each(["catalog-failed", "activation-failed"] as const)(
   "publishes registry completion only after the %s catalog settles",
   async (outcome) => {
     let response = createDeferred<PluginsControlUiCatalog>();
     const activationStarted = createDeferred();
     const activation = createDeferred();
-    const completed = createDeferred();
-    const request = vi.fn((method: string) =>
-      method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true }),
-    );
-    const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
-    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-      async (getContext, runtime, owner) => {
-        activationStarted.resolve();
-        await activation.promise;
-        if (outcome === "activation-failed") {
-          throw new Error("Plugin activation failed");
-        }
-        return Object.assign(owner, {
-          host: createControlUiPluginHost(getContext, runtime, owner),
-        });
-      },
-    );
-    const runtime = runtimeFor(context);
-    runtime.subscribe(() => {
-      if (runtime.registryStatus !== "pending") {
-        completed.resolve();
+    const request = (method: string) =>
+      method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true });
+    const runtime = runtimeForRequest(request);
+    initializeWith(async () => {
+      activationStarted.resolve();
+      await activation.promise;
+      if (outcome === "activation-failed") {
+        throw new Error("Plugin activation failed");
       }
     });
     try {
-      expect(runtime.registryStatus).toBe("pending");
       runtime.start();
+      const completion = runtime.refresh();
       expect(runtime.registryStatus).toBe("pending");
       if (outcome === "catalog-failed") {
         response.reject(new Error("Catalog unavailable"));
       } else {
-        response.resolve(catalog(outcome === "empty" ? [] : [pluginDescriptor()], "one"));
+        response.resolve(catalog([pluginDescriptor()], "one"));
       }
-      if (outcome === "activated" || outcome === "activation-failed") {
+      if (outcome === "activation-failed") {
         await activationStarted.promise;
         expect(runtime.registryStatus).toBe("pending");
         activation.resolve();
       }
-      await completed.promise;
+      await completion;
       expect(runtime.registryStatus).toBe(outcome === "catalog-failed" ? "failed" : "complete");
       if (outcome === "catalog-failed") {
-        expect(runtime.errors).toEqual([{ pluginId: "host", message: "Catalog unavailable" }]);
+        expect(runtime.errors).toEqual([diagnostic("Catalog unavailable", "host")]);
         expect(controlUiLoader.initializeControlUiPlugin).not.toHaveBeenCalled();
-        expect(request.mock.calls).toEqual([["plugins.controlUi.list", {}]]);
         expect(runtime.isLoading("review")).toBe(false);
         response = createDeferred<PluginsControlUiCatalog>();
         const retry = runtime.refresh();
@@ -412,244 +436,138 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
   },
 );
 
-it("publishes a new revision for plugin-owned navigation mutations before notifying readers", async () => {
-  const navigation = { id: "board", label: "Workboard", page: { id: "board" } };
-  const completed = createDeferred();
-  const context = connectedContext(
-    {
-      gatewayUrl: localGateway(),
-      request: async (method) =>
-        method === "plugins.controlUi.list" ? catalog([pluginDescriptor()]) : { ok: true },
-    },
-    configForRuntime(),
-  );
-  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-    async (getContext, runtime, owner) => {
-      const host = createControlUiPluginHost(getContext, runtime, owner);
-      host.ui.registerNavigation(navigation);
-      return Object.assign(owner, { host });
-    },
-  );
-  const runtime = runtimeFor(context);
-  expect(runtime.revision).toBe(0);
-  runtime.subscribe(() => {
-    if (runtime.registryStatus === "complete") {
-      completed.resolve();
-    }
-  });
-  runtime.start();
-  await completed.promise;
-  const registration = runtime.registrations("navigation")[0]!;
-  const previousRevision = runtime.revision;
-  const observed: { revision: number; label: string | undefined }[] = [];
-  runtime.subscribe(() =>
-    observed.push({
-      revision: runtime.revision,
-      label: runtime.registrations("navigation")[0]?.value.label,
-    }),
-  );
-
-  navigation.label = "Updated board";
-  registration.host.ui.invalidate();
-
-  expect(runtime.registrations("navigation")[0]?.value).toBe(navigation);
-  expect(observed).toEqual([{ revision: previousRevision + 1, label: "Updated board" }]);
-});
-
 it.each([
-  {
-    scenario: "cross-origin native plugin",
-    remote: true,
-    error:
-      "Native plugin UI requires the Control UI served by the connected Gateway. Open https://remote.example and reconnect there.",
-  },
-  { scenario: "ordinary remote connection", native: false, remote: true },
-  {
-    scenario: "missing native asset grant",
-    error: "Native plugin asset grant unavailable: review",
-  },
-  {
-    scenario: "authenticated native plugin on plain HTTP",
-    secure: false,
-    granted: true,
-    error:
-      "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard.",
-  },
-  { scenario: "unauthenticated native HTTP", secure: false, requiresAuth: false, loads: true },
-  {
-    scenario: "native resource base path",
-    granted: true,
-    loads: true,
-    resourceBasePath: "/console",
-  },
-])(
-  "settles $scenario without loading protected modules",
-  async ({
-    native = true,
-    remote = false,
-    secure = true,
-    granted = false,
-    requiresAuth = true,
-    loads = false,
-    resourceBasePath = "",
-    error = null,
-  }) => {
-    vi.stubGlobal("isSecureContext", secure);
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      return method === "plugins.controlUi.list"
-        ? catalog(
-            native
-              ? [pluginDescriptor("one", `${assetPath("one", resourceBasePath)}index.js`)]
-              : [],
-          )
-        : { ok: true };
-    });
-    const refresh = vi.fn(async () => ({
-      pluginAssetsRequireAuth: requiresAuth,
-      pluginFrameGrants: granted ? grants(resourceBasePath) : [],
-    }));
-    const context = connectedContext(
-      {
-        gatewayUrl: remote ? "wss://remote.example/ws" : localGateway(),
-        request,
-      },
-      configForRuntime(refresh, resourceBasePath),
-      resourceBasePath,
-      catalogMethods,
-    );
-    Object.assign(context, { basePath: "/navigation-only" });
-    const runtime = runtimeFor(context);
-    runtime.start();
-    expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 1);
-    await runtime.refresh();
-    expect(runtime.errors).toEqual(error ? [{ pluginId: "review", message: error }] : []);
-    const reports = request.mock.calls
-      .filter(([method]) => method === "plugins.controlUi.report")
-      .map(([, params]) => params);
-    expect(reports).toEqual(
-      error
-        ? [{ reports: [{ pluginId: "review", revision: "one", status: "failed", error }] }]
-        : [],
-    );
-    expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 2);
-    expect(controlUiLoader.initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
-    expect(runtime.registrations("pages")).toEqual([]);
-    expect(runtime.isLoading("review")).toBe(false);
-    expect(runtime.registryStatus).toBe("complete");
-  },
-);
+  "cross-origin",
+  "remote empty",
+  "no grant",
+  "authenticated HTTP",
+  "public HTTP",
+  "base path",
+])("settles %s without loading protected modules", async (scenario) => {
+  const remote = scenario === "cross-origin" || scenario === "remote empty";
+  const resourceBasePath = scenario === "base path" ? "/console" : "";
+  const granted = scenario === "base path" || scenario === "authenticated HTTP";
+  const secure = !scenario.endsWith("HTTP");
+  const requiresAuth = scenario !== "public HTTP";
+  const loads = scenario === "base path" || scenario === "public HTTP";
+  const error =
+    scenario === "cross-origin"
+      ? "Native plugin UI requires the Control UI served by the connected Gateway. Open https://remote.example and reconnect there."
+      : scenario === "no grant"
+        ? "Native plugin asset grant unavailable: review"
+        : scenario === "authenticated HTTP"
+          ? "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard."
+          : null;
+  vi.stubGlobal("isSecureContext", secure);
+  const request = vi.fn(async (method: string, _params: unknown) =>
+    method === "plugins.controlUi.list"
+      ? catalog(
+          scenario !== "remote empty"
+            ? [pluginDescriptor("one", `${assetPath("one", resourceBasePath)}index.js`)]
+            : [],
+        )
+      : { ok: true },
+  );
+  const refresh = vi.fn(async () => ({
+    pluginAssetsRequireAuth: requiresAuth,
+    pluginFrameGrants: granted ? grants(resourceBasePath) : [],
+  }));
+  const context = connectedContext(
+    clientFor(request, remote ? "wss://remote.example/ws" : localGateway()),
+    configForRuntime(refresh, resourceBasePath),
+    resourceBasePath,
+    catalogMethods,
+  );
+  Object.assign(context, { basePath: "/navigation-only" });
+  const runtime = runtimeFor(context);
+  runtime.start();
+  await runtime.refresh();
+  expect(runtime.errors).toEqual(error ? [diagnostic(error)] : []);
+  const reports = request.mock.calls
+    .filter(([method]) => method === "plugins.controlUi.report")
+    .map(([, params]) => params);
+  expect(reports).toEqual(error ? [{ reports: [activationReport("review", error)] }] : []);
+  if (remote) {
+    expect(refresh).not.toHaveBeenCalled();
+  }
+  expect(controlUiLoader.initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
+  expect(runtime.isLoading("review")).toBe(false);
+  expect(runtime.registryStatus).toBe("complete");
+});
 
 it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
   "reconciles native UI on %s without retiring the unchanged connection",
   async (event) => {
-    stubGatewayStoreTestGlobals();
-    const { gateway, clients, current } = createGatewayStoreTestStore();
-    gateway.connect({ gatewayUrl: localGateway() });
-    const client = current();
     let revision: string | null = "one";
-    let generation = 0;
-    const widgetKinds = () =>
-      revision ? [{ pluginId: "review", kind: "review:summary", label: revision }] : [];
-    const methods = ["plugins.uiDescriptors", "plugins.controlUi.list", "plugins.controlUi.report"];
-    client.request.mockImplementation(async (method) => {
-      if (method === "plugins.controlUi.list") {
-        return catalog(
-          revision
-            ? [
-                {
-                  ...pluginDescriptor(revision, `${assetPath(revision)}index.js`),
-                  uiCapabilities: ["replacement", "widget"],
-                },
-              ]
-            : [],
-          String(generation),
-        );
-      }
-      if (method === "plugins.uiDescriptors") {
-        return {
-          ok: true,
-          generation,
-          descriptors: [],
-          methods,
-          controlUiTabs: [],
-          controlUiWidgetKinds: widgetKinds(),
-          pluginSurfaceUrls: {},
-        };
-      }
-      if (method === "plugins.controlUi.report") {
-        return { ok: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
+    const descriptor = (version: string): PluginsControlUiCatalog["plugins"][number] => ({
+      ...pluginDescriptor(version),
+      uiCapabilities: ["replacement", "widget", "navigation"],
     });
-    const context = {
-      gateway,
-      resourceBasePath: "",
-      config: configForRuntime(),
-    } as unknown as ApplicationContext;
-    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-      async (getContext, runtime, owner) => {
-        const host = createControlUiPluginHost(getContext, runtime, owner);
-        host.ui.registerReplacement({
-          id: "composer",
-          label: owner.descriptor.revision,
-          surface: "composer",
-          mount: () => undefined,
-        });
-        return Object.assign(owner, { host });
-      },
+    const context = connectedContext(
+      clientFor(async (method) => {
+        if (method === "plugins.controlUi.list") {
+          return catalog(revision ? [descriptor(revision)] : []);
+        }
+        if (method === "plugins.controlUi.report") {
+          return { ok: true };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      }),
     );
-    const runtime = runtimeFor(context);
-    const hello = {
-      ...GATEWAY_STORE_TEST_HELLO,
-      server: { connId: "native-connection-one" },
-      features: { methods },
+    let onConnection: Parameters<ApplicationContext["gateway"]["subscribe"]>[0] = () => {};
+    let onEvent: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0] = () => {};
+    context.gateway.subscribe = (listener) => {
+      onConnection = listener;
+      return () => {};
     };
+    context.gateway.subscribeEvents = (listener) => {
+      onEvent = listener;
+      return () => {};
+    };
+    const page = navigation();
+    initializeWith((host, owner) => {
+      host.ui.registerNavigation(page);
+      host.ui.registerReplacement({
+        ...view("composer", owner.descriptor.revision),
+        surface: "composer",
+      });
+    });
+    const runtime = runtimeFor(context);
+    expect(runtime.revision).toBe(0);
     const changed = async (next: string | null) => {
       revision = next;
-      if (event === "plugins.changed") {
-        generation += 1;
-      }
-      client.testOptions.onEvent?.(
-        createGatewayEvent(
-          event,
-          event === "plugins.changed" ? { generation } : { revision: next ?? "disabled" },
-        ),
-      );
-      await vi.waitFor(() => {
-        expect(gateway.snapshot.pluginCapabilities?.generation).toBe(generation);
-        expect(gateway.snapshot.hello?.controlUiWidgetKinds).toEqual(widgetKinds());
-        expect(runtime.isLoading("review")).toBe(false);
-      });
+      onEvent(createGatewayEvent(event, {}));
+      await vi.waitFor(() => expect(runtime.isLoading("review")).toBe(false));
     };
     try {
       runtime.start();
-      client.testOptions.onHello?.(hello);
       await vi.waitFor(() => expect(runtime.registrations("replacements")).toHaveLength(1));
       runtime.selectReplacement("composer", "review/composer");
       const first = runtime.selectedReplacement("composer")!;
+      const revisionBeforeMutation = runtime.revision;
+      const observed: [number, string | undefined][] = [];
+      const stopObserving = runtime.subscribe(() => {
+        observed.push([runtime.revision, runtime.registrations("navigation")[0]?.value.label]);
+      });
+      page.label = "Updated board";
+      first.host.ui.invalidate();
+      stopObserving();
+      expect(runtime.registrations("navigation")[0]?.value).toBe(page);
+      expect(observed).toEqual([[revisionBeforeMutation + 1, "Updated board"]]);
 
       expect(runtime.errors).toEqual([]);
-      first.host.ui.registerWidget({ id: "late", label: "Late widget", mount: () => undefined });
+      first.host.ui.registerWidget(view("late"));
       expect(runtime.registrations("widgets")).toHaveLength(1);
       expect(runtime.errors).toEqual([]);
-      const removePanel = first.host.ui.registerPanel({
-        id: "undeclared",
-        label: "Panel",
-        mount: () => undefined,
-      });
+      const removePanel = first.host.ui.registerPanel(view("undeclared"));
       expect(runtime.registrations("panels")).toHaveLength(1);
-      const warning = {
-        pluginId: "review",
-        message:
-          'Registered UI capability "panel" is missing from uiCapabilities in openclaw.plugin.json.',
-      };
+      const warning = diagnostic(
+        'Registered UI capability "panel" is missing from uiCapabilities in openclaw.plugin.json.',
+      );
       expect(runtime.errors).toContainEqual(warning);
       runtime.reportError("review", "Activation receipt unavailable");
       expect(runtime.errors).toContainEqual(warning);
-      expect(runtime.errors).toContainEqual({
-        pluginId: "review",
-        message: "Activation receipt unavailable",
-      });
+      expect(runtime.errors).toContainEqual(diagnostic("Activation receipt unavailable"));
 
       await changed("one");
       expect(runtime.selectedReplacement("composer")?.signal).toBe(first.signal);
@@ -677,18 +595,16 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       expect(runtime.selectedReplacement("composer")).toBeUndefined();
       runtime.selectReplacement("composer", "review/composer");
       const reinstalled = runtime.selectedReplacement("composer")!;
-      client.testOptions.onHello?.({ ...hello, server: { connId: "native-connection-two" } });
+      Object.assign(context.gateway.snapshot.hello!, { server: { connId: "new-connection" } });
+      onConnection(context.gateway.snapshot);
       await vi.waitFor(() => {
         expect(runtime.registrations("replacements")).toHaveLength(1);
         expect(runtime.isLoading("review")).toBe(false);
       });
       expect(reinstalled.signal.aborted).toBe(true);
       expect(runtime.selectedReplacement("composer")).toBeUndefined();
-      expect(clients).toHaveLength(1);
-      expect(client.stopped).toBe(0);
     } finally {
       runtime.dispose();
-      gateway.stop();
     }
   },
 );

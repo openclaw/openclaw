@@ -475,7 +475,7 @@ it.each(["foreign launcher", "wrapped gateway", "runtime version"])(
     const env = { ...account, APPDATA: tempDirs.make("task-startup-") };
     const inventory = version
       ? await findExtraGatewayServices(env, { deep: true })
-      : await listManagedOpenClawGatewayServices(env, { requireComplete: true });
+      : await listManagedOpenClawGatewayServices(env);
     expect(inventory).toEqual({
       services: [],
       errors: wrapped
@@ -773,7 +773,7 @@ describe("inventory projections", () => {
     const env = { ...nativeEnv, OPENCLAW_WINDOWS_TASK_NAME: selected };
     const result = selected
       ? await findExtraGatewayServices(env, { deep: true })
-      : await listManagedOpenClawGatewayServices(env, { requireComplete: true });
+      : await listManagedOpenClawGatewayServices(env);
     expect(result).toEqual({
       services: [],
       errors: tasks.map(({ taskPath: source }) => ({

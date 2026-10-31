@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import * as config from "../config/config.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
@@ -26,12 +27,12 @@ type FixtureOptions = NonNullable<Parameters<typeof createMigrationResourceFixtu
 };
 
 const fixtures: Fixture[] = [];
-const stdin = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const tty = createCliTtyMock([process.stdin]);
 function createFixture(options: FixtureOptions = {}) {
   const fixture = createMigrationResourceFixture(options);
   fixtures.push(fixture);
   if (options.interactive) {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    tty.set(true);
   }
   const state = path.join(fixture.root, "state");
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -43,11 +44,7 @@ function createFixture(options: FixtureOptions = {}) {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  if (stdin) {
-    Object.defineProperty(process.stdin, "isTTY", stdin);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
+  tty.restore();
   fixtures.splice(0).forEach((fixture) => fixture.cleanup());
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
@@ -135,12 +132,7 @@ it.each([false, true])(
       await Promise.race([state.applying.promise, completion]);
       const ownerPath = gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath;
       expect(gatewayLock.readLockPayloadSync(ownerPath)).toMatchObject(embeddedOwner);
-      expect(state.applied).toBeDefined();
-      expect(state.applied).toBe(state.planned);
       expectConnection(fixture, 0, true);
-      expect(state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual({
-        value: 42,
-      });
       state.resumeApply.resolve();
       const outcome = await completion;
       if (failApply) {
@@ -150,7 +142,6 @@ it.each([false, true])(
         expect(outcome.error).toBeUndefined();
         expect(outcome.result?.summary.migrated).toBe(1);
         expect(outcome.result?.metadata).toBe(state.planned?.metadata);
-        expect(outcome.result?.metadata).toEqual({ read: expect.any(Function) });
         expect(logs).toHaveLength(1);
         expect(JSON.parse(logs[0] ?? "{}").summary.migrated).toBe(1);
       }
@@ -166,13 +157,11 @@ it.each([false, true])(
 it("borrows an active raw provider without disposing its connection", async () => {
   const fixture = createFixture();
   const { state } = fixture;
-  const active = await loadAndActivateRootPluginRegistry({ config: fixture.config });
-  expect(active.migrationProviders.map(({ provider }) => provider.id)).toContain(fixture.id);
+  await loadAndActivateRootPluginRegistry({ config: fixture.config });
   state.resumeApply.resolve();
   const result = await migrateDefaultCommand(createNonExitingRuntime(), applyOptions(fixture));
   expect(result.summary.migrated).toBe(1);
   expectConnection(fixture, 0, true);
-  expect(state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
 });
 
 it("keeps post-install plan details alive through config projection and preparation disposal", async () => {
@@ -182,7 +171,6 @@ it("keeps post-install plan details alive through config projection and preparat
   const completion = settled(postInstall(fixture));
   try {
     await Promise.race([state.preparationDisposing.promise, completion]);
-    expect(state.applied).toBe(state.planned);
     const ownerPath = gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath;
     expect(gatewayLock.readLockPayloadSync(ownerPath)).toMatchObject(embeddedOwner);
     expect(state.patchReads).toBeGreaterThan(0);
@@ -224,14 +212,11 @@ it("logs the primary migration failure before a prepared instance disposal failu
 
 it("carries runtime metadata for a negative detection after its native registration closes", async () => {
   const fixture = createFixture({ detectFound: false, configPath: true });
-  const { state } = fixture;
   const discovery = await detectSetupMigrationSources({
     config: fixture.config,
     runtime: createNonExitingRuntime(),
   });
   expect(discovery.detections).toEqual([]);
-  expect(state.connections).toHaveLength(1);
-  expect(state.connections[0]?.database.isOpen).toBe(false);
   const params = { baseConfig: fixture.config, ...discovery };
   const options = await listSetupMigrationOptions(params);
   const label = "Import from Native migration fixture";

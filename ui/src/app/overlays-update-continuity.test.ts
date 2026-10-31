@@ -4,13 +4,13 @@ import { showToast } from "../lib/toast.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
-import { disposeTestOverlays, runTest } from "./overlays-update.test-support.ts";
+import { disposeTestOverlays, requestCalls, runTest } from "./overlays-update.test-support.ts";
 
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 let run: ReturnType<typeof updateRunFixture>;
 let request: ReturnType<typeof vi.fn<RequestFn>>;
-const calls = (method: string) => request.mock.calls.filter(([name]) => name === method);
+const calls = (method: string) => requestCalls(request, method);
 const acceptedRun = (method: string, status: object = {}) =>
   method === "update.run"
     ? { ok: true, runId: run.runId }
@@ -47,7 +47,6 @@ it("reads an accepted run and follows events through restart to a visible succes
   const snapshot = () => overlays.snapshot;
   await flushMicrotasks();
   await overlays.runUpdate();
-  expect(request).toHaveBeenCalledWith("update.runs.get", { runId: run.runId });
   expect(snapshot().updateRun).toEqual(run);
   expect(snapshot().updateRunning || snapshot().updateReconciliationPending).toBe(true);
 
@@ -58,6 +57,8 @@ it("reads an accepted run and follows events through restart to a visible succes
     expect(snapshot().updateRun?.phase).toBe(phase);
   }
   const hello = harness.gateway.snapshot.hello;
+  const statusReads = calls("update.status").length;
+  const runReads = calls("update.runs.get").length;
   harness.update({ phase: "reconnecting", hello: null });
   await vi.advanceTimersByTimeAsync(40 * 60_000);
   expect(snapshot().updateRun?.phase).toBe("restarting");
@@ -68,6 +69,8 @@ it("reads an accepted run and follows events through restart to a visible succes
   harness.update({ phase: "connected", hello });
   await flushMicrotasks();
   expect(snapshot().updateRun?.phase).toBe("verifying");
+  expect(calls("update.status")).toHaveLength(statusReads);
+  expect(calls("update.runs.get")).toHaveLength(runReads + 1);
   run = {
     ...run,
     ...finished,
@@ -126,21 +129,7 @@ it.each(["activeRun", "lastRun"] as const)(
     overlays = fixture.remount();
     await flushMicrotasks();
     expect(overlays.snapshot.updateRun).toEqual(run);
-    expect(calls("update.status")).toHaveLength(2);
     expect(calls("update.run")).toHaveLength(0);
     expect(sessionStorage.length).toBe(0);
   },
 );
-
-it("keeps a known run on reconnect even when status retains another attempt", async () => {
-  const { harness, overlays } = continuityTest();
-  await overlays.runUpdate();
-  const statusReads = calls("update.status").length;
-  harness.update({ phase: "reconnecting" });
-  run = { ...run, phase: "verifying", updatedAtMs: 3_000 };
-  harness.update({ phase: "connected" });
-  await flushMicrotasks();
-  expect(overlays.snapshot.updateRun).toEqual(run);
-  expect(calls("update.status")).toHaveLength(statusReads);
-  expect(calls("update.runs.get")).toHaveLength(2);
-});

@@ -1,4 +1,19 @@
+import type { StoredConversationReference } from "./conversation-store.js";
 import type { MSTeamsApp } from "./sdk.js";
+
+export function createStoredReference(
+  overrides: Partial<StoredConversationReference> = {},
+): StoredConversationReference {
+  return {
+    activityId: "activity123",
+    user: { id: "user123", name: "User" },
+    agent: { id: "bot123", name: "Bot" },
+    conversation: { id: "19:abc@thread.tacv2;messageid=deadbeef" },
+    channelId: "msteams",
+    serviceUrl: "https://smba.trafficmanager.net/amer/",
+    ...overrides,
+  };
+}
 
 type MockAppOptions = {
   createFn?: (activity: unknown) => Promise<unknown>;

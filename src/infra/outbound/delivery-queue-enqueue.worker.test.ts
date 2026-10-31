@@ -12,7 +12,6 @@ import {
   getDeliveryQueueEntryStatus,
   seedDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.test-support.js";
-import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { createDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME as MEDIA_STAGE_QUEUE,
@@ -25,6 +24,7 @@ import {
   enqueuePreparedDeliveryOnce,
 } from "./delivery-queue-storage.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
+import { holdEnqueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 
 const payload = { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "original" }] };

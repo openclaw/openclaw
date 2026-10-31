@@ -13,17 +13,12 @@ import {
   resolveManagedCodexAppServerStartOptions,
 } from "./app-server/managed-binary.js";
 
-export type CodexDoctorStartOptionsDependencies = {
-  resolveStartOptions?: typeof resolveManagedCodexAppServerStartOptions;
-};
-
 /** Selects the same local agent or passive-catalog command for both Doctor probes. */
 export async function resolveCodexDoctorStartOptions(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   pluginRoot: string;
   managedOnly?: boolean;
-  deps?: CodexDoctorStartOptionsDependencies;
 }): Promise<
   { status: "selected"; start: CodexAppServerStartOptions } | { status: "skipped"; reason: string }
 > {
@@ -35,8 +30,6 @@ export async function resolveCodexDoctorStartOptions(params: {
   if (params.managedOnly && start.commandSource !== "managed") {
     return { status: "skipped", reason: "Codex uses a custom app-server command." };
   }
-  const resolveStartOptions =
-    params.deps?.resolveStartOptions ?? resolveManagedCodexAppServerStartOptions;
   const candidates: CodexAppServerStartOptions[] = [];
   for (const agentId of listAgentIds(params.cfg)) {
     const model = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
@@ -68,7 +61,7 @@ export async function resolveCodexDoctorStartOptions(params: {
   for (const candidate of candidates) {
     // Doctor verifies the shipped package every install falls back to, never a
     // user-installed Codex, so update checks stay independent of PATH.
-    const resolved = await resolveStartOptions(candidate, {
+    const resolved = await resolveManagedCodexAppServerStartOptions(candidate, {
       pluginRoot: params.pluginRoot,
       preferInstalled: false,
     });

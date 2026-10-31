@@ -163,11 +163,39 @@ function textViewportBounds(node: Text, probe: Range, viewport: Viewport): [numb
 
 function matchesFor(content: BlockText, pattern: RegExp): NodeMatches[] {
   const { text, nodes, starts } = content;
+  const normalized = text.normalize("NFC");
+  // Normalize across inline nodes, then translate only matched boundaries back
+  // to their original graphemes. Scrolling reuses the resulting node offsets.
+  const segments =
+    normalized === text
+      ? null
+      : new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)[Symbol.iterator]();
+  let segment = segments?.next().value;
+  let normalizedStart = 0;
+  let normalizedPart = segment?.segment.normalize("NFC") ?? "";
+  const sourceOffset = (position: number, end: boolean): number => {
+    if (!segments) {
+      return position;
+    }
+    while (segment && position > normalizedStart + normalizedPart.length) {
+      normalizedStart += normalizedPart.length;
+      segment = segments.next().value;
+      normalizedPart = segment?.segment.normalize("NFC") ?? "";
+    }
+    if (!segment) {
+      return text.length;
+    }
+    const offset = position - normalizedStart;
+    if (offset === 0 || normalizedPart === segment.segment) {
+      return segment.index + offset;
+    }
+    return segment.index + (offset === normalizedPart.length || end ? segment.segment.length : 0);
+  };
   const matched = new Map<Text, NodeMatches>();
   let first = 0;
-  for (const match of text.matchAll(pattern)) {
-    const start = match.index;
-    const end = start + match[0].length;
+  for (const match of normalized.matchAll(pattern)) {
+    const start = sourceOffset(match.index, false);
+    const end = sourceOffset(match.index + match[0].length, true);
     while (first < nodes.length && starts[first]! + nodes[first]!.length <= start) {
       first++;
     }

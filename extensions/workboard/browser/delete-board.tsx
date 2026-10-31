@@ -4,6 +4,7 @@ import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { action, createMemo, createOptimistic, createSignal, Errored, Loading } from "solid-js";
 import { t } from "./i18n/index.ts";
 import { formatUiError } from "./lib/format-error.ts";
+import { listen } from "./lib/listener.ts";
 import { workboardBoardName } from "./lib/workboard/board-presentation.ts";
 import type { WorkboardBoardSummary } from "./lib/workboard/types.ts";
 
@@ -26,7 +27,7 @@ export function deleteWorkboardBoard(
         return;
       }
       closed = true;
-      host.signal.removeEventListener("abort", finish);
+      stopAbort();
       dialog.dispose();
       disposeRoot();
       container.remove();
@@ -105,6 +106,6 @@ export function deleteWorkboardBoard(
       content,
       onCancel: () => (busy ? false : finish()),
     });
-    host.signal.addEventListener("abort", finish, { once: true });
+    const stopAbort = listen(host.signal, "abort", finish, { once: true });
   });
 }

@@ -29,6 +29,7 @@
 .chat-subagents-mobile__row {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -208,6 +209,7 @@
 
 .chat-subagents-mobile__header {
   display: flex;
+  flex-wrap: wrap;
   flex: none;
   align-items: center;
   gap: 8px;
@@ -252,6 +254,13 @@
   background: transparent;
 }
 
+.chat-subagents-mobile__error {
+  order: 1;
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
 .chat-subagents-mobile__open:focus-visible,
 .chat-subagents-mobile__stop:focus-visible,
 .chat-subagents-mobile__disclosure:focus-visible,
@@ -285,4 +294,8 @@
 .chat-subagents-mobile__indicator .subagents-desktop__spinner {
   background: var(--subagent-row-surface);
   box-shadow: 0 0 0 2px var(--subagent-row-surface);
+}
+
+.chat-subagents-mobile:has(> openclaw-panel-empty-state) {
+  padding: 0;
 }

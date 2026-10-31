@@ -12,8 +12,8 @@ import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntriesCore,
-  loadSessionEntry,
+  listSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
   loadTranscriptEvents,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
@@ -141,7 +141,7 @@ async function readSessionEntries(params: {
   const completeTarget = normalizeCompleteSessionTarget(params.sessionTarget);
   if (completeTarget) {
     const targetKeyAgentId = parseAgentSessionKey(completeTarget.sessionKey)?.agentId;
-    const targetKeyEntry = loadSessionEntry({
+    const targetKeyEntry = loadSessionEntryReadOnly({
       agentId: completeTarget.agentId,
       sessionKey: completeTarget.sessionKey,
       storePath: completeTarget.storePath,
@@ -192,7 +192,7 @@ async function readSessionEntries(params: {
   }
   const targetKeyAgentId = parseAgentSessionKey(incompleteTarget?.sessionKey)?.agentId;
   const targetKeyEntry = incompleteTarget?.sessionKey
-    ? loadSessionEntry({
+    ? loadSessionEntryReadOnly({
         agentId: marker.agentId,
         sessionKey: incompleteTarget.sessionKey,
         storePath: marker.storePath,
@@ -210,13 +210,13 @@ async function readSessionEntries(params: {
     throw new Error("Trajectory export transcript target conflicts with the legacy marker");
   }
   const suppliedKeyEntry = params.sessionKey
-    ? loadSessionEntry({
+    ? loadSessionEntryReadOnly({
         agentId: marker.agentId,
         sessionKey: params.sessionKey,
         storePath: marker.storePath,
       })
     : undefined;
-  const markerMatches = listSessionEntriesCore({
+  const markerMatches = listSessionEntriesReadOnly({
     agentId: marker.agentId,
     storePath: marker.storePath,
   }).filter(({ entry }) => entry.sessionId === marker.sessionId);
@@ -804,6 +804,14 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const tools = Array.isArray(compiledContext?.tools) ? compiledContext.tools : undefined;
   const files: DiagnosticSupportBundleFile[] = [];
   const supplementalFiles: string[] = [];
+  const captureHeader = () => ({
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    traceId: manifest.traceId,
+    sessionId: manifest.sessionId,
+    sessionKey: manifest.sessionKey,
+  });
   const captures = {
     "metadata.json": ((): JsonRecord | undefined => {
       const runtimeMetadata = resolveLatestRuntimeEventData(runtimeEvents, "trace.metadata");
@@ -821,12 +829,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
           }
         : undefined;
       return {
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        traceId: manifest.traceId,
-        sessionId: manifest.sessionId,
-        sessionKey: manifest.sessionKey,
+        ...captureHeader(),
         harness: runtimeMetadata.harness,
         model: runtimeMetadata.model ?? modelFallback,
         config: runtimeMetadata.config,
@@ -927,12 +930,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
         return undefined;
       }
       return {
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        traceId: manifest.traceId,
-        sessionId: manifest.sessionId,
-        sessionKey: manifest.sessionKey,
+        ...captureHeader(),
         finalStatus: runtimeArtifacts?.finalStatus ?? runtimeEnd?.status,
         aborted: runtimeArtifacts?.aborted ?? runtimeEnd?.aborted,
         externalAbort: runtimeArtifacts?.externalAbort ?? runtimeEnd?.externalAbort,
@@ -1003,12 +1001,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
         return undefined;
       }
       return {
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        traceId: manifest.traceId,
-        sessionId: manifest.sessionId,
-        sessionKey: manifest.sessionKey,
+        ...captureHeader(),
         system: systemPrompt,
         submittedPrompts,
         latestSubmittedPrompt: submittedPrompts.at(-1),

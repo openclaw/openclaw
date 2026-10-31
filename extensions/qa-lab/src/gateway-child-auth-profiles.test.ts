@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -19,10 +19,13 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
 const setup = createQaGatewaySetupHarness();
+let stateDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
+  stateDir = await tempDirs.makeTempDir("qa-auth-");
   vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
   vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE", undefined);
 });
 
 afterEach(async () => {
@@ -31,10 +34,31 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await tempDirs.cleanup();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
-function readAuthProfileStore(stateDir: string, agentId: string) {
-  return readQaAuthProfiles(path.join(stateDir, "agents", agentId, "agent"));
+async function readProfiles(root: string, agentId: string) {
+  return (await readQaAuthProfiles(path.join(root, "agents", agentId, "agent"))).profiles;
+}
+
+async function expectStaged(
+  cfg: OpenClawConfig,
+  root: string,
+  id: string,
+  credential: { provider: string; type: string; [key: string]: unknown },
+  agents = ["main", "qa"],
+  displayName?: string,
+) {
+  expect(cfg.auth?.profiles).toEqual({
+    [id]: expect.objectContaining({
+      provider: credential.provider,
+      mode: credential.type,
+      ...(displayName ? { displayName } : {}),
+    }),
+  });
+  for (const agent of agents) {
+    expect(await readProfiles(root, agent)).toEqual({ [id]: expect.objectContaining(credential) });
+  }
 }
 
 function assertCodexAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv = {}) {
@@ -46,82 +70,102 @@ function assertCodexAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-async function stageLive(env: NodeJS.ProcessEnv, cfg: OpenClawConfig = {}) {
-  const stateDir = await tempDirs.makeTempDir("qa-live-auth-");
-  return {
-    stateDir,
-    cfg: await stageQaLiveApiKeyProfiles({ cfg, stateDir, providerIds: ["openai"], env }),
-  };
+function stageLive(env: NodeJS.ProcessEnv, cfg: OpenClawConfig = {}) {
+  return stageQaLiveApiKeyProfiles({ cfg, stateDir, providerIds: ["openai"], env });
 }
 
 describe("QA Gateway auth profile staging", () => {
+  it.each(["explicit", "default"])(
+    "prepares selected providers and auth from the %s JSON5 config",
+    async (source) => {
+      const home = await tempDirs.makeTempDir("qa-json5-home-");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await mkdir(path.dirname(configPath));
+      await writeFile(
+        configPath,
+        // Comments, single quotes, unquoted keys and a trailing comma exercise JSON5.
+        "// JSON5 provider config\n{models:{providers:{'custom-openai':{baseUrl:'https://proxy.example.test/v1'," +
+          "api:'openai-responses',apiKey:'qa-json5-key',models:[]}," +
+          "ignored:{baseUrl:'https://ignored.example.test',models:[]},}}}",
+      );
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+      const {
+        cfg,
+        stateDir: customStateDir,
+        configPath: childConfigPath,
+      } = await setup.prepare(
+        {
+          providerMode: "live-frontier",
+          primaryModel: "custom-openai/fixture",
+          alternateModel: "custom-openai/fixture",
+        },
+        {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: source === "explicit" ? configPath : undefined,
+        },
+      );
+      expect(JSON.parse(await readFile(childConfigPath, "utf8")).models.providers).toEqual({
+        "custom-openai": {
+          baseUrl: "https://proxy.example.test/v1",
+          api: "openai-responses",
+          apiKey: "qa-json5-key",
+          models: [],
+        },
+      });
+      expect(cfg.plugins?.allow).toContain("openai");
+      await expectStaged(cfg, customStateDir, "qa-live-custom-openai-env", {
+        type: "api_key",
+        provider: "custom-openai",
+        key: "qa-json5-key",
+      });
+    },
+  );
+
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-setup-token-state-");
     const token = `sk-ant-oat01-${"c".repeat(80)}`;
+    vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", token);
 
-    const cfg = await stageQaLiveAnthropicSetupToken({
-      cfg: {},
+    const cfg = await stageQaLiveAnthropicSetupToken({ cfg: {}, stateDir });
+
+    await expectStaged(
+      cfg,
       stateDir,
-      env: { OPENCLAW_LIVE_SETUP_TOKEN_VALUE: token },
-    });
-
-    expect(cfg.auth?.profiles?.["anthropic:qa-setup-token"]).toMatchObject({
-      provider: "anthropic",
-      mode: "token",
-    });
-    expect(
-      (await readAuthProfileStore(stateDir, "main")).profiles["anthropic:qa-setup-token"],
-    ).toMatchObject({ type: "token", provider: "anthropic", token });
+      "anthropic:qa-setup-token",
+      { type: "token", provider: "anthropic", token },
+      ["main"],
+    );
   });
 
   it.each([
     { source: "provider env", apiKey: undefined, env: { OPENAI_API_KEY: "qa-live-key" } },
     { source: "config literal", apiKey: "qa-live-key", env: {} },
   ])("stages $source API-key auth for isolated live QA workers", async ({ apiKey, env }) => {
-    const { stateDir, cfg } = await stageLive(
+    const cfg = await stageLive(
       env,
       apiKey === undefined
         ? {}
-        : {
-            models: { providers: { openai: { baseUrl: "", models: [], apiKey } } },
-          },
+        : { models: { providers: { openai: { baseUrl: "", models: [], apiKey } } } },
     );
-    expect(cfg.auth?.profiles?.["qa-live-openai-env"]).toMatchObject({
-      provider: "openai",
-      mode: "api_key",
-      displayName: "QA live openai env credential",
-    });
-    expect(Object.values(cfg.auth?.profiles ?? {})).not.toContainEqual(
-      expect.objectContaining({ provider: "anthropic" }),
+    await expectStaged(
+      cfg,
+      stateDir,
+      "qa-live-openai-env",
+      { type: "api_key", provider: "openai", key: "qa-live-key" },
+      undefined,
+      "QA live openai env credential",
     );
-    for (const agentId of ["main", "qa"]) {
-      const profiles = (await readAuthProfileStore(stateDir, agentId)).profiles;
-      expect(profiles["qa-live-openai-env"]).toMatchObject({
-        type: "api_key",
-        provider: "openai",
-        key: "qa-live-key",
-      });
-      expect(Object.values(profiles)).not.toContainEqual(
-        expect.objectContaining({ provider: "anthropic" }),
-      );
-    }
     expect(() => assertCodexAuth(cfg)).not.toThrow();
   });
 
   it("keeps the Codex API-key handoff out of profiles and maps it only into the gateway env", async () => {
     const baseEnv = { OPENCLAW_QA_CODEX_API_KEY_HANDOFF: "  synthetic-qa-api-key  " };
-    const { stateDir, cfg } = await stageLive(baseEnv);
+    const cfg = await stageLive(baseEnv);
 
     expect(cfg.auth?.profiles).toBeUndefined();
-    for (const agentId of ["main", "qa"]) {
-      expect((await readAuthProfileStore(stateDir, agentId)).profiles).toEqual({});
+    for (const agent of ["main", "qa"]) {
+      expect(await readProfiles(stateDir, agent)).toEqual({});
     }
-    const { env } = await setup.prepare(
-      {
-        providerMode: "live-frontier",
-      },
-      baseEnv,
-    );
+    const { env } = await setup.prepare({ providerMode: "live-frontier" }, baseEnv);
     expect(env.CODEX_API_KEY).toBe("synthetic-qa-api-key");
     expect("OPENCLAW_QA_CODEX_API_KEY_HANDOFF" in env).toBe(false);
   });
@@ -147,8 +191,6 @@ describe("QA Gateway auth profile staging", () => {
   });
 
   it("stages mock profiles only for the requested agents and providers when callers override the defaults", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-mock-auth-override-");
-
     const cfg = await stageQaMockAuthProfiles({
       cfg: {},
       stateDir,
@@ -156,18 +198,9 @@ describe("QA Gateway auth profile staging", () => {
       providers: ["openai"],
     });
 
-    expect(cfg.auth?.profiles?.["qa-mock-openai"]).toMatchObject({
-      provider: "openai",
-      mode: "api_key",
-    });
-    expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
-
-    const qaStore = await readAuthProfileStore(stateDir, "qa");
-    expect(qaStore.profiles["qa-mock-openai"]).toMatchObject({
-      provider: "openai",
-      type: "api_key",
-    });
-    expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
+    await expectStaged(cfg, stateDir, "qa-mock-openai", { provider: "openai", type: "api_key" }, [
+      "qa",
+    ]);
 
     await expect(
       lstat(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),

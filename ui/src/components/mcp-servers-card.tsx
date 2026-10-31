@@ -1,4 +1,15 @@
-import { action, createMemo, createOptimistic, createStore, For, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
@@ -73,11 +84,11 @@ export function McpServersCard(props: McpServersCardProps) {
     requestFailedMessage: () => t("mcpServers.signInFailed"),
     sessionExpiredMessage: () => t("mcpServers.signInExpired"),
   });
-  void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
-    setView((draft) => {
-      draft.message = { kind: "error", text: formatUiError(error) };
-    });
-  });
+  const initialLoad = context.runtimeConfig.ensureLoaded();
+  const [completion, setCompletion] = createSignal<Promise<void> | undefined>(initialLoad);
+  const completed = createMemo(() => completion()?.then(() => null) ?? null);
+  // The selected outcome owns feedback; a retired read cannot replace a later command.
+  void initialLoad.catch(() => {});
   onSettled(() => {
     let hello = context.gateway.snapshot.hello;
     // Retire sign-in with its transport or agent selection before the next interaction can reuse it.
@@ -116,6 +127,7 @@ export function McpServersCard(props: McpServersCardProps) {
     ) {
       return;
     }
+    setCompletion(undefined);
     setView((draft) => {
       draft.message = null;
     });
@@ -138,16 +150,15 @@ export function McpServersCard(props: McpServersCardProps) {
     setView((draft) => {
       draft.message = null;
     });
+    const result = performMutation(() => patchMcpServers(context.runtimeConfig, options));
+    void setCompletion(result);
     try {
-      await performMutation(() => patchMcpServers(context.runtimeConfig, options));
+      await result;
       setView((draft) => {
         draft.message = { kind: "success", text: options.successText };
       });
       return true;
-    } catch (error) {
-      setView((draft) => {
-        draft.message = { kind: "error", text: formatUiError(error) };
-      });
+    } catch {
       return false;
     } finally {
       mutationPending = false;
@@ -155,6 +166,7 @@ export function McpServersCard(props: McpServersCardProps) {
   };
   const addServer = async (form: McpServerForm) => {
     if (!MCP_SERVER_NAME_PATTERN.test(form.name)) {
+      setCompletion(undefined);
       setView((draft) => {
         draft.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       });
@@ -162,6 +174,7 @@ export function McpServersCard(props: McpServersCardProps) {
     }
     const target = parseMcpTarget(form.target, form.transport);
     if (!target) {
+      setCompletion(undefined);
       setView((draft) => {
         draft.message = { kind: "error", text: t("mcpServers.targetInvalid") };
       });
@@ -187,21 +200,30 @@ export function McpServersCard(props: McpServersCardProps) {
         name,
       }),
     });
-  const removeServer = async (name: string) => {
-    const confirmed = await showConfirmDialog({
+  const removeServer = (name: string) => {
+    if (!active || !canMutate() || mutationPending) {
+      return;
+    }
+    setView((draft) => {
+      draft.message = null;
+    });
+    const result = showConfirmDialog({
       title: t("mcpServers.removeConfirmTitle", { name }),
       message: t("mcpServers.removeConfirmMessage"),
       confirmLabel: t("common.remove"),
       danger: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) {
+        return;
+      }
+      await mutate({
+        buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
+        note: `mcp settings: remove server ${name}`,
+        successText: t("mcpServers.removedSuccess", { name }),
+      });
     });
-    if (!confirmed) {
-      return;
-    }
-    await mutate({
-      buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
-      note: `mcp settings: remove server ${name}`,
-      successText: t("mcpServers.removedSuccess", { name }),
-    });
+    void setCompletion(result);
+    void result.catch(() => {});
   };
   const rows = createMemo(() =>
     summarizeMcpServers(resolveEditableSnapshotConfig(config.read().configSnapshot)),
@@ -225,6 +247,9 @@ export function McpServersCard(props: McpServersCardProps) {
               title={mutationBlockedReason() ?? ""}
               disabled={disabled()}
               onClick={() => {
+                if (!view.formOpen) {
+                  setCompletion(undefined);
+                }
                 setView((draft) => {
                   if (!draft.formOpen) {
                     draft.message = null;
@@ -252,6 +277,19 @@ export function McpServersCard(props: McpServersCardProps) {
                 });
               }}
             />
+          </Show>
+          <Show when={!busy()}>
+            <Loading on={completion()}>
+              <Errored
+                fallback={(error) => (
+                  <div class="mcp-server-message mcp-server-message--error" role="alert">
+                    {formatUiError(error())}
+                  </div>
+                )}
+              >
+                {completed()}
+              </Errored>
+            </Loading>
           </Show>
           <Show when={!busy() && view.message} keyed>
             {(message) => (
@@ -335,6 +373,7 @@ export function McpServersCard(props: McpServersCardProps) {
                             <button
                               type="button"
                               class="btn btn--sm"
+                              aria-label={t("mcpServers.signInNamed", { name: server().name })}
                               disabled={disabled()}
                               onClick={() => signIn(server())}
                             >
@@ -344,6 +383,14 @@ export function McpServersCard(props: McpServersCardProps) {
                           <button
                             type="button"
                             class="btn btn--sm"
+                            aria-label={t(
+                              busy()
+                                ? "mcpServers.workingNamed"
+                                : server().enabled
+                                  ? "mcpServers.disableNamed"
+                                  : "mcpServers.enableNamed",
+                              { name: server().name },
+                            )}
                             title={mutationBlockedReason() ?? ""}
                             disabled={disabled()}
                             onClick={() => void toggleServer(server().name, !server().enabled)}
@@ -363,7 +410,7 @@ export function McpServersCard(props: McpServersCardProps) {
                               t("mcpServers.removeNamed", { name: server().name })
                             }
                             disabled={disabled()}
-                            onClick={() => void removeServer(server().name)}
+                            onClick={() => removeServer(server().name)}
                           >
                             <Icon name="trash" />
                           </button>

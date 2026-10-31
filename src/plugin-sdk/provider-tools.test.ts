@@ -3,9 +3,11 @@ import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { configureAiTransportHost } from "../../packages/ai/src/host.js";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   buildProviderToolCompatFamilyHooks,
   inspectDeepSeekToolSchemas,
@@ -86,6 +88,75 @@ function providerContext(tools: never[], options: ProviderContextOptions = {}) {
 }
 
 const openAIHooks = buildProviderToolCompatFamilyHooks("openai");
+
+it("normalizes a frozen schema once across requests while keeping the current tool and route", () => {
+  const parameters = freezeJsonSnapshot(objectSchema({ payload: { type: "object" } }));
+  const first = normalizeOpenAITools([tool(parameters)])[0]!;
+  const expected = objectSchema({ payload: objectVariant({}, []) });
+  expect(first.parameters).toEqual(expected);
+  using entries = vi.spyOn(Object, "entries");
+  for (let request = 0; request < 10; request++) {
+    const name = `tool_${request}`;
+    const execute = async () => ({ content: [], details: request });
+    const current = Object.assign(tool(parameters, name), { execute });
+    const next = normalizeOpenAITools([current])[0]!;
+    expect(next.parameters).toBe(first.parameters);
+    expect(next.name).toBe(name);
+    expect(next.execute).toBe(execute);
+    expect(JSON.stringify(next.parameters)).toBe(JSON.stringify(expected));
+    expect(normalizeOpenAITools([current], { baseUrl: "https://proxy.example/v1" })[0]).toBe(
+      current,
+    );
+  }
+  expect(entries.mock.calls.filter(([source]) => source === parameters)).toHaveLength(0);
+});
+
+it.each(["mutable", "shallow-frozen", "accessor"])(
+  "rechecks %s schemas when their contents change",
+  (kind) => {
+    const properties = { payload: { type: "object" } };
+    const parameters =
+      kind === "accessor"
+        ? Object.freeze({
+            type: "object",
+            get properties() {
+              return properties;
+            },
+          })
+        : { type: "object", properties };
+    if (kind === "shallow-frozen") {
+      Object.freeze(parameters);
+    }
+    const before = normalizeOpenAITools([tool(parameters)])[0]!;
+    properties.payload = { type: "string" };
+    expect(normalizeOpenAITools([tool(parameters)])[0]?.parameters).toEqual(
+      objectSchema({ payload: { type: "string" } }),
+    );
+    expect(before.parameters).toEqual(objectSchema({ payload: objectVariant({}, []) }));
+  },
+);
+
+it("keeps depth warnings bound to each tool name when a frozen schema is reused", () => {
+  let schema = objectSchema({});
+  for (let depth = 0; depth < 150; depth++) {
+    schema = objectSchema({ nested: schema });
+  }
+  const parameters = freezeJsonSnapshot(schema);
+  const logWarn = vi.fn();
+  configureAiTransportHost({ logWarn });
+  try {
+    for (const name of ["first", "second", "first", "second"]) {
+      normalizeOpenAITools([tool(parameters, name)]);
+    }
+    expect(logWarn).toHaveBeenCalledTimes(2);
+    expect(logWarn.mock.calls.map((call) => call[1])).toEqual([
+      expect.stringContaining('Tool "first"'),
+      expect.stringContaining('Tool "second"'),
+    ]);
+  } finally {
+    configureAiTransportHost({});
+  }
+});
 
 function normalizeOpenAITools(tools: never[], options?: ProviderContextOptions) {
   return openAIHooks.normalizeToolSchemas(providerContext(tools, options));
@@ -285,6 +356,37 @@ it("preserves diagnostic paths and tool indices for gemini", () => {
   ]);
   expect(tools).toEqual(originalTools);
 });
+
+it.each([
+  ["gemini", "pattern", "^value$"],
+  ["deepseek", "oneOf", [{ type: "string" }]],
+] as const)(
+  "bounds each %s inspection once and checks changed inputs again",
+  (family, keyword, value) => {
+    let enumerations = 0;
+    const schema: Record<string, unknown> = { type: "string" };
+    const parameters = new Proxy(schema, {
+      ownKeys(target) {
+        enumerations++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const context = providerContext([tool(parameters)]);
+    const hooks = buildProviderToolCompatFamilyHooks(family);
+
+    expect(hooks.inspectToolSchemas(context)).toEqual([]);
+    // One depth-bound walk and one diagnostic walk, with no intermediate revalidation.
+    expect(enumerations).toBe(2);
+    schema[keyword] = value;
+    enumerations = 0;
+    expect(hooks.inspectToolSchemas(context)).toEqual([
+      { toolName: "demo", toolIndex: 0, violations: [`demo.parameters.${keyword}`] },
+    ]);
+    expect(enumerations).toBe(2);
+    schema.items = parameters;
+    expect(() => hooks.inspectToolSchemas(context)).toThrow("circular reference");
+  },
+);
 
 it("normalizes canonical OpenAI Codex Responses tool schemas", () => {
   const normalized = normalizeOpenAITools([tool({})], {

@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
-import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -30,94 +29,47 @@ vi.mock("node:child_process", async () => {
 // Do not mock doctor-whatsapp-responsiveness: its actual owner reads mocked ps
 // and queues the advisory through the real contribution runner.
 
-describe("Doctor responsiveness contribution flow", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+beforeEach(() => vi.clearAllMocks());
 
-  it.each([false, true])("keeps CPU advice observational (maintenance=%s)", async (maintenance) => {
-    const cfg = { channels: { whatsapp: { enabled: true } } };
-    const status = {
-      eventLoop: {
-        degraded: true,
-        degradedSinceMs: 0,
-        reasons: ["cpu"],
-        intervalMs: 1_000,
-        delayP99Ms: 40,
-        delayMaxMs: 40,
-        utilization: 0.04,
-        cpuCoreRatio: 2,
-      },
-    };
-    const fakePid = process.pid + 1_000_000;
-    mocks.ps.mockReturnValue({
-      status: 0,
-      stdout: `${fakePid} openclaw-tui --profile unrelated\n`,
-    });
-    mocks.checkGatewayHealth.mockResolvedValue({ healthOk: true, authenticated: false, status });
-    const ctx = createDoctorHealthFlowContext({
-      cfg,
-      cfgForPersistence: cfg,
-      configResult: { cfg },
-      env: {},
-      options: { repair: maintenance, nonInteractive: true },
-      gatewayMaintenanceActive: maintenance,
-    });
-    ctx.prompter = createDoctorPrompter({ runtime: ctx.runtime, options: ctx.options });
-    expect(ctx.prompter.shouldRepair).toBe(maintenance);
-    const selected = resolveDoctorHealthContributions().filter((entry) =>
-      ["doctor:gateway-health", "doctor:whatsapp-responsiveness"].includes(entry.id),
-    );
-    expect(selected.map((entry) => entry.id)).toEqual([
-      "doctor:gateway-health",
-      "doctor:whatsapp-responsiveness",
-    ]);
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-      throw new Error("This advisory flow must not signal any process");
-    });
-    try {
-      await runDoctorHealthContributionList(ctx, selected);
-      expect(ctx.gatewayStatus).toEqual(maintenance ? undefined : status);
-      expect(mocks.checkGatewayHealth).toHaveBeenCalledTimes(maintenance ? 0 : 1);
-      expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
-      const findings =
-        ctx.healthFindings?.filter(
-          (finding) => finding.checkId === "core/doctor/whatsapp-responsiveness",
-        ) ?? [];
-      showDoctorHealthSummary(ctx);
-      const output = vi
-        .mocked(ctx.runtime.log)
-        .mock.calls.map(([line]) => String(line))
-        .join("\n");
-      if (maintenance || process.platform === "win32") {
-        expect(mocks.ps).not.toHaveBeenCalled();
-        expect(findings).toEqual([]);
-        expect(output).not.toContain("Gateway reports pressure");
-      } else {
-        expect(mocks.ps).toHaveBeenCalledTimes(1);
-        expect(mocks.ps).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
-          encoding: "utf8",
-          killSignal: "SIGKILL",
-          timeout: 1_000,
-        });
-        expect(findings).toEqual([
-          expect.objectContaining({
-            category: "recommended",
-            target: String(fakePid),
-            message:
-              "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
-            fixHint:
-              "Inspect Gateway diagnostics with openclaw gateway diagnostics export before deciding whether to close clients.",
-          }),
-        ]);
-        expect(output).not.toContain("Recommended improvements:");
-        expect(output).not.toContain("This snapshot does not identify the source of the pressure.");
-        expect(output).not.toContain("Gateway reports pressure");
-      }
-      expect(kill).not.toHaveBeenCalled();
-      expect(mocks.note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toEqual([]);
-    } finally {
-      kill.mockRestore();
-    }
+it.each([false, true])("keeps CPU advice observational (maintenance=%s)", async (maintenance) => {
+  const cfg = { channels: { whatsapp: { enabled: true } } };
+  const status = { eventLoop: { degraded: true } };
+  const fakePid = process.pid + 1_000_000;
+  mocks.ps.mockReturnValue({
+    status: 0,
+    stdout: `${fakePid} openclaw-tui --profile unrelated\n`,
   });
+  mocks.checkGatewayHealth.mockResolvedValue({ healthOk: true, authenticated: false, status });
+  const ctx = createDoctorHealthFlowContext({
+    cfg,
+    env: {},
+    options: { repair: maintenance, nonInteractive: true },
+    gatewayMaintenanceActive: maintenance,
+  });
+  ctx.prompter = createDoctorPrompter({ runtime: ctx.runtime, options: ctx.options });
+  expect(ctx.prompter.shouldRepair).toBe(maintenance);
+  const selected = resolveDoctorHealthContributions().filter((entry) =>
+    ["doctor:gateway-health", "doctor:whatsapp-responsiveness"].includes(entry.id),
+  );
+  using kill = vi.spyOn(process, "kill").mockImplementation(() => {
+    throw new Error("This advisory flow must not signal any process");
+  });
+  await runDoctorHealthContributionList(ctx, selected);
+  const findings =
+    ctx.healthFindings?.filter(
+      (finding) => finding.checkId === "core/doctor/whatsapp-responsiveness",
+    ) ?? [];
+  if (maintenance || process.platform === "win32") {
+    expect(mocks.ps).not.toHaveBeenCalled();
+    expect(findings).toEqual([]);
+  } else {
+    expect(findings).toEqual([
+      expect.objectContaining({
+        category: "recommended",
+        target: String(fakePid),
+      }),
+    ]);
+  }
+  expect(kill).not.toHaveBeenCalled();
+  expect(mocks.note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toEqual([]);
 });

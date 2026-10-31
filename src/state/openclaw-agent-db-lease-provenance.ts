@@ -106,8 +106,8 @@ export function agentDatabaseLeaseProcessDeathRefusal(
   if (staleReason !== "owner-pid-dead") {
     return staleReason;
   }
-  if (row.opened_at <= 0) {
-    return "predecessor-admission-incomplete";
+  if (row.opened_at < 0) {
+    return "predecessor-full-required";
   }
   if (row.owner_start_time === null) {
     return "owner-start-time-missing";

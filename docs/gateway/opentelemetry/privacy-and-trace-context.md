@@ -58,6 +58,13 @@ bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
 
+Skill-use spans can include a SHA-256 fingerprint of the instructions actually
+delivered while tracing is active, even with content capture disabled. This
+allows correlation of identical instruction bodies and comparison with known
+content; it is not anonymization. OpenClaw does not hash unread support files or
+the discovered skill catalog for this attribute, and does not export the body
+or file path. Metrics-only exporters do not request this hashing.
+
 When `diagnostics-otel` tracing is active, outbound model requests may include
 a W3C `traceparent` header from the actual exporter-owned model-call span.
 Diagnostic trace IDs and span IDs only correlate events to that span; they are

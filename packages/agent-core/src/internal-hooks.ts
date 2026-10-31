@@ -27,7 +27,29 @@ export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToo
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
-export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+export type InternalBeforeRequestHook = (
+  signal?: AbortSignal,
+) => Promise<AgentMessage[] | undefined>;
+
+const beforeRequestByOwner = new WeakMap<object, InternalBeforeRequestHook>();
+
+/** Adopt already committed host messages before any initial or continuation request. */
+export function setInternalBeforeRequest(
+  owner: object,
+  hook: InternalBeforeRequestHook | undefined,
+): void {
+  if (hook) {
+    beforeRequestByOwner.set(owner, hook);
+  } else {
+    beforeRequestByOwner.delete(owner);
+  }
+}
+
+export function getInternalBeforeRequest(owner: object): InternalBeforeRequestHook | undefined {
+  return beforeRequestByOwner.get(owner);
+}
+
+type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
@@ -51,7 +73,12 @@ export function commitInternalToolTurnInput(
   }
 }
 
-type InternalReadyToolCall = { toolCallId: string; args: unknown };
+/** A source-start veto, translated into an unstarted outcome rather than a fatal error. */
+export class InternalToolLoopBlocked extends Error {
+  constructor(readonly intervention: ToolLoopIntervention) {
+    super(intervention.reason);
+  }
+}
 
 export type InternalToolBatchLifecycle = {
   /**
@@ -59,12 +86,15 @@ export type InternalToolBatchLifecycle = {
    * before their implementations start, argument-validation rejections when the
    * launch reaches them. May throw before launch.
    */
-  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
+  commitReadyCalls?: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
   /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
   /** Observe settled outcomes in assistant order, before warning text changes their identity. */
   observeOutcome?: (
-    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    outcome: Pick<
+      AfterToolOutcomeContext,
+      "toolCall" | "args" | "result" | "isError" | "errorKind"
+    >,
     state: ToolLoopRecoveryState,
   ) => ToolLoopIntervention | undefined;
 };

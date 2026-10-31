@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -52,6 +53,7 @@ describe("invokeNodeClaudeCliRun", () => {
       nodeId: "node-1",
       pairingGeneration: "generation-1",
       commands: ["agent.cli.claude.run.v1"],
+      caps: [],
     });
   });
 
@@ -78,17 +80,33 @@ describe("invokeNodeClaudeCliRun", () => {
       clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     };
     await expect(invoke(credentials)).resolves.toEqual({ ok: true });
-    expect(mocks.resolveNodeCommandAllowlist).toHaveBeenCalledOnce();
-    expect(mocks.invoke.mock.calls).toMatchObject([
-      [
-        {
-          expectedConnId: "conn-1",
-          expectedPairingGeneration: "generation-1",
-          params: credentials,
-        },
-      ],
-    ]);
+    expect(mocks.invoke.mock.calls[0]?.[0]).toMatchObject({
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
+      params: credentials,
+    });
   });
+
+  it.each([false, true])(
+    "negotiates native-only auth with node support (%s)",
+    async (supported) => {
+      mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+      mocks.get.mockReturnValue({
+        ...mocks.get(),
+        caps: supported ? ["claude-cli-native-auth-v1"] : [],
+      });
+      mocks.invoke.mockImplementation(async ({ params }) => {
+        if (!supported && Object.hasOwn(params, "nativeAuthOnly")) {
+          throw new Error("INVALID_REQUEST: unknown param nativeAuthOnly");
+        }
+        const decoded = await decodeClaudeCliNodeRunParams(JSON.stringify(params));
+        expect(decoded.nativeAuthOnly).toBe(supported ? true : undefined);
+        return { ok: true };
+      });
+
+      await expect(invoke({ nativeAuthOnly: true })).resolves.toEqual({ ok: true });
+    },
+  );
 
   it("withholds private history revoked while node pairing is pending", async () => {
     const pairingEntered = createDeferred();

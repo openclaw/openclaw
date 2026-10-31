@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
@@ -61,7 +62,6 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
               : undefined;
           const {
             resolveCapabilityAgentOption,
-            parseOptionalPositiveInteger,
             parseOptionalTimeoutMs,
             requireProviderModelOverride,
             resolveLocalCapabilityAgent,
@@ -70,7 +70,12 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const model = opts.model as string | undefined;
           const count = parseOptionalPositiveInteger(opts.count, "--count");
           const size = opts.size as string | undefined;
-          const aspectRatio = opts.aspectRatio as string | undefined;
+          const aspectRatio = normalizeOptionalString(opts.aspectRatio);
+          const { parseAspectRatioValue } =
+            await import("../../../packages/media-generation-core/src/normalization.js");
+          if (aspectRatio && !parseAspectRatioValue(aspectRatio)) {
+            throw new Error("--aspect-ratio must be a W:H ratio of positive numbers, like 16:9");
+          }
           const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(
             opts.outputFormat,
@@ -94,23 +99,27 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
           const { generateImage } = await import("../../image-generation/runtime.js");
           const { getImageMetadata } = await import("../../media/media-services.js");
-          const { readInputFiles, writeOutputAsset } = await import("../media-output.js");
+          const { writeOutputAsset } = await import("../media-output.js");
           requireProviderModelOverride(model);
           const { cfg, agentDir } = await resolveLocalCapabilityAgent({
             commandName: `infer ${capability}`,
             targetIds: getModelsCommandSecretTargetIds(),
             agent,
           });
+          const { readFile } = await import("node:fs/promises");
           const inputImages =
             file && file.length > 0
               ? await Promise.all(
-                  (await readInputFiles(file)).map(async (entry) => ({
-                    buffer: entry.buffer,
-                    fileName: path.basename(entry.path),
-                    mimeType:
-                      (await detectMime({ buffer: entry.buffer, filePath: entry.path })) ??
-                      "image/png",
-                  })),
+                  file.map(async (filePath) => {
+                    const resolvedPath = path.resolve(filePath);
+                    const buffer = await readFile(resolvedPath);
+                    return {
+                      buffer,
+                      fileName: path.basename(resolvedPath),
+                      mimeType:
+                        (await detectMime({ buffer, filePath: resolvedPath })) ?? "image/png",
+                    };
+                  }),
                 )
               : undefined;
           const result = await generateImage({

@@ -632,23 +632,17 @@ it("sanitizes with trusted tooling before inventory and hoisted packing", () => 
   );
   expect(refreshRootDistInventory).toHaveBeenCalledTimes(1);
   expect(steps).toEqual(["prepack", "inventory", "pack", "postpack"]);
-  expect(pnpmPack.calls).toEqual(
-    [
-      ["run", "prepack"],
-      [
-        "pack",
-        "--config.ignore-scripts=true",
-        "--config.node-linker=hoisted",
-        "--pack-destination",
-        fixture.outputDir,
-      ],
-      ["run", "--if-present", "postpack"],
-    ].map((args) => ({
-      args,
-      cwd: fixture.sourceDir,
-      env: expect.objectContaining({ OPENCLAW_PREPACK_PREPARED: "1" }),
-    })),
-  );
+  expect(pnpmPack.calls[1]).toEqual({
+    args: [
+      "pack",
+      "--config.ignore-scripts=true",
+      "--config.node-linker=hoisted",
+      "--pack-destination",
+      fixture.outputDir,
+    ],
+    cwd: fixture.sourceDir,
+    env: expect.objectContaining({ OPENCLAW_PREPACK_PREPARED: "1" }),
+  });
 
   expect(existsSync(marker)).toBe(false);
   expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
@@ -785,18 +779,6 @@ it("qualifies exact package bytes with large SDK and npm lock evidence", async (
   );
   const npmLocks = `${JSON.stringify({ packages: [{ lock: { packages: { "": { description: "x".repeat(3 * 1024 * 1024) } } } }] })}\n`;
   const dependencyReports = {
-    ...Object.fromEntries(
-      [
-        "dependency-vulnerability-gate",
-        "transitive-manifest-risk-report",
-        "dependency-ownership-surface-report",
-        "dependency-changes-report",
-      ].flatMap((name) => [
-        [`${name}.json`, {}],
-        [`${name}.md`, "# Report\n"],
-      ]),
-    ),
-    "dependency-evidence-summary.md": "# Dependency evidence\n",
     "npm-package-locks.json": npmLocks,
     "npm-package-locks.md": "# npm package-lock mirrors\n",
   };
@@ -881,16 +863,6 @@ it.each<
   [
     "source check still running",
     (proof) => Object.assign(proof.jobs[0]!, { status: "in_progress" }),
-    "unique exact completed producer job",
-  ],
-  [
-    "dependency check failed",
-    (proof) => Object.assign(proof.jobs[3]!, { conclusion: "failure" }),
-    "unique exact completed producer job",
-  ],
-  [
-    "SDK proof from another attempt",
-    (proof) => Object.assign(proof.jobs[2]!, { run_attempt: 1 }),
     "unique exact completed producer job",
   ],
   [

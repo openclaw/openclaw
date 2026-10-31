@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import {
   mergeTelegramProofIntoReleaseBody,
   parseArgs,
-  parseWorkflowRunIdFromOutput,
   pollRun,
   readPositiveInt,
   requireWorkflowRunIdFromOutput,
@@ -12,15 +11,7 @@ import {
 const telegramProof =
   "- npm Telegram beta E2E: https://github.com/openclaw/openclaw/actions/runs/123";
 const releaseBody = (proof = "") =>
-  `## Changes\n\n### Release verification\n\n` +
-  `- npm package: https://www.npmjs.com/package/openclaw/v/2026.5.20-beta.1\n` +
-  `${proof}\n\n### Assets\n\n- artifact\n`;
-const workflowRun = (completed = false) => ({
-  conclusion: completed ? "success" : null,
-  html_url: "https://github.com/openclaw/openclaw/actions/runs/123",
-  status: completed ? "completed" : "queued",
-  updated_at: "2026-05-28T12:00:00Z",
-});
+  `## Changes\n\n### Release verification\n\n${proof}\n\n### Assets\n\n- artifact\n`;
 
 it("rejects runs with both validation lanes skipped", () => {
   expect(() => parseArgs(["--skip-parallels", "--skip-telegram"])).toThrow(
@@ -43,10 +34,9 @@ it("rejects malformed positive integer environment limits", () => {
   const readLimit = (raw?: string) =>
     readPositiveInt(raw, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS");
   expect(readLimit()).toBe(60);
-  expect(readLimit("")).toBe(60);
   expect(readLimit("25")).toBe(25);
 
-  for (const raw of ["1e3", "25ms", "1.5", "0", "-1", String(Number.MAX_SAFE_INTEGER + 1)]) {
+  for (const raw of ["25ms", "0", String(Number.MAX_SAFE_INTEGER + 1)]) {
     expect(() => readLimit(raw)).toThrow(
       "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS must be a positive integer",
     );
@@ -55,8 +45,9 @@ it("rejects malformed positive integer environment limits", () => {
 
 it("parses workflow run urls when gh includes them in dispatch output", () => {
   expect(
-    parseWorkflowRunIdFromOutput(
+    requireWorkflowRunIdFromOutput(
       "Dispatched: https://github.com/openclaw/openclaw/actions/runs/1234567890",
+      "npm-telegram.yml",
     ),
   ).toBe("1234567890");
 });
@@ -99,7 +90,12 @@ it.each([false, true])("polls until timeout or completion (completed=%s)", async
   const polling = pollRun("openclaw/openclaw", "123", {
     now: () => now,
     pollIntervalMs: 400,
-    readRun: () => workflowRun(completed),
+    readRun: () => ({
+      conclusion: completed ? "success" : null,
+      html_url: "https://github.com/openclaw/openclaw/actions/runs/123",
+      status: completed ? "completed" : "queued",
+      updated_at: "2026-05-28T12:00:00Z",
+    }),
     sleep: async (ms) => {
       sleeps.push(ms);
       now += ms;

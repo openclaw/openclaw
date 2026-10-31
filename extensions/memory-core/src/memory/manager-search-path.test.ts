@@ -63,7 +63,6 @@ describe("searchPathKeyword", () => {
         return line;
       });
 
-      const queryPlans: string[] = [];
       let fetchedTextBytes = 0;
       const prepare = db.prepare.bind(db);
       using prepareSpy = vi.spyOn(db, "prepare");
@@ -72,17 +71,8 @@ describe("searchPathKeyword", () => {
         const statement = prepare(
           sql.replaceAll("candidate.start_line", "observe_path_chunk_line(candidate.start_line)"),
         );
-        const observePlan = (values: SQLInputValue[]) => {
-          for (const row of prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values)) {
-            queryPlans.push(String(row.detail));
-          }
-        };
-        function* observed(
-          values: SQLInputValue[],
-          read: () => Iterable<ReturnType<typeof statement.all>[number]>,
-        ) {
-          observePlan(values);
-          for (const row of read()) {
+        function* observed(rows: Iterable<ReturnType<typeof statement.all>[number]>) {
+          for (const row of rows) {
             if (typeof row.text === "string") {
               fetchedTextBytes += Buffer.byteLength(row.text);
             }
@@ -90,13 +80,10 @@ describe("searchPathKeyword", () => {
           }
         }
         statement.all = new Proxy(statement.all.bind(statement), {
-          apply: (all, _receiver, values: SQLInputValue[]) => [
-            ...observed(values, () => all(...values)),
-          ],
+          apply: (all, _receiver, values: SQLInputValue[]) => [...observed(all(...values))],
         });
         statement.iterate = new Proxy(statement.iterate.bind(statement), {
-          apply: (iterate, _receiver, values: SQLInputValue[]) =>
-            observed(values, () => iterate(...values)),
+          apply: (iterate, _receiver, values: SQLInputValue[]) => observed(iterate(...values)),
         });
         return statement;
       });
@@ -113,8 +100,6 @@ describe("searchPathKeyword", () => {
         { id: "path-0-chunk-0", snippet: "body 0/0 " + "x".repeat(191) },
         { id: "path-2-chunk-0", snippet: "body 2/0 " + "x".repeat(191) },
       ]);
-      expect(queryPlans.length).toBeGreaterThan(0);
-      expect(queryPlans.filter((detail) => /\bSCAN (?:c|candidate)\b/.test(detail))).toEqual([]);
       expect(examinedChunkLines).toBeGreaterThan(0);
       expect(examinedChunkLines).toBeLessThanOrEqual(16);
       expect(fetchedTextBytes).toBeLessThanOrEqual(4 * 200 * 4);

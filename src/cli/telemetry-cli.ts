@@ -62,6 +62,7 @@ export function registerTelemetryCli(program: Command): void {
           defaultRuntime.writeJson(
             {
               featureStatsEnabled: telemetry.enabled,
+              installationCountEnabled: telemetry.installationCountEnabled,
               reason: telemetry.reason,
               endpoint: telemetry.endpoint,
               lastPingAt: telemetry.lastPingAt
@@ -75,6 +76,12 @@ export function registerTelemetryCli(program: Command): void {
         }
 
         defaultRuntime.log(`Feature stats: ${telemetry.enabled ? "enabled" : "disabled"}`);
+        defaultRuntime.log(
+          "Installation counting: " +
+            (telemetry.installationCountEnabled
+              ? "eligible after a fresh receiver capability"
+              : "disabled"),
+        );
         defaultRuntime.log(`Reason: ${TELEMETRY_REASON_LABELS[telemetry.reason]}`);
         defaultRuntime.log(`Endpoint: ${telemetry.endpoint}`);
         defaultRuntime.log(

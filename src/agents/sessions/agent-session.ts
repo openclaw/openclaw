@@ -7,11 +7,12 @@ import { sleep } from "../../utils/sleep.js";
 import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
 import { AgentSessionCompaction } from "./agent-session-compaction.js";
 import type { AgentSessionConfig, ExtensionBindings } from "./agent-session-types.js";
-import { ExtensionRunner, type ToolDefinition, wrapRegisteredTools } from "./extensions/index.js";
+import { ExtensionRunner, type ToolDefinition } from "./extensions/index.js";
 import { emitSessionShutdownEvent } from "./extensions/runner.js";
 import type { ResourceExtensionPaths } from "./resource-loader.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
+import { wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 function describeCommands<T extends Pick<SlashCommandInfo, "description" | "sourceInfo">>(
   commands: readonly T[],
@@ -266,12 +267,11 @@ export class AgentSession extends AgentSessionCompaction {
       })),
     ].filter((tool) => this.allowedToolNames.has(tool.definition.name));
     this.toolDefinitions = new Map(allCustomTools.map((tool) => [tool.definition.name, tool]));
-    this.toolRegistry = new Map(
-      wrapRegisteredTools(allCustomTools, this.currentExtensionRunner).map((tool) => [
-        tool.name,
-        tool,
-      ]),
+    const runner = this.currentExtensionRunner;
+    const wrappedTools = allCustomTools.map((tool) =>
+      wrapToolDefinition(tool.definition, () => runner.createContext()),
     );
+    this.toolRegistry = new Map(wrappedTools.map((tool) => [tool.name, tool]));
     this.setActiveToolsByName([...new Set([...activeToolNames, ...this.toolRegistry.keys()])]);
   }
 

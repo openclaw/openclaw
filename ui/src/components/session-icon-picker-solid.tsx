@@ -6,7 +6,7 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
@@ -17,7 +17,7 @@ import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 export type AppearancePickerFocus = (
   target: "first" | "grid" | "custom",
@@ -75,6 +75,12 @@ export function AppearancePicker(props: AppearancePickerProps) {
       }),
     );
   });
+  const noShortcutHint = () =>
+    t(
+      props.allowSvg
+        ? "sessionsView.customIconHintNoShortcut"
+        : "sessionsView.customEmojiHintNoShortcut",
+    );
   const accepted = () => {
     const normalized = normalizeSessionIconValue(props.customIconValue);
     return (
@@ -291,6 +297,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
           <div class="session-menu__icon-custom-hint">
             {sessionEmojiPickerShortcut() ? (
               <ShortcutText
+                fallback={noShortcutHint()}
                 text={t(
                   props.allowSvg ? "sessionsView.customIconHint" : "sessionsView.customEmojiHint",
                   { shortcut: "{shortcut}" },
@@ -298,11 +305,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
                 shortcut={() => <Kbd keys={sessionEmojiPickerShortcut()!} inline />}
               />
             ) : (
-              t(
-                props.allowSvg
-                  ? "sessionsView.customIconHintNoShortcut"
-                  : "sessionsView.customEmojiHintNoShortcut",
-              )
+              noShortcutHint()
             )}
           </div>
         </div>
@@ -396,6 +399,10 @@ export function useSessionMenuAppearance(
     setMode("grid");
     setCustomValue("");
   };
+  const selectAppearance = (event: Event, action: AppearanceAction) => {
+    event.stopPropagation();
+    runAction(action);
+  };
   const showIconGrid = (event?: Event) => {
     event?.stopPropagation();
     prepare();
@@ -420,21 +427,12 @@ export function useSessionMenuAppearance(
         currentColor={readState().session.color}
         colorDisabled={actionDisabled("set-color")}
         colorDisabledReason={readState().actionDisabledReasons["set-color"]}
-        onSelectColor={(event, color) => {
-          event.stopPropagation();
-          runAction({ kind: "set-color", color });
-        }}
-        onReset={(event) => {
-          event.stopPropagation();
-          runAction({ kind: "reset-appearance" });
-        }}
+        onSelectColor={(event, color) => selectAppearance(event, { kind: "set-color", color })}
+        onReset={(event) => selectAppearance(event, { kind: "reset-appearance" })}
         customIconValue={customValue()}
         disabled={actionDisabled("set-icon")}
         disabledReason={readState().actionDisabledReasons["set-icon"]}
-        onSelect={(event, icon) => {
-          event.stopPropagation();
-          runAction({ kind: "set-icon", icon });
-        }}
+        onSelect={(event, icon) => selectAppearance(event, { kind: "set-icon", icon })}
         onShowCustom={(event) => {
           event.stopPropagation();
           setMode("custom");

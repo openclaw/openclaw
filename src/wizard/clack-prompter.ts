@@ -74,12 +74,8 @@ async function runPromptWithNavigation<T>(
   externalSignal?: AbortSignal,
 ): Promise<T> {
   const navigationEnabled = navigation?.canGoBack === true || navigation?.canGoForward === true;
-  const hadLeft = navigationEnabled && settings.actions.has("left");
-  const hadRight = navigationEnabled && settings.actions.has("right");
-  if (navigationEnabled) {
-    settings.actions.delete("left");
-    settings.actions.delete("right");
-  }
+  const hadLeft = navigationEnabled && settings.actions.delete("left");
+  const hadRight = navigationEnabled && settings.actions.delete("right");
   try {
     const controller = new AbortController();
     const signal = externalSignal

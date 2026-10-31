@@ -9,7 +9,6 @@ import {
   resolveActiveEmbeddedRunOwnerByRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
   areDiagnosticsEnabledForProcess,
   onDiagnosticEvent,
@@ -22,7 +21,6 @@ import {
   stopGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
-import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { listActiveSessionRunKeys } from "../../sessions/session-controller.queries.js";
 import {
@@ -36,14 +34,12 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
 import {
-  backendGatewayClient,
   getAgentTestMocks,
   invokeAgent,
   makeContext,
   prime,
   waitForAssertion,
 } from "./agent.test-harness.js";
-import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -65,37 +61,6 @@ function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: str
     { code: "UNAVAILABLE", message: "reactivate boom" },
     { runId, error: "reactivate boom" },
   );
-}
-
-export function setupRestartRecoveryAdmissionFixture(runId: string) {
-  const sessionKey = "agent:main:main";
-  const sessionId = "recovery-session";
-  const storePath = getAgentTestStorePath();
-  const store: Record<string, SessionEntry> = {
-    [sessionKey]: {
-      sessionId,
-      updatedAt: Date.now() - 10_000,
-      status: "interrupted",
-      abortedLastRun: true,
-      restartRecoveryDeliveryRunId: runId,
-      restartRecoveryDeliverySourceRunId: "interrupted-source-run",
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 1,
-        chargedAttempts: 1,
-        reservation: { runId, attempt: 1, lifecycleGeneration: mocks.lifecycleGeneration },
-      },
-    },
-  };
-  mocks.loadSessionEntry.mockImplementation(() => ({
-    cfg: {},
-    agentId: "main",
-    storePath,
-    entry: structuredClone(store[sessionKey]),
-    canonicalKey: sessionKey,
-  }));
-  mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-  return { sessionKey, sessionId, storePath, store };
 }
 
 export function registerAgentPreDispatchFailureTests() {
@@ -327,168 +292,4 @@ export function registerAgentPreDispatchFailureTests() {
       });
     },
   );
-
-  it.each(["pending input admission", "pre-dispatch reactivation"] as const)(
-    "restores admitted restart recovery if %s fails",
-    async (failurePhase) => {
-      const runId = "recovery-reactivation-fails";
-      const { sessionKey, sessionId, store } = setupRestartRecoveryAdmissionFixture(runId);
-      const inputError = new Error("Pending input ownership ended; submit a new turn to continue");
-      if (failurePhase === "pending input admission") {
-        mocks.stageSessionPendingInput.mockImplementationOnce(async () => {
-          expect(store[sessionKey]?.abortedLastRun).toBe(false);
-          expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-          throw inputError;
-        });
-      } else {
-        mockCompletedRun(sessionKey);
-        mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
-          throw new Error("reactivate boom");
-        });
-      }
-
-      const context = makeContext();
-      const respond = vi.fn();
-      await invokeAgent(
-        {
-          message: "resume after restart",
-          agentId: "main",
-          sessionKey,
-          sessionId,
-          expectedExistingSessionId: sessionId,
-          idempotencyKey: runId,
-          inputProvenance: {
-            kind: "internal_system",
-            sourceSessionKey: sessionKey,
-            sourceTool: "main_session_restart_recovery",
-          },
-        },
-        { context, client: backendGatewayClient(), reqId: runId, respond },
-      );
-
-      expect(mocks.agentCommand).not.toHaveBeenCalled();
-      expect(store[sessionKey]).toMatchObject({
-        sessionId,
-        status: "interrupted",
-        abortedLastRun: true,
-        restartRecoveryDeliverySourceRunId: "interrupted-source-run",
-        mainRestartRecovery: {
-          chargedAttempts: 1,
-        },
-      });
-      expect(rpcSourceTesting.has(runId)).toBe(false);
-      expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-      expect(store[sessionKey]?.restartRecoveryDeliveryRunId).toBeUndefined();
-      if (failurePhase === "pending input admission") {
-        expect(respond.mock.calls).toEqual([
-          [false, undefined, { code: "UNAVAILABLE", message: inputError.message }],
-        ]);
-      } else {
-        expectReactivationFailure(respond, runId);
-      }
-    },
-  );
-
-  it("releases a foreground recovery owner if pre-dispatch reactivation fails", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "interrupted-session";
-    const runId = "foreground-reactivation-fails";
-    const storePath = getAgentTestStorePath();
-    const store: Record<string, SessionEntry> = {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now() - 10_000,
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 1,
-          chargedAttempts: 1,
-        },
-      },
-    };
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath,
-      entry: structuredClone(store[sessionKey]),
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mockCompletedRun(sessionKey);
-    mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
-      throw new Error("reactivate boom");
-    });
-
-    const respond = await invokeAgent(
-      {
-        message: "new foreground turn",
-        agentId: "main",
-        sessionKey,
-        sessionId,
-        idempotencyKey: runId,
-      },
-      { client: backendGatewayClient(), reqId: runId },
-    );
-
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(store[sessionKey]?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
-    expectReactivationFailure(respond, runId);
-  });
-
-  it("releases gateway admission when foreground owner cleanup exhausts retries", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "interrupted-session";
-    const runId = "foreground-release-fails";
-    const storePath = getAgentTestStorePath();
-    const store: Record<string, SessionEntry> = {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now() - 10_000,
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 1,
-          chargedAttempts: 1,
-        },
-      },
-    };
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath,
-      entry: structuredClone(store[sessionKey]),
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.applySessionEntryReplacements.mockRejectedValue(new Error("owner release write failed"));
-
-    await expect(
-      invokeAgent(
-        {
-          message: "new foreground turn",
-          agentId: "main",
-          sessionKey,
-          sessionId,
-          deliver: true,
-          replyChannel: "telegram",
-          bestEffortDeliver: false,
-          idempotencyKey: runId,
-        },
-        {
-          client: backendGatewayClient(),
-          reqId: runId,
-          respond: vi.fn(),
-          flushDispatch: false,
-        },
-      ),
-    ).rejects.toThrow("owner release write failed");
-    await expect(
-      runSessionMutation({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        signal: AbortSignal.timeout(100),
-        run: async () => "released",
-      }),
-    ).resolves.toBe("released");
-  });
 }

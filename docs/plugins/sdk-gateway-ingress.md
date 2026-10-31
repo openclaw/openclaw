@@ -254,8 +254,8 @@ resource-specific policy remain required where the direct listener requires them
 The surface refuses
 general APIs, webhooks, `/v1`, standalone MCP, worker and node transfers, and
 undeclared plugin routes. Service workers and local browser bootstrap recovery
-are blocked. The sandbox surface serves only its dedicated shell and declared
-public renderer resources, never Gateway data.
+are blocked. The sandbox surface serves only its dedicated shell, never Gateway
+data.
 
 The HTTP transport is not arbitrary forwarding or a private network proxy. MCP
 integrations use the separate grant-bound RPC operation, not an HTTP route

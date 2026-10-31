@@ -9,6 +9,7 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   asNullableRecord,
@@ -27,11 +28,7 @@ import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
 import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
-import {
-  resolveBrowserBaseUrl,
-  resolveBrowserToolNodeTarget,
-  resolveBrowserToolTimeoutMs,
-} from "./browser-tool.routing.js";
+import { resolveBrowserBaseUrl, resolveBrowserToolNodeTarget } from "./browser-tool.routing.js";
 import { BROWSER_ACT_REQUEST_KEYS, type BrowserToolCapabilities } from "./browser-tool.schema.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
 import type { browserAct } from "./browser/client-actions.js";
@@ -58,6 +55,26 @@ type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
   | { target: "node"; node: string }
 );
+
+const DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
+const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
+  "status",
+  "start",
+  "stop",
+  "profiles",
+  "tabs",
+  "open",
+  "focus",
+  "close",
+]);
+const PERSISTENT_TAB_ACTIONS = new Set(["profiles", "tabs", "open", "focus", "close"]);
+
+function hasExistingSessionProfile(resolved: ReturnType<typeof resolveBrowserConfig>) {
+  return Object.keys(resolved.profiles).some((name) => {
+    const candidate = resolveProfile(resolved, name);
+    return candidate ? getBrowserProfileCapabilities(candidate).usesChromeMcp : false;
+  });
+}
 
 function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
@@ -191,8 +208,12 @@ export function createBrowserTool(
   opts?: BrowserScreenshotOptions & {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
+    allowLocalLoopback?: boolean;
+    assertLocalLoopbackCurrent?: () => void;
+    assertInvocationCurrent?: () => void;
     agentSessionKey?: string;
     agentId?: string;
+    decisions?: DecisionRuntimeV2;
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
   },
@@ -201,6 +222,7 @@ export function createBrowserTool(
   return {
     ...metadata,
     execute: async (_toolCallId, args, signal) => {
+      opts?.assertInvocationCurrent?.();
       let params = binding
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
@@ -443,21 +465,31 @@ export function createBrowserTool(
       if (
         !proxyRequest &&
         isUserBrowserProfile &&
-        ["requests", "errors", "text", "emulate"].includes(action)
+        ["requests", "errors", "text", "judge", "emulate"].includes(action)
       ) {
         throw new Error(
           `action=${action} is not supported for existing-session profiles; use action=snapshot to inspect this page, or select a managed browser profile for ${action}.`,
         );
       }
       const nodeRoute = nodeTarget ? createBrowserNodeSessionTabRoute(nodeTarget) : undefined;
-      const toolTimeoutMs = resolveBrowserToolTimeoutMs({
-        requestedTimeoutMs,
-        action,
-        isUserBrowserProfile,
-        usesPersistentPlaywright: profileCapabilities?.usesPersistentPlaywright === true,
-        isNodeProxy: proxyRequest !== null,
-        resolvedBrowser,
-      });
+      const usesPersistentPlaywright = profileCapabilities?.usesPersistentPlaywright === true;
+      let toolTimeoutMs = requestedTimeoutMs;
+      if (toolTimeoutMs === undefined) {
+        if (
+          EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
+          (isUserBrowserProfile ||
+            (action === "profiles" && hasExistingSessionProfile(resolvedBrowser)))
+        ) {
+          toolTimeoutMs = DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS;
+        } else if (
+          // A node proxy resolves the profile on its execution host, so the Gateway
+          // must budget tab operations for the possible persistent Playwright path.
+          PERSISTENT_TAB_ACTIONS.has(action) &&
+          (usesPersistentPlaywright || proxyRequest !== null)
+        ) {
+          toolTimeoutMs = resolvedBrowser.actionTimeoutMs;
+        }
+      }
       const sessionTabs = createBrowserToolSessionTabs({
         agentId: opts?.agentId,
         sessionKey: opts?.agentSessionKey,
@@ -551,6 +583,10 @@ export function createBrowserTool(
           requestedTimeoutMs,
           signal,
           opts,
+          judgment:
+            opts?.decisions && opts.agentId
+              ? { decisions: opts.decisions, agentId: opts.agentId }
+              : undefined,
           boundTargetId: binding
             ? binding.targetId
             : dashboardName
@@ -592,21 +628,39 @@ export function createBrowserTool(
           },
         });
       const dashboardTarget = browserDashboard;
-      const result = dashboardTarget
-        ? await withBrowserRequestScope(
-            {
-              managedOnly: true,
-              assertCurrent: async (admittedProfile) =>
-                (await import("./browser-dashboard.js")).assertBrowserDashboardTargetCurrent(
-                  dashboardTarget,
-                  opts?.agentId,
-                  { signal },
-                  admittedProfile,
-                ),
-            },
-            dispatchTabAction,
-          )
-        : await dispatchTabAction();
+      const result = await withBrowserRequestScope(
+        {
+          allowLocalLoopback: opts?.allowLocalLoopback === true && !baseUrl && !proxyRequest,
+          assertLocalLoopbackCurrent: opts?.assertLocalLoopbackCurrent,
+          ...(opts?.assertInvocationCurrent
+            ? {
+                assertInvocationCurrent: opts.assertInvocationCurrent,
+                assertCurrent: opts.assertInvocationCurrent,
+              }
+            : {}),
+          ...(dashboardTarget
+            ? {
+                managedOnly: true as const,
+                assertCurrent: async (
+                  admittedProfile?: Parameters<
+                    typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
+                  >[3],
+                ) => {
+                  const { assertBrowserDashboardTargetCurrent } =
+                    await import("./browser-dashboard.js");
+                  await assertBrowserDashboardTargetCurrent(
+                    dashboardTarget,
+                    opts?.agentId,
+                    { signal },
+                    admittedProfile,
+                  );
+                  opts?.assertInvocationCurrent?.();
+                },
+              }
+            : {}),
+        },
+        dispatchTabAction,
+      );
       if (browserDashboard) {
         // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
         return { ...result, details: { ...asNullableRecord(result.details), browserDashboard } };
@@ -618,6 +672,7 @@ export function createBrowserTool(
         "screenshot",
         "snapshot",
         "text",
+        "judge",
         "requests",
         "errors",
         "console",

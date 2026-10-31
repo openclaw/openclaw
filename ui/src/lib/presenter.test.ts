@@ -70,6 +70,16 @@ describe("formatCronPayload", () => {
       }),
     ).toBe("Agent: Review the Workshop collection.");
   });
+
+  it("names a scheduled plugin command instead of its reserved agent-turn placeholder", () => {
+    expect(
+      formatCronPayload({
+        ...job({ kind: "every", everyMs: 60_000 }),
+        payload: { kind: "agentTurn", message: "[plugin-command-scheduled-turn:v1]" },
+        payloadSource: { kind: "pluginCommand", pluginId: "watcher", command: "watch" },
+      }),
+    ).toBe("Plugin command: /watch (watcher)");
+  });
 });
 
 it("formats session detail against its last-run prompt budget", () => {

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -29,12 +30,7 @@ suite.define(() => {
               channelAccounts: {},
               channelDefaultAccountId: {},
             },
-            "channels.pairing.list": {
-              accounts: [],
-              requests: [],
-              commandOwnerConfigured: true,
-              limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-            },
+            "channels.pairing.list": emptyPairingSnapshot(),
             "wizard.start": {
               sessionId: "channel-option-contrast-proof",
               done: false,

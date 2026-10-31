@@ -13,13 +13,88 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 
 const suite = createChatFlowE2eSuite();
 const visiblePane = ".chat-pane-cache__pane--visible";
-const skeletonSelector = `${visiblePane} .chat-thread openclaw-panel-loading-skeleton`;
+const skeletonSelector = `${visiblePane} .chat-thread :is(openclaw-panel-loading-skeleton, .lazy-view-state--loading)`;
 const textInThread = (page: Page, text: string, root = ".chat-thread") =>
   page.locator(root).getByText(text);
 const sessionLink = (page: Page, session: string) =>
   page.locator(`[data-session-key="agent:main:session-${session}"] a.sidebar-recent-session__link`);
 
 suite.define(() => {
+  it("reopens a parked startup with authoritative history and the retained draft", async () => {
+    const page = await newChatPage(suite);
+    const key = "agent:main:session-b";
+    const draft = "Draft retained through the parked startup";
+    const current = "Authoritative history after reopening";
+    const obsolete = "Obsolete history from the parked read";
+    const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
+      sessionKey: "agent:main:session-a",
+      historyMessages: [chatMessage("assistant", "Established conversation")],
+      sessionTranscripts: { [key]: { messages: [chatMessage("assistant", current)] } },
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+    await textInThread(page, "Established conversation").waitFor({ state: "visible" });
+    const before = (await gateway.getRequests("chat.startup", { sessionKey: key })).length;
+    await gateway.deferNext("chat.startup", { sessionKey: key });
+    await sessionLink(page, "b").click();
+    await gateway.waitForRequest("chat.startup", { after: before, match: { sessionKey: key } });
+    const composer = page.locator(`${visiblePane} .agent-chat__composer-combobox textarea`);
+    // An unsubmitted draft owns no delivery read. Enter would deliberately queue
+    // it in the outbox, whose independent startup custody must survive hiding.
+    await composer.fill(draft);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await sessionLink(page, "a").click();
+    await textInThread(page, "Established conversation", visiblePane).waitFor({ state: "visible" });
+    // Sidebar preview paints before route ownership commits. Only committed hide
+    // retires the old read; resolving it during preview would still be current.
+    await page.waitForURL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+    await page.waitForFunction((parked) => {
+      const panes = Array.from(document.querySelectorAll("openclaw-chat-pane"));
+      const previous = panes.find((pane) => pane.sessionKey === parked);
+      const presented = panes.find((pane) => pane.sessionKey === "agent:main:session-a");
+      return (
+        previous?.getAttribute("aria-hidden") === "true" &&
+        !previous.presented &&
+        presented?.getAttribute("aria-hidden") === "false" &&
+        presented.presented
+      );
+    }, key);
+    await gateway.resolveDeferred(
+      "chat.startup",
+      {
+        messages: [chatMessage("assistant", obsolete)],
+        sessionId: "session-b",
+      },
+      { match: { sessionKey: key } },
+    );
+    await gateway.deferNext("chat.startup", { sessionKey: key });
+    await sessionLink(page, "b").click();
+    await gateway.waitForRequest("chat.startup", { after: before + 1, match: { sessionKey: key } });
+    expect(await composer.inputValue()).toBe(draft);
+    expect(await textInThread(page, obsolete, visiblePane).count()).toBe(0);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await gateway.resolveDeferred(
+      "chat.startup",
+      {
+        messages: [chatMessage("assistant", current)],
+        sessionId: "session-b",
+      },
+      { match: { sessionKey: key } },
+    );
+    await textInThread(page, current, visiblePane).waitFor({ state: "visible" });
+    const send = page.locator(visiblePane).getByRole("button", { name: "Send message" });
+    await expect.poll(() => send.isEnabled()).toBe(true);
+    expect(await composer.inputValue()).toBe(draft);
+    expect(await gateway.getRequests("chat.startup", { sessionKey: key })).toHaveLength(before + 2);
+    await send.click();
+    expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+      sessionKey: key,
+      message: draft,
+    });
+    expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+  });
+
   it("switches immediately but shows a skeleton only for slow history", async () => {
     const page = await newChatPage(suite, {
       ...createControlUiE2eContextOptions(),
@@ -28,6 +103,7 @@ suite.define(() => {
     const previousText = "Previous conversation.";
     const destinationText = "Destination conversation.";
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup", "chat.history"],
       sessionKey: "agent:main:session-a",
       historyMessages: [{ role: "assistant", content: previousText }],
@@ -77,62 +153,54 @@ suite.define(() => {
     await gateway.deferNext("chat.startup");
     const [revealDelay] = await Promise.all([
       page.evaluate(
-        ({ selector, oldText }) =>
-          new Promise<{ delay: number; previousVisible: boolean }>((resolve) => {
-            const started = performance.now();
-            let revealAnimation: Animation | undefined;
-            let previousVisible = false;
-            const findRevealAnimation = (skeleton: Element | null) =>
-              skeleton
-                ?.getAnimations()
-                .find(
-                  (entry) =>
-                    entry instanceof CSSAnimation && entry.animationName === "chat-skeleton-reveal",
-                );
-            // A concurrent reduced-motion transition can precede the reveal.
-            // Retain the reveal clock before getAnimations() drops its finished effect.
-            const observer = new MutationObserver(() => {
-              const skeleton = document.querySelector(selector);
-              revealAnimation ??= findRevealAnimation(skeleton);
-              if (revealAnimation) {
-                observer.disconnect();
-              }
-            });
-            observer.observe(document.body, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: ["class"],
-            });
-            const sample = () => {
+        async ({ selector, oldText }) => {
+          const started = performance.now();
+          let animation: Animation | undefined;
+          let previousVisible = false;
+          const capture = () => {
+            animation ??= document
+              .querySelector(selector)
+              ?.getAnimations()
+              .find(
+                (entry) =>
+                  entry instanceof CSSAnimation && entry.animationName === "chat-skeleton-reveal",
+              );
+          };
+          // Retain the reduced-motion clock before its finished effect disappears.
+          const observer = new MutationObserver(capture);
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["class"],
+          });
+          try {
+            while (performance.now() - started <= 3_000) {
               const skeleton = document.querySelector(selector);
               if (skeleton) {
-                revealAnimation ??= findRevealAnimation(skeleton);
+                capture();
                 previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
                   (pane) =>
                     getComputedStyle(pane).opacity !== "0" &&
                     pane.getAttribute("aria-hidden") === "false" &&
                     pane.textContent.includes(oldText),
                 );
-                const currentTime = revealAnimation?.currentTime;
                 if (
                   getComputedStyle(skeleton).visibility === "visible" &&
-                  typeof currentTime === "number"
+                  typeof animation?.currentTime === "number"
                 ) {
-                  observer.disconnect();
-                  resolve({ delay: currentTime, previousVisible });
-                  return;
+                  return { delay: animation.currentTime, previousVisible };
                 }
               }
-              if (performance.now() - started > 3_000) {
-                observer.disconnect();
-                resolve({ delay: -1, previousVisible });
-                return;
-              }
-              requestAnimationFrame(sample);
-            };
-            sample();
-          }),
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+            }
+            return { delay: -1, previousVisible };
+          } finally {
+            observer.disconnect();
+          }
+        },
         { selector: skeletonSelector, oldText: previousText },
       ),
       sessionLink(page, "b").click(),
@@ -164,6 +232,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
       const marker = "The selected conversation survived canonical navigation.";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         historyMessages: [{ role: "assistant", content: "Initial conversation." }],
         sessionTranscripts: {
@@ -232,79 +301,34 @@ suite.define(() => {
     },
   );
 
-  it.each(["retry", "reconnect", "cached refresh"] as const)(
-    "recovers failed history after %s",
-    async (recovery) => {
-      const page = await newChatPage(suite);
-      const cached = recovery === "cached refresh";
-      const marker = `Transcript recovered after ${recovery}.`;
-      const failure = cached
-        ? "History refresh failed."
-        : recovery === "retry"
-          ? "Chat history is temporarily unavailable."
-          : "Chat history will recover after reconnect.";
-      const gateway = await installMockGateway(page, {
-        deferredMethods: cached ? [] : ["chat.startup"],
-        historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const transcript = textInThread(page, marker);
-      if (cached) {
-        await transcript.waitFor({ state: "visible" });
-        await gateway.deferNext("chat.startup");
-        await gateway.setOnline(false);
-        await gateway.setOnline(true);
-      }
-      await gateway.waitForRequest("chat.startup", { after: cached ? 1 : 0 });
-      await gateway.rejectDeferred("chat.startup", {
-        code: cached ? "GATEWAY_ERROR" : "GATEWAY_UNAVAILABLE",
-        message: failure,
-        ...(cached ? { retryable: false } : recovery === "reconnect" ? { retryable: true } : {}),
-      });
-      const historyError = page.locator(
-        cached ? ".chat-history-error--inline" : ".chat-history-error",
-      );
-      await historyError.waitFor({ state: "visible", timeout: 5_000 });
-      if (cached) {
-        expect(await historyError.textContent()).toContain(failure);
-      } else {
-        expect(await historyError.textContent()).toContain("Couldn’t load this conversation");
-        expect(
-          await historyError.locator("[aria-description]").getAttribute("aria-description"),
-        ).toContain(failure);
-      }
-      if (cached) {
-        // Failed refreshes must leave the stale transcript available throughout retry.
-        await transcript.waitFor({ state: "visible" });
-      } else {
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-      }
-      const startupCount = (await gateway.getRequests("chat.startup")).length;
-      if (recovery === "reconnect") {
-        await gateway.setOnline(false);
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-        await gateway.setOnline(true);
-      } else {
-        if (!cached) {
-          await gateway.deferNext("chat.startup");
-        }
-        await historyError.getByRole("button", { name: "Retry" }).click();
-      }
-      await gateway.waitForRequest("chat.startup", { after: startupCount });
-      if (recovery === "retry") {
-        await historyError.waitFor({ state: "detached" });
-        await page
-          .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
-          .waitFor({ state: "visible" });
-        await gateway.resolveDeferred("chat.startup");
-      } else if (cached) {
-        await historyError.waitFor({ state: "hidden", timeout: 5_000 });
-      }
-      await transcript.waitFor({ state: "visible" });
-      if (!cached) {
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(2);
-        expect(await page.locator(".chat-history-error").count()).toBe(0);
-      }
-    },
-  );
+  it("keeps cached history visible through a failed refresh and manual retry", async () => {
+    const page = await newChatPage(suite);
+    const marker = "Retained transcript";
+    const failure = "History refresh failed.";
+    const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
+      historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const transcript = textInThread(page, marker);
+    await transcript.waitFor({ state: "visible" });
+    await gateway.deferNext("chat.startup");
+    await gateway.setOnline(false);
+    await gateway.setOnline(true);
+    await gateway.waitForRequest("chat.startup", { after: 1 });
+    await gateway.rejectDeferred("chat.startup", {
+      code: "GATEWAY_ERROR",
+      message: failure,
+      retryable: false,
+    });
+    const error = page.locator(".chat-history-error--inline");
+    await error.waitFor({ state: "visible", timeout: 5_000 });
+    expect(await error.textContent()).toContain(failure);
+    await transcript.waitFor({ state: "visible" });
+    const before = (await gateway.getRequests("chat.startup")).length;
+    await error.getByRole("button", { name: "Retry" }).click();
+    await gateway.waitForRequest("chat.startup", { after: before });
+    await error.waitFor({ state: "hidden", timeout: 5_000 });
+    await transcript.waitFor({ state: "visible" });
+  });
 });

@@ -16,7 +16,12 @@ export type DoctorMaintenanceParams = {
   runtime: RuntimeEnv;
   runId?: string;
   assertCurrent?: () => void;
+  lendPolicyCustody?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["lendPolicyCustody"];
   databaseGenerations?: UpdateDatabaseGenerations;
   databasePluginOwners?: import("../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  /** Public update repair names the next step when it leaves a managed Gateway stopped. */
+  reportStoppedService?: boolean;
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
   beforeStateMutation?: (context: { env: NodeJS.ProcessEnv; signal: AbortSignal }) => Promise<void>;
 };

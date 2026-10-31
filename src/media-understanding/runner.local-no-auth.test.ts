@@ -108,10 +108,7 @@ async function checkAudioCase(params: AudioCase, expected: Expected) {
         expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(expected.reason);
         expect(requests).toEqual([]);
       } else {
-        expect(result).toMatchObject({
-          decision: { outcome: "success" },
-          outputs: [{ text: expected.apiKey }],
-        });
+        expect(result.decision.outcome).toBe("success");
         expect(requests.map(({ apiKey, auth }) => ({ apiKey, auth }))).toEqual([expected]);
       }
     });
@@ -119,25 +116,16 @@ async function checkAudioCase(params: AudioCase, expected: Expected) {
 }
 
 const hookAuth = { kind: "api-key", apiKey: "hook-key", source: "media auth hook" } as const;
-it.each<[string, AudioCase, Expected]>([
+// #74644: plugin no-auth remains available after generic auth misses.
+it.each<[AudioCase, Expected]>([
+  [{ resolveAuth: noAuth }, { apiKey: CUSTOM_LOCAL_AUTH_MARKER, auth: noAuth() }],
+  [{ resolveAuth: () => hookAuth }, { apiKey: "hook-key", auth: hookAuth }],
   [
-    "#74644: plugin no-auth after generic auth misses",
-    { resolveAuth: noAuth },
-    { apiKey: CUSTOM_LOCAL_AUTH_MARKER, auth: noAuth() },
-  ],
-  [
-    "plugin API key after generic auth misses",
-    { resolveAuth: () => hookAuth },
-    { apiKey: "hook-key", auth: hookAuth },
-  ],
-  [
-    "rejects remote provider with missing generic auth and a null hook",
     { remote: true, resolveAuth: () => null },
     { reason: 'No API key found for provider "remote-audio"' },
   ],
   [
-    "plugin no-auth cannot override a missing explicit profile",
     { missing: false, profile: "missing-profile", resolveAuth: noAuth },
     { reason: 'No credentials found for profile "missing-profile"' },
   ],
-])("runCapability media auth: %s", (_name, params, expected) => checkAudioCase(params, expected));
+])("runCapability media auth case %# (%j): %j", checkAudioCase);

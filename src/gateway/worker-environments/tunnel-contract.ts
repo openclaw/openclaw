@@ -109,6 +109,9 @@ type WorkerRepositoryCheckpointPayload = {
   currentManifestRef: string;
   publicationStagingRoot?: string;
   publicationDigest?: string;
+  gitHistory?: import("./workspace-result-inventory.js").WorkerWorkspaceGitHistory;
+  gitPackPath?: string;
+  gitHistoryNote?: string;
 };
 
 type WorkerRepositoryCheckpointPreparation = {
@@ -142,6 +145,9 @@ type WorkerRepositoryWorkspaceSource = {
     | "currentManifestRaw"
     | "publicationStagingRoot"
     | "publicationDigest"
+    | "gitHistory"
+    | "gitPackPath"
+    | "gitHistoryNote"
   >;
 };
 
@@ -200,6 +206,8 @@ export type WorkerWorkspaceReconcileRequest = {
         authorize?: () => void;
         markPhase?: (phase: string) => void;
         referenceManifestRef: string;
+        /** Last durably accepted checkpoint, independent of placement/startup captures. */
+        acceptedManifestRef?: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
         ): Promise<WorkerRepositoryCheckpointPreparation>;

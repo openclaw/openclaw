@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
 import * as configAudit from "../config/io.audit.js";
 import { registerRuntimeConfigWriteListener } from "../config/runtime-snapshot.js";
@@ -8,6 +9,7 @@ import {
   createRuntimeConfigWriteApplication,
   publishRuntimeConfigWrite,
 } from "../config/runtime-write-application.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
@@ -19,9 +21,11 @@ import {
   createConfigReloadTestClock,
   createReloaderHarness,
   flushReload,
+  getOnlyHotReloadCall,
   makeSnapshot,
   makeZeroDebounceHookWrite,
   prepareConfigReloadTest,
+  waitForReloadState,
 } from "./config-reload.test-support.js";
 
 beforeEach((context) => {
@@ -69,6 +73,73 @@ async function admittedWrite(hash: string) {
   void application.result.then(settled);
   return { ...harness, application, settled };
 }
+
+it("keeps config observation and application free of main-thread lease reads", async () => {
+  const { requireNodeSqlite } = await import("../infra/node-sqlite.js");
+  const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync").mockImplementation(
+    (options, run) =>
+      withLease(options, (lease) => {
+        reads.queries.length = 0;
+        return run(lease);
+      }),
+  );
+  const leaseReads = () => reads.queries.filter((sql) => /from "state_leases"/i.test(sql)).length;
+  const checkpoints: number[] = [];
+  const snapshot = makeZeroDebounceHookWrite("observation-lease").snapshot;
+  const harness = createReloaderHarness(
+    async () => {
+      checkpoints.push(leaseReads());
+      return snapshot;
+    },
+    {
+      readPluginInstallRecords: async () => {
+        checkpoints.push(leaseReads());
+        return {};
+      },
+    },
+  );
+  await harness.reloader.ready;
+  checkpoints.length = 0;
+  harness.watcher.emit("change");
+  await flushReload(harness.reloader);
+
+  expect(checkpoints).toEqual([0, 0]);
+  expect(harness.onHotReload).toHaveBeenCalledOnce();
+  expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+  reads.restore();
+});
+
+it("rejects a lease that expires during observation before applying the config", async () => {
+  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync").mockImplementation(
+    (options, run) => withLease({ ...options, leaseMs: 1_000 }, run),
+  );
+  let expire = false;
+  const snapshot = makeZeroDebounceHookWrite("expired-observation").snapshot;
+  const readPluginInstallRecords = vi.fn(async () => ({}));
+  const harness = createReloaderHarness(
+    async () => {
+      if (expire) {
+        // Acquisition uses the worker's real clock; suspend without running the heartbeat.
+        vi.setSystemTime(vi.getRealSystemTime() + 60_000);
+      }
+      return snapshot;
+    },
+    { readPluginInstallRecords },
+  );
+  await harness.reloader.ready;
+  readPluginInstallRecords.mockClear();
+  expire = true;
+  harness.watcher.emit("change");
+  await flushReload(harness.reloader);
+
+  expect(readPluginInstallRecords).not.toHaveBeenCalled();
+  expect(harness.onHotReload).not.toHaveBeenCalled();
+  expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+  expect(harness.log.error).toHaveBeenCalledWith(expect.stringContaining("lease"));
+});
 
 it("coalesces config writes after a delayed Gateway scheduler wake", async () => {
   const { clock, scheduler } = createConfigReloadTestClock();
@@ -198,7 +269,7 @@ it.each([
   "retries $source reload after $reason without another event",
   async ({ source, reason }) => {
     const acquire = vi
-      .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
+      .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
       .mockRejectedValueOnce(unavailableError(reason));
     const harness = await readyHarness("lease-retry");
 
@@ -224,9 +295,9 @@ it.each([
 );
 
 it("settles an exhausted admission receipt and retries a later observation with a fresh budget", async () => {
-  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
   const acquire = vi
-    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
     .mockRejectedValue(unavailableError());
   const harness = await admittedWrite("backoff");
   const { settled } = harness;
@@ -261,7 +332,7 @@ it("settles an exhausted admission receipt and retries a later observation with 
 
 it("cancels a pending admission retry on shutdown without applying or leaking timers", async () => {
   const acquire = vi
-    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
     .mockRejectedValueOnce(unavailableError());
   const harness = await admittedWrite("shutdown");
   await flushReload(harness.reloader);
@@ -293,8 +364,8 @@ it.each([
   ...nonRetryableErrors.map((error) => ({ error, entered: false })),
   { error: unavailableError(), entered: true },
 ])("does not retry $error after callback entry: $entered", async ({ error, entered }) => {
-  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
-  const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease");
+  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
+  const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync");
   if (entered) {
     acquire.mockImplementationOnce((options, run) =>
       withLease(options, async (lease) => {
@@ -318,7 +389,7 @@ it.each([
 it("settles a superseded write while lease admission is still pending", async ({ signal }) => {
   const lease = createDeferred<never>();
   const entered = createDeferred();
-  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockImplementationOnce(() => {
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync").mockImplementationOnce(() => {
     entered.resolve();
     return lease.promise;
   });
@@ -336,4 +407,63 @@ it("settles a superseded write while lease admission is still pending", async ({
   await harness.reloader.stop();
   await expect(application.result).resolves.toBe("superseded");
   await expect(replacement.result).resolves.toBe("failed");
+});
+
+it("applies a leased plugin change while startup reconciles a config edit", async ({ signal }) => {
+  vi.useRealTimers();
+  const startupConfig: OpenClawConfig = { gateway: { reload: {} } };
+  // The file changed after startup read it, so initial reconciliation queues a reload.
+  let diskConfig: OpenClawConfig = { ...startupConfig, logging: { level: "debug" } };
+  const startupEdit = diskConfig;
+  const preparation = createDeferred();
+  const runtime = { operationId: "startup-plugin-reload", generation: 9, pluginIds: ["notes"] };
+  const harness = createReloaderHarness(
+    async () => makeSnapshot({ config: diskConfig, hash: "disk" }),
+    {
+      initialConfig: startupConfig,
+      prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
+        await preparation.promise;
+        return { runtimeConfig, compareConfig: sourceConfig };
+      },
+      onHotReload: async (plan, config, ownership) => {
+        ownership.markRuntimeCommitted(config, plan);
+        return { status: "applied", runtime };
+      },
+    },
+  );
+  const startWatcher = harness.watcher.adapter.start.getMockImplementation();
+  harness.watcher.adapter.start.mockImplementationOnce(async () => {
+    await startWatcher?.();
+    harness.watcher.emit("ready");
+  });
+  try {
+    // plugins.reload holds the lease before startup reaches its watcher drain.
+    await pluginLifecycleLease.withPluginLifecycleLeaseAsync({}, async () => {
+      const application = harness.reloader.applyPluginLifecycleChange({
+        config: startupEdit,
+        pluginIds: ["notes"],
+        reason: "reload",
+      });
+      preparation.resolve();
+      await expect(withinTest(application, signal)).resolves.toEqual(runtime);
+    });
+    await withinTest(harness.reloader.ready, signal);
+    await waitForReloadState(() => !harness.reloader.isReloading());
+
+    // The application carried the startup edit; the queued reload sees only its echo.
+    const [plan, appliedConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.pluginLifecycle?.pluginIds).toEqual(["notes"]);
+    expect(plan.changedPaths).toEqual(["logging"]);
+    expect(appliedConfig).toEqual(startupEdit);
+
+    // The watcher still owns later edits once the startup drain completes.
+    diskConfig = { ...startupConfig, logging: { level: "warn" } };
+    harness.watcher.emit("change");
+    await waitForReloadState(() =>
+      harness.onConfigAccepted.mock.calls.some(([config]) => config.logging?.level === "warn"),
+    );
+  } finally {
+    preparation.resolve();
+    await harness.reloader.stop();
+  }
 });

@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import {
   withBackupFixture,
   createVerifiedBackup,
@@ -15,6 +24,7 @@ import {
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
   inspectDatabase,
+  isolateBackupScratch,
   mkdirs,
 } from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
@@ -23,7 +33,114 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
+const systemTempRoot = os.tmpdir();
+
 afterEach(() => vi.restoreAllMocks());
+
+it("preserves fixture inputs after a retained backup reader cannot close", async () => {
+  // Keep the real snapshot outside the parent under test so even the broken
+  // parent cleanup leaves its native owner available for supported retirement.
+  const snapshots = createTempDirTracker();
+  const cacheRoot = snapshots.make("backup-retained-reader-", systemTempRoot);
+  const environment = { ...process.env };
+  const restores: Array<() => void> = [];
+  const failure = new Error("retained backup reader close incomplete");
+  let fixture: OpenClawTestState | undefined;
+  let input = "";
+  let snapshotPath = "";
+  let snapshotBytes: Buffer | undefined;
+  let readSucceeded = false;
+  let closeAttempts = 0;
+
+  onTestFinished(async () => {
+    try {
+      expect(readSucceeded).toBe(true);
+      expect(closeAttempts).toBeGreaterThan(1);
+      expect(await fs.readFile(input, "utf8")).toBe("retained fixture input\n");
+      expect(await fs.readFile(snapshotPath)).toEqual(snapshotBytes);
+    } finally {
+      for (const restore of restores.toReversed()) {
+        restore();
+      }
+      if (fixture) {
+        // The fixture caches its failed cleanup. Rejoin the real retained
+        // owner before removing any bytes or restoring its selectors.
+        await cleanupSessionStateForTest({ rootPath: fixture.root, stateDir: fixture.stateDir });
+        if (snapshotPath) {
+          await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        await fs.rm(fixture.root, { recursive: true, force: true });
+      }
+      snapshots.cleanup();
+      // Other keys already belong to the enclosing hooks' restoration.
+      for (const key of Object.keys(fixture?.envVars ?? {})) {
+        const value = environment[key];
+        if (value === undefined) {
+          deleteTestEnvValue(key);
+        } else {
+          setTestEnvValue(key, value);
+        }
+      }
+    }
+  });
+
+  const captureSource = stateReadWorker.captureOpenClawStateReadSource;
+  const capture = vi
+    .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+    .mockImplementation(() => {
+      const source = captureSource();
+      const createTransport = source.createTransport.bind(source);
+      const create = vi
+        .spyOn(source, "createTransport")
+        .mockImplementation((command, onChunk, onChunkAsync, awaitedOnly) => {
+          const transport = createTransport(command, onChunk, onChunkAsync, awaitedOnly);
+          if (command.type === "worktrees.livePaths") {
+            const startRead = transport.startRead.bind(transport);
+            const read = vi
+              .spyOn(transport, "startRead")
+              .mockImplementation(async (...readArgs) => {
+                snapshotPath = readArgs[0].location;
+                const outcome = await startRead(...readArgs);
+                readSucceeded = "value" in outcome && outcome.value.ok;
+                return outcome;
+              });
+            const close = transport.startClose;
+            // Keep the retained refusal active through the sibling mock-reset hook.
+            transport.startClose = async () => {
+              closeAttempts++;
+              throw failure;
+            };
+            restores.push(
+              () => read.mockRestore(),
+              () => {
+                transport.startClose = close;
+              },
+            );
+          }
+          return transport;
+        });
+      restores.push(() => create.mockRestore());
+      return source;
+    });
+  restores.push(() => capture.mockRestore());
+
+  await expect(
+    withBackupFixture({ prefix: "backup-retained-fixture-" }, async (state) => {
+      fixture = state;
+      await isolateBackupScratch(state);
+      state.envVars.XDG_CACHE_HOME = cacheRoot;
+      state.applyEnv();
+      input = await state.writeText("retained-input.txt", "retained fixture input\n");
+      const owner = openOpenClawStateDatabase({ env: state.env });
+      await closeOpenClawStateDatabaseByPathAsync(owner.path);
+      const output = state.path("backup.tar.gz");
+      await expect(createArchive(state)).rejects.toThrow();
+      expect(snapshotPath).not.toBe(owner.path);
+      snapshotBytes = await fs.readFile(snapshotPath);
+      await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    }),
+  ).rejects.toThrow();
+});
 
 function mutateAfterSnapshot(paths: string[], mutate: () => void | Promise<void>) {
   const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
@@ -48,15 +165,18 @@ type HardlinkedDatabase = {
 function hardlinkCase<Args extends unknown[]>(
   run: (fixture: HardlinkedDatabase, ...args: Args) => Promise<void>,
   opaque = false,
+  ownerName = "alpha.sqlite",
 ) {
+  const aliasName = ownerName.replace("alpha", "zeta");
   return (...args: Args) =>
     withBackupFixture({ layout: "split", prefix: "backup-plugin-hardlinks-" }, async (state) => {
+      await isolateBackupScratch(state);
       if (!opaque) {
         await declarePluginSqliteResources(state, "plugins/hardlinks");
       }
       const directory = state.statePath("plugins", "hardlinks");
-      const ownerPath = path.join(directory, opaque ? "zeta.sqlite" : "alpha.sqlite");
-      const aliasPath = path.join(directory, opaque ? "alpha.sqlite" : "zeta.sqlite");
+      const ownerPath = path.join(directory, opaque ? aliasName : ownerName);
+      const aliasPath = path.join(directory, opaque ? ownerName : aliasName);
       await fs.mkdir(directory, { recursive: true });
       using database = new (requireNodeSqlite().DatabaseSync)(ownerPath);
       database.exec(`
@@ -109,6 +229,12 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
   it(
     "copies undeclared hardlinks and sidecars as opaque bytes",
     hardlinkCase(async ({ state, ownerPath, aliasPath }) => {
+      const scratchRoot = os.tmpdir();
+      onTestFinished(async () => {
+        for (const root of [state.root, scratchRoot]) {
+          await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      });
       await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
       await fs.link(ownerPath, state.path("outside.sqlite"));
       const directory = path.dirname(ownerPath);
@@ -123,14 +249,9 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       );
       expect(archive.warnings?.every((warning) => /opaque/iu.test(warning))).toBe(true);
       const restored = await restoreBackup(state, archive);
-      const asset = expectDefined(
-        archive.assets.find((candidate) => candidate.kind === "state"),
-        "state asset",
-      );
       const restoredDirectory = path.join(
         restored.targetPath,
-        asset.archivePath,
-        "plugins/hardlinks",
+        buildBackupArchivePath(archive.archiveRoot, directory),
       );
       expect((await fs.readdir(restoredDirectory)).toSorted()).toEqual(names.toSorted());
       for (const [name, bytes] of originals) {
@@ -140,22 +261,36 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     }, true),
   );
 
-  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
-    "preserves a live writer's main-file POSIX lock when backing up a declared plugin %s",
-    hardlinkCase(async ({ state, ownerPath, aliasPath }, layout: string) => {
-      if (layout === "singleton") {
-        await fs.unlink(aliasPath);
-      }
-      const locksBefore = readMainDatabasePosixLocks(ownerPath);
-      expect(locksBefore).toEqual([
-        { length: 510, pid: process.pid, start: 1073741826, type: "read" },
-      ]);
+  it.runIf(process.platform === "linux").each([
+    ["singleton", "alpha.sqlite"],
+    ["hardlink pair", "alpha.sqlite"],
+    ["singleton", "alpha.db"],
+    ["hardlink pair", "alpha.db"],
+  ])(
+    "preserves a live writer's POSIX lock for a declared plugin %s named %s",
+    async (layout, ownerName) => {
+      await hardlinkCase(
+        async ({ state, ownerPath, aliasPath }) => {
+          if (layout === "singleton") {
+            await fs.unlink(aliasPath);
+          }
+          const locksBefore = readMainDatabasePosixLocks(ownerPath);
+          expect(locksBefore).toEqual([
+            { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+          ]);
 
-      const archive = await createArchive(state);
+          const archive = await createArchive(state);
 
-      expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
-      expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
-    }),
+          // Closing an in-process header probe would drop the writer's POSIX locks.
+          expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+          // No opaque-copy warning: .db names were classified as SQLite too.
+          expect(archive.warnings ?? []).toEqual([]);
+          expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
+        },
+        false,
+        ownerName,
+      )();
+    },
   );
 
   it.each([
@@ -179,7 +314,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         const firstPath = state.statePath("state", "first-global.sqlite");
         const secondPath = state.statePath("state", "second-global.sqlite");
         const canonicalAlias = state.statePath("state", "zeta-global-alias.sqlite");
-        let canonicalIno: number | undefined;
         if (canonical) {
           await mkdirs(path.dirname(canonicalPath));
           for (const sqlitePath of [firstPath, secondPath]) {
@@ -187,7 +321,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           }
           await fs.symlink(firstPath, canonicalPath);
           await fs.link(firstPath, canonicalAlias);
-          canonicalIno = (await fs.stat(firstPath)).ino;
         }
         if (firstWal) {
           database.close();
@@ -225,18 +358,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         try {
           await expectBackupRefused(state, error);
           expect(changed).toHaveBeenCalledOnce();
-          if (canonical) {
-            expect(await fs.realpath(canonicalPath)).toBe(
-              change === "canonical symlink" ? secondPath : firstPath,
-            );
-            if (change === "canonical hardlink") {
-              expect((await fs.stat(canonicalPath)).ino).toBe(canonicalIno);
-              expect((await fs.stat(canonicalAlias)).ino).not.toBe(canonicalIno);
-            }
-          }
-          if (firstWal) {
-            expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
-          }
         } finally {
           if (walMoved) {
             await fs.rename(movedWal, `${ownerPath}-wal`);

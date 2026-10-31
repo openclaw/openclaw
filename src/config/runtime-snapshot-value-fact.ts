@@ -66,16 +66,6 @@ export function matchesRuntimeConfigValueFact(
     : hashRuntimeConfigValue(config) === fact.fingerprint;
 }
 
-export function matchesRuntimeConfigPublicationFact(
-  config: OpenClawConfig,
-  fact: RuntimeConfigValueFact,
-): boolean {
-  return (
-    matchesRuntimeConfigValueFact(config, fact) &&
-    isDeepStrictEqual(serializeConfigResolutionFacts(config), fact.facts)
-  );
-}
-
 export function matchesRuntimeSourceConfigValueFact(
   config: OpenClawConfig,
   fact: RuntimeConfigValueFact,

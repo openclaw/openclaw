@@ -24,4 +24,5 @@ export type ChannelParticipantInput = {
   verifiedPrincipal?: UserChannelIdentity;
   requesterProfile?: PreparedRequesterProfile;
   commandOwnerAuthority?: PreparedCommandOwnerAuthority;
+  commandOwnerPrincipal?: UserChannelIdentity;
 };

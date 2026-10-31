@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "../plugins/plugin-metadata-empty.test-support.js";
 
 const providerEndpointPlugins = vi.hoisted(() => [
   {

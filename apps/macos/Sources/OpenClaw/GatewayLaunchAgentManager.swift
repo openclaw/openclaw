@@ -5,6 +5,7 @@ enum GatewayLaunchAgentManager {
     struct LoadedGatewayState: Equatable, Sendable {
         let runningPID: Int32?
         let reusablePID: Int32?
+        let lastError: String?
     }
 
     struct InstalledServiceCLI: Sendable, Equatable {
@@ -159,7 +160,8 @@ enum GatewayLaunchAgentManager {
     }
 
     static func loadedGatewayState(port: Int, allowUnconfigured: Bool = false) async throws -> LoadedGatewayState? {
-        guard let service = try await self.readDaemonService() else { return nil }
+        guard let status = try await self.readDaemonStatus() else { return nil }
+        let service = status.service
         let runningPID = self.runningGatewayPID(from: service)
         let runtime = service["runtime"] as? [String: Any]
         guard let loaded = service["loaded"] as? Bool,
@@ -185,7 +187,7 @@ enum GatewayLaunchAgentManager {
         } else {
             nil
         }
-        return LoadedGatewayState(runningPID: runningPID, reusablePID: reusablePID)
+        return LoadedGatewayState(runningPID: runningPID, reusablePID: reusablePID, lastError: status.lastError)
     }
 
     private static func configAuditAllowsReuse(_ audit: [String: Any]?) -> Bool {
@@ -199,8 +201,8 @@ enum GatewayLaunchAgentManager {
     }
 
     static func runningGatewayPID() async -> Int32? {
-        guard let service = try? await self.readDaemonService() else { return nil }
-        return self.runningGatewayPID(from: service)
+        guard let status = try? await self.readDaemonStatus() else { return nil }
+        return self.runningGatewayPID(from: status.service)
     }
 
     static func set(
@@ -420,8 +422,8 @@ enum GatewayLaunchAgentManager {
             guard !exists else { return "Gateway service ownership could not be inspected" }
             do {
                 // A missing plist is not proof that launchd has no loaded, externally managed job.
-                guard let service = try await self.readDaemonService(), service["loaded"] as? Bool == false,
-                      (service["command"] as? [String: Any]) == nil
+                guard let status = try await self.readDaemonStatus(), status.service["loaded"] as? Bool == false,
+                      (status.service["command"] as? [String: Any]) == nil
                 else { return "Gateway service ownership could not be inspected" }
             } catch {
                 return error.localizedDescription
@@ -565,11 +567,14 @@ extension GatewayLaunchAgentManager {
     }
 
     static func serviceIsConfirmedAbsent(installedCLI: InstalledServiceCLI?) async throws -> Bool {
-        guard let service = try await self.readDaemonService(installedCLI: installedCLI) else { return false }
+        guard let status = try await self.readDaemonStatus(installedCLI: installedCLI) else { return false }
+        let service = status.service
         return service["loaded"] as? Bool == false && (service["command"] == nil || service["command"] is NSNull)
     }
 
-    private static func readDaemonService(installedCLI: InstalledServiceCLI? = nil) async throws -> [String: Any]? {
+    private static func readDaemonStatus(installedCLI: InstalledServiceCLI? = nil) async throws
+        -> (service: [String: Any], lastError: String?)?
+    {
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
             timeout: 15,
@@ -588,7 +593,7 @@ extension GatewayLaunchAgentManager {
         else {
             return nil
         }
-        return service
+        return (service, json["lastError"] as? String)
     }
 
     private static func gatewayPort(from service: [String: Any]) -> Int? {

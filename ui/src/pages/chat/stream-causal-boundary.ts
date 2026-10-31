@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { streamSegmentHasItemId, type ChatStreamSegment } from "../../lib/chat/chat-types.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
+import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
@@ -60,11 +60,11 @@ export function observedRunInputSendId(
   return readSessionMessageIdentity(input)?.sendId ?? undefined;
 }
 
-export function streamCausalInterval(
+export function knownStreamCausalInterval(
   messages: unknown[],
   part: { runId?: string },
   afterUserSendId?: string,
-): { start: number; end: number } {
+): { start: number; end: number } | null {
   const inputIndex = afterUserSendId
     ? messages.findIndex(
         (message) => readSessionMessageIdentity(message)?.sendId === afterUserSendId,
@@ -91,17 +91,34 @@ export function streamCausalInterval(
     // the first retained steer; an unanchored replay or tail does not.
     return { start: 0, end: startIndex };
   }
-  if (startIndex >= 0) {
+  const runOutputIndex =
+    startIndex < 0 && part.runId
+      ? messages.findIndex((message) => readSessionMessageIdentity(message)?.runId === part.runId)
+      : -1;
+  if (startIndex >= 0 || runOutputIndex >= 0 || afterUserSendId) {
+    const start = startIndex >= 0 ? startIndex + 1 : Math.max(runOutputIndex, 0);
     const end = messages.findIndex(
       (message, index) =>
-        index > startIndex &&
+        index >= start &&
         readSessionMessageIdentity(message)?.role === "user" &&
         (inputIndex >= 0 || persistedSteerTargetRunId(message) !== part.runId),
     );
-    return { start: startIndex + 1, end: end >= 0 ? end : messages.length };
+    return { start, end: end >= 0 ? end : messages.length };
   }
-  const end = messages.length;
-  return { start: lastUserMessageIndex(messages, end) + 1, end };
+  return null;
+}
+
+export function streamCausalInterval(
+  messages: unknown[],
+  part: { runId?: string },
+  afterUserSendId?: string,
+): { start: number; end: number } {
+  return (
+    knownStreamCausalInterval(messages, part, afterUserSendId) ?? {
+      start: lastUserMessageIndex(messages) + 1,
+      end: messages.length,
+    }
+  );
 }
 
 export function streamCausalInsertIndex(

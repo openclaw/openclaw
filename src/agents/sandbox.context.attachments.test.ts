@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
+import { createConfig as createCustodyConfig } from "./sandbox/context-custody.test-support.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSubagentSessionAttachmentRootDir } from "./subagents/subagent-attachment-paths.js";
 
@@ -15,11 +16,6 @@ it("isolates a session attachment projection from sibling agent-scoped sessions"
   const workspaceDir = path.join(stateDir, "workspace");
   const attachedSessionKey = "agent:main:subagent:attached";
   const siblingSessionKey = "agent:main:subagent:sibling";
-  const attachmentRoot = resolveSubagentSessionAttachmentRootDir({
-    agentId: "main",
-    childSessionKey: attachedSessionKey,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
   const backendFactory = vi.fn(async (params) => ({
     id: "attachment-scope-backend",
     runtimeId: `runtime-${params.scopeKey}`,
@@ -40,23 +36,19 @@ it("isolates a session attachment projection from sibling agent-scoped sessions"
     capabilities: { readOnlyResourceMounts: true },
     factory: backendFactory,
   });
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          backend: "attachment-scope-backend",
-          scope: "agent",
-          workspaceAccess: "none",
-          prune: { idleHours: 0, maxAgeDays: 0 },
-        },
-      },
-    },
-  };
+  const cfg: OpenClawConfig = createCustodyConfig({
+    backend: "attachment-scope-backend",
+    scope: "agent",
+    workspaceAccess: "none",
+  });
 
   try {
     await fs.mkdir(workspaceDir, { recursive: true });
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const attachmentRoot = resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey: attachedSessionKey,
+      });
       const beforeAttachment = await resolveSandboxContext({
         config: cfg,
         sessionKey: attachedSessionKey,

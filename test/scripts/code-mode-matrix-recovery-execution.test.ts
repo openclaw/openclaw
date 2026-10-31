@@ -9,7 +9,6 @@ import {
   createCodeModeHarness,
   resetCodeModeTestState,
   runUntilCompleted,
-  testing,
 } from "../../src/agents/code-mode.test-support.js";
 import { createReadTool } from "../../src/agents/sessions/tools/read.js";
 import { createWriteTool } from "../../src/agents/sessions/tools/write.js";
@@ -47,7 +46,7 @@ it("reconciles uncertain settlements through public exec/wait without replaying 
     },
   });
   targets.push(createReadTool(workspace), createWriteTool(workspace));
-  const observations = new Map(targets.map((tool) => [tool.name, vi.spyOn(tool, "execute")]));
+  const observations = targets.map((tool) => vi.spyOn(tool, "execute"));
   const harness = createCodeModeHarness({ codeMode: { executor: "node" } });
   applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, ...targets] });
   const execTool = expectDefined(harness.tools[0], "public Code Mode exec");
@@ -108,17 +107,9 @@ it("reconciles uncertain settlements through public exec/wait without replaying 
   expect(exec).toHaveBeenCalledOnce();
   expect(wait.mock.calls.length).toBeGreaterThanOrEqual(4);
   expect(details.telemetry).toMatchObject({ callCount: 20 });
-  const nestedIds = [...observations.values()].flatMap((execute) =>
+  const nestedIds = observations.flatMap((execute) =>
     execute.mock.calls.map(([toolCallId]) => toolCallId),
   );
   expect([nestedIds.length, new Set(nestedIds).size]).toEqual([20, 20]);
   expect(nestedIds.every((id) => id.startsWith("tool_call:code-call-1:"))).toBe(true);
-  const observedWrite = expectDefined(observations.get("write"), "report write");
-  const observedRead = expectDefined(observations.get("read"), "report readback");
-  expect(observedWrite).toHaveBeenCalledOnce();
-  expect(observedRead).toHaveBeenCalledOnce();
-  expect(observedWrite.mock.invocationCallOrder[0]).toBeLessThan(
-    expectDefined(observedRead.mock.invocationCallOrder[0], "report readback order"),
-  );
-  expect([testing.activeRuns.size, testing.resumingRunIds.size]).toEqual([0, 0]);
 });

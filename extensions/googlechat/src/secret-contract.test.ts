@@ -43,6 +43,7 @@ describe("googlechat secret contract", () => {
     ).toEqual([
       expectedAssignment("alpha"),
       expectedAssignment("beta"),
+      expectedAssignment("default"),
       expectedAssignment("override", "channels.googlechat.accounts.override.serviceAccount"),
     ]);
     const serviceAccount = { client_email: "synthetic@example.invalid" };

@@ -19,6 +19,7 @@ import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import {
   canResolveOperatorApproval,
   canReviewOperatorApproval,
+  isHostPluginApprovalCall,
 } from "../operator-approval-authorization.js";
 import type { OperatorApprovalStoreGuard } from "../operator-approval-store.types.js";
 import {
@@ -174,7 +175,8 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
     const legacy = method.startsWith("exec.approval.") || method.startsWith("plugin.approval.");
     const allowed = legacy
       ? authority.family === "native-compatibility" ||
-        authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed
+        authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed ||
+        isHostPluginApprovalCall(method, client)
       : method === "approval.resolve"
         ? canResolveOperatorApproval(client)
         : method === "approval.history"

@@ -1,8 +1,10 @@
+import { resolveConfiguredCommandOwners } from "../../auto-reply/command-auth.js";
+import { resolveOwnerPromptNumbers } from "../owner-display.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 
-/** Project admitted command facts into embedded and CLI tool construction. */
+/** Project admitted command facts into embedded and CLI tool and prompt construction. */
 export function buildCommandAttemptToolContext(
-  params: Pick<AgentAttemptParams, "messageChannel" | "opts" | "runContext" | "spawnedBy">,
+  params: Pick<AgentAttemptParams, "cfg" | "messageChannel" | "opts" | "runContext" | "spawnedBy">,
 ) {
   return {
     requesterOrigin: params.opts.requesterOrigin,
@@ -24,6 +26,13 @@ export function buildCommandAttemptToolContext(
     replyToMode: params.runContext.replyToMode,
     senderId: params.runContext.senderId,
     senderIsOwner: params.opts.senderIsOwner,
+    // Owners are a config fact, so completion turns render the user turn's prompt section.
+    ownerNumbers: resolveOwnerPromptNumbers({
+      ownerNumbers: resolveConfiguredCommandOwners(params.cfg, {
+        channel: params.messageChannel,
+        accountId: params.runContext.accountId,
+      }),
+    }),
     gitContributorProfileId: params.opts.gitContributorProfileId,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,

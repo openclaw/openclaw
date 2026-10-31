@@ -10,6 +10,7 @@ import {
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import type { PhysicalFactsTestResult } from "./physical-facts-runtime.test-support.js";
 import { admitPostgresPhysicalFacts } from "./physical-facts.js";
+import { createSqlStatementObserver } from "./sql-statement-observer.test-support.js";
 
 const input: {
   connection: string;
@@ -37,17 +38,12 @@ try {
   const db = new PostgresSyncConnection(input.connection, input.namespace, anchor, input.storeId);
   let catalogReads = 0;
   const statements = channel("openclaw.database.statement");
-  const observe = (message: unknown) => {
-    if (
-      message &&
-      typeof message === "object" &&
-      "sql" in message &&
-      typeof message.sql === "string" &&
-      message.sql.startsWith("WITH captured")
-    ) {
+  const observe = createSqlStatementObserver(
+    (sql) => sql.startsWith("WITH captured"),
+    () => {
       catalogReads++;
-    }
-  };
+    },
+  );
   statements.subscribe(observe);
   let result: PhysicalFactsTestResult;
   try {

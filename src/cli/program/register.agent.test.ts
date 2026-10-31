@@ -8,66 +8,44 @@ import { registerBackupCommand } from "./register.backup.js";
 import { registerMigrateCommand } from "./register.migrate.js";
 
 const mocks = vi.hoisted(() => ({
-  agentCliCommandMock: vi.fn(),
-  agentExecCommandMock: vi.fn(),
-  agentsAddCommandMock: vi.fn(),
-  agentsTeamCreateCommandMock: vi.fn(),
-  agentsBindingsCommandMock: vi.fn(),
-  agentsUpdateBindingsCommandMock: vi.fn(),
-  agentsDeleteCommandMock: vi.fn(),
-  agentsListCommandMock: vi.fn(),
-  agentsSetIdentityCommandMock: vi.fn(),
-  requestExitAfterOneShotOutputMock: vi.fn(),
-  setVerboseMock: vi.fn(),
+  agent: vi.fn(),
+  exec: vi.fn(),
+  add: vi.fn(),
+  bindings: vi.fn(),
+  bind: vi.fn(),
+  delete: vi.fn(),
+  list: vi.fn(),
+  exit: vi.fn(),
+  verbose: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
-vi.mock("../../commands/agent-via-gateway.js", () => ({
-  agentCliCommand: mocks.agentCliCommandMock,
-}));
-
-vi.mock("../../commands/agent-exec.js", () => ({
-  agentExecCommand: mocks.agentExecCommandMock,
-}));
-
-vi.mock("../../commands/agents.commands.add.js", () => ({
-  agentsAddCommand: mocks.agentsAddCommandMock,
-}));
-
-vi.mock("../../commands/agents.commands.team.js", () => ({
-  agentsTeamCreateCommand: mocks.agentsTeamCreateCommandMock,
-}));
-
+// mock-isolation: CLI parsing must not connect to a real Gateway or execute an agent.
+vi.mock("../../commands/agent-via-gateway.js", () => ({ agentCliCommand: mocks.agent }));
+// mock-isolation: CLI parsing must not execute local agent turns.
+vi.mock("../../commands/agent-exec.js", () => ({ agentExecCommand: mocks.exec }));
+// mock-isolation: CLI parsing must not create persisted agents.
+vi.mock("../../commands/agents.commands.add.js", () => ({ agentsAddCommand: mocks.add }));
 vi.mock("../../commands/agents.commands.bind.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../commands/agents.commands.bind.js")>()),
-  agentsBindingsCommand: mocks.agentsBindingsCommandMock,
-  agentsUpdateBindingsCommand: mocks.agentsUpdateBindingsCommandMock,
+  agentsBindingsCommand: mocks.bindings,
+  agentsUpdateBindingsCommand: mocks.bind,
 }));
 
-vi.mock("../../commands/agents.commands.delete.js", () => ({
-  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
-}));
+// mock-isolation: CLI parsing must not delete persisted agents.
+vi.mock("../../commands/agents.commands.delete.js", () => ({ agentsDeleteCommand: mocks.delete }));
 
-vi.mock("../../commands/agents.commands.identity.js", () => ({
-  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
-}));
-
-vi.mock("../../commands/agents.commands.list.js", () => ({
-  agentsListCommand: mocks.agentsListCommandMock,
-}));
-
-vi.mock("../../global-state.js", () => ({
-  setVerbose: mocks.setVerboseMock,
-}));
-
+// mock-isolation: Agent enumeration is a controlled command collaborator.
+vi.mock("../../commands/agents.commands.list.js", () => ({ agentsListCommand: mocks.list }));
+// mock-isolation: Argument parsing must not mutate process-wide verbosity.
+vi.mock("../../global-state.js", () => ({ setVerbose: mocks.verbose }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
-vi.mock("../one-shot-exit.js", () => ({
-  requestExitAfterOneShotOutput: mocks.requestExitAfterOneShotOutputMock,
-}));
+// mock-isolation: One-shot command output must not exit the test process.
+vi.mock("../one-shot-exit.js", () => ({ requestExitAfterOneShotOutput: mocks.exit }));
 
 const handlers = vi.hoisted(() => ({
   create: vi.fn(),
@@ -84,7 +62,6 @@ const handlers = vi.hoisted(() => ({
 
 // mock-isolation: argument parsing must not create real backup archives.
 vi.mock("../../commands/backup.js", () => ({ backupCreateCommand: handlers.create }));
-// Argument parsing must not open database owners or launch backup workers.
 // mock-isolation: argument parsing must not open repositories or launch backup workers.
 vi.mock("../../commands/backup-git.js", () => ({
   backupGitLogCommand: handlers.gitLog,
@@ -103,7 +80,7 @@ vi.mock("../../commands/backup-sqlite.js", () => ({
   backupSqliteVerifyCommand: handlers.sqliteVerify,
 }));
 
-const { agentCliCommandMock: agent, agentExecCommandMock: exec, runtime } = mocks;
+const { agent, exec, runtime } = mocks;
 
 async function runCli(args: string[]) {
   const program = new Command().enablePositionalOptions();
@@ -120,7 +97,7 @@ beforeEach(() => {
 describe("agent command registration", () => {
   it("normalizes explicit verbosity", async () => {
     await runCli("agent --message hi --verbose ON --json".split(" "));
-    expect(mocks.setVerboseMock).toHaveBeenCalledWith(true);
+    expect(mocks.verbose).toHaveBeenCalledWith(true);
     expect(agent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: "hi", verbose: "ON", json: true }),
       runtime,
@@ -135,86 +112,48 @@ describe("agent command registration", () => {
     ]);
     expect(exec).toHaveBeenCalledWith(
       "fix",
-      expect.objectContaining({
-        timeout: "120",
-        configOverride: overrides,
-      }),
+      expect.objectContaining({ timeout: "120", configOverride: overrides }),
       runtime,
     );
     expect(agent).not.toHaveBeenCalled();
   });
 
   it("selects agent creation posture", async () => {
+    const options = { name: "beta", bind: ["telegram", "discord:acct"], nonInteractive: true };
     await runCli(
       "agents add beta --workspace /tmp/ws --bind telegram --bind discord:acct --non-interactive --json".split(
         " ",
       ),
     );
-    expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        name: "beta",
-        workspace: "/tmp/ws",
-        bind: ["telegram", "discord:acct"],
-        nonInteractive: true,
-        json: true,
-      }),
-      { hasAutomationFlags: true },
-    );
+    expect(mocks.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(options), {
+      hasAutomationFlags: true,
+    });
   });
 
   it.each([
-    ["", mocks.agentsListCommandMock, {}],
-    [
-      "list --json --bindings --tree",
-      mocks.agentsListCommandMock,
-      { json: true, bindings: true, tree: true },
-    ],
-    ["bindings --agent ops --json", mocks.agentsBindingsCommandMock, { agent: "ops", json: true }],
+    ["", mocks.list, {}],
+    ["bindings --agent ops --json", mocks.bindings, { agent: "ops" }],
     [
       "bind --agent ops --bind matrix:ops --bind telegram --json",
-      mocks.agentsUpdateBindingsCommandMock,
-      { agent: "ops", bind: ["matrix:ops", "telegram"], json: true },
+      mocks.bind,
+      { agent: "ops", bind: ["matrix:ops", "telegram"] },
       "bind",
     ],
     [
       "unbind --agent ops --all --json",
-      mocks.agentsUpdateBindingsCommandMock,
-      { agent: "ops", bind: [], all: true, json: true },
+      mocks.bind,
+      { agent: "ops", bind: [], all: true },
       "unbind",
     ],
-    [
-      "delete worker-a --force --json",
-      mocks.agentsDeleteCommandMock,
-      { id: "worker-a", force: true, json: true },
-    ],
-    [
-      "team create --preset team --coordinator lead --prefix docs --workspace-root /tmp/team --non-interactive --json",
-      mocks.agentsTeamCreateCommandMock,
-      {
-        preset: "team",
-        coordinator: "lead",
-        prefix: "docs",
-        workspaceRoot: "/tmp/team",
-        nonInteractive: true,
-        json: true,
-      },
-    ],
-    [
-      "set-identity --agent main --workspace /tmp/ws --identity-file /tmp/ws/IDENTITY.md --from-identity --json",
-      mocks.agentsSetIdentityCommandMock,
-      {
-        agent: "main",
-        workspace: "/tmp/ws",
-        identityFile: "/tmp/ws/IDENTITY.md",
-        fromIdentity: true,
-        json: true,
-      },
-    ],
+    ["delete worker-a --force --json", mocks.delete, { id: "worker-a", force: true }],
   ] as const)(
     "dispatches agents %s",
     async (args, command, options, operation?: "bind" | "unbind") => {
       await runCli(["agents", ...(args ? args.split(" ") : [])]);
-      expect(command).toHaveBeenCalledExactlyOnceWith(...(operation ? [operation] : []), options);
+      expect(command).toHaveBeenCalledExactlyOnceWith(
+        ...(operation ? [operation] : []),
+        expect.objectContaining(options),
+      );
     },
   );
 
@@ -231,13 +170,12 @@ describe("agent command registration", () => {
     );
     await runCli("agent --message hello --json".split(" "));
     expect(runtime.error).toHaveBeenCalledWith(message);
-    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("Error:"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
 
 describe("backup registration", () => {
-  const gitOptions = { repository: "/repo", ref: "HEAD", global: false, json: true };
+  const gitOptions = { repository: "/repo", ref: "HEAD", global: false };
   async function parse(args: string) {
     const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
     registerBackupCommand(program);
@@ -248,31 +186,20 @@ describe("backup registration", () => {
     [
       "create --output /repo --json --dry-run",
       handlers.create,
-      {
-        output: "/repo",
-        json: true,
-        dryRun: true,
-        verify: false,
-        onlyConfig: false,
-        includeWorkspace: true,
-      },
+      { dryRun: true, verify: false, onlyConfig: false, includeWorkspace: true },
     ],
-    ["verify /backup.tgz --json", handlers.verify, { archive: "/backup.tgz", json: true }],
+    ["verify /backup.tgz --json", handlers.verify, { archive: "/backup.tgz" }],
     [
       "restore /backup.tgz --target /restored --json",
       handlers.restore,
-      { archive: "/backup.tgz", target: "/restored", json: true },
+      { archive: "/backup.tgz", target: "/restored" },
     ],
     [
       "sqlite create --global --repository /repo --json",
       handlers.sqliteCreate,
-      { global: true, agent: undefined, repository: "/repo", json: true },
+      { global: true, repository: "/repo" },
     ],
-    [
-      "sqlite list --repository /repo --json",
-      handlers.sqliteList,
-      { repository: "/repo", json: true },
-    ],
+    ["sqlite list --repository /repo --json", handlers.sqliteList, { repository: "/repo" }],
     [
       "git restore --repository /repo --store team-reports --target /restored.sqlite --json",
       handlers.gitRestore,
@@ -283,25 +210,25 @@ describe("backup registration", () => {
       handlers.gitVerify,
       { ...gitOptions, store: "workboard" },
     ],
-  ] as const)("dispatches backup %s", async (args, command, options) => {
-    await parse(args);
-    expect(command).toHaveBeenCalledExactlyOnceWith(runtime, options);
-  });
-
-  it.each([
     [
-      "verify /snapshot --scratch /scratch --json",
+      "sqlite verify /snapshot --scratch /scratch --json",
       handlers.sqliteVerify,
-      { scratch: "/scratch", json: true },
+      { scratch: "/scratch" },
+      "/snapshot",
     ],
     [
-      "restore /snapshot --target /restored.sqlite --json",
+      "sqlite restore /snapshot --target /restored.sqlite --json",
       handlers.sqliteRestore,
-      { target: "/restored.sqlite", json: true },
+      { target: "/restored.sqlite" },
+      "/snapshot",
     ],
-  ] as const)("dispatches backup sqlite %s", async (args, command, options) => {
-    await parse(`sqlite ${args}`);
-    expect(command).toHaveBeenCalledExactlyOnceWith(runtime, "/snapshot", options);
+  ] as const)("dispatches backup %s", async (args, command, options, snapshot?: string) => {
+    await parse(args);
+    expect(command).toHaveBeenCalledExactlyOnceWith(
+      runtime,
+      ...(snapshot ? [snapshot] : []),
+      expect.objectContaining(options),
+    );
   });
 
   it("rejects partial Git log limits before dispatch", async () => {

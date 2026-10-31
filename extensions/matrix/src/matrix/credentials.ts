@@ -5,11 +5,7 @@ import {
   matrixCredentialsStoreKey,
   normalizeMatrixStoredCredentials,
 } from "./credentials-state.js";
-import type {
-  MatrixCredentialStateRecord,
-  MatrixStoredCredentialRecord,
-  MatrixStoredCredentials,
-} from "./credentials-state.js";
+import type { MatrixStoredCredentialRecord, MatrixStoredCredentials } from "./credentials-state.js";
 import { updateMatrixKeyedState } from "./sqlite-state.js";
 
 export {
@@ -47,7 +43,9 @@ async function persistMatrixCredentials(
   const preparedCredentials = { ...credentials };
   const now = new Date().toISOString();
   let result: "saved" | "skipped" = "saved";
-  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
+  const store = openMatrixCredentialsAsyncStore(env);
+  const key = matrixCredentialsStoreKey(normalizedAccountId);
+  await updateMatrixKeyedState(store, key, (current) => {
     result = "saved";
     // A delayed login backfill must not resurrect credentials after logout.
     if (backfill && isMatrixCredentialRevocation(current, normalizedAccountId)) {
@@ -78,16 +76,4 @@ async function persistMatrixCredentials(
     } satisfies MatrixStoredCredentialRecord;
   });
   return result;
-}
-
-async function updateMatrixCredentials(
-  env: NodeJS.ProcessEnv,
-  accountId: string,
-  update: (
-    current: MatrixCredentialStateRecord | undefined,
-  ) => MatrixCredentialStateRecord | undefined,
-): Promise<void> {
-  const store = openMatrixCredentialsAsyncStore(env);
-  const key = matrixCredentialsStoreKey(accountId);
-  await updateMatrixKeyedState(store, key, update);
 }

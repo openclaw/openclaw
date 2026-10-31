@@ -32,24 +32,9 @@ function mountStrip(
 }
 afterEach(() => {
   document.documentElement.removeAttribute("dir");
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-});
-
-it("preserves keyed nodes, controlled selection, and updated labels", () => {
-  const { button, update, onSelect, container } = mountStrip();
-  const [firstNode, secondNode] = [button("a"), button("b")] as const;
-  firstNode.click();
-  expect(onSelect).not.toHaveBeenCalled();
-  secondNode.click();
-  expect(onSelect).toHaveBeenCalledExactlyOnceWith("b");
-  update([{ ...second, label: "Renamed second" }, first], "b");
-  expect([...container.querySelectorAll('[role="tab"]')]).toEqual([secondNode, firstNode]);
-  expect(secondNode).toMatchObject({ textContent: expect.stringContaining("Renamed second") });
-  expect(secondNode.getAttribute("aria-selected")).toBe("true");
-  expect([button("b-close").tabIndex, button("a-close").tabIndex]).toEqual([0, -1]);
-  secondNode.click();
-  expect(onSelect).toHaveBeenCalledOnce();
 });
 
 it("creates the group only for populated lists and slots the new-tab action", () => {
@@ -93,7 +78,13 @@ it("disables both close gestures without disabling selection", () => {
   tab.click();
   expect(onClose).not.toHaveBeenCalled();
   expect(onSelect).toHaveBeenCalledExactlyOnceWith(second.id);
-  update([first, second]);
+  update([first, { ...second, label: "Renamed second" }], "b");
+  expect(button("b")).toBe(tab);
+  expect(tab).toMatchObject({ textContent: expect.stringContaining("Renamed second") });
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  expect([close.tabIndex, button("a-close").tabIndex]).toEqual([0, -1]);
+  tab.click();
+  expect(onSelect).toHaveBeenCalledOnce();
   expect(close.disabled).toBe(false);
   close.click();
   expect(onClose).toHaveBeenCalledExactlyOnceWith(second.id);
@@ -126,15 +117,35 @@ it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (d
 });
 
 it("releases measurement observers on disposal", () => {
-  const disconnected = vi.fn();
-  const observer = vi.fn(function () {
-    return { observe() {}, unobserve() {}, disconnect: disconnected };
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  const observed = new Set<Element>();
+  const disconnected = vi.fn(() => observed.clear());
+  vi.stubGlobal("ResizeObserver", function () {
+    return {
+      observe: (target: Element) => observed.add(target),
+      unobserve: (target: Element) => observed.delete(target),
+      disconnect: disconnected,
+    };
   });
-  vi.stubGlobal("ResizeObserver", observer);
   const view = mountStrip();
-  const initialObservers = observer.mock.calls.length;
-  expect(initialObservers).toBeGreaterThan(0);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(observed.size).toBeGreaterThan(0);
+  const firstTargets = new Set(observed);
+  const other = mountStrip();
+  flush();
+  vi.advanceTimersToNextFrame();
+  const otherTargets = new Set([...observed].filter((target) => !firstTargets.has(target)));
+  expect(otherTargets.size).toBeGreaterThan(0);
   view.unmount();
-  expect(observer).toHaveBeenCalledTimes(initialObservers);
-  expect(disconnected).toHaveBeenCalledTimes(initialObservers);
+  expect(observed).toEqual(otherTargets);
+  expect(disconnected).not.toHaveBeenCalled();
+  other.query(".tabstrip")!.dispatchEvent(new Event("scroll"));
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  other.unmount();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(observed.size).toBe(0);
+  expect(disconnected).toHaveBeenCalled();
+  vi.advanceTimersToNextFrame();
+  expect(observed.size).toBe(0);
 });

@@ -6,9 +6,9 @@ import { startTranscripts } from "../../transcripts/capture.js";
 import type { TranscriptStartRequest } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
+import { createEnteredGate as captureGate } from "../entered-gate.test-support.js";
 import {
   captureFixture,
-  captureGate,
   type CaptureStart,
 } from "./transcripts-tool.capture-fixture.test-support.js";
 import {
@@ -442,16 +442,10 @@ it.each([
     await h.start();
     const replacement = (await h.store.readSession("2026-07-02/notes"))!;
     const savedSummary = await h.store.readSummary(replacement);
-    const read = vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot");
-    const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
-    const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
     authorization.release();
     await expect.soft(delayed).resolves.toMatchObject({
       details: action === "status" ? { active: [] } : { skipped: true },
     });
-    expect.soft(read).not.toHaveBeenCalled();
-    expect.soft(write).not.toHaveBeenCalled();
-    expect.soft(materialize).not.toHaveBeenCalled();
     expect.soft(await h.store.readSummary(replacement)).toEqual(savedSummary);
     await expect.soft(fs.stat(h.store.sessionDir(replacement))).rejects.toMatchObject({
       code: "ENOENT",

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -20,6 +20,8 @@ import { finishUpdateRun, recordUpdateRunDiagnostic } from "./daemon-cli.js";
 import { printResult } from "./update-cli/progress.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const handoffFailure = { status: "failed", reason: "managed-service-handoff-failed" } as const;
+const fail = (reason: string) => ({ status: "failed" as const, reason });
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -86,11 +88,8 @@ async function finishFromPublishedDriver(
 }
 
 it("exports the terminal-safe update diagnostic writer for installed-runtime finalization", async () => {
-  const { options, run, reportPath } = fixture();
-  await finishUpdateRun(run.runId, { status: "failed", reason: "post-update-failed" }, options);
-  expect(await fs.readFile(reportPath, "utf8")).toContain(
-    "OpenClaw update failed: post-update-failed",
-  );
+  const { options, run } = fixture();
+  await finishUpdateRun(run.runId, fail("post-update-failed"), options);
 
   recordUpdateRunDiagnostic(
     run.runId,
@@ -131,14 +130,14 @@ it.each(["published driver", "settled child"] as const)(
       { nextAction: "Update is not finished. Check progress: openclaw update status" },
     );
     expect(await fs.readFile(reportPath, "utf8")).toContain("in progress");
-    const outcome = { status: "failed" as const, reason: "managed-service-handoff-failed" };
-    const reason = driver === "settled child" ? "candidate-validation-failed" : outcome.reason;
+    const reason =
+      driver === "settled child" ? "candidate-validation-failed" : handoffFailure.reason;
     if (driver === "settled child") {
       // The child committed its verdict, then exited before replacing the report.
-      finishLedgerRun(run.runId, { status: "failed", reason }, options);
-      await finishUpdateRun(run.runId, outcome, options);
+      finishLedgerRun(run.runId, fail(reason), options);
+      await finishUpdateRun(run.runId, handoffFailure, options);
     } else {
-      const stderr = await finishFromPublishedDriver(run.runId, outcome, options);
+      const stderr = await finishFromPublishedDriver(run.runId, handoffFailure, options);
       expect(stderr).not.toContain("Update report could not be saved:");
     }
     expect(getUpdateRun(run.runId, options)).toMatchObject({
@@ -160,11 +159,7 @@ it.each(["published driver", "settled child"] as const)(
 
 it("preserves a child-authored terminal report and its first recorded outcome", async () => {
   const { options, run, result, opts, reportPath } = fixture();
-  await finishUpdateRun(
-    run.runId,
-    { status: "failed", reason: "candidate-validation-failed" },
-    options,
-  );
+  await finishUpdateRun(run.runId, fail("candidate-validation-failed"), options);
   await printResult({ ...result, status: "error", reason: "candidate-validation-failed" }, opts, {
     nextAction: "Keep this specific candidate diagnostic and inspect the failed check.",
   });
@@ -179,13 +174,9 @@ it("keeps durable failure when the report directory cannot be written", async ()
   const { stateDir, options, run } = fixture();
   await fs.writeFile(path.join(stateDir, "update-reports"), "unrelated file");
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  await expect(
-    finishUpdateRun(
-      run.runId,
-      { status: "failed", reason: "managed-service-handoff-failed" },
-      options,
-    ),
-  ).resolves.toMatchObject({ status: "failed" });
+  await expect(finishUpdateRun(run.runId, handoffFailure, options)).resolves.toMatchObject({
+    status: "failed",
+  });
   expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
   expect(warn).toHaveBeenCalledWith(expect.stringContaining("Update report could not be saved:"));
   expect(await fs.readFile(path.join(stateDir, "update-reports"), "utf8")).toBe("unrelated file");
@@ -208,19 +199,16 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
       return rename(from, to);
     });
     const foreground = printResult(result, opts);
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       paused.promise,
-      foreground.then(() => {
-        throw new Error("Foreground report completed without reaching its atomic write gate");
-      }),
-    ]);
-    const contended = createDeferred();
-    const terminal = finishFromPublishedDriver(
-      run.runId,
-      { status: "failed", reason: "managed-service-handoff-failed" },
-      options,
-      { lockPath: `${reportPath}.lock`, observed: () => contended.resolve() },
+      foreground,
+      "Foreground report completed without reaching its atomic write gate",
     );
+    const contended = createDeferred();
+    const terminal = finishFromPublishedDriver(run.runId, handoffFailure, options, {
+      lockPath: `${reportPath}.lock`,
+      observed: () => contended.resolve(),
+    });
     try {
       // Exercise both lock handoff and a writer delayed beyond the actual budget.
       if (releaseAfter === "helper wait exhausted") {
@@ -228,10 +216,7 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
       } else {
         await Promise.race([terminal, contended.promise]);
       }
-      expect(getUpdateRun(run.runId, options)).toMatchObject({
-        status: "failed",
-        reason: "managed-service-handoff-failed",
-      });
+      expect(getUpdateRun(run.runId, options)).toMatchObject(handoffFailure);
     } finally {
       release.resolve();
       await Promise.allSettled([foreground, terminal]);
@@ -253,11 +238,7 @@ it.each(["terminal", "captured"] as const)(
   async (kind) => {
     const { options, run, result, opts, reportPath } = fixture();
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const captured = await finishUpdateRun(
-      run.runId,
-      { status: "failed", reason: "helper-first-failure" },
-      options,
-    );
+    const captured = await finishUpdateRun(run.runId, fail("helper-first-failure"), options);
     expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
     const before = await fs.readFile(reportPath, "utf8");
     closeOpenClawStateDatabaseForTest();

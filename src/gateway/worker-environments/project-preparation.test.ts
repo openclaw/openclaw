@@ -235,7 +235,7 @@ test "$PWD" = "$OPENCLAW_SOURCE_TREE_PATH"
 test "$PWD" = "$OPENCLAW_WORKTREE_PATH"
 mkdir build
 printf '%s\\n' "$HOME" > build/home
-printf '#!/bin/sh\\ncat %s/input.txt\\n' "$PWD" > build/read-source
+printf '#!/bin/sh\\ncat "%s/input.txt"\\n' "$PWD" > build/read-source
 chmod +x build/read-source
 printf 'setup\\n' >> "$HOME/count"
 `,

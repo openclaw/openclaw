@@ -336,21 +336,26 @@ export function extractMessagingToolSendResult(
   pending: MessagingToolSend,
   result: unknown,
 ): MessagingToolSend {
-  const providerId = normalizeChannelId(pending.provider);
+  const routedAccountId =
+    pending.tool === "message"
+      ? normalizeOptionalString(readToolResultDetails(result)?.accountId)
+      : undefined;
+  const confirmed = routedAccountId ? { ...pending, accountId: routedAccountId } : pending;
+  const providerId = normalizeChannelId(confirmed.provider);
   const extracted = providerId
     ? getChannelPlugin(providerId)?.actions?.extractToolSendResult?.({
         result,
         send: {
-          to: pending.to ?? "",
-          accountId: pending.accountId,
-          threadId: pending.threadId,
-          threadImplicit: pending.threadImplicit,
-          threadSuppressed: pending.threadSuppressed,
+          to: confirmed.to ?? "",
+          accountId: confirmed.accountId,
+          threadId: confirmed.threadId,
+          threadImplicit: confirmed.threadImplicit,
+          threadSuppressed: confirmed.threadSuppressed,
         },
       })
     : null;
   if (!extracted?.to) {
-    return pending;
+    return confirmed;
   }
   const extractedThreadId = normalizeOptionalString(extracted.threadId);
   const providerReportedThread =
@@ -359,12 +364,12 @@ export function extractMessagingToolSendResult(
     extracted.threadSuppressed === true;
   // Thread route fields are one state. Mixing provider and pending values can
   // create contradictory implicit and suppressed evidence.
-  const threadEvidence = providerReportedThread ? extracted : pending;
+  const threadEvidence = providerReportedThread ? extracted : confirmed;
   return {
-    ...pending,
+    ...confirmed,
     ...extracted,
-    accountId: normalizeOptionalString(extracted.accountId) ?? pending.accountId,
-    to: normalizeTargetForProvider(providerId ?? pending.provider, extracted.to),
+    accountId: normalizeOptionalString(extracted.accountId) ?? confirmed.accountId,
+    to: normalizeTargetForProvider(providerId ?? confirmed.provider, extracted.to),
     threadId: normalizeOptionalString(threadEvidence.threadId),
     threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,

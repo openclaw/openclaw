@@ -31,7 +31,7 @@ Common forms:
   limits, MCP servers, and skills.
 - `/codex models` lists live Codex app-server models.
 - `/codex threads [filter]` lists recent Codex app-server threads.
-- `/codex goal` reads or updates the attached thread's native Codex goal. Codex automatic goal continuation stays disabled; OpenClaw does not own autonomous follow-on turns yet.
+- `/codex goal` reads or updates the attached thread's native Codex goal. Codex automatic goal continuation stays disabled. Use OpenClaw's [`/goal`](/tools/goal) for an objective pursued through the shared continuation queue.
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an
   existing Codex thread.
 - `/codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]`
@@ -62,6 +62,12 @@ Common forms:
   `operator.admin` gateway client.
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
+
+Without a thread ID, `/codex bind` creates a separate native thread on the next
+message. When transferring an existing OpenClaw Codex harness session, it copies
+bounded visible user and assistant history; it does not carry the harness tool
+catalog or developer instructions. Queued reply ownership does not block this
+transfer. Started source execution must finish or be stopped first.
 
 When `/codex resume` attaches a thread without an existing verified harness
 binding, its next turn checks the native thread's stored tool catalog and

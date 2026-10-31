@@ -28,3 +28,12 @@ export function pairingSnapshot(
     ...overrides,
   };
 }
+
+export function emptyPairingSnapshot(): ChannelsPairingListResult {
+  return {
+    accounts: [],
+    requests: [],
+    commandOwnerConfigured: true,
+    limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+  };
+}

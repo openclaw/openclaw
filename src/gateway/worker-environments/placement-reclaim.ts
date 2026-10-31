@@ -26,6 +26,7 @@ import {
 } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  adoptReclaimedWorkspaceHistory,
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
@@ -346,6 +347,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       report: recovery.reportConflict,
                     });
                     reauthorize?.();
+                    await adoptReclaimedWorkspaceHistory({
+                      ...recovery,
+                      assertCurrent,
+                      stagedResultRef: recordedStagedResultRef,
+                    });
                     return await settleStagedWorkspaceResult({
                       assertCurrent: recovery.assertCurrent,
                       placements,
@@ -370,11 +376,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           });
                           assertCurrent();
                         }
-                        await environments.destroy(current.environmentId);
+                        await environments.reclaim(current.environmentId);
                       },
                       complete: async () => {
-                        // Destroy is the final privileged effect. Once it commits, durable placement
-                        // completion must finish even if caller authority closes during the await.
+                        // Session shutdown and cleanup acceptance are committed. Physical release
+                        // remains with the environment owner while placement completion settles.
                         const completed = await completeWorkerWorkspaceTeardown({
                           placements,
                           turnClaim: reclaimClaim,
@@ -399,11 +405,8 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               if (reclaimed.state !== "local" && reclaimed.state !== "reclaimed") {
                 throw new Error("Cloud worker teardown produced a nonterminal placement");
               }
-              try {
-                await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
-              } catch {
-                // Provider teardown is authoritative; local tunnel cleanup is best effort.
-              }
+              // reclaim already stopped the session transport before provider acceptance.
+              // Reentering its environment lock would wait for physical release again.
               return reclaimed;
             } catch (error) {
               if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {

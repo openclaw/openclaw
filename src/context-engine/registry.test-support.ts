@@ -1,4 +1,8 @@
+import { vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
@@ -51,4 +55,23 @@ export async function resetContextEngineRuntimeQuarantineForTests(): Promise<voi
   const state = getContextEngineRegistryStateForTests();
   state.quarantinedEngines.clear();
   await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+}
+
+export function gateContextEngineHealthCleanupForTest() {
+  const reached = createDeferredCore();
+  const release = createDeferredCore();
+  const clear = pluginStateWorker.clearRuntimeHealthInWorker;
+  const observer = vi
+    .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
+    .mockImplementation(async (params) => {
+      reached.resolve();
+      await release.promise;
+      await clear(params);
+    });
+  return { reached, release, observer };
+}
+
+/** Selects a test engine with independent approval for its registered plugin owner. */
+export function contextEngineConfig(engineId: string, owner: string): OpenClawConfig {
+  return { plugins: { allow: [owner], slots: { contextEngine: engineId } } };
 }

@@ -32,6 +32,7 @@ import {
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
+  nativeQuestionConfigFixture,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
@@ -66,6 +67,68 @@ describe("Codex native configuration lifecycle", () => {
     }
     throw new Error(`unexpected method: ${method}`);
   }
+
+  it.each([undefined, false, true])(
+    "refreshes callable question policy and authored native configuration (%s)",
+    async (authored) => {
+      let enabled = authored;
+      const native = threadStartResult("question-thread", { cwd: workspaceDir });
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          if (method === "thread/inject_items") {
+            return {};
+          }
+          return method === "config/read"
+            ? nativeQuestionConfigFixture(enabled)
+            : readNativeConfig(method);
+        },
+      });
+      const common = { ...lifecycleParams(fixture.client), askUserAvailable: true };
+      const binding = await startOrResumeThread(common);
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        binding.threadId,
+        binding.liveThreadOwnership?.release,
+        binding.liveThreadConfigFingerprint,
+      );
+      const start = fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+      expect(start).toBeDefined();
+      const startConfig = isJsonObject(start) && isJsonObject(start.config) ? start.config : {};
+      expect(startConfig["tools.experimental_request_user_input.enabled"]).toBe(
+        authored ? undefined : false,
+      );
+      enabled = authored !== true;
+      const changed = await startOrResumeThread(common);
+      expect(changed.threadId).toBe(binding.threadId);
+      const refreshed = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+      expect(refreshed).toHaveLength(1);
+      const refresh = refreshed[0]?.[1];
+      const refreshConfig =
+        isJsonObject(refresh) && isJsonObject(refresh.config) ? refresh.config : {};
+      expect(refreshConfig["tools.experimental_request_user_input.enabled"]).toBe(
+        enabled ? undefined : false,
+      );
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        changed.threadId,
+        changed.liveThreadOwnership?.release,
+        changed.liveThreadConfigFingerprint,
+      );
+      const next = await startOrResumeThread({ ...common, askUserAvailable: false });
+      expect(next.threadId).toBe(binding.threadId);
+      const resumes = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+      expect(resumes).toHaveLength(enabled ? 1 : 2);
+      if (!enabled) {
+        const resumed = resumes.at(-1)?.[1];
+        const config = isJsonObject(resumed) && isJsonObject(resumed.config) ? resumed.config : {};
+        expect(config).not.toHaveProperty("tools.experimental_request_user_input.enabled");
+      }
+    },
+  );
 
   it("resumes the bound thread after replacing the inference proxy client", async () => {
     const createClient = (persistedThreads: string[] = []) =>
@@ -111,6 +174,54 @@ describe("Codex native configuration lifecycle", () => {
       second.client.close();
     }
   });
+
+  it.each([false, true])(
+    "suppresses plugin suggestions on start and resume without disabling plugins (authored: %s)",
+    async (authored) => {
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const native = threadStartResult("plugin-thread", { cwd: workspaceDir });
+      const config: JsonObject = {
+        "features.apps": true,
+        "features.plugins": true,
+        plugins: { "calendar@fixture": { enabled: true } },
+        apps: { calendar: { enabled: true } },
+        ...(authored
+          ? { "features.tool_suggest": true, "features.recommended_plugins": true }
+          : {}),
+      };
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          return readNativeConfig(method);
+        },
+      });
+      const common = { ...lifecycleParams(fixture.client), config };
+      await startOrResumeThread(common);
+      fixture.seed(native, { loaded: false, subscribed: false });
+      await startOrResumeThread(common);
+
+      const requests = fixture.writes
+        .map((line): unknown => JSON.parse(line))
+        .filter(isJsonObject)
+        .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
+      expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
+      for (const request of requests) {
+        expect(request.params).toMatchObject({
+          config: {
+            "features.tool_suggest": false,
+            "features.recommended_plugins": false,
+            "features.apps": true,
+            "features.plugins": true,
+            plugins: { "calendar@fixture": { enabled: true } },
+            apps: { calendar: { enabled: true } },
+          },
+        });
+      }
+    },
+  );
 
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",

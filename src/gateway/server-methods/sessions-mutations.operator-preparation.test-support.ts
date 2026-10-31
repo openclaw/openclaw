@@ -59,35 +59,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
       entry: { incognito: true },
     },
   ];
-  const startRequest = (
-    method: "sessions.create" | "sessions.patch" | "sessions.patchMany",
-    params: Record<string, unknown>,
-    caller: GatewayClient,
-    context: GatewayRequestContext,
-    requestId: string,
-    authorize = true,
-  ) => {
-    const authorization = authorize
-      ? resolveSessionMutationAuthorization({
-          method,
-          client: caller,
-          context,
-          requestParams: params,
-        })
-      : undefined;
-    if (authorization) {
-      expect(authorization.error).toBeNull();
-    }
-    return startSessionMutationRequest(method, params, {
-      req: { type: "req", id: requestId, method, params },
-      client: caller,
-      context,
-      ...(authorization && {
-        hasCurrentClientAuthority: () => !caller.invalidated,
-        sessionMutationAuthorization: authorization.authorization,
-      }),
-    });
-  };
   const cases = (["sessions.patch", "sessions.patchMany", "sessions.create"] as const).flatMap(
     (method) => (["params", "caller", "target"] as const).map((change) => ({ method, change })),
   );
@@ -113,11 +84,32 @@ export function registerSessionOperatorPreparationTests(fixture: {
           context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
       }),
       start: (
-        method: Parameters<typeof startRequest>[0],
+        method: "sessions.create" | "sessions.patch" | "sessions.patchMany",
         params: Record<string, unknown>,
         requestId: string,
         authorize = true,
-      ) => startRequest(method, params, caller, context, requestId, authorize),
+      ) => {
+        const authorization = authorize
+          ? resolveSessionMutationAuthorization({
+              method,
+              client: caller,
+              context,
+              requestParams: params,
+            })
+          : undefined;
+        if (authorization) {
+          expect(authorization.error).toBeNull();
+        }
+        return startSessionMutationRequest(method, params, {
+          req: { type: "req", id: requestId, method, params },
+          client: caller,
+          context,
+          ...(authorization && {
+            hasCurrentClientAuthority: () => !caller.invalidated,
+            sessionMutationAuthorization: authorization.authorization,
+          }),
+        });
+      },
     };
   }
   describe("session mutation operator preparation", () => {

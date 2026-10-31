@@ -161,6 +161,7 @@ export function createPreparedGatewayModelCatalog(
     pluginRegistry?: SessionRowPolicyRegistry;
     metadataSnapshot?: PluginMetadataSnapshot;
     config?: OpenClawConfig;
+    includeSessionRowPolicy?: boolean;
   },
 ): PreparedGatewayModelCatalog {
   const catalog: PreparedGatewayModelCatalog = {
@@ -172,13 +173,14 @@ export function createPreparedGatewayModelCatalog(
     // Row dependencies retain their selected generation's manifests and config policy.
     factsByCatalog.set(catalog, {
       metadata: params.metadataSnapshot,
-      rowPolicy: params.pluginRegistry
-        ? captureSessionRowPolicy({
-            ...params,
-            metadataSnapshot: params.metadataSnapshot,
-            pluginRegistry: params.pluginRegistry,
-          })
-        : undefined,
+      rowPolicy:
+        params.pluginRegistry && params.includeSessionRowPolicy !== false
+          ? captureSessionRowPolicy({
+              ...params,
+              metadataSnapshot: params.metadataSnapshot,
+              pluginRegistry: params.pluginRegistry,
+            })
+          : undefined,
     });
   }
   return catalog;

@@ -17,6 +17,7 @@ describe("sandbox command registration", () => {
       ["sandbox", "list"],
       ["sandbox", "recreate"],
       ["sandbox", "explain"],
+      ["sandbox", "recover"],
     ]) {
       const output: string[] = [];
       const program = new Command().exitOverride();

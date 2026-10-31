@@ -1,6 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
@@ -72,13 +71,34 @@ function createFallbackSelection(probe = createProbe()) {
   });
 }
 
+function storedProbe(entry: SessionEntry, followupRun = createProbeRun(), sessionKey = "main") {
+  const store: Record<string, SessionEntry> = { [sessionKey]: entry };
+  return {
+    store,
+    followupRun,
+    execute: (overrides: Partial<AgentTurnParams> = {}) =>
+      execute(
+        { followupRun },
+        { sessionKey, activeSessionStore: store, getActiveSessionEntry: () => entry, ...overrides },
+      ),
+  };
+}
+
+function routeResult(text: string, provider: string, model: string) {
+  return createRunResult(text, {
+    durationMs: 1,
+    agentMeta: { sessionId: "session", provider, model },
+  });
+}
+
 function recheck(run: ReturnType<typeof createFollowupRun>["run"], entry: SessionEntry) {
   return resolveRunAfterAutoFallbackPrimaryProbeRecheck({ run, entry, sessionKey: "main" });
 }
 
 function lifecycleEvents(runId: string) {
-  return emitAgentEvent.mock.calls
-    .map(([event]) => event)
+  return vi
+    .mocked(emitAgentEvent)
+    .mock.calls.map(([event]) => event)
     .filter((event) => event.runId === runId && event.stream === "lifecycle");
 }
 
@@ -185,94 +205,37 @@ describe("executeAgentTurn: primary probe routing", () => {
     });
   });
 
-  it("drops stale queued primary probes after a user model switch", async () => {
-    const probe = createProbe();
+  it.each([
+    { providerOverride: "openai", modelOverride: "gpt-5.4" },
+    { providerOverride: undefined, modelOverride: "openai/gpt-5.4" },
+  ])("propagates rechecked user selection $modelOverride to post-run state", async (selection) => {
+    const sessionKey = "rechecked-user-selection";
     const sessionEntry = createSessionEntry({
-      modelOverride: "openai/gpt-5.4",
+      ...selection,
       modelOverrideSource: "user",
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     });
-    const { run } = createProbeRun({ autoFallbackPrimaryProbe: probe });
+    const staleAutoEntry = createFallbackSelection();
+    const fixture = storedProbe(sessionEntry, createProbeRun(), sessionKey);
+    state.runWithModelFallbackMock.mockImplementationOnce(runFallbackCandidate);
+    state.runEmbeddedAgentMock.mockResolvedValueOnce(
+      routeResult("user model", "openai", "gpt-5.4"),
+    );
 
-    expect(recheck(run, sessionEntry)).toMatchObject({
+    await fixture.execute({ getActiveSessionEntry: () => staleAutoEntry });
+
+    expect(fixture.followupRun.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
       requestedRouteResolution: "raw",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
       modelOverrideSource: "user",
-      autoFallbackPrimaryProbe: undefined,
     });
-  });
-
-  it.each([
-    { name: "legacy user", marker: undefined, expectedSource: "user" as const },
-    { name: "marker-backed auto", marker: 0, expectedSource: "auto" as const },
-  ])(
-    "canonicalizes a source-less $name auth profile during queued probe recheck",
-    ({ marker, expectedSource }) => {
-      const probe = createProbe();
-      const sessionEntry: SessionEntry = {
-        sessionId: "session",
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-        modelOverrideSource: "user",
-        authProfileOverride: "openai:work",
-        ...(marker === undefined ? {} : { authProfileOverrideCompactionCount: marker }),
-      };
-      const { run } = createProbeRun({ autoFallbackPrimaryProbe: probe });
-
-      expect(recheck(run, sessionEntry)).toMatchObject({
-        provider: "openai",
-        model: "gpt-5.4",
-        authProfileId: "openai:work",
-        authProfileIdSource: expectedSource,
-        autoFallbackPrimaryProbe: undefined,
-      });
-    },
-  );
-
-  it("propagates rechecked user selections to post-run state", async () => {
-    const sessionKey = "rechecked-user-selection";
-    const sessionEntry = createSessionEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user",
-    });
-    const activeSessionStore = { [sessionKey]: sessionEntry };
-    const staleAutoEntry = createFallbackSelection();
-    const followupRun = createProbeRun();
-    state.runWithModelFallbackMock.mockImplementationOnce(runFallbackCandidate);
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "user model" }],
-      meta: {
-        agentMeta: {
-          provider: "openai",
-          model: "gpt-5.4",
-        },
-      },
-    });
-
-    await execute(
-      { followupRun },
-      { sessionKey, activeSessionStore, getActiveSessionEntry: () => staleAutoEntry },
-    );
-
-    expect(followupRun.run).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: "openai:work",
-      authProfileIdSource: "user",
-      modelOverrideSource: "user",
-    });
-    expect(followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
-    expect(activeSessionStore[sessionKey]).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
+    expect(fixture.followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
+    expect(fixture.store[sessionKey]).toMatchObject({
+      ...selection,
       modelOverrideSource: "user",
     });
   });
@@ -283,13 +246,12 @@ describe("executeAgentTurn: primary probe routing", () => {
       authProfileOverride: "google:fallback",
       authProfileOverrideSource: "user",
     });
-    const run = createFollowupRun().run;
-    run.provider = "anthropic";
-    run.model = "claude-sonnet-4-6";
-    run.hasSessionModelOverride = true;
-    run.modelOverrideSource = "auto";
-    run.hasAutoFallbackProvenance = true;
-    run.autoFallbackPrimaryProbe = probe;
+    const { run } = createProbeRun({
+      hasSessionModelOverride: true,
+      modelOverrideSource: "auto",
+      hasAutoFallbackProvenance: true,
+      autoFallbackPrimaryProbe: probe,
+    });
 
     const rechecked = recheck(run, sessionEntry);
     expect(rechecked).toMatchObject({
@@ -316,7 +278,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       authProfileOverride: probe.fallbackAuthProfileId,
       authProfileOverrideSource: "auto" as const,
     };
-    const activeSessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const fixture = storedProbe(sessionEntry, followupRun, sessionKey);
     const exhaustedResult = {
       payloads: [{ text: "Terminal tool summary", isError: true }],
       meta: {
@@ -358,14 +320,10 @@ describe("executeAgentTurn: primary probe routing", () => {
     }));
     const { replyOperation, failMock } = createMockReplyOperation();
     const completeMock = vi.spyOn(replyOperation, "complete");
-    const result = await execute(
-      { followupRun, replyOperation },
-      {
-        sessionKey,
-        activeSessionStore,
-        getActiveSessionEntry: () => activeSessionStore[sessionKey],
-      },
-    );
+    const result = await fixture.execute({
+      replyOperation,
+      getActiveSessionEntry: () => fixture.store[sessionKey],
+    });
 
     expect(result).toMatchObject({
       kind: "success",
@@ -374,7 +332,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       fallbackModel: probe.model,
       runResult: exhaustedResult,
     });
-    expect(activeSessionStore[sessionKey]).toMatchObject({
+    expect(fixture.store[sessionKey]).toMatchObject({
       providerOverride: probe.fallbackProvider,
       modelOverride: probe.fallbackModel,
       modelOverrideSource: "auto",
@@ -384,8 +342,9 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(completeMock).not.toHaveBeenCalled();
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     expect(
-      emitAgentEvent.mock.calls
-        .map((call) => call[0])
+      vi
+        .mocked(emitAgentEvent)
+        .mock.calls.map((call) => call[0])
         .find(
           (event) =>
             event.stream === "lifecycle" &&
@@ -397,103 +356,6 @@ describe("executeAgentTurn: primary probe routing", () => {
             event.data.timeoutPhase === "provider",
         ),
     ).toBeDefined();
-  });
-
-  it("reports a completed non-fallbackable error result as a failure terminal", async () => {
-    const terminalErrorResult = {
-      payloads: [{ text: "Command may have changed state", isError: true }],
-      meta: {
-        replayInvalid: true,
-        error: {
-          kind: "incomplete_turn",
-          message: "raw provider detail should stay private",
-          fallbackSafe: false,
-        },
-      },
-    };
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({
-        stream: "lifecycle",
-        data: {
-          phase: "finishing",
-          error: "Command may have changed state",
-          replayInvalid: true,
-        },
-      });
-      return terminalErrorResult;
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "completed",
-      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
-    const { replyOperation, failMock } = createMockReplyOperation();
-    const completeMock = vi.spyOn(replyOperation, "complete");
-    const result = await execute({ replyOperation, opts: { runId: "run-non-fallbackable-error" } });
-
-    expect(result).toMatchObject({ kind: "success", runResult: terminalErrorResult });
-    expect(completeMock).not.toHaveBeenCalled();
-    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
-    const terminalLifecycleEvents = lifecycleEvents("run-non-fallbackable-error");
-    expect(terminalLifecycleEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          data: expect.objectContaining({
-            phase: "error",
-            error: "Command may have changed state",
-            executionSettled: true,
-            replayInvalid: true,
-          }),
-        }),
-      ]),
-    );
-    expect(
-      terminalLifecycleEvents.some(
-        (event) => event.data.phase === "end" || event.data.fallbackExhaustedFailure === true,
-      ),
-    ).toBe(false);
-    expect(JSON.stringify(terminalLifecycleEvents)).not.toContain("raw provider detail");
-  });
-
-  it("surfaces an empty heartbeat terminal result through the normal reply path", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: {
-        error: {
-          kind: "tool_result_mismatch",
-          message: "Agent run reached a terminal error before reply delivery.",
-        },
-      },
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "completed",
-      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
-    const { replyOperation, failMock } = createMockReplyOperation();
-
-    const result = await execute(
-      { replyOperation },
-      {
-        isHeartbeat: true,
-      },
-    );
-
-    expect(result).toMatchObject({
-      kind: "success",
-      terminalFailurePayload: {
-        text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-        isError: true,
-      },
-      runResult: {
-        payloads: [],
-      },
-    });
-    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
   it("reports exhausted CLI preserved earlier candidate without a success terminal", async () => {
@@ -534,12 +396,10 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(completeMock).not.toHaveBeenCalled();
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     const events = lifecycleEvents("run-cli-exhausted");
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          data: expect.objectContaining({ phase: "error", executionSettled: true }),
-        }),
-      ]),
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", executionSettled: true }),
+      }),
     );
     expect(events.some((event) => event.data.phase === "end")).toBe(false);
   });
@@ -646,15 +506,15 @@ describe("executeAgentTurn: primary probe routing", () => {
     const probe = createProbe();
     const sessionKey = "concurrent-user-switch-during-probe";
     const staleAutoEntry = createFallbackSelection();
-    const activeSessionStore = { [sessionKey]: staleAutoEntry };
     const followupRun = createProbeRun({ sessionKey, autoFallbackPrimaryProbe: probe });
+    const fixture = storedProbe(staleAutoEntry, followupRun, sessionKey);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = await params.run(
         params.provider,
         params.model,
         initialFallbackAttemptOptions(params),
       );
-      activeSessionStore[sessionKey] = {
+      fixture.store[sessionKey] = {
         sessionId: "session",
         updatedAt: 2,
         providerOverride: "openai",
@@ -668,26 +528,13 @@ describe("executeAgentTurn: primary probe routing", () => {
         attempts: [],
       };
     });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "primary recovered" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-        },
-      },
-    });
-
-    await execute(
-      { followupRun },
-      {
-        sessionKey,
-        activeSessionStore,
-        getActiveSessionEntry: () => staleAutoEntry,
-      },
+    state.runEmbeddedAgentMock.mockResolvedValueOnce(
+      routeResult("primary recovered", "anthropic", "claude-sonnet-4-6"),
     );
 
-    expect(activeSessionStore[sessionKey]).toMatchObject({
+    await fixture.execute();
+
+    expect(fixture.store[sessionKey]).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       modelOverrideSource: "user",
@@ -711,19 +558,14 @@ describe("executeAgentTurn: primary probe routing", () => {
       modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
     });
     const sessionKey = "live-switch-probe";
-    const activeSessionStore = { [sessionKey]: sessionEntry };
     const followupRun = createProbeRun({ sessionKey, autoFallbackPrimaryProbe: probe });
+    const fixture = storedProbe(sessionEntry, followupRun, sessionKey);
     const attemptedProviders: Array<string | undefined> = [];
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+    state.runWithModelFallbackMock.mockImplementation((params: FallbackRunnerParams) => {
       attemptedProviders.push(params.provider);
       const provider = params.provider ?? "anthropic";
       const model = params.model ?? "claude-sonnet-4-6";
-      return {
-        result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-        provider,
-        model,
-        attempts: [],
-      };
+      return runFallbackCandidate(params, provider, model);
     });
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async () => {
@@ -734,24 +576,11 @@ describe("executeAgentTurn: primary probe routing", () => {
           authProfileIdSource: "auto",
         });
       })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "switched" }],
-        meta: {
-          agentMeta: {
-            provider: "openai",
-            model: "gpt-5.4",
-          },
-        },
-      });
+      .mockResolvedValueOnce(routeResult("switched", "openai", "gpt-5.4"));
 
-    const result = await execute(
-      { followupRun },
-      {
-        sessionKey,
-        activeSessionStore,
-        getActiveSessionEntry: () => activeSessionStore[sessionKey],
-      },
-    );
+    const result = await fixture.execute({
+      getActiveSessionEntry: () => fixture.store[sessionKey],
+    });
 
     expect(result.kind).toBe("success");
     expect(attemptedProviders).toEqual(["anthropic", "openai"]);

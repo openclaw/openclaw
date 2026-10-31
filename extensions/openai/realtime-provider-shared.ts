@@ -1,4 +1,5 @@
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
@@ -42,19 +43,21 @@ type OpenAIRealtimeClientSecretRequest = {
 };
 
 export function resolveOpenAIRealtimeRequestHeaders(
-  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+  { resolveProviderRequestHeaders }: Pick<OpenAIRealtimeHost, "resolveProviderRequestHeaders">,
   baseUrl: string,
   defaultHeaders: Record<string, string> = {},
   transport: "http" | "websocket" = "http",
 ): Record<string, string> {
   return (
-    resolveProviderRequestHeaders({
-      provider: "openai",
-      baseUrl,
-      capability: "audio",
-      transport,
-      defaultHeaders,
-    }) ?? defaultHeaders
+    omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: "openai",
+        baseUrl,
+        capability: "audio",
+        transport,
+        defaultHeaders,
+      }),
+    ) ?? defaultHeaders
   );
 }
 

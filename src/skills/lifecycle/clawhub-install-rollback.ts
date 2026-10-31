@@ -46,12 +46,12 @@ export async function rollbackDeferredSkillInstall(params: {
       expectedVersion: params.version,
     });
     if (!link?.valid || link.artifact?.integrity !== params.integrity || !planned.ok) {
-      throw new Error(`Skill ${JSON.stringify(params.slug)} changed after its Claw upgrade.`);
+      throw new Error(`Skill ${JSON.stringify(params.slug)} changed after its Template upgrade.`);
     }
   }
   await params.transaction.rollback(params.assertCurrent);
   if (hasInstalledEntry && params.installed) {
-    replaceClawHubSkillLockEntryExpected({
+    await replaceClawHubSkillLockEntryExpected({
       workspaceDir: params.workspaceDir,
       slug: params.slug,
       expected: params.installed,

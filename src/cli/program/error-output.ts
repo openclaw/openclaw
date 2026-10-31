@@ -114,18 +114,19 @@ function formatCliUnknownCommandOutput(
 export function createCliParseError(
   raw: string,
   options: FormatCliParseErrorOptions = {},
-  errorOptions: { humanOutputWritten?: boolean } = {},
 ): ExpectedCliError {
   const message = stripCommanderErrorPrefix(raw);
   const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
   if (unknownCommand) {
-    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, errorOptions);
+    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, {
+      humanOutputWritten: true,
+    });
   }
   const humanOutput = formatCliParseErrorOutput(raw, options);
   return new ExpectedCliError({
     message,
     humanOutput,
-    humanOutputWritten: errorOptions.humanOutputWritten,
+    humanOutputWritten: true,
     machineOutput: formatCliMachineOutput(humanOutput),
   });
 }

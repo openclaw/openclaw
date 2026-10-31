@@ -204,7 +204,8 @@ vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
   addGatewayRunCommand: addGatewayRunCommandMock,
 }));
 
-vi.mock("../daemon/launchd.js", () => ({
+vi.mock("../daemon/launchd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/launchd.js")>()),
   parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
 }));
 
@@ -382,8 +383,16 @@ vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readConfigFileSnapshotMock }));
 
-// mock-isolation: Dispatcher fixtures replace storage startup; real CLI tests cover selection.
-vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => false }));
+// mock-isolation: Dispatcher fixtures replace native startup; real CLI tests cover admission.
+vi.mock("./run-main-service-installation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./run-main-service-installation.js")>()),
+  inspectCliGatewayServiceInstallation: async () => undefined,
+}));
+
+vi.mock("./database-engine-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./database-engine-selection.js")>()),
+  prepareCliDatabaseEngine: async () => false,
+}));
 
 // mock-isolation: Gateway admission must read synthetic snapshots without real config I/O.
 vi.mock("../config/io.factory.js", () => ({
@@ -440,15 +449,10 @@ async function withCliExitSpies(
     exitSpy: MockInstance<RuntimeEnv["exit"]>,
   ) => Promise<void>,
 ): Promise<void> {
-  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  using errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   const { defaultRuntime } = await import("../runtime.js");
-  const exitSpy = vi.spyOn(defaultRuntime, "exit");
-  try {
-    await run(errorSpy, exitSpy);
-  } finally {
-    exitSpy.mockRestore();
-    errorSpy.mockRestore();
-  }
+  using exitSpy = vi.spyOn(defaultRuntime, "exit");
+  await run(errorSpy, exitSpy);
 }
 
 async function runGatewayBeforeHook(opts: { reset?: boolean } = {}): Promise<void> {
@@ -542,9 +546,7 @@ export function installRunMainTestHooks(): void {
     startupConfig = await import("../commands/config-preflight-snapshot.js");
   });
 
-  afterAll(() => {
-    serviceEnvSnapshot.restore();
-  });
+  afterAll(() => serviceEnvSnapshot.restore());
 
   beforeEach(() => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
@@ -557,6 +559,7 @@ export function installRunMainTestHooks(): void {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     existsSyncOverride.value = undefined;
     vi.clearAllMocks();
+    buildProgramMock.mockReset();
     vi.spyOn(startupConfig, "readConfigSnapshotForEngineSelection").mockResolvedValue(
       createSnapshot({ hash: "fixture", sourceConfig: {} }),
     );

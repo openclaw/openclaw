@@ -1,13 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { cronJobsListResponse } from "../lib/cron/cron.test-support.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -37,8 +30,13 @@ async function geometry(page: Page) {
 }
 
 type DetailsMotionFrame = {
-  time: number;
   open: boolean;
+  detailsLeft: number;
+  detailsWidth: number;
+  detailsHeight: number;
+  detailsDisplay: string;
+  detailsPadding: string;
+  detailsBackground: string;
   frameRight: number;
   threadRight: number;
   threadWidth: number;
@@ -63,6 +61,7 @@ async function captureDetailsMotion(
     const frame = document.querySelector<HTMLElement>(".chat-main__conversation-frame")!;
     const column = document.querySelector<HTMLElement>(".chat-thread-inner")!;
     const composer = document.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+    const details = document.querySelector<HTMLElement>(".chat-details")!;
     const trigger = document.querySelector<HTMLButtonElement>(".chat-details-toggle")!;
     const threadBounds = thread.getBoundingClientRect();
     const anchor = [...thread.querySelectorAll<HTMLElement>(".chat-group")].find((group) => {
@@ -75,9 +74,16 @@ async function captureDetailsMotion(
     const sample = () => {
       const columnBox = column.getBoundingClientRect();
       const composerBox = composer.getBoundingClientRect();
+      const detailsBox = details.getBoundingClientRect();
+      const detailsStyle = getComputedStyle(details);
       probe.frames.push({
-        time: performance.now(),
         open: trigger.getAttribute("aria-expanded") === "true",
+        detailsLeft: detailsBox.left,
+        detailsWidth: detailsBox.width,
+        detailsHeight: detailsBox.height,
+        detailsDisplay: detailsStyle.display,
+        detailsPadding: detailsStyle.padding,
+        detailsBackground: detailsStyle.backgroundColor,
         frameRight: frame.getBoundingClientRect().right,
         threadRight: thread.getBoundingClientRect().right,
         threadWidth: thread.getBoundingClientRect().width,
@@ -98,13 +104,11 @@ async function captureDetailsMotion(
     await trigger.click();
   }
   if (input === "reversed") {
-    // Reverse a moving column, rather than sleeping for an assumed animation duration.
+    // Reverse a moving surface, including floating Details without a reserved column.
     await page.evaluate(async () => {
       const frames = window.detailsMotionProbe!.frames;
       for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (
-          frames.some((frame) => Math.abs(frame.composerCenter - frames[0]!.composerCenter) > 1)
-        ) {
+        if (frames.some((frame) => Math.abs(frame.detailsLeft - frames[0]!.detailsLeft) > 1)) {
           return;
         }
         await new Promise(requestAnimationFrame);
@@ -132,22 +136,30 @@ async function captureDetailsMotion(
 
 function expectSteadyDetailsMotion(frames: DetailsMotionFrame[]) {
   expect(frames.length).toBeGreaterThan(1);
-  for (const key of ["threadWidth", "anchorTop"] as const) {
-    expect(
-      Math.max(...frames.map((frame) => frame[key])) -
-        Math.min(...frames.map((frame) => frame[key])),
-    ).toBeLessThan(1);
+  const painted = frames.filter((frame) => frame.detailsDisplay !== "none");
+  expect(painted.length).toBeGreaterThan(0);
+  for (const key of ["detailsWidth", "detailsHeight"] as const) {
+    const values = painted.map((frame) => frame[key]);
+    expect(Math.max(...values) - Math.min(...values)).toBeLessThan(1);
   }
-  expect(
-    Math.max(...frames.map((frame) => Math.abs(frame.threadRight - frame.frameRight))),
-  ).toBeLessThan(1);
-  expect(
-    Math.max(...frames.map((frame) => Math.abs(frame.columnCenter - frame.composerCenter))),
-  ).toBeLessThan(1);
-  expect(
-    Math.max(...frames.map((frame) => frame.scrollTop)) -
-      Math.min(...frames.map((frame) => frame.scrollTop)),
-  ).toBeLessThan(1);
+  for (const frame of painted) {
+    expect(frame.detailsPadding).toBe(painted[0]!.detailsPadding);
+    expect(frame.detailsBackground).toBe(painted[0]!.detailsBackground);
+  }
+  const last = frames.at(-1)!;
+  expect(last.detailsDisplay === "none").toBe(!last.open);
+  for (const key of ["threadWidth", "anchorTop", "scrollTop"] as const) {
+    const values = frames.map((frame) => frame[key]);
+    expect(Math.max(...values) - Math.min(...values)).toBeLessThan(1);
+  }
+  for (const [left, right] of [
+    ["threadRight", "frameRight"],
+    ["columnCenter", "composerCenter"],
+  ] as const) {
+    expect(Math.max(...frames.map((frame) => Math.abs(frame[left] - frame[right])))).toBeLessThan(
+      1,
+    );
+  }
   for (let index = 1; index < frames.length; index += 1) {
     const before = frames[index - 1]!;
     const after = frames[index]!;
@@ -169,34 +181,7 @@ suite.define(() => {
         await seedChatSettings(page, suite.server.baseUrl, { themeMode: "dark" });
         await installMockGateway(page, {
           sessionKey,
-          agentModel: "example/demo-model",
-          models: [
-            { id: "demo-model", name: "Demo model", provider: "example", contextWindow: 128000 },
-          ],
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "cron.list",
-            "chat.metadata",
-            "chat.startup",
-            "progressCard.get",
-            "progressCard.refresh",
-          ],
           methodResponses: {
-            "cron.list": cronJobsListResponse([]),
-            "progressCard.get": {
-              card: {
-                sessionKey,
-                revision: 1,
-                updatedAt: 1,
-                markdown:
-                  "Review the release notes and verify the session layout before publication.",
-                steps: [
-                  { step: "Inspect the proposed release notes", status: "completed" },
-                  { step: "Verify the session layout", status: "in_progress" },
-                  { step: "Publish the reviewed notes", status: "pending" },
-                ],
-              },
-            },
             "sessions.files.list": {
               sessionKey,
               root: "/workspace/release-review",
@@ -211,12 +196,6 @@ suite.define(() => {
               sessionId: "details-scrollbar",
               kind: "direct",
               label: "Review release notes",
-              spawnedCwd: "/workspace/release-review",
-              worktree: { id: "release-review", repoRoot: "/workspace", branch: "release-review" },
-              model: "demo-model",
-              totalTokens: 32000,
-              totalTokensFresh: true,
-              contextTokens: 128000,
             },
           ],
           historyMessages: Array.from({ length: 24 }, (_, index) => ({
@@ -260,10 +239,6 @@ suite.define(() => {
           open: await captureDetailsMotion(page),
         };
         await page.emulateMedia({ reducedMotion: "no-preference" });
-        await writeFile(
-          path.join(suite.artifactDir, "details-motion.json"),
-          JSON.stringify({ motion, keyboard, reduced }, null, 2),
-        );
         for (const frames of [
           ...Object.values(motion),
           ...Object.values(keyboard),
@@ -277,13 +252,6 @@ suite.define(() => {
         }
         await thread.hover();
         await page.mouse.wheel(0, -1);
-        const capture = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".chat-main__conversation-frame"),
-          [page.locator(".chat-details-desktop-body"), composer],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "details-wide.png"), capture.png);
         const initial = await geometry(page);
         expect(initial.thread.right).toBeCloseTo(initial.frame.right, 0);
         expect(initial.frame.right - initial.details.right).toBe(13);
@@ -333,6 +301,23 @@ suite.define(() => {
             return Math.abs(boxes.thread.right - boxes.frame.right);
           })
           .toBeLessThan(1);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await openChatDetails(page);
+        expect(
+          await page
+            .locator(".chat-details")
+            .evaluate((panel) => panel.classList.contains("chat-details--docked")),
+        ).toBe(false);
+        for (const reducedMotion of ["no-preference", "reduce"] as const) {
+          await page.emulateMedia({ reducedMotion });
+          const inputs =
+            reducedMotion === "reduce"
+              ? (["pointer", "pointer"] as const)
+              : (["pointer", "pointer", "reversed"] as const);
+          for (const input of inputs) {
+            expectSteadyDetailsMotion(await captureDetailsMotion(page, input));
+          }
+        }
         const side = await page.locator('[data-region="side"]:visible').boundingBox();
         expect((await geometry(page)).thread.right).toBeLessThanOrEqual(side!.x);
         await composer.click();

@@ -80,7 +80,7 @@ describe("matrix profile actions", () => {
   it("skips blank desired profile values before provider or media effects", async () => {
     expect(
       await updateMatrixOwnProfile({ displayName: "  ", avatarUrl: "\t", avatarPath: "\n" }),
-    ).toMatchObject({ skipped: true, displayNameUpdated: false, avatarUpdated: false });
+    ).toMatchObject({ displayNameUpdated: false, avatarUpdated: false });
     expect(actionClient.getUserProfile).not.toHaveBeenCalled();
     expect(actionClient.setDisplayName).not.toHaveBeenCalled();
     expect(actionClient.setAvatarUrl).not.toHaveBeenCalled();

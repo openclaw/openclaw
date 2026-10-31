@@ -292,7 +292,7 @@ fn native_control_owner_uses_accepted_session_secret_not_current_configuration_o
         ),
     ] {
         let hello = validate_hello(json!({
-            "type":"hello-ok", "protocol":MAX_PROTOCOL_VERSION,
+            "type":"hello-ok", "protocol":PROTOCOL_VERSION,
             "features":{"methods":["agents.list", "chat.send"]},
             "auth":{"method":method,"role":"operator","scopes":["operator.read"]},
         }))
@@ -334,7 +334,7 @@ fn verified_network_session_uses_only_its_issued_current_device_grant() {
     let challenge = fixture.challenge();
     for method in ["tailscale", "trusted-proxy", "bootstrap-token"] {
         let hello = validate_hello(json!({
-            "type":"hello-ok", "protocol":MAX_PROTOCOL_VERSION,
+            "type":"hello-ok", "protocol":PROTOCOL_VERSION,
             "features":{"methods":["agents.list", "chat.send"]},
             "auth":{"method":method,"role":"operator","scopes":["operator.read"],"deviceToken":"issued-network-grant"},
         })).unwrap();
@@ -403,7 +403,7 @@ fn verified_network_session_uses_only_its_issued_current_device_grant() {
 fn hello_grants_operator_scopes_without_fabricating_native_authority() {
     let hello = |auth: Value| {
         validate_hello(json!({
-            "type":"hello-ok", "protocol":MAX_PROTOCOL_VERSION,
+            "type":"hello-ok", "protocol":PROTOCOL_VERSION,
             "features":{"methods":["agents.list", "chat.send"]}, "auth":auth,
         }))
         .unwrap()

@@ -56,18 +56,30 @@ describe("MCP OAuth bearer fetch", () => {
     expectBearers(fetchFn, ["test-token-placeholder", null]);
   });
 
-  it("uses an unauthenticated challenge to bootstrap a missing token", async () => {
+  it("bootstraps a missing token and replays the request body after the challenge", async () => {
     oauthMocks.resolve.mockResolvedValueOnce(undefined).mockResolvedValueOnce("test-auth-token");
-    const fetchFn = vi
-      .fn<FetchLike>()
-      .mockResolvedValueOnce(
-        makeResponse(
-          401,
-          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="docs.read"',
-        ),
-      )
-      .mockResolvedValueOnce(makeResponse());
-    await expect(wrap(fetchFn)(IDENTITY.serverUrl)).resolves.toMatchObject({ status: 200 });
+    const body = '{"jsonrpc":"2.0","method":"tools/list"}';
+    const bodies: string[] = [];
+    const fetchFn = vi.fn<FetchLike>(async (input, init) => {
+      expect(init).not.toBeInstanceOf(Request);
+      bodies.push(await new Request(input, init).text());
+      return bodies.length === 1
+        ? makeResponse(
+            401,
+            'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="docs.read"',
+          )
+        : makeResponse();
+    });
+    await expect(
+      wrap(fetchFn)(
+        new Request(IDENTITY.serverUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }),
+      ),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(bodies).toEqual([body, body]);
     expectBearers(fetchFn, [null, "test-auth-token"]);
     expect(oauthMocks.resolve.mock.calls[0]?.[0]).toMatchObject({ allowMissingToken: true });
     expect(oauthMocks.resolve.mock.calls[1]?.[0]).toMatchObject({
@@ -75,32 +87,6 @@ describe("MCP OAuth bearer fetch", () => {
       resourceMetadataUrl: new URL("https://mcp.example.com/.well-known/oauth-protected-resource"),
       scope: "docs.read",
     });
-  });
-
-  it("replays a body-bearing Request once after OAuth refresh", async () => {
-    oauthMocks.resolve
-      .mockResolvedValueOnce("decoy-token")
-      .mockResolvedValueOnce("test-auth-token");
-    const bodies: string[] = [];
-    const fetchFn = vi.fn<FetchLike>(async (input, init) => {
-      expect(init).not.toBeInstanceOf(Request);
-      bodies.push(await new Request(input, init).text());
-      return makeResponse(bodies.length === 1 ? 401 : 200);
-    });
-    const response = await wrap(fetchFn)(
-      new Request(IDENTITY.serverUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: '{"jsonrpc":"2.0","method":"tools/list"}',
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(bodies).toEqual([
-      '{"jsonrpc":"2.0","method":"tools/list"}',
-      '{"jsonrpc":"2.0","method":"tools/list"}',
-    ]);
-    expectBearers(fetchFn, ["decoy-token", "test-auth-token"]);
   });
 
   it("requires scope-bearing login on insufficient-scope 403 but leaves other 403s untouched", async () => {

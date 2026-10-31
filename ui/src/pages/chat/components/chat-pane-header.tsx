@@ -1,16 +1,11 @@
-import { Show, createMemo, merge, onSettled, type Element } from "solid-js";
+import { Show, createMemo, lazy, merge, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
-import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
-import { createRouteElementRef } from "../../../app/route-element-ref.ts";
-import {
-  SHELL_NAV_DRAWER_TOGGLE_EVENT,
-  type ShellNavDrawerToggleDetail,
-} from "../../../components/command-palette-contract.ts";
 import { canRetryGatewayStatus } from "../../../components/gateway-status.ts";
-import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
+import { PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MobileNavToggle } from "../../../components/solid/mobile-nav-toggle.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -27,24 +22,51 @@ import {
   ChatDashboardMenu,
   ChatPaneLayoutMenu,
 } from "./chat-header-panel-actions.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { AgentCrumb, IdentityCrumbs, ProjectCrumb } from "./chat-pane-header-identity.tsx";
 import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
-import { ChatSessionPublicIndicator, ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
-import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
+import { ChatSessionPublicIndicator } from "./chat-session-sharing-shared.tsx";
+import {
+  ChatSessionSharing,
+  ChatSessionSharingPlaceholder,
+} from "./chat-session-sharing.solid.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ContinueInTerminalDialog = lazy(() => import("./continue-in-terminal-dialog.tsx"), {
+  export: "ContinueInTerminalDialog",
+});
 
 export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
   return (
     <>
       <ChatPaneHeader {...props.header} />
       <Show when={props.continueInTerminal}>
-        {(dialog) => <ContinueInTerminalDialog {...dialog()} />}
+        {(dialog) => (
+          <ChatLazyBoundary onClose={() => dialog().onClose()}>
+            <ContinueInTerminalDialog {...dialog()} />
+          </ChatLazyBoundary>
+        )}
       </Show>
     </>
+  );
+}
+
+/** Incognito limits under the session header; the pending header shows the same notice. */
+export function ChatPaneIncognitoNotice() {
+  return (
+    <aside class="chat-pane__incognito-notice" aria-label={t("sessionsView.incognitoLabel")}>
+      <span class="chat-pane__incognito-notice-icon" aria-hidden="true">
+        <Icon name="incognito" />
+      </span>
+      <div>
+        <p>{t("sessionsView.incognitoDescription")}</p>
+        <p class="chat-pane__incognito-limits">{t("sessionsView.incognitoLimits")}</p>
+      </div>
+    </aside>
   );
 }
 
@@ -117,15 +139,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   };
   const notice = (
     <Show when={incognito()}>
-      <aside class="chat-pane__incognito-notice" aria-label={t("sessionsView.incognitoLabel")}>
-        <span class="chat-pane__incognito-notice-icon" aria-hidden="true">
-          <Icon name="incognito" />
-        </span>
-        <div>
-          <p>{t("sessionsView.incognitoDescription")}</p>
-          <p class="chat-pane__incognito-limits">{t("sessionsView.incognitoLimits")}</p>
-        </div>
-      </aside>
+      <ChatPaneIncognitoNotice />
     </Show>
   );
   return (
@@ -160,8 +174,8 @@ function ChatPaneHeaderChrome(
     props.session?.placement?.state === "active" &&
     props.session.placement.runner?.kind === "device" &&
     props.session.placement.runner.status === "offline";
-  const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
-  const hasSharingControl = () => props.sharingControl !== undefined;
+  const hasSharingControl = () =>
+    props.sharingControl !== undefined || (!props.narrow && props.sharingPlaceholder !== undefined);
   const presented = usePanePresentation(() => props.presented);
   const incognito = () =>
     (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
@@ -189,35 +203,15 @@ function ChatPaneHeaderChrome(
       >
         <div class="chat-pane__header-leading">
           <Show when={props.mergedChrome}>
-            {(_mergedChrome) => {
-              const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
-              return (
-                <openclaw-tooltip prop:content={drawerLabel()}>
-                  <button
-                    ref={drawerRef}
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
-                    type="button"
-                    aria-label={drawerLabel()}
-                    aria-expanded={props.navDrawerOpen ? "true" : "false"}
-                    data-connection-status={props.gatewayStatus?.kind ?? undefined}
-                    onClick={(event) => {
-                      window.dispatchEvent(
-                        new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
-                          detail: {
-                            trigger: event.currentTarget,
-                          },
-                        }),
-                      );
-                    }}
-                  >
-                    <Icon name="menu" />
-                    <Show when={props.gatewayStatus?.kind}>
-                      <span class="gateway-status-dot" aria-hidden="true" />
-                    </Show>
-                  </button>
-                </openclaw-tooltip>
-              );
-            }}
+            <openclaw-tooltip
+              prop:content={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
+            >
+              <MobileNavToggle
+                class="chat-pane__nav-toggle"
+                open={props.navDrawerOpen ?? false}
+                status={props.gatewayStatus?.kind}
+              />
+            </openclaw-tooltip>
           </Show>
           <Show when={incognito()}>
             <openclaw-tooltip
@@ -257,7 +251,11 @@ function ChatPaneHeaderChrome(
                   />
                 </Show>
               </Show>
-              <Show when={props.gatewayStatus?.kind}>
+              <Show
+                when={
+                  props.gatewayStatus?.kind ?? (props.savedConversation ? "reconnecting" : null)
+                }
+              >
                 {(kind) => (
                   <openclaw-tooltip
                     prop:content={
@@ -310,7 +308,9 @@ function ChatPaneHeaderChrome(
                             />
                           </Show>
                         </span>
-                        {t(`connection.${kind()}`)}
+                        {props.savedConversation
+                          ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
+                          : t(`connection.${kind()}`)}
                       </span>
                       <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
                         <span class="chat-pane__connection-divider" aria-hidden="true" />
@@ -351,7 +351,8 @@ function ChatPaneHeaderChrome(
             {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
           </Show>
           {props.mergedChrome || props.detailsControl || hasSharingControl() ? undefined : (
-            <StandalonePersonLink
+            <PersonAvatarLink
+              standalone
               link={
                 props.showOwnerChip
                   ? personActivityLink(
@@ -370,7 +371,7 @@ function ChatPaneHeaderChrome(
                 props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
                 props.ownerViewing,
               )}
-            </StandalonePersonLink>
+            </PersonAvatarLink>
           )}
           {!props.mergedChrome &&
           !props.detailsControl &&
@@ -447,7 +448,14 @@ function ChatPaneHeaderChrome(
                 {(presence) => <PaneHeaderPresence {...presence()} />}
               </Show>
             </Show>
-            <Show when={props.sharingControl}>
+            <Show
+              when={props.sharingControl}
+              fallback={
+                <Show when={!props.narrow && props.sharingPlaceholder}>
+                  {(display) => <ChatSessionSharingPlaceholder display={display()} />}
+                </Show>
+              }
+            >
               {(sharing) => <ChatSessionSharing {...sharing()} />}
             </Show>
             {props.details}
@@ -508,6 +516,19 @@ function ChatPaneHeaderChrome(
               </openclaw-tooltip>
             </Show>
           </div>
+          {/* Inactive panes hide session actions, but must keep their close control. */}
+          <Show when={!props.mergedChrome && props.onClosePane}>
+            <button
+              type="button"
+              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close"
+              aria-label={t("chat.splitView.closePane")}
+              title={t("chat.splitView.closePane")}
+              disabled={props.actionsDisabled}
+              onClick={() => props.onClosePane?.(props.paneId)}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
         </div>
         <Show when={props.narrow && (props.mergedChrome || !props.detailsControl)}>
           <RunningSubagents count={props.runningSubagentCount} />

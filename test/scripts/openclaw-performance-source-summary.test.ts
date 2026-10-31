@@ -17,7 +17,6 @@ const mockHello = {
     gatewayProcessRssStartBytes: 90 * 1024 * 1024,
     wallMs: 250,
   },
-  run: { primaryModel: "mock-openai/perf" },
   scenarios: [{ id: "mock-hello", status: "pass" }],
 };
 
@@ -47,21 +46,10 @@ function writeSourceFixture(sourceDir = mkTmpRoot()) {
     results: [
       {
         id: "default",
-        name: "default",
         summary: {
-          readyzMs: { p50: 12, p95: 18 },
-          healthzMs: { p50: 5 },
-          httpListenLogMs: { p50: 8 },
-          gatewayReadyLogMs: { p50: 9 },
-          firstOutputMs: { p50: 30 },
+          readyzMs: { p50: 12 },
           maxRssMb: { p95: 120 },
           cpuCoreRatio: { p95: 0.25 },
-          startupTrace: {
-            "memory.ready.heapUsedMb": { p50: 30, p95: 32 },
-            "phase.load.total": { p50: 70, p95: 80 },
-            "phase.load.itemCount": { p50: 40, p95: 50 },
-            "phase.load": { p50: 7, p95: 8 },
-          },
         },
       },
     ],
@@ -74,23 +62,18 @@ function writeSourceFixture(sourceDir = mkTmpRoot()) {
       cases: [
         {
           id: "gatewayHealthJson",
-          name: "gateway health json",
           summary: {
-            durationMs: { p50: 10, p95: 14 },
+            durationMs: { p50: 10 },
             maxRssMb: { p95: 90 },
-            exitSummary: "code:0x3",
           },
         },
       ],
     },
   });
   writeJson(path.join(sourceDir, "extension-memory.json"), {
-    baseline: { maxRssMb: 50, status: "ok" },
-    combined: { maxRssMb: 180, status: "ok" },
-    counts: { totalEntries: 12 },
-    topByDeltaMb: [
-      { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
-    ],
+    baseline: { maxRssMb: 50 },
+    combined: { maxRssMb: 180 },
+    topByDeltaMb: [{ dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12 }],
   });
   writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
     ...sqliteRun,
@@ -190,19 +173,9 @@ describe("buildMarkdown", () => {
       id: "agent-cache.plugin-model-catalog.list",
       p50Ms: 1,
       p95Ms: 2,
-      plan: {
-        fullTableScans: [],
-        indexes: ["sqlite_autoindex_cache_entries_1"],
-        raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
-        tempSorts: [],
-      },
       rows: 100,
-      sql: "SELECT key FROM cache_entries WHERE scope = ?",
     });
-    const currentQuery = sqliteQuery({
-      p95Ms: 15,
-      sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
-    });
+    const currentQuery = sqliteQuery({ p95Ms: 15 });
     const sourceDir = makeSqliteSource([currentQuery, agentQuery]);
     const baselineDir = makeSqliteSource([
       { ...agentQuery, id: "baseline-only", p50Ms: 3, p95Ms: 4 },
@@ -310,7 +283,6 @@ describe("buildMarkdown", () => {
     const sourceDir = writeSourceFixture();
     fs.rmSync(path.join(sourceDir, "sqlite-perf-smoke.json"));
 
-    expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
-    expect(buildMarkdown(sourceDir, null)).toContain("No data.");
+    expect(buildMarkdown(sourceDir, null)).toMatch(/## SQLite State Smoke\s+No data\./u);
   });
 });

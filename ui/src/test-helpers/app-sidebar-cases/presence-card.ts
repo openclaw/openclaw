@@ -6,7 +6,7 @@ import { domProbe } from "../dom-probe.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 const owner = (id: string) => ({
   actor: { type: "human" as const, id, identity: { type: "profile" as const, id } },

@@ -102,7 +102,6 @@ async function fixture(setup?: (source: string) => Promise<void>) {
         targetStateDir,
         candidateRoot,
         assertCurrent,
-        onProgress: assertCurrent,
       }),
   };
 }

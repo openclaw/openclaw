@@ -19,10 +19,15 @@ export type SessionPendingInputOwner = Omit<
   authority?: SessionPendingInputAuthority;
   /** Published only after the exact input was consumed by a committed transcript write. */
   consumed?: true;
+  /** Host-only link published with committed aggregate consumption. */
+  promotedOwner?: SessionPendingInputOwner;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
   settling?: true;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
-  restartRecovered?: true;
+  /** Host-only staged retry custody; inbound dedupe spends it once. */
+  dedupeRetryAvailable?: true;
+  /** Graceful shutdown leaves this accepted input for the session's ordinary FIFO. */
+  preserveQueuedForRestart?: true;
   /** Aggregate authority is the exact source closures, never persisted source identifiers. */
   sources?: readonly SessionPendingInputOwner[];
 };

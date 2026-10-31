@@ -18,8 +18,12 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { liveProvidersShareOwningPlugin } from "../live-provider-owner.js";
 
 type ModelRef = { provider?: string | null; id?: string | null };
-type LiveModelPolicyRef = ModelRef &
-  Pick<Parameters<typeof resolveProviderModernModelRef>[0], "config" | "workspaceDir" | "env">;
+type ResolvedModelRef = { provider: string; id: string };
+type LiveProviderScope = Pick<
+  Parameters<typeof resolveProviderModernModelRef>[0],
+  "config" | "workspaceDir" | "env"
+>;
+type LiveModelPolicyRef = ModelRef & LiveProviderScope;
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-5-5",
@@ -80,18 +84,18 @@ function canonicalLiveModelRef(ref: ModelRef): string | undefined {
   return provider && id ? `${provider}/${id}` : undefined;
 }
 
-function listLiveModelRefs(priority: readonly string[]): Array<{ provider: string; id: string }> {
+function listLiveModelRefs(priority: readonly string[]): ResolvedModelRef[] {
   return priority.map((ref) => {
     const separator = ref.indexOf("/");
     return { provider: ref.slice(0, separator), id: ref.slice(separator + 1) };
   });
 }
 
-export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
+export function listPrioritizedHighSignalLiveModelRefs(): ResolvedModelRef[] {
   return listLiveModelRefs(HIGH_SIGNAL_LIVE_MODEL_PRIORITY);
 }
 
-export function listPrioritizedSmallLiveModelRefs(): Array<{ provider: string; id: string }> {
+export function listPrioritizedSmallLiveModelRefs(): ResolvedModelRef[] {
   return listLiveModelRefs(SMALL_LIVE_MODEL_PRIORITY);
 }
 
@@ -170,15 +174,14 @@ export function isHighSignalLiveModelRef(ref: LiveModelPolicyRef): boolean {
   return major > 4 || (major === 4 && minor >= 6);
 }
 
-export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
-  provider?: string | null;
-  useExplicitModels: boolean;
-  providerFilter?: ReadonlySet<string> | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  resolveProviderOwners?: (provider: string) => readonly string[] | undefined;
-}): boolean {
+export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(
+  params: LiveProviderScope & {
+    provider?: string | null;
+    useExplicitModels: boolean;
+    providerFilter?: ReadonlySet<string> | null;
+    resolveProviderOwners?: (provider: string) => readonly string[] | undefined;
+  },
+): boolean {
   const provider = normalizeProviderId(params.provider ?? "");
   if (!provider || params.useExplicitModels || !excludedProviders.has(provider)) {
     return false;
@@ -232,12 +235,9 @@ function createLiveItemSelector(priority: readonly string[]) {
     const grouped = new Map<string, T[]>();
     for (const item of remaining) {
       const provider = providerOf(item);
-      const group = grouped.get(provider);
-      if (group) {
-        group.push(item);
-      } else {
-        grouped.set(provider, [item]);
-      }
+      const group = grouped.get(provider) ?? [];
+      group.push(item);
+      grouped.set(provider, group);
     }
     while (selected.length < maxItems && grouped.size > 0) {
       for (const [provider, group] of grouped) {
@@ -290,16 +290,14 @@ const providerRuntimeLoader = createLazyImportLoader(
 
 export function resolveLiveProviderDiscoveryProviderIds(params: {
   providerFilter: ReadonlySet<string> | null;
-  explicitRefs: readonly { provider: string; id: string }[];
-  priorityRefs?: readonly { provider: string; id: string }[];
+  explicitRefs: readonly ResolvedModelRef[];
+  priorityRefs?: readonly ResolvedModelRef[];
 }): string[] | undefined {
-  const providers = new Set<string>();
-  for (const provider of params.providerFilter ?? []) {
-    const normalized = normalizeProviderId(provider);
-    if (normalized) {
-      providers.add(normalized);
-    }
-  }
+  const providers = new Set(
+    [...(params.providerFilter ?? [])]
+      .map((provider) => normalizeProviderId(provider))
+      .filter(Boolean),
+  );
   for (const ref of [...params.explicitRefs, ...(params.priorityRefs ?? [])]) {
     providers.add(ref.provider);
   }
@@ -356,21 +354,20 @@ export function applyLiveProviderPluginDiscoveryCompat(params: {
  * Explicit selections use agent resolution, including accepted bundled aliases;
  * prioritized sweeps retain provider discovery without expanding static catalogs.
  */
-export async function appendLiveModelCandidates(params: {
-  models: Model[];
-  config?: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  modelRegistry: ProviderResolveDynamicModelContext["modelRegistry"];
-  resolution?:
-    | { kind: "prioritized" }
-    | { kind: "explicit"; getDiscoveryStores: () => Promise<LiveModelDiscoveryStores> };
-  resolveDynamicModel?: DynamicModelResolver;
-  prepareDynamicModel?: DynamicModelPreparer;
-  normalizeModel?: DynamicModelNormalizer;
-  refs?: Array<{ provider: string; id: string }>;
-}): Promise<{ models: Model[]; added: Model[] }> {
+export async function appendLiveModelCandidates(
+  params: LiveProviderScope & {
+    models: Model[];
+    agentDir: string;
+    modelRegistry: ProviderResolveDynamicModelContext["modelRegistry"];
+    resolution?:
+      | { kind: "prioritized" }
+      | { kind: "explicit"; getDiscoveryStores: () => Promise<LiveModelDiscoveryStores> };
+    resolveDynamicModel?: DynamicModelResolver;
+    prepareDynamicModel?: DynamicModelPreparer;
+    normalizeModel?: DynamicModelNormalizer;
+    refs?: ResolvedModelRef[];
+  },
+): Promise<{ models: Model[]; added: Model[] }> {
   const { config, agentDir, workspaceDir, env, modelRegistry } = params;
   const resolveDynamicModel =
     params.resolveDynamicModel ??
@@ -381,13 +378,7 @@ export async function appendLiveModelCandidates(params: {
     (async (request: Parameters<DynamicModelPreparer>[0]) =>
       (await providerRuntimeLoader.load()).prepareProviderDynamicModel(request));
   const refs = params.refs ?? listPrioritizedHighSignalLiveModelRefs();
-  const seen = new Set<string>();
-  for (const model of params.models) {
-    const key = canonicalLiveModelRef(model);
-    if (key) {
-      seen.add(key);
-    }
-  }
+  const seen = new Set(params.models.map(canonicalLiveModelRef).filter((key) => key !== undefined));
 
   const models = [...params.models];
   const added: Model[] = [];

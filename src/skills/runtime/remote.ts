@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -65,29 +66,20 @@ function extractErrorMessage(err: unknown): string | undefined {
   if (!err) {
     return undefined;
   }
-  if (err instanceof Error) {
+  if (err instanceof Error || (typeof err !== "object" && typeof err !== "function")) {
+    return coerceErrorMessage(err);
+  }
+  if (typeof err !== "object") {
+    return undefined;
+  }
+  if ("message" in err && typeof err.message === "string") {
     return err.message;
   }
-  if (typeof err === "object" && "message" in err && typeof err.message === "string") {
-    return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return undefined;
   }
-  if (
-    typeof err === "string" ||
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint" ||
-    typeof err === "symbol"
-  ) {
-    return String(err);
-  }
-  if (typeof err === "object") {
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
@@ -381,7 +373,6 @@ type RemoteNodeBinRefreshParams = {
   deviceFamily?: string;
   commands?: string[];
   cfg: OpenClawConfig;
-  timeoutMs?: number;
   readinessDelayMs?: number;
   readinessSignal?: AbortSignal;
 };
@@ -480,7 +471,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   }
 
   const binsList = [...requiredBins];
-  const timeoutMs = params.timeoutMs ?? 15_000;
+  const timeoutMs = 15_000;
   const command = canWhich ? "system.which" : "system.run";
   const probeSignature = JSON.stringify([
     command,
@@ -541,17 +532,16 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
       bumpSkillsSnapshotVersion({ reason: "remote-node" });
     }
   };
-  const connectivityTimeoutMs = Math.min(timeoutMs, 2_000);
   if (typeof remoteRegistry.checkConnectivity === "function") {
     const preflightContext = {
       command: "websocket.ping",
-      timeoutMs: connectivityTimeoutMs,
+      timeoutMs: 2_000,
       requiredBinCount: binsList.length,
     };
     const preflightConnId = remoteRegistry.get(params.nodeId)?.connId;
     let connectivity: Awaited<ReturnType<typeof remoteRegistry.checkConnectivity>>;
     try {
-      connectivity = await remoteRegistry.checkConnectivity(params.nodeId, connectivityTimeoutMs);
+      connectivity = await remoteRegistry.checkConnectivity(params.nodeId, 2_000);
     } catch (err) {
       recordFailure(err, preflightContext, "preflight");
       return;
@@ -565,7 +555,6 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
           deviceFamily: latestSession.deviceFamily,
           commands: latestSession.commands,
           cfg: params.cfg,
-          timeoutMs: params.timeoutMs,
         });
         return;
       }

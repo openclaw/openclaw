@@ -25,6 +25,7 @@ import {
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
 import { readDatabase } from "./observations.mjs";
+import { captureSessionArchives, readSessionArchiveBytes } from "./session-archive-proof.mjs";
 import * as sessionSourceFixture from "./session-source-fixture.mjs";
 import {
   assertUpgradeVolumeMigrated,
@@ -666,6 +667,9 @@ function captureLegacyOperatorPendingDelivery([stateDir, artifactRoot]) {
   }
   let witness;
   try {
+    // Managed candidate workers strip NODE_OPTIONS. The external service shim
+    // observes after Doctor, before startup recovery and terminal cleanup.
+    captureSessionArchives(stateDir, path.join(artifactRoot, "session-archives"));
     readDatabase(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), (db) => {
       witness = { row: readLegacyOperatorPendingDelivery(db) };
     });
@@ -736,14 +740,17 @@ function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
     .readdirSync(runsDir)
     .filter((name) => name.endsWith(".json"))
     .map((name) => readJson(path.join(runsDir, name)))
-    .filter((run) => run.completedAt)
-    .flatMap((run) => run.targets.flatMap((target) => target.completedMoves))
+    .filter((run) => run.completedAt && !run.failedAt)
+    .flatMap((run) =>
+      run.targets
+        .filter((target) => target.validationBeforeArchive === "passed")
+        .flatMap((target) => target.completedMoves),
+    )
     .some(
       (move) =>
         move.kind === "legacy-store" &&
         move.sourcePath === fixture.storePath &&
-        fs.existsSync(move.archivePath) &&
-        fs.readFileSync(move.archivePath, "utf8") === fixture.original,
+        readSessionArchiveBytes(move).toString("utf8") === fixture.original,
     );
   assert(archived, "published update did not archive the original legacy session bytes");
   assert(liveRow, "startup removed the imported legacy session");
@@ -781,7 +788,7 @@ function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
     );
   }
   console.log(
-    "Published updater: legacy pending delivery imported into SQLite; original JSON archived unchanged.",
+    "Published updater: legacy pending delivery imported into SQLite; original JSON archived unchanged and retained or verifiably retired.",
   );
 }
 

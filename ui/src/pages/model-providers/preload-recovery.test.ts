@@ -8,6 +8,7 @@ import {
   createAuthStatus,
   createHarness,
   createPage,
+  expandProvider,
   mountPage,
   publishCatalog,
   publishRouteData,
@@ -42,10 +43,11 @@ it("catches a catalog publication between route preload and page mount", async (
   publishRouteData(page, data);
   try {
     mountPage(page);
+    await expandProvider(page, "openai");
     await waitForSolid(() => {
       const provider = page.querySelector('[data-provider-id="openai"]');
-      expect(provider?.querySelector('[data-profile-id="openai:one"]')?.textContent).toContain(
-        "Signed in",
+      expect(provider?.querySelector('[data-profile-id="openai:one"] strong')?.textContent).toBe(
+        "Signed-in account 1",
       );
       expect(provider?.querySelector(".model-providers__head .settings-status")?.textContent).toBe(
         "Ready",

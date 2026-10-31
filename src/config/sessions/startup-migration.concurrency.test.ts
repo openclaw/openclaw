@@ -24,7 +24,7 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 
 type TaskObservation = { worker: Worker; port: MessagePort; agentId: string };
 const observer = vi.hoisted(() => ({
@@ -132,6 +132,32 @@ function withFleet(run: (fleet: Fleet) => Promise<void>, invalidFirst = false) {
     run(seedFleet(state, invalidFirst)),
   );
 }
+
+it("preserves native lock classification after canonical worker cleanup", () =>
+  withFleet(async (state) => {
+    const agentId = state.agentIds[0]!;
+    const pathname = resolveOpenClawAgentSqlitePath({ agentId, env: state.env });
+    const preload = await state.writeText(
+      "canonical-lock.cjs",
+      `
+      const { DatabaseSync } = require('node:sqlite');
+      const exec = DatabaseSync.prototype.exec;
+      DatabaseSync.prototype.exec = function(sql) {
+        if (this.location() === ${JSON.stringify(pathname)} && /^\\s*BEGIN\\b/i.test(sql)) {
+          throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR', errcode: 5 });
+        }
+        return exec.call(this, sql);
+      };
+      `,
+    );
+    observer.beforeCreate = (options) => ({
+      ...options,
+      execArgv: [...(options.execArgv ?? []), "--require", preload],
+    });
+    await expect(state.start([agentId])).rejects.toMatchObject({ errcode: 5 });
+    expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
+    state.assertNoLeases();
+  }));
 
 function observeRetirement(
   configure: (

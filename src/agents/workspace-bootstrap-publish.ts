@@ -14,7 +14,7 @@ export class WorkspaceBootstrapSeedConflictError extends Error {
 
 export async function publishBootstrapFile(
   filePath: string,
-  content: string | Buffer,
+  content: string | Buffer | (() => Promise<string>),
   beforePersistentApply?: () => void,
 ): Promise<boolean> {
   const dir = await fs.realpath(path.dirname(filePath));
@@ -26,9 +26,10 @@ export async function publishBootstrapFile(
   if (existing) {
     return false;
   }
+  const resolvedContent = typeof content === "function" ? await content() : content;
   const root = await fsRoot(dir);
   try {
-    await root.create(targetPath, content, {
+    await root.create(targetPath, resolvedContent, {
       atomic: true,
       durable: "file",
       mkdir: false,
@@ -53,11 +54,11 @@ export async function publishBootstrapFile(
 
 export async function publishAgentInstructions(
   filePath: string,
-  template: string,
+  template: () => Promise<string>,
   purpose: string | undefined,
   beforePersistentApply?: () => void,
 ): Promise<void> {
-  const content = purpose ? `# Agent purpose\n\n${purpose}\n\n${template}` : template;
+  const content = purpose ? `# Agent purpose\n\n${purpose}\n\n${await template()}` : template;
   const created = await publishBootstrapFile(filePath, content, beforePersistentApply);
   if (purpose && !created) {
     const existing = await readWorkspaceFileWithGuards({

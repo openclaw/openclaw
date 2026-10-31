@@ -44,6 +44,7 @@ export async function createPtyAdapter(
   }
   const pty = await spawnTerminalPty(
     {
+      executionIntent: params.executionIntent,
       file: preparedSpawn.command,
       args: preparedSpawn.args,
       cwd: params.cwd,

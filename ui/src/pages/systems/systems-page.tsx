@@ -3,6 +3,7 @@ import {
   Errored,
   For,
   Loading,
+  Repeat,
   Show,
   action,
   createEffect,
@@ -14,13 +15,13 @@ import {
 import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import "../../components/sparkline-tile.tsx";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import "../../components/desktop/desktop-panel.ts";
+import "../../components/desktop/desktop-panel-solid.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { formatResourceBytes as bytes, formatTimeAgo } from "../../lib/format.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -45,15 +46,6 @@ import {
 import "../../styles/systems.css";
 
 registerEnglishCatalog(registerSystemsEnglish);
-
-function bytes(value: number): string {
-  return formatByteSize(value, {
-    style: "legacy-binary",
-    separator: " ",
-    maxUnit: "tera",
-    fractionDigits: (size, unit) => (unit === "tera" || size < 10 ? 1 : 0),
-  });
-}
 
 function metricSamples(
   history: readonly SystemsTelemetrySample[],
@@ -305,13 +297,11 @@ function SystemsDetails(props: { controller: Systems; row: SystemsInventoryRow }
               <a
                 class="systems-session-link"
                 href={target().href}
-                onClick={(event: MouseEvent) => {
-                  if (!shouldHandleNavigationClick(event)) {
-                    return;
-                  }
-                  event.preventDefault();
-                  controller().context.navigate(face, target().options);
-                }}
+                onClick={(event: MouseEvent) =>
+                  handleNavigationClick(event, () => {
+                    controller().context.navigate(face, target().options);
+                  })
+                }
               >
                 <strong class="systems-session-link__title">
                   {session.displayName ?? session.label ?? session.key}
@@ -545,42 +535,64 @@ function SystemsWorkspace(props: {
           <Icon name="panelRightOpen" />
         </button>
       </header>
-      <Show when={props.inventoryRead.receipt()} keyed>
-        {(receipt) => (
-          <Errored
-            fallback={(error) => (
-              <div class="systems-callout systems-callout--error" role="alert">
-                {formatUiError(error())}
-                <button
-                  onClick={() => void controller().refresh("manual")}
-                  disabled={props.inventoryRead.pending()}
-                >
-                  {t("common.retry")}
-                </button>
-              </div>
-            )}
-          >
-            <Loading on={receipt}>{readStatus()}</Loading>
-          </Errored>
-        )}
-      </Show>
-      {!controller().connected() ? (
-        <div class="systems-callout" role="status">
-          {t("systems.offlineGateway")}
-        </div>
-      ) : null}
-      {auxiliaryErrors().length ? (
-        <details class="systems-callout">
-          <summary>{t("systems.errors")}</summary>
-          <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
-        </details>
-      ) : null}
-      {controller().state.showStats && row() ? (
-        <SystemMeasurements row={row()!} controller={controller()} />
-      ) : null}
-      {!row() || row()!.environment.id === "gateway" ? (
-        <SystemsBackups controller={controller()} />
-      ) : null}
+      <div
+        class={["systems-overview", { "systems-overview--compact": !controller().state.showStats }]}
+        role="region"
+        aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
+        tabindex={0}
+      >
+        <Show when={props.inventoryRead.receipt()} keyed>
+          {(receipt) => (
+            <Errored
+              fallback={(error) => (
+                <div class="systems-callout systems-callout--error" role="alert">
+                  {formatUiError(error())}
+                  <button
+                    onClick={() => void controller().refresh("manual")}
+                    disabled={props.inventoryRead.pending()}
+                  >
+                    {t("common.retry")}
+                  </button>
+                </div>
+              )}
+            >
+              <Loading on={receipt}>{readStatus()}</Loading>
+            </Errored>
+          )}
+        </Show>
+        {!controller().connected() ? (
+          <div class="systems-callout" role="status">
+            {t("systems.offlineGateway")}
+          </div>
+        ) : null}
+        {auxiliaryErrors().length ? (
+          <details class="systems-callout">
+            <summary>{t("systems.errors")}</summary>
+            <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
+          </details>
+        ) : null}
+        {controller().state.showStats ? (
+          <div class="systems-overview__telemetry">
+            <Show
+              when={row()}
+              fallback={
+                <Show when={props.inventoryRead.pending()}>
+                  <div class="systems-metrics" aria-hidden="true">
+                    <div class="systems-vitals">
+                      <Repeat count={3}>{() => <div class="systems-vital skeleton" />}</Repeat>
+                    </div>
+                  </div>
+                </Show>
+              }
+            >
+              {(selected) => <SystemMeasurements row={selected()} controller={controller()} />}
+            </Show>
+          </div>
+        ) : null}
+        {!row() || row()!.environment.id === "gateway" ? (
+          <SystemsBackups controller={controller()} />
+        ) : null}
+      </div>
       <div class="systems-body">
         <div class="systems-desktop">
           {canView() && row() ? (
@@ -598,7 +610,16 @@ function SystemsWorkspace(props: {
               loading={props.inventoryRead.pending()}
             />
           ) : (
-            <div class="systems-state" role="status">
+            <div
+              class="systems-state"
+              role="status"
+              style={{
+                visibility:
+                  props.inventoryRead.pending() && !controller().state.inventory
+                    ? "hidden"
+                    : undefined,
+              }}
+            >
               <span class="systems-state__icon" aria-hidden="true">
                 <Icon name="monitor" />
               </span>

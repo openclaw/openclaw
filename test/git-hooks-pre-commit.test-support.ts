@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
@@ -46,11 +46,8 @@ export const runFailure = (...args: Parameters<typeof run>) => {
     if (!(error instanceof Error) || !("status" in error)) {
       throw error;
     }
-    const failure = error as Error & {
-      status?: number;
-      stderr?: string;
-      stdout?: string;
-    };
+    const failure = error as Error &
+      Partial<Pick<SpawnSyncReturns<string>, "status" | "stderr" | "stdout">>;
     return {
       status: failure.status ?? 1,
       stderr: failure.stderr ?? "",
@@ -67,23 +64,18 @@ export function writeExecutable(dir: string, name: string, contents: string): vo
 
 export function installPreCommitFixture(dir: string): string {
   const at = (...names: string[]) => path.join(dir, ...names);
+  const source = (...names: string[]) => path.join(process.cwd(), ...names);
   for (const name of ["git-hooks", "scripts/pre-commit", "node_modules/.bin", "bin"]) {
     fs.mkdirSync(at(name), { recursive: true });
   }
-  fs.symlinkSync(
-    path.join(process.cwd(), "git-hooks", "pre-commit"),
-    at("git-hooks", "pre-commit"),
-  );
+  fs.symlinkSync(source("git-hooks/pre-commit"), at("git-hooks/pre-commit"));
   for (const name of [
     "run-node-tool.sh",
     "filter-staged-files.mjs",
     "guard-staged-content.mjs",
     "format-staged.sh",
   ]) {
-    fs.copyFileSync(
-      path.join(process.cwd(), "scripts/pre-commit", name),
-      at("scripts/pre-commit", name),
-    );
+    fs.copyFileSync(source("scripts/pre-commit", name), at("scripts/pre-commit", name));
   }
   // Freshness checks import repository planners; hook behavior tests isolate formatting and guards.
   fs.writeFileSync(at("scripts/pre-commit/check-staged-freshness.mts"), "");

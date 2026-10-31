@@ -250,8 +250,9 @@ it.each([undefined, "auto", "on", "off"] as const)("gates reasoning %s", async (
 });
 
 it.each([
-  ["boolean", 200, 200],
-  ["boolean", 201, 200],
+  ["boolean", 201, 400],
+  ["boolean", 400, 400],
+  ["boolean", 401, 400],
   ["choice", 255, 255],
   ["choice", 256, 255],
 ] as const)("enforces %s capacity at %i before HTTP", async (type, count, limit) => {
@@ -277,7 +278,11 @@ it.each([
         ];
   reply({ answers });
   const result = await evaluate({}, { state: { type: "text", text: "Evidence" }, questions });
-  expectDispatch(result, count === limit);
+  expectDispatch(result, count <= limit);
+  if (result.status === "ok") {
+    expect(Object.keys(result.result.answers)).toHaveLength(type === "boolean" ? count : 1);
+    expect(requestBody().questions).toHaveLength(type === "boolean" ? count : 1);
+  }
 });
 
 it.each([

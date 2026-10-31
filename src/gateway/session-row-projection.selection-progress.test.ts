@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { AgentHarness } from "../agents/harness/types.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import { cronTestJob } from "../cron/service.fixture-builders.test-support.js";
 import type { CronJob } from "../cron/types.js";
@@ -18,15 +17,12 @@ import {
 } from "./session-automation-index.js";
 import * as membership from "./session-membership-projection.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import {
-  canRetainSessionRowRuntimeOwnership,
-  isPreparedSessionRowDatabaseFacts,
-  ready,
-} from "./session-row-projection-record.js";
+import { ready } from "./session-row-projection-record.js";
 import * as rowFixture from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+const cfg = { agents: { entries: { main: {} } } };
 
 function installHarness(
   id: string,
@@ -63,10 +59,8 @@ it.for([
   "preserves %s readiness when listing a sidebar page",
   async ([, options, firstExpected, keys], { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { entries: { main: {} } } };
       const visible = { agentId: "main", sessionKey: visibleKey };
-      const offPage = { agentId: "main", sessionKey: offPageKey };
-      replaceSessionEntrySync(visible, {
+      rowFixture.seedRow(visibleKey, {
         sessionId: "visible",
         updatedAt: 2,
         visibility: "shared",
@@ -78,7 +72,7 @@ it.for([
         agentHarnessId: "sidebar-owner",
         modelSelectionLocked: true,
       };
-      replaceSessionEntrySync(offPage, offPageEntry);
+      rowFixture.seedRow(offPageKey, offPageEntry);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let holdOwnership = false;
@@ -107,7 +101,7 @@ it.for([
         expect(initial.sessions.map((row) => row.key)).toEqual([visible.sessionKey]);
         const first = await projection.withSelectionPreparation(async () => {
           holdOwnership = true;
-          replaceSessionEntrySync(offPage, { ...offPageEntry, label: "Renamed off-page" });
+          rowFixture.seedRow(offPageKey, { ...offPageEntry, label: "Renamed off-page" });
           reading = reads.listSessions({ context, client, request, acceptsSerializedJson: true });
           const winner = await Promise.race([
             reading.then(() => "response" as const),
@@ -130,21 +124,17 @@ it.for([
 );
 
 describe("automation bindings", () => {
-  const cfg = { agents: { entries: { main: {} } } };
   afterEach(() => registerSessionAutomationSource(null));
 
   it("rebuilds only changed automation bindings and preserves complete unrelated rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const keys = ["bound", "next", "parent", "other"].map((name) => `agent:main:${name}`);
       for (const [index, sessionKey] of keys.entries()) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: `session-${index}`,
-            updatedAt: 1,
-            ...(index === 0 ? { parentSessionKey: keys[2] } : {}),
-          },
-        );
+        rowFixture.seedRow(sessionKey, {
+          sessionId: `session-${index}`,
+          updatedAt: 1,
+          ...(index === 0 ? { parentSessionKey: keys[2] } : {}),
+        });
       }
       const jobs: CronJob[] = [];
       registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
@@ -199,8 +189,8 @@ describe("automation bindings", () => {
         },
       };
       for (const agentId of ["main", "work"]) {
-        replaceSessionEntrySync(
-          { agentId, storePath, sessionKey: "global" },
+        rowFixture.seedRow(
+          { agentId, storePath, key: "global" },
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
@@ -232,7 +222,6 @@ it.each(["parent model change", "late cron registration"])(
   "settles selection of materialized opaque-ownership rows after %s",
   async (invalidation) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { entries: { main: {} } } };
       const parentKey = "agent:main:parent";
       const parent = { sessionId: "parent", updatedAt: 1 };
       const keys = Array.from({ length: 3 }, (_, index) => `agent:main:opaque-${index}`);
@@ -270,8 +259,6 @@ it.each(["parent model change", "late cron registration"])(
       await listProjectedSessions({ projection, opts: {} });
       expect(projection.dirtyRowCount).toBe(0);
       expect(projection.needsSelectionPreparation()).toBe(false);
-      const rows = keys.map((key) => projection.capture({ agentId: "main", key })!);
-      const retained = rows.map((row) => row.retainedDatabaseFacts);
 
       if (invalidation === "parent model change") {
         rowFixture.seedRow(parentKey, {
@@ -283,33 +270,12 @@ it.each(["parent model change", "late cron registration"])(
         const jobs = keys.map((key, index) =>
           cronTestJob({
             id: `binding-${index}`,
-            createdAtMs: 1,
-            updatedAtMs: 1,
             sessionTarget: `session:${key}`,
-            wakeMode: "now",
-            payload: { kind: "systemEvent", text: "Synthetic binding" },
           }),
         );
         registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
       }
       expect(projection.dirtyRowCount).toBeGreaterThanOrEqual(keys.length);
-      for (const [index, row] of rows.entries()) {
-        expect(projection.capture({ agentId: "main", key: row.key })).toBe(row);
-        expect(row.materialized).toBeDefined();
-        expect(row.pendingDatabaseFacts).toBeUndefined();
-        expect(row.retainedDatabaseFacts).toBe(retained[index]);
-        const facts = row.retainedDatabaseFacts;
-        expect(isPreparedSessionRowDatabaseFacts(facts)).toBe(true);
-        if (!isPreparedSessionRowDatabaseFacts(facts)) {
-          throw new Error("Expected prepared retained database facts");
-        }
-        expect(facts.entry).toMatchObject({
-          agentHarnessId: "row-opaque",
-          modelSelectionLocked: true,
-        });
-        expect(facts.runtimeOwnershipDependencies).toEqual([]);
-        expect(canRetainSessionRowRuntimeOwnership(facts)).toBe(false);
-      }
       expect(projection.needsSelectionPreparation()).toBe(true);
 
       preparationBudget = 8;

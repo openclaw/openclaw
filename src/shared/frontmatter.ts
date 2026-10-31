@@ -28,9 +28,8 @@ export function parseFrontmatterBool(value: string | undefined, fallback: boolea
 /** Parses the JSON5 OpenClaw manifest block embedded inside a string frontmatter field. */
 export function resolveOpenClawManifestBlock(params: {
   frontmatter: Record<string, unknown>;
-  key?: string;
 }): Record<string, unknown> | undefined {
-  const raw = getFrontmatterString(params.frontmatter, params.key ?? "metadata");
+  const raw = getFrontmatterString(params.frontmatter, "metadata");
   if (!raw) {
     return undefined;
   }

@@ -1,18 +1,22 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { normalizeAcceptedSessionSpawnResult as acceptedSpawn } from "../../accepted-session-spawn.js";
-import {
-  readAdmittedRunOperatorAuthority,
-  resolvePreparedRunAdmission,
-} from "../../admitted-run-context.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
-import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry.js";
+import {
+  activateSubagentRegistry,
+  settleRequesterAfterSessionSpawns,
+} from "../registry/subagent-registry.js";
+import { admitEmbeddedRun, recordFinal } from "./subagent-spawn.boundary-run.test-support.js";
 import {
   collectFailure,
   sessionReader,
@@ -22,7 +26,6 @@ import {
 } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
-  recordSpawnBoundaryFinal,
   type createSpawnOperatorSource,
   type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -43,12 +46,39 @@ export function registerGuestSpawnCases(
     waitForEmbeddedRun: WaitForEmbeddedRun;
   },
 ) {
-  it.for([false, true])(
-    "launches an owned hidden child and returns its result (audit=%s)",
-    async (audit, { signal }) => {
+  it.for([
+    { audit: false, visibility: "shared", context: "isolated" },
+    { audit: true, visibility: "shared", context: "isolated" },
+    { audit: false, visibility: "draft", context: "isolated" },
+    { audit: false, visibility: "draft", context: "fork" },
+  ] as const)(
+    "launches an owned $visibility child and returns its result (audit=$audit, context=$context)",
+    async ({ audit, visibility, context }, { signal }) => {
       const { bound, source, modelPolicy, scopes } = await options.createGuestParent(audit);
+      await upsertSessionEntryCore(
+        { storePath: bound.storePath, sessionKey: bound.parentSessionKey },
+        { visibility },
+      );
       const readSession = sessionReader(bound.storePath);
+      if (context === "fork") {
+        const parent = expectDefined(readSession(bound.parentSessionKey), "fork parent");
+        for (const message of [
+          { role: "user", content: "Plan a small picnic." },
+          { role: "assistant", content: "Let us compare indoor backups.", stopReason: "stop" },
+        ]) {
+          await appendTranscriptMessage(
+            {
+              storePath: bound.storePath,
+              sessionKey: bound.parentSessionKey,
+              sessionId: parent.sessionId,
+            },
+            { message },
+          );
+        }
+      }
       const { runtime } = await options.createBoundGateway(bound);
+      vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+      await activateSubagentRegistry(bound.resolveGatewayContext);
       const nativeAnnounce = await vi.importActual<
         typeof import("../announce/subagent-announce.js")
       >("../announce/subagent-announce.js");
@@ -62,12 +92,7 @@ export function registerGuestSpawnCases(
       const modelResult = createDeferred<EmbeddedAgentRunResult>();
       const parentTurns: { prompt: string; internalEvents?: AgentInternalEvent[] }[] = [];
       options.runEmbeddedAgent.mockImplementation(async (params) => {
-        const admitted = await resolvePreparedRunAdmission({
-          runId: params.runId,
-          runtimeKind: "embedded",
-          admittedRunContext: params.admittedRunContext,
-          preparedRunAdmission: params.preparedRunAdmission,
-        });
+        const admitted = await admitEmbeddedRun(params);
         const authority = readAdmittedRunOperatorAuthority(admitted);
         expect(authority?.profileId).toBe(source.authority.profileId);
         expect(authority?.scopes).toEqual(scopes);
@@ -84,18 +109,14 @@ export function registerGuestSpawnCases(
         }
         const text = parentTurn ? "Parent received the result" : "guest child complete";
         const result = parentTurn ? visibleResult(text) : await modelResult.promise;
-        await recordSpawnBoundaryFinal({
-          storePath: bound.storePath,
-          sessionKey: expectDefined(params.sessionKey, "child session"),
-          runId: params.runId,
-          text,
-        });
+        await recordFinal(bound, params, text);
         return result;
       });
       let childRunId: string | undefined;
+      let initialChildVisibility: string | undefined;
       const failures: unknown[] = [];
       await collectFailure(failures, async () => {
-        const result = await createBoundSpawnInvocation(bound, hiddenSpawn)();
+        const result = await createBoundSpawnInvocation(bound, { ...hiddenSpawn, context })();
         const details = expectDefined(
           acceptedSpawn(result),
           `accepted child: ${JSON.stringify(result.details)}`,
@@ -112,6 +133,7 @@ export function registerGuestSpawnCases(
           },
           sandbox: "required",
         });
+        initialChildVisibility = readSession(details.childSessionKey)?.visibility ?? "shared";
         expect(
           await settleRequesterAfterSessionSpawns({
             requesterSessionKey: bound.parentSessionKey,
@@ -136,6 +158,7 @@ export function registerGuestSpawnCases(
       modelResult.resolve(visibleResult("guest child complete"));
       failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
       options.throwBoundFailures(failures);
+      expect(initialChildVisibility).toBe(visibility);
     },
   );
 

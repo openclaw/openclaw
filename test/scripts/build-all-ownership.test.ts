@@ -44,6 +44,7 @@ for (const scenario of scenarios) {
       const scripts = path.join(root, "scripts");
       fs.mkdirSync(scripts);
       fs.writeFileSync(path.join(scripts, "tsx.mjs"), "");
+      fs.writeFileSync(path.join(scripts, "generate-runtime-script-assets.mjs"), "");
       // Only the terminal workload/loader are synthetic; build selection, child joining,
       // inherited claims and their cleanup all run through the real entrypoints.
       fs.writeFileSync(

@@ -42,12 +42,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function assistantToolCall(id: string, name = "n", stopReason?: "toolUse"): AgentMessage {
-  return {
-    role: "assistant",
+function assistantToolCall(id: string, name = "n", stopReason?: "toolUse") {
+  return makeAgentAssistantMessage({
     content: [{ type: "toolCall", id, name, arguments: {} }],
     ...(stopReason ? { stopReason } : {}),
-  } as AgentMessage;
+  });
 }
 
 function appender(sm: ReturnType<typeof guardSessionManager>) {
@@ -142,12 +141,19 @@ describe("guardSessionManager integration", () => {
     const current = callbacks();
     const { sm } = createGuard({ runId: "reused-run", ...previous });
     const clearPrevious = sm.clearTranscriptRunCallbacks;
-    guardSessionManager(sm, { runId: "reused-run", ...current });
+    const setPreviousPersistence = sm.setNextUserMessagePersistence;
+    guardSessionManager(sm, {
+      runId: "reused-run",
+      suppressNextUserMessagePersistence: true,
+      ...current,
+    });
     clearPrevious?.();
+    setPreviousPersistence?.("normal");
 
-    await sm.appendMessageAsync(makeUserMessage("persisted", 1));
-    sm.setNextUserMessagePersistence?.("suppress");
     await sm.appendMessageAsync(makeUserMessage("suppressed", 2));
+    sm.setNextUserMessagePersistence?.("suppress");
+    await sm.appendMessageAsync(makeUserMessage("suppressed by current setter", 5));
+    await sm.appendMessageAsync(makeUserMessage("persisted", 1));
     await sm.appendMessageAsync(makeUserMessage("blocked", 3));
     sm.clearTranscriptRunCallbacks?.();
     await sm.appendMessageAsync(makeUserMessage("after cleanup", 4));
@@ -155,9 +161,9 @@ describe("guardSessionManager integration", () => {
     for (const callback of Object.values(previous)) {
       expect(callback).not.toHaveBeenCalled();
     }
-    expect(current.onUserMessagePreparingForPersistence).toHaveBeenCalledTimes(3);
+    expect(current.onUserMessagePreparingForPersistence).toHaveBeenCalledTimes(4);
     expect(current.onUserMessagePersisted).toHaveBeenCalledOnce();
-    expect(current.onUserMessagePersistenceSuppressed).toHaveBeenCalledOnce();
+    expect(current.onUserMessagePersistenceSuppressed).toHaveBeenCalledTimes(2);
     expect(current.onUserMessageBlocked).toHaveBeenCalledOnce();
     expect(current.onMessagePersisted).toHaveBeenCalledOnce();
     expect(getMessages(sm)).toEqual([
@@ -266,18 +272,6 @@ describe("guardSessionManager integration", () => {
     );
   });
 
-  it("keeps a retired prompt's persistence-mode setter bound to its own run", async () => {
-    const { sm } = createGuard();
-    const previousSetPersistence = sm.setNextUserMessagePersistence;
-    guardSessionManager(sm, { suppressNextUserMessagePersistence: true });
-    previousSetPersistence?.("normal");
-
-    await sm.appendMessageAsync(makeUserMessage("already persisted current turn", 1));
-    await sm.appendMessageAsync(makeUserMessage("next current turn", 2));
-
-    expect(getMessages(sm)).toEqual([makeUserMessage("next current turn", 2)]);
-  });
-
   it("keeps synthetic-result cleanup private after retiring callbacks", async () => {
     const onMessagePersisted = vi.fn();
     const { sm } = createGuard({
@@ -285,12 +279,7 @@ describe("guardSessionManager integration", () => {
       privateCompletion: true,
       onMessagePersisted,
     });
-    await sm.appendMessageAsync(
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "unfinished", name: "n", arguments: {} }],
-        stopReason: "toolUse",
-      }),
-    );
+    await sm.appendMessageAsync(assistantToolCall("unfinished", "n", "toolUse"));
     sm.clearTranscriptRunCallbacks?.();
     await sm.flushPendingToolResultsAsync?.();
 

@@ -3,6 +3,7 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { describeCronHostExecutionRestriction } from "../cron/service/state.js";
 import { assertCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import {
   CronStreamJobOwner,
   isCronStreamJob,
@@ -52,6 +53,7 @@ export function createCronStreamWatchers({
   /** Test seams; production uses the built-in cadence and retry schedules. */
   minIntervalMs?: number;
 }): CronStreamWatchers {
+  const spawnBroker = getSpawnBroker();
   const owners = new Map<string, CronStreamJobOwner>();
   let stopped = false;
 
@@ -61,7 +63,7 @@ export function createCronStreamWatchers({
   };
 
   const createOwner = (job: CronStreamJob): CronStreamJobOwner => {
-    const owner = new CronStreamJobOwner(job, ownerParams);
+    const owner = new CronStreamJobOwner(job, ownerParams, spawnBroker);
     owners.set(job.id, owner);
     return owner;
   };

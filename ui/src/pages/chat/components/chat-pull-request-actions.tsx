@@ -7,6 +7,7 @@ import {
   Menu,
   type MenuEntry,
   type MenuHandle,
+  type MenuItemBindings,
 } from "../../../components/solid/menu.tsx";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -14,15 +15,15 @@ import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
 import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import {
   ChecksRows,
+  PullRequestCopyError,
   StatusWarning,
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
 
 const CHECK_ROLLUP = {
   failing: ["failed", "chat.pullRequests.checksFailed", "circleX"],
@@ -36,7 +37,8 @@ export function PullRequestActions(props: {
   presented: PresentationValue;
   dismissed?: boolean;
   onDismiss: () => void;
-  pullRequest: ControlUiSessionPullRequest;
+  url: string;
+  pullRequest?: ControlUiSessionPullRequest;
   owner: ChatPullRequestsProps;
 }) {
   const id = createUniqueId();
@@ -44,30 +46,29 @@ export function PullRequestActions(props: {
   const parentPresented = useContext(ContentPresentation);
   let menu: MenuHandle | undefined;
   const [page, setPage] = createSignal<"home" | "checks" | "monitoring">("home");
-  let backButton: HTMLButtonElement | undefined;
-  let checksButton: HTMLButtonElement | undefined;
-  let monitoringButton: HTMLButtonElement | undefined;
+  const [visited, setVisited] = createSignal({ checks: false, monitoring: false });
   const navigate = (next: "checks" | "monitoring") => {
+    setVisited((current) => ({ ...current, [next]: true }));
     setPage(next);
-    queueMicrotask(() => backButton?.focus());
+    queueMicrotask(() => menu?.itemElement("back")?.focus());
   };
   const back = () => {
-    const previous = page();
+    const previous = page() === "checks" ? "checks" : "monitoring";
     setPage("home");
-    queueMicrotask(() => (previous === "checks" ? checksButton : monitoringButton)?.focus());
+    queueMicrotask(() => menu?.itemElement(previous)?.focus());
   };
   const [menuOpen, setMenuOpen] = createSignal(false);
   const presentation = createMemo(() => projectPresentation(props.presented));
   const presented = () => parentPresented() && !props.dismissed && presentation().read();
   const clipboard = createPullRequestCopy({
-    url: () => props.pullRequest.url,
+    url: () => props.url,
     presented: () => presented() && menu?.overlay.open === true,
     onCopied: () => {
       menu?.close();
       showToast({ message: t("chat.pullRequests.linkCopied") });
     },
   });
-  const checks = () => props.pullRequest.checks;
+  const checks = () => props.pullRequest?.checks;
   const rollup = () => {
     const current = checks();
     if (!current) {
@@ -94,46 +95,54 @@ export function PullRequestActions(props: {
   };
   // The enclosing page supplies visibility; CI owners retain requests, errors and mutations.
   const checksContent = (
-    <div
-      class="chat-pr-menu__page"
-      hidden={page() !== "checks"}
-      aria-label={t("chat.pullRequests.checksTitle")}
-    >
-      <div class="chat-pr-menu__checks-heading">
-        <span>{t("chat.pullRequests.checksTitle")}</span>
-        <div class="chat-pr-menu__checks-totals">
-          <ChecksRows checks={checks()} runningFirst />
+    <Show when={visited().checks ? props.pullRequest : undefined}>
+      {(pullRequest) => (
+        <div
+          class="chat-pr-menu__page"
+          hidden={page() !== "checks"}
+          aria-label={t("chat.pullRequests.checksTitle")}
+        >
+          <div class="chat-pr-menu__checks-heading">
+            <span>{t("chat.pullRequests.checksTitle")}</span>
+            <div class="chat-pr-menu__checks-totals">
+              <ChecksRows checks={checks()} runningFirst />
+            </div>
+          </div>
+          <ChatCiDetailsPanel
+            pullRequest={pullRequest()}
+            gateway={props.owner.gateway}
+            sessionKey={props.owner.sessionKey ?? ""}
+            presented={presented() && menuOpen() && page() === "checks"}
+            inline
+            menuControls
+            controls={controls}
+          />
         </div>
-      </div>
-      <openclaw-chat-ci-details
-        prop:pullRequest={props.pullRequest}
-        prop:gateway={props.owner.gateway}
-        prop:sessionKey={props.owner.sessionKey ?? ""}
-        prop:presented={presented() && menuOpen() && page() === "checks"}
-        prop:inline={true}
-        prop:menuControls={true}
-        prop:controls={controls}
-      />
-    </div>
+      )}
+    </Show>
   );
   const monitoringContent = (
-    <div
-      class="chat-pr-menu__page"
-      hidden={page() !== "monitoring"}
-      aria-label={t("chat.pullRequests.ciMonitoring")}
-    >
-      <div class="chat-pr-menu__caption">{t("chat.pullRequests.ciMonitoring")}</div>
-      <openclaw-chat-ci-automation
-        prop:pullRequest={props.pullRequest}
-        prop:gateway={props.owner.gateway}
-        prop:sessionKey={props.owner.sessionKey ?? ""}
-        prop:sessionId={props.owner.sessionId ?? ""}
-        prop:presented={presented() && menuOpen() && page() === "monitoring"}
-        prop:inline={true}
-        prop:menuPresentation={true}
-        prop:controls={controls}
-      />
-    </div>
+    <Show when={visited().monitoring ? props.pullRequest : undefined}>
+      {(pullRequest) => (
+        <div
+          class="chat-pr-menu__page"
+          hidden={page() !== "monitoring"}
+          aria-label={t("chat.pullRequests.ciMonitoring")}
+        >
+          <div class="chat-pr-menu__caption">{t("chat.pullRequests.ciMonitoring")}</div>
+          <ChatCiAutomationPanel
+            pullRequest={pullRequest()}
+            gateway={props.owner.gateway}
+            sessionKey={props.owner.sessionKey ?? ""}
+            sessionId={props.owner.sessionId ?? ""}
+            presented={presented() && menuOpen() && page() === "monitoring"}
+            inline
+            menuPresentation
+            controls={controls}
+          />
+        </div>
+      )}
+    </Show>
   );
   // Keep the same bridges connected across page changes and menu closure so late
   // write outcomes and retry state stay with their native owners.
@@ -152,19 +161,12 @@ export function PullRequestActions(props: {
     label: t("common.back"),
     closeOnSelect: false,
     render: (attributes) => (
-      <button
-        {...attributes}
-        ref={(element) => {
-          backButton = element;
-        }}
-        class="oc-menu-item chat-pr-menu__back"
-        type="button"
-      >
+      <button {...attributes} class="oc-menu-item chat-pr-menu__back" type="button">
         <span class="oc-menu-item__icon">
           <Icon name="arrowLeft" />
         </span>
         <span class="oc-menu-item__label">{t("common.back")}</span>
-        <span class="chat-pr-menu__value">#{props.pullRequest.number}</span>
+        <span class="chat-pr-menu__value">#{props.pullRequest?.number}</span>
       </button>
     ),
   });
@@ -173,7 +175,7 @@ export function PullRequestActions(props: {
       ? [
           backItem(),
           ciPages,
-          ...(page() === "checks" && props.pullRequest.checksUrl
+          ...(page() === "checks" && props.pullRequest?.checksUrl
             ? [
                 {
                   kind: "group" as const,
@@ -184,7 +186,7 @@ export function PullRequestActions(props: {
                       id: "checks-link",
                       label: t("chat.pullRequests.openChecks"),
                       icon: <Icon name="externalLink" />,
-                      href: props.pullRequest.checksUrl,
+                      href: props.pullRequest?.checksUrl,
                       attributes: {
                         target: "_blank",
                         rel: "noopener noreferrer",
@@ -201,87 +203,97 @@ export function PullRequestActions(props: {
             kind: "content",
             id: "facts",
             content: (
-              <div class="chat-pr-menu__facts">
-                <div class="chat-pr-menu__repository">
-                  <span>
-                    {props.pullRequest.owner}/{props.pullRequest.repo}
-                  </span>
-                  <span>#{props.pullRequest.number}</span>
-                </div>
-                <Show
-                  when={
-                    props.pullRequest.additions !== undefined ||
-                    props.pullRequest.deletions !== undefined
-                  }
-                >
-                  <div class="chat-pr-menu__fact">
-                    <Icon name="diff" />
-                    <span>{t("chat.pullRequests.codeChanges")}</span>
-                    <span class="chat-pr-menu__value">
-                      <GitDiffValues
-                        item={props.pullRequest}
-                        classPrefix="chat-pr"
-                        locale="en-US"
-                      />
-                    </span>
+              <Show when={props.pullRequest}>
+                {(pullRequest) => (
+                  <div class="chat-pr-menu__facts">
+                    <div class="chat-pr-menu__repository">
+                      <span>
+                        {pullRequest().owner}/{pullRequest().repo}
+                      </span>
+                      <span>#{pullRequest().number}</span>
+                    </div>
+                    <Show
+                      when={
+                        pullRequest().additions !== undefined ||
+                        pullRequest().deletions !== undefined
+                      }
+                    >
+                      <div class="chat-pr-menu__fact">
+                        <Icon name="diff" />
+                        <span>{t("chat.pullRequests.codeChanges")}</span>
+                        <span class="chat-pr-menu__value">
+                          <GitDiffValues
+                            item={pullRequest()}
+                            classPrefix="chat-pr"
+                            locale="en-US"
+                          />
+                        </span>
+                      </div>
+                    </Show>
+                    <div class="chat-pr-menu__fact">
+                      <Icon name={sessionPullRequestStateIcons[pullRequest().state]} />
+                      <span>{t("chat.pullRequests.status")}</span>
+                      <span class="chat-pr-menu__value">
+                        {t(STATE_LABEL_KEYS[pullRequest().state])}
+                      </span>
+                    </div>
+                    <Show
+                      when={
+                        pullRequest().state !== "merged" || props.owner.status === "unavailable"
+                      }
+                    >
+                      <StatusWarning status={props.owner.status} text />
+                    </Show>
                   </div>
-                </Show>
-                <div class="chat-pr-menu__fact">
-                  <Icon name={sessionPullRequestStateIcons[props.pullRequest.state]} />
-                  <span>{t("chat.pullRequests.status")}</span>
-                  <span class="chat-pr-menu__value">
-                    {t(STATE_LABEL_KEYS[props.pullRequest.state])}
-                  </span>
-                </div>
-                <Show
-                  when={
-                    props.pullRequest.state !== "merged" || props.owner.status === "unavailable"
-                  }
-                >
-                  <StatusWarning status={props.owner.status} text />
-                </Show>
-              </div>
+                )}
+              </Show>
             ),
           },
           ciPages,
-          {
-            kind: "group",
-            id: "checks-group",
-            class: "chat-pr-menu__group",
-            items: [
-              {
-                kind: "content",
-                id: "checks-heading",
-                content: (
-                  <div class="chat-pr-menu__caption">{t("chat.pullRequests.checksTitle")}</div>
-                ),
-              },
-              {
-                id: "checks",
-                label: `${t("chat.pullRequests.checksTitle")}: ${rollup()?.label ?? t("chat.pullRequests.automationNoChecks")}${rollup() ? ` ${rollup()?.count}` : ""}`,
-                closeOnSelect: false,
-                render: (attributes) => (
-                  <button
-                    {...attributes}
-                    ref={(element) => {
-                      checksButton = element;
-                    }}
-                    class="oc-menu-item chat-pr-menu__drill-trigger"
-                    type="button"
-                  >
-                    <span class="oc-menu-item__icon chat-ci__status" data-state={rollup()?.state}>
-                      <Icon name={rollup()?.icon ?? "listChecks"} />
-                    </span>
-                    <span class="oc-menu-item__label">
-                      {rollup()?.label ?? t("chat.pullRequests.automationNoChecks")}
-                    </span>
-                    <span class="chat-pr-menu__value">{rollup()?.count}</span>
-                    <Icon name="chevronRight" />
-                  </button>
-                ),
-              },
-            ],
-          },
+          ...(props.pullRequest
+            ? [
+                {
+                  kind: "group" as const,
+                  id: "checks-group",
+                  class: "chat-pr-menu__group",
+                  items: [
+                    {
+                      kind: "content" as const,
+                      id: "checks-heading",
+                      content: (
+                        <div class="chat-pr-menu__caption">
+                          {t("chat.pullRequests.checksTitle")}
+                        </div>
+                      ),
+                    },
+                    {
+                      id: "checks",
+                      label: `${t("chat.pullRequests.checksTitle")}: ${rollup()?.label ?? t("chat.pullRequests.automationNoChecks")}${rollup() ? ` ${rollup()?.count}` : ""}`,
+                      closeOnSelect: false,
+                      render: (attributes: MenuItemBindings) => (
+                        <button
+                          {...attributes}
+                          class="oc-menu-item chat-pr-menu__drill-trigger"
+                          type="button"
+                        >
+                          <span
+                            class="oc-menu-item__icon chat-ci__status"
+                            data-state={rollup()?.state}
+                          >
+                            <Icon name={rollup()?.icon ?? "listChecks"} />
+                          </span>
+                          <span class="oc-menu-item__label">
+                            {rollup()?.label ?? t("chat.pullRequests.automationNoChecks")}
+                          </span>
+                          <span class="chat-pr-menu__value">{rollup()?.count}</span>
+                          <Icon name="chevronRight" />
+                        </button>
+                      ),
+                    },
+                  ],
+                },
+              ]
+            : []),
           {
             kind: "group",
             id: "links",
@@ -291,7 +303,7 @@ export function PullRequestActions(props: {
                 id: "github",
                 label: t("chat.pullRequests.openGitHub"),
                 icon: <Icon name="externalLink" />,
-                href: props.pullRequest.url,
+                href: props.url,
                 attributes: {
                   target: "_blank",
                   rel: "noopener noreferrer",
@@ -308,37 +320,32 @@ export function PullRequestActions(props: {
               {
                 kind: "content",
                 id: "copy-error",
-                content: (
-                  <Show when={clipboard.failed()}>
-                    <p class="chat-pr-menu__error" role="alert">
-                      {t("chat.pullRequests.copyFailed")}
-                    </p>
-                  </Show>
-                ),
+                content: <PullRequestCopyError clipboard={clipboard} />,
               },
             ],
           },
-          {
-            id: "monitoring",
-            label: t("chat.pullRequests.ciMonitoring"),
-            closeOnSelect: false,
-            render: (attributes) => (
-              <button
-                {...attributes}
-                ref={(element) => {
-                  monitoringButton = element;
-                }}
-                class="oc-menu-item chat-pr-menu__drill-trigger"
-                type="button"
-              >
-                <span class="oc-menu-item__icon">
-                  <Icon name="listChecks" />
-                </span>
-                <span class="oc-menu-item__label">{t("chat.pullRequests.ciMonitoring")}</span>
-                <Icon name="chevronRight" />
-              </button>
-            ),
-          },
+          ...(props.pullRequest
+            ? [
+                {
+                  id: "monitoring",
+                  label: t("chat.pullRequests.ciMonitoring"),
+                  closeOnSelect: false,
+                  render: (attributes: MenuItemBindings) => (
+                    <button
+                      {...attributes}
+                      class="oc-menu-item chat-pr-menu__drill-trigger"
+                      type="button"
+                    >
+                      <span class="oc-menu-item__icon">
+                        <Icon name="listChecks" />
+                      </span>
+                      <span class="oc-menu-item__label">{t("chat.pullRequests.ciMonitoring")}</span>
+                      <Icon name="chevronRight" />
+                    </button>
+                  ),
+                },
+              ]
+            : []),
           {
             kind: "group",
             id: "hide-group",

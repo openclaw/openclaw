@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, dispatchQaHttpRequest } from "./bus-server.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import {
@@ -237,6 +237,10 @@ describe.skipIf(process.platform !== "linux")(
           context.skip(sandboxSkipReason);
         }
         expect(process.platform).toBe("linux");
+        const codexManifest = JSON.parse(
+          await fs.readFile(path.join(REPO_ROOT, "extensions/codex/package.json"), "utf8"),
+        ) as { dependencies: { "@openai/codex": string } };
+        const expectedCodexVersion = `codex-cli ${codexManifest.dependencies["@openai/codex"]}`;
         const root = tempDirs.make("openclaw-native-hook-pressure-");
         const pluginDir = path.join(root, "plugin");
         await fs.mkdir(pluginDir);
@@ -403,6 +407,7 @@ export default {
           }
           const gateway = await owner.start({
             repoRoot: REPO_ROOT,
+            initializeCurrentRuntimeState: true,
             command: {
               executablePath: process.execPath,
               argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
@@ -603,7 +608,7 @@ export default {
               ).stdout.trim();
               const current = await readProcess(row.pid);
               expect(current?.startTimeTicks).toBe(row.startTimeTicks);
-              expect(version).toBe("codex-cli 0.162.1");
+              expect(version).toBe(expectedCodexVersion);
               binaryIdentities.push({
                 pid: row.pid,
                 startTimeTicks: row.startTimeTicks,
@@ -622,7 +627,11 @@ export default {
               remainingObservedOrDescendantRelays: { live: 0, zombies: 0 },
             });
           }
-          expect(utilityRequests).toBeGreaterThan(0);
+          // Terminal activity recaps run asynchronously after agent.wait completes.
+          await vi.waitFor(() => expect(utilityRequests, gateway.logs()).toBeGreaterThan(0), {
+            timeout: 5_000,
+            interval: 25,
+          });
         } finally {
           const stopped = await owner.stop();
           await sockets.close();

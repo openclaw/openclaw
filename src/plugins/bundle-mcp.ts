@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import {
@@ -24,7 +24,7 @@ import type {
 } from "./bundle-mcp.types.js";
 import { encodePluginInstallDirName } from "./install-paths.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
@@ -237,11 +237,7 @@ function validateAgentMcpServer(params: {
     if (!isValidAgentCommand(params.raw.command, params.rootDir)) {
       return { ok: false, error: "stdio command must be a bare name or ./-relative path" };
     }
-    if (
-      params.raw.args !== undefined &&
-      (!Array.isArray(params.raw.args) ||
-        !params.raw.args.every((entry) => typeof entry === "string"))
-    ) {
+    if (params.raw.args !== undefined && !isStringArray(params.raw.args)) {
       return { ok: false, error: "stdio args must be an array of strings" };
     }
     if (params.raw.env !== undefined && !isStringRecord(params.raw.env)) {
@@ -547,6 +543,25 @@ export function loadEnabledBundleMcpConfig(params: {
       ),
     ),
   };
+}
+
+/** MCP servers one plugin declares, whether or not it is enabled. */
+export function loadPluginDeclaredMcpServers(
+  record: Pick<PluginManifestRecord, "id" | "format" | "bundleFormat" | "rootDir" | "mcpServers">,
+): Record<string, BundleMcpServerConfig> {
+  if (record.format === "bundle") {
+    return record.bundleFormat
+      ? loadBundleMcpConfig({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat,
+        }).config.mcpServers
+      : {};
+  }
+  return record.mcpServers
+    ? loadRootRelativeMcpConfig({ rootDir: record.rootDir, mcpServers: record.mcpServers }).config
+        .mcpServers
+    : {};
 }
 
 function withMcpPluginOwnership(

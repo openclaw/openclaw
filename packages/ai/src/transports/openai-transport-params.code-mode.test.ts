@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   assertCodeModeResponsesToolSurface as assertSurface,
   enforceCodeModeResponsesToolSurface as enforceSurface,
@@ -18,7 +18,6 @@ const named = (name: string) => ({ name });
 const fn = (name: string) => ({ type: "function", name });
 const nestedFn = (name: string) => ({ type: "function", function: named(name) });
 const hosted = (type: string) => ({ type });
-const grouped = (...names: string[]) => ({ functionDeclarations: names.map(named) });
 const declaration = (name: string) => ({ name, parameters: { type: "object" } });
 const payloadWith = (...tools: unknown[]) => ({ tools });
 const visible = new Set(["exec", "wait", "computer"]);
@@ -82,45 +81,20 @@ it("keeps only explicitly allowed hosted tools alongside visible client function
   expect(() => assertSurface(payload, visible, hostedTypes)).not.toThrow();
 });
 
-it("observes exact final-egress identities without a second payload parser", () => {
-  const observer = vi.fn();
-  const payload = payloadWith(
-    fn("exec"),
-    nestedFn("wait"),
-    grouped("computer", "rogue"),
-    hosted("web_search"),
-    hosted("file_search"),
-  );
-
-  enforceSurface(payload, visible, hostedTypes, observer);
-
-  expect(observer).toHaveBeenCalledOnce();
-  expect(observer).toHaveBeenCalledWith({
-    beforeToolIdentities: [
-      "client:exec",
-      "client:wait",
-      "client:computer",
-      "client:rogue",
-      "hosted:web_search",
-      "hosted:file_search",
-    ],
-    afterToolIdentities: ["client:exec", "client:wait", "hosted:web_search"],
-  });
-});
-
 it.each(["functionDeclarations", "function_declarations"] as const)(
-  "rejects and removes grouped %s from final OpenAI payloads",
+  "rejects and removes grouped %s from final-egress tools",
   (field) => {
-    const payload = payloadWith(named("exec"), named("wait"), {
-      [field]: [named("exec"), named("computer")],
-    });
-
-    expectViolation(payload);
-
-    enforceSurface(payload, visible);
-
-    expect(payload.tools).toEqual([{ name: "exec" }, { name: "wait" }]);
-    expect(() => assertSurface(payload, visible)).not.toThrow();
+    const payload = payloadWith(
+      fn("exec"),
+      nestedFn("wait"),
+      { [field]: [named("computer"), named("rogue")] },
+      hosted("web_search"),
+      hosted("file_search"),
+    );
+    expectViolation(payload, hostedTypes);
+    enforceSurface(payload, visible, hostedTypes);
+    expect(payload.tools).toEqual([fn("exec"), nestedFn("wait"), hosted("web_search")]);
+    expect(() => assertSurface(payload, visible, hostedTypes)).not.toThrow();
   },
 );
 

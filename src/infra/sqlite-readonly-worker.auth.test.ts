@@ -144,6 +144,62 @@ it.skipIf(skipBroker)(
   },
 );
 
+it.skipIf(skipBroker)(
+  "keeps late-discovered auth directories on the bound Gateway readers",
+  async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(fs, "watch").mockImplementation(() => {
+      throw new Error("synthetic unavailable watcher");
+    });
+    const broker = createSpawnBrokerHost();
+    const gatewayReaders = createSqliteReadOnlyWorkerScope();
+    const callerReaders = createSqliteReadOnlyWorkerScope();
+    const publishFileChange = authProfileFileChanges.onChange;
+    const observed: unknown[] = [];
+    try {
+      await broker.ready();
+      const brokerSpawn = vi.spyOn(broker, "spawn");
+      vi.mocked(spawn).mockClear();
+      runWithSpawnBroker(broker, () => gatewayReaders.run(bindAuthProfileFileObservationReaders));
+      const { source, store } = createAuthDatabase();
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      authProfileFileChanges.onChange = async (change) => {
+        await publishFileChange?.(change);
+        if (change.directory === path.dirname(source)) {
+          observed.push((await read(source, "canonical")).store);
+        }
+      };
+      runWithSpawnBroker(broker, () =>
+        callerReaders.run(() => readAuthProfileDatabaseIdentity(source)),
+      );
+      await callerReaders.close();
+
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toEqual([
+        { status: "readable", raw: store },
+        { status: "readable", raw: store },
+      ]);
+      expect(brokerSpawn).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+
+      await gatewayReaders.close();
+      clearAuthState(source);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toHaveLength(2);
+      expect(brokerSpawn).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      authProfileFileChanges.onChange = publishFileChange;
+      await closeOpenClawStateDatabaseAsync();
+      await callerReaders.close();
+      await gatewayReaders.close();
+      await broker.close();
+    }
+  },
+);
+
 function createAuthDatabase(key = "synthetic", metadata?: Record<string, string>) {
   const source = path.join(tempDirs.make("openclaw-auth-transport-"), "source.sqlite");
   const store = {

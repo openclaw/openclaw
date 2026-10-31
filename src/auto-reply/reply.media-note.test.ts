@@ -1,7 +1,6 @@
 /** Tests media-note behavior as it appears through reply prompt assembly. */
 import { describe, expect, it } from "vitest";
-import { prepareReplyRunContext } from "./reply/get-reply-run-context.js";
-import { baseParams } from "./reply/get-reply-run.test-support.js";
+import { prepareReadyReply } from "./reply/get-reply-run-context.test-support.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 
 describe("getReplyFromConfig media note plumbing", () => {
@@ -14,12 +13,7 @@ describe("getReplyFromConfig media note plumbing", () => {
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["/tmp/a.png", "/tmp/b.png"],
     });
-    const prepared = await prepareReplyRunContext(
-      baseParams({ ctx: sessionCtx, sessionCtx, isNewSession: false }),
-    );
-    if (prepared.kind !== "ready") {
-      throw new Error("Expected prepared reply context");
-    }
+    const prepared = await prepareReadyReply({ ctx: sessionCtx, sessionCtx, isNewSession: false });
     const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
     const prompt = envelope.prefixedCommandBody;
 
@@ -59,12 +53,7 @@ describe("getReplyFromConfig media note plumbing", () => {
         },
       ],
     });
-    const prepared = await prepareReplyRunContext(
-      baseParams({ ctx: sessionCtx, sessionCtx, isNewSession: false }),
-    );
-    if (prepared.kind !== "ready") {
-      throw new Error("Expected prepared reply context");
-    }
+    const prepared = await prepareReadyReply({ ctx: sessionCtx, sessionCtx, isNewSession: false });
     const prompt = prepared.buildPromptBodies({
       prefixedBody: prepared.prefixedBodyBase,
     }).prefixedCommandBody;

@@ -35,6 +35,7 @@ export async function verifyUpdateFailureRecovery(params: {
   opts: UpdateCommandOptions;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  mutationStarted?: boolean;
   serviceStopped?: boolean;
   gatewayStartAttempted?: "install" | "restart";
   definitionRecovery?: UpdateServiceDefinitionRecovery;
@@ -99,7 +100,8 @@ export async function verifyUpdateFailureRecovery(params: {
   try {
     await withCommandProcessScope(async () => {
       const untouched =
-        ["managed-service-preflight", "gateway-stop-unverified"].includes(result.reason ?? "") &&
+        ((params.mutationStarted === false && !dataAtRisk) ||
+          ["managed-service-preflight", "gateway-stop-unverified"].includes(result.reason ?? "")) &&
         !params.serviceStopped &&
         !params.preManagedServiceStop?.stopped &&
         !params.gatewayStartAttempted &&

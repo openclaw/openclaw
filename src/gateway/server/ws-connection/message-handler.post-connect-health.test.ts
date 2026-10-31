@@ -7,6 +7,7 @@ import {
   validateUpdateStatusParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { captureSecurityEvents } from "../../../agents/test-helpers/security-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
@@ -44,6 +45,7 @@ import {
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
 import * as wsLog from "../../ws-log.js";
+import { createGatewaySnapshotFixture } from "../health-state.test-support.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -58,7 +60,6 @@ import {
   cleanupGatewayHarnesses,
   connectTrustedProxyUser,
   createGatewayHarnessGate,
-  captureSecurityEvents,
   createCloseMock,
   createConnectedTestClient,
   createHealthSummary,
@@ -102,18 +103,7 @@ const {
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   commitPresenceMock: vi.fn(),
-  buildGatewaySnapshotMock: vi.fn(() => ({
-    presence: [],
-    health: {},
-    stateVersion: { presence: 1, health: 1 },
-    uptimeMs: 1,
-    sessionDefaults: {
-      defaultAgentId: "main",
-      mainKey: "main",
-      mainSessionKey: "main",
-      scope: "per-sender",
-    },
-  })),
+  buildGatewaySnapshotMock: vi.fn(() => createGatewaySnapshotFixture()),
   getHealthCacheMock: vi.fn(() => null),
   getHealthVersionMock: vi.fn(() => 1),
   loadConfigMock: vi.fn(() => ({
@@ -160,10 +150,10 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
   resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
-// mock-isolation: Ordinary connection tests do not use Enterprise identity or remote enrichment.
-vi.mock("../../github-user-identity.js", () => ({
+// mock-isolation: Keep remote enrichment synthetic while native connection admission stays real.
+vi.mock("../../github-user-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../github-user-identity.js")>()),
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
-  resolveTrustedEnterpriseGitHubAccountId: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
@@ -291,7 +281,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       await Promise.all([prewarmStarted.promise, helloSent.promise]);
       expect(prewarmGatewaySessionHistoryMock).toHaveBeenCalledWith(
         loadConfigMock(),
-        expect.objectContaining({ onlyIfCold: true }),
+        expect.objectContaining({ isCancelled: expect.any(Function) }),
       );
       expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
         ok: true,
@@ -1826,7 +1816,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           request: { message: "hello", idempotencyKey: runId },
           hasRestoredCronContinuation: false,
           isOneShotModelRun: false,
-          isRestartRecoveryResumeRun: false,
         }),
       ).toEqual(remote ? undefined : { runId, callerOrigin: { kind: "local" } });
     },
@@ -1835,6 +1824,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   it.each([
     ["openclaw-control-ui", "operator.admin", true],
     ["openclaw-control-ui", "operator.read", false],
+    ["openclaw-control-ui", "operator.write", false],
+    ["openclaw-control-ui", "operator.cron", false],
     ["openclaw-tui", "operator.admin", false],
   ] as const)(
     "records authenticated remote management authority for %s with %s: %s",
@@ -1854,17 +1845,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
             hasRestoredCronContinuation: false,
             isOneShotModelRun: false,
-            isRestartRecoveryResumeRun: false,
           });
-          const expected = allowed
-            ? {
-                runId: "control-ui-admin-run",
-                callerOrigin: { kind: "unknown" },
-                callerScopedCreation: true,
-                managementEntitlement: { source: "control-ui-admin" },
-              }
-            : undefined;
-          expect(admission).toEqual(expected);
+          const expected = {
+            runId: "control-ui-admin-run",
+            callerOrigin: { kind: "unknown" },
+            callerScopedCreation: true,
+            ...(allowed ? { managementEntitlement: { source: "control-ui-admin" } } : {}),
+          };
+          expect(admission).toEqual(scope === "operator.read" ? undefined : expected);
         },
       );
     },

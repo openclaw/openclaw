@@ -1,0 +1,2 @@
+# Packed snapshot and legacy corruption regressions; migrate existing manifest decode assertions.
+45

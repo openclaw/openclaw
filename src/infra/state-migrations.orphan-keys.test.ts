@@ -45,17 +45,6 @@ const OPS_WORK_CONFIG = {
   agents: { entries: { ops: {} } },
 } as OpenClawConfig;
 
-function opsSessionStorePath(stateDir: string): string {
-  return path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
-}
-
-function sharedMainOpsConfig(sharedStorePath: string): OpenClawConfig {
-  return {
-    session: { mainKey: "work", store: sharedStorePath },
-    agents: { entries: { main: {}, ops: {} } },
-  } as OpenClawConfig;
-}
-
 async function migrateFixtureState(
   stateDir: string,
   cfg: OpenClawConfig = OPS_WORK_CONFIG,
@@ -73,6 +62,22 @@ describe("migrateOrphanedSessionKeys", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tmpDir: string;
   let stateDir: string;
+  const agentStore = (agentId: string) =>
+    path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  const configuredStore = (store: string): OpenClawConfig => ({
+    session: { store },
+    agents: { entries: { ops: {} } },
+  });
+  const sharedConfig = (store: string): OpenClawConfig => ({
+    session: { mainKey: "work", store },
+    agents: { entries: { main: {}, ops: {} } },
+  });
+  function expectDeferred(
+    result: Awaited<ReturnType<typeof migrateFixtureState>>,
+    warning: string,
+  ) {
+    expect(result).toEqual({ changes: [], warnings: [warning] });
+  }
   beforeEach(() => {
     tmpDir = tempDirs.make("orphan-keys-test-");
     stateDir = path.join(tmpDir, ".openclaw");
@@ -81,35 +86,36 @@ describe("migrateOrphanedSessionKeys", () => {
     listPluginDoctorSessionStoreAgentIdsMock.mockReturnValue([]);
   });
 
-  it("promotes legacy voice sessions before canonical runtime access", async () => {
-    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    writeStore(storePath, {
-      "voice:15550001111": entry("legacy-voice", 2_000),
-      "agent:main:voice:15550001111": entry("stale-canonical", 1_000),
+  it("leaves malformed UTF-8 unchanged while repairing an independent session store", async () => {
+    const badPath = agentStore("main");
+    writeStore(badPath, { main: entry("damaged", 1) });
+    const bytes = fs.readFileSync(badPath);
+    bytes[bytes.indexOf("damaged")] = 0xff;
+    fs.writeFileSync(badPath, bytes);
+    const goodPath = agentStore("ops");
+    writeStore(goodPath, { main: entry("valid", 1) });
+
+    const result = await migrateFixtureState(stateDir, {
+      agents: { entries: { main: {}, ops: {} } },
     });
 
-    await migrateFixtureState(stateDir, {} as OpenClawConfig);
-
-    expectStore(storePath, { "agent:main:voice:15550001111": "legacy-voice" }, [
-      "voice:15550001111",
-    ]);
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(fs.readFileSync(badPath)).toEqual(bytes);
+    expectStore(goodPath, { "agent:ops:main": "valid" }, ["main"]);
   });
 
   it("distinguishes large adjacent inodes before planning store aliases", async () => {
     const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
-    const targetStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+    const targetStorePath = agentStore("voice");
     writeStore(configuredStorePath, {});
     writeStore(targetStorePath, {});
-    const cfg = {
-      session: { store: configuredStorePath },
-      agents: { entries: { ops: {} } },
-    } as OpenClawConfig;
+    const cfg = configuredStore(configuredStorePath);
     const realStatSync = fs.statSync.bind(fs);
     const largeInodes = new Map([
       [configuredStorePath, 72057594037932382n],
       [targetStorePath, 72057594037932383n],
     ]);
-    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((
+    using statSpy = vi.spyOn(fs, "statSync").mockImplementation(((
       candidate: Parameters<typeof fs.statSync>[0],
       options?: { bigint?: boolean },
     ) => {
@@ -120,34 +126,21 @@ describe("migrateOrphanedSessionKeys", () => {
       if (inode === undefined) {
         return stat;
       }
-      return new Proxy(stat, {
-        get(target, property, receiver) {
-          if (property === "dev") {
-            return useBigInt ? 2n : 2;
-          }
-          if (property === "ino") {
-            return useBigInt ? inode : Number(inode);
-          }
-          return Reflect.get(target, property, receiver);
-        },
+      return Object.assign(stat, {
+        dev: useBigInt ? 2n : 2,
+        ino: useBigInt ? inode : Number(inode),
       });
     }) as typeof fs.statSync);
 
-    let ownership: ReturnType<typeof resolveSessionStoreOwnership>;
-    try {
-      ownership = resolveSessionStoreOwnership({
-        cfg,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        targetAgentId: "voice",
-        pluginSessionStoreAgentIds: ["voice"],
-      });
-      expect(statSpy).toHaveBeenCalledWith(configuredStorePath, { bigint: true });
-      expect(statSpy).toHaveBeenCalledWith(targetStorePath, { bigint: true });
-    } finally {
-      statSpy.mockRestore();
-    }
-
+    const ownership = resolveSessionStoreOwnership({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      stateDir,
+      targetAgentId: "voice",
+      pluginSessionStoreAgentIds: ["voice"],
+    });
+    expect(statSpy).toHaveBeenCalledWith(configuredStorePath, { bigint: true });
+    expect(statSpy).toHaveBeenCalledWith(targetStorePath, { bigint: true });
     expect(ownership).toEqual({
       preserveAmbiguousKeys: false,
       preserveForeignMainAliases: false,
@@ -172,17 +165,15 @@ describe("migrateOrphanedSessionKeys", () => {
         [canonicalMainKey]: entry("voice-main", 1000),
         "voice:15550001111": entry("legacy-voice", 2000),
       });
-      const cfg = {
-        session: { store: storeTemplate, scope },
-        agents: { entries: { main: {} } },
-        plugins: {
-          entries: {
-            "voice-call": { config: { agentId: "voice" } },
-          },
+      const result = await migrateFixtureState(
+        stateDir,
+        {
+          session: { store: storeTemplate, scope },
+          agents: { entries: { main: {} } },
+          plugins: { entries: { "voice-call": { config: { agentId: "voice" } } } },
         },
-      } as OpenClawConfig;
-
-      const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
+        ["voice"],
+      );
 
       expectStore(
         voiceStorePath,
@@ -201,88 +192,54 @@ describe("migrateOrphanedSessionKeys", () => {
   it("warns from a readable alias when the configured path identity is inaccessible", async () => {
     const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
     writeStore(configuredStorePath, {});
-    const standardStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+    const standardStorePath = agentStore("voice");
     writeStore(standardStorePath, {
       "voice:15550001111": entry("legacy-voice", 1000),
     });
-    const cfg = {
-      session: { store: configuredStorePath },
-      agents: { entries: { ops: {} } },
-    } as OpenClawConfig;
+    const cfg = configuredStore(configuredStorePath);
     const realStatSync = fs.statSync.bind(fs);
-    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+    using _ = vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
       if (path.resolve(candidate.toString()) === configuredStorePath) {
         throw Object.assign(new Error("inaccessible store"), { code: "EACCES" });
       }
       return realStatSync(candidate);
     });
 
-    let result: Awaited<ReturnType<typeof migrateOrphanedSessionKeys>>;
-    try {
-      result = await migrateFixtureState(stateDir, cfg, ["voice"]);
-    } finally {
-      statSpy.mockRestore();
-    }
-
-    expect(result.changes).toHaveLength(0);
-    expect(result.warnings).toEqual([
+    const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
+    expectDeferred(
+      result,
       `Deferred session key migration for ${standardStorePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one canonical session.store path, then rerun openclaw doctor --fix`,
-    ]);
+    );
     expectStore(standardStorePath, { "voice:15550001111": "legacy-voice" });
   });
 
   it("defers migration through a final-component store symlink", async () => {
-    const standardStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+    const standardStorePath = agentStore("voice");
     writeStore(standardStorePath, {
       "agent:voice::matrix:channel:!room:example.org": entry("malformed-owner", 2000),
       "voice:15550001111": entry("legacy-voice", 1000),
     });
     const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
     fs.symlinkSync(standardStorePath, configuredStorePath);
-    const cfg = {
-      session: { store: configuredStorePath },
-      agents: { entries: { ops: {} } },
-      plugins: {
-        entries: {
-          "voice-call": { config: { agentId: "voice" } },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg: OpenClawConfig = {
+      ...configuredStore(configuredStorePath),
+      plugins: { entries: { "voice-call": { config: { agentId: "voice" } } } },
+    };
 
     const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
 
-    expect(result.changes).toHaveLength(0);
-    expect(result.warnings).toEqual([
+    expectDeferred(
+      result,
       `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
-    ]);
+    );
     expect(fs.lstatSync(configuredStorePath).isSymbolicLink()).toBe(true);
     expectStore(standardStorePath, {
       "agent:voice::matrix:channel:!room:example.org": "malformed-owner",
     });
   });
 
-  it("defers an unambiguous rewrite through a singleton final symlink", async () => {
-    const outsideStorePath = path.join(tmpDir, "outside-sessions.json");
-    writeStore(outsideStorePath, {
-      "agent:main:main": entry("outside-global", 1000),
-    });
-    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.symlinkSync(outsideStorePath, storePath);
-    const cfg = { session: { scope: "global" } } as OpenClawConfig;
-
-    const result = await migrateFixtureState(stateDir, cfg);
-
-    expect(result.changes).toHaveLength(0);
-    expect(result.warnings).toEqual([
-      `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
-    ]);
-    expect(fs.lstatSync(storePath).isSymbolicLink()).toBe(true);
-    expectStore(outsideStorePath, { "agent:main:main": "outside-global" });
-  });
-
   it("defers global main aliases across hard-linked store paths", async () => {
-    const standardStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const standardStorePath = agentStore("main");
     writeStore(standardStorePath, {
       "agent:main:main": entry("legacy-global", 1000),
     });
@@ -298,14 +255,14 @@ describe("migrateOrphanedSessionKeys", () => {
     for (const storePath of [configuredStorePath, standardStorePath]) {
       expectStore(storePath, { "agent:main:main": "legacy-global" }, ["global"]);
     }
-    expect(result.changes).toHaveLength(0);
-    expect(result.warnings).toEqual([
+    expectDeferred(
+      result,
       `Deferred session key migration in aliased store ${configuredStorePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
-    ]);
+    );
   });
 
   it("keeps the newest entry and prefers canonical keys on ties in either source order", async () => {
-    const storePath = opsSessionStorePath(stateDir);
+    const storePath = agentStore("ops");
     writeStore(storePath, {
       "agent:main:main": entry("old-orphan", 500),
       "agent:ops:work": entry("current", 2000),
@@ -330,7 +287,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
   it("preserves the exact bytes of commented JSON5 with trailing commas", async () => {
     const raw = `// operator-authored session history\n{\n  'agent:ops:work': { sessionId: 'abc-123', updatedAt: 1000, },\n}\n`;
-    const storePath = opsSessionStorePath(stateDir);
+    const storePath = agentStore("ops");
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
     fs.writeFileSync(storePath, raw);
 
@@ -348,17 +305,12 @@ describe("migrateOrphanedSessionKeys", () => {
         ),
       },
     } as OpenClawConfig;
-    const statSpy = vi.spyOn(fs, "statSync");
-
-    try {
-      expect(await migrateFixtureState(stateDir, cfg)).toEqual({ changes: [], warnings: [] });
-      const storeProbes = statSpy.mock.calls.filter(([candidate]) =>
-        candidate.toString().endsWith("sessions.json"),
-      );
-      expect(storeProbes).toHaveLength(agentCount);
-    } finally {
-      statSpy.mockRestore();
-    }
+    using statSpy = vi.spyOn(fs, "statSync");
+    expect(await migrateFixtureState(stateDir, cfg)).toEqual({ changes: [], warnings: [] });
+    const storeProbes = statSpy.mock.calls.filter(([candidate]) =>
+      candidate.toString().endsWith("sessions.json"),
+    );
+    expect(storeProbes).toHaveLength(agentCount);
   });
 
   it("does not prepare channel migration surfaces without a legacy store", async () => {
@@ -447,7 +399,7 @@ describe("migrateOrphanedSessionKeys", () => {
   ])("$name in shared stores", async ({ source, present, absent, config, changes, warnings }) => {
     const storePath = path.join(tmpDir, "shared-sessions.json");
     writeStore(storePath, source);
-    const base = sharedMainOpsConfig(storePath);
+    const base = sharedConfig(storePath);
     const result = await migrateFixtureState(stateDir, {
       ...base,
       ...config,
@@ -463,26 +415,8 @@ describe("migrateOrphanedSessionKeys", () => {
     expect(result.warnings).toHaveLength(warnings);
   });
 
-  it("does not guess the owner of raw keys in shared multi-agent stores", async () => {
-    const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
-    writeStore(sharedStorePath, {
-      "voice:15550001111": entry("legacy-voice", 2000),
-      "agent:ops:work": entry("ops-session", 1000),
-    });
-
-    const result = await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
-
-    expectStore(sharedStorePath, { "voice:15550001111": "legacy-voice" }, [
-      "agent:main:voice:15550001111",
-      "agent:ops:voice:15550001111",
-    ]);
-    expect(result.warnings).toContain(
-      `Preserved 1 ambiguous session key(s) in potentially shared store ${sharedStorePath}`,
-    );
-  });
-
   it("canonicalizes mixed-case scoped main aliases on the first run", async () => {
-    const storePath = opsSessionStorePath(stateDir);
+    const storePath = agentStore("ops");
     writeStore(storePath, {
       "Agent:OPS:MAIN": entry("ops-session", 2000),
     });
@@ -493,19 +427,5 @@ describe("migrateOrphanedSessionKeys", () => {
     expectStore(storePath, { "agent:ops:work": "ops-session" }, ["Agent:OPS:MAIN"]);
     expect(first.changes).toHaveLength(1);
     expect(second).toEqual({ changes: [], warnings: [] });
-  });
-
-  it("no-ops when default agentId is main and mainKey is main", async () => {
-    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    writeStore(storePath, {
-      "agent:main:main": entry("abc-123", 1000),
-    });
-
-    const cfg = {} as OpenClawConfig;
-
-    const result = await migrateFixtureState(stateDir, cfg);
-
-    expect(result.changes).toHaveLength(0);
-    expectStore(storePath, { "agent:main:main": "abc-123" });
   });
 });

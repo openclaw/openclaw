@@ -21,31 +21,6 @@ function qualifiedRepository(prefix: string) {
   };
 }
 
-function referenceTextContexts(children: readonly Token[]) {
-  const contexts = new Map<
-    Token,
-    { run: { content: string; scannedTo: number }; offset: number }
-  >();
-  let run = { content: "", scannedTo: 0 };
-  let linkDepth = 0;
-  for (const token of children) {
-    if (token.type === "link_open") {
-      linkDepth++;
-    } else if (token.type === "link_close") {
-      linkDepth--;
-    }
-    if (linkDepth === 0 && token.type === "text") {
-      contexts.set(token, { run, offset: run.content.length });
-      run.content += token.content;
-    } else if (!/^(?:em|strong)_(?:open|close)$/.test(token.type)) {
-      // Formatting is transparent to reference semantics, but links, code,
-      // images, and line breaks must not lend their text to a nearby keyword.
-      run = { content: "", scannedTo: 0 };
-    }
-  }
-  return contexts;
-}
-
 export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
   markdownParser.core.ruler.before("web-link-classes", "github-item-refs", (state) => {
     let inHeading = false;
@@ -59,7 +34,27 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
       if (inHeading || blockToken.type !== "inline" || !children) {
         continue;
       }
-      const contexts = referenceTextContexts(children);
+      const contexts = new Map<
+        Token,
+        { run: { content: string; scannedTo: number }; offset: number }
+      >();
+      let run = { content: "", scannedTo: 0 };
+      let linkDepth = 0;
+      for (const token of children) {
+        if (token.type === "link_open") {
+          linkDepth++;
+        } else if (token.type === "link_close") {
+          linkDepth--;
+        }
+        if (linkDepth === 0 && token.type === "text") {
+          contexts.set(token, { run, offset: run.content.length });
+          run.content += token.content;
+        } else if (!/^(?:em|strong)_(?:open|close)$/.test(token.type)) {
+          // Formatting is transparent to reference semantics, but links, code,
+          // images, and line breaks must not lend their text to a nearby keyword.
+          run = { content: "", scannedTo: 0 };
+        }
+      }
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
         if (!token) {

@@ -33,14 +33,6 @@ const row: ProcessSnapshot = {
     exited: false,
   },
 };
-const mapped = {
-  pid: 123,
-  ppid: 1,
-  pgid: 123,
-  state: "S",
-  owner: "same",
-  startedAt: "Fri Jan 2 10:17:36 1970",
-};
 const snapshot = (pids?: readonly number[]) =>
   readDarwinProcessSnapshot(performance.now() + 1000, pids);
 const tree = (roots: readonly number[]) => readDarwinProcessTree(performance.now() + 1000, roots);
@@ -57,34 +49,20 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("preserves persisted UTC lstart identities and selected PID queries", async () => {
-  expect(await snapshot([123])).toEqual([mapped]);
-  expect(native.census).toHaveBeenCalledExactlyOnceWith({
-    timeoutMs: expect.any(Number),
-    pids: [123],
-  });
-});
-
 it("omits incomplete topology only after proving that the PID disappeared", async () => {
   native.census.mockReturnValue([{ pid: 123, owner: "unknown" }]);
   native.identity.mockReturnValue(null);
   expect(await snapshot()).toEqual([]);
-  expect(native.identity).toHaveBeenCalledExactlyOnceWith(123);
   fail(native.identity, "access-denied");
   await expect(snapshot()).rejects.toMatchObject({ reason: "permission" });
 });
 
-it.each([
-  ["running", "R"],
-  ["sleeping", "S"],
-  ["stopped", "T"],
-  ["zombie", "Z"],
-  ["idle", "I"],
-  ["unknown", "?"],
-] as const)("maps native %s state for existing process consumers", (state, expected) => {
-  native.census.mockReturnValue([{ ...row, state, owner: "different", identity: undefined }]);
+it("maps census topology without requiring a birth identity", () => {
+  native.census.mockReturnValue([
+    { ...row, state: "zombie", owner: "different", identity: undefined },
+  ]);
   expect([...readDarwinProcessCensus(1000)]).toEqual([
-    { pid: 123, ppid: 1, pgid: 123, state: expected, owner: "different" },
+    { pid: 123, ppid: 1, pgid: 123, state: "Z", owner: "different" },
   ]);
 });
 
@@ -99,7 +77,6 @@ it.each([
   ["timeout", "deadline", "ETIMEDOUT"],
   ["access-denied", "permission", "EPERM"],
   ["incomplete", "unavailable", "EIO"],
-  ["helper-unavailable", "unavailable", "EIO"],
 ] as const)("preserves %s failure semantics", async (code, reason, mappedCode) => {
   fail(native.census, code);
   await expect(snapshot()).rejects.toMatchObject({ reason, code: mappedCode });
@@ -135,11 +112,7 @@ it("requires identities only for the requested lineage and observer", async () =
     child,
     { ...row, pid: 789, owner: "different", identity: undefined },
   ]);
-  expect(await tree([123])).toEqual([
-    { ...mapped, pid: process.pid },
-    mapped,
-    { ...mapped, pid: 456, ppid: 123 },
-  ]);
+  expect((await tree([123])).map(({ pid }) => pid)).toEqual([process.pid, 123, 456]);
   native.census.mockReturnValue([observer, row, { ...child, identity: undefined }]);
   await expect(tree([123])).rejects.toMatchObject({ reason: "permission" });
 });

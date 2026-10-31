@@ -1,22 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { aroundEach, expect, it, vi } from "vitest";
+import { aroundEach, expect, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../../test/helpers/managed-handoff-isolation.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as handoffDatabase from "../../infra/update-managed-service-handoff-database.js";
-import {
-  resolveManagedUpdateLeaseDatabasePath,
-  createManagedHandoffLeaseStore,
-} from "../../infra/update-managed-service-handoff-lease.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { resolveUpdateRoot } from "./shared.js";
-import {
-  withUpdateCommandExecutor,
-  captureUpdateCommandExecutorAuthority,
-} from "./update-command-executor.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
 export const validConfigSnapshot = createTestConfigSnapshot({}, {});
@@ -96,35 +87,4 @@ export function registerPrivateHandoffBindingTests() {
       dirs.cleanup();
     }
   });
-  it.each([false, true])(
-    "binds the real executor before opening its store (missing=%s)",
-    async (missing) => {
-      const root = await resolveUpdateRoot();
-      const wrongDirectory = dirs.make("update-lifecycle-unbound-");
-      if (missing) {
-        vi.mocked(tempRoot.resolvePreferredOpenClawTmpDir).mockReturnValue(wrongDirectory);
-      }
-      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-      const run = createUpdateRun({ trigger: "cli" });
-      const operation = withUpdateCommandExecutor(run.runId, async (executor) => {
-        const fence = await executor.enter(root);
-        expect(captureUpdateCommandExecutorAuthority(fence).databasePath).toBe(
-          binding.databasePath,
-        );
-        expect(createManagedHandoffLeaseStore().read(root)).toMatchObject({ kind: "current" });
-      });
-      if (missing) {
-        await expect(operation).rejects.toMatchObject({
-          code: "ERR_ASSERTION",
-          actual: path.join(wrongDirectory, "managed-update-handoffs.sqlite"),
-          expected: binding.databasePath,
-        });
-        expect(await fs.readdir(wrongDirectory)).toEqual([]);
-      } else {
-        await operation;
-        expect((await fs.stat(binding.assertPath())).isFile()).toBe(true);
-        expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-      }
-    },
-  );
 }

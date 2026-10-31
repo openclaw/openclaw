@@ -2,7 +2,9 @@
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import * as authStore from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import * as modelSelection from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
@@ -11,6 +13,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
+import * as auth from "../sessions/auth-profile-preservation.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
 import {
@@ -49,8 +52,9 @@ const ANTHROPIC_OPUS_ID = "claude-opus-4-6";
 const OPENAI_GPT_MODEL = "openai/gpt-5.4";
 const OPENAI_GPT_ID = "gpt-5.4";
 
+const applyAuthOverride = auth.applyModelOverrideWithAuthProfileCompatibility;
 type ProviderAuthMetadataSnapshot = NonNullable<
-  ApplySessionsPatchArgs["providerAuthMetadataSnapshot"]
+  Parameters<typeof applyAuthOverride>[0]["metadataSnapshot"]
 >;
 
 const EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT = {
@@ -85,7 +89,6 @@ function runPatch({
   storeKey = MAIN_SESSION_KEY,
   agentId,
   loadGatewayModelCatalog,
-  providerAuthMetadataSnapshot,
   archivedBy,
   mainEntry,
   ...patch
@@ -96,7 +99,6 @@ function runPatch({
     storeKey,
     agentId,
     loadGatewayModelCatalog,
-    providerAuthMetadataSnapshot,
     archivedBy,
     patch: { key: storeKey, ...patch },
   });
@@ -158,14 +160,17 @@ async function applyMainModelPatch(params: {
   catalogRefs?: string[];
   providerAuthMetadataSnapshot?: ProviderAuthMetadataSnapshot;
 }) {
+  const metadataSnapshot =
+    params.providerAuthMetadataSnapshot ?? EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT;
+  using _ = vi
+    .spyOn(auth, "applyModelOverrideWithAuthProfileCompatibility")
+    .mockImplementation((options) => applyAuthOverride({ ...options, metadataSnapshot }));
   return await patchOk({
     store: params.store,
     cfg: params.cfg,
     model: params.model,
     loadGatewayModelCatalog:
       params.catalogRefs === undefined ? undefined : loadCatalog(...params.catalogRefs),
-    providerAuthMetadataSnapshot:
-      params.providerAuthMetadataSnapshot ?? EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT,
   });
 }
 
@@ -267,6 +272,7 @@ describe("gateway sessions patch", () => {
   });
 
   test("keeps a custom SVG icon through store normalization, unrelated patches, and clearing", async () => {
+    using defaults = vi.spyOn(modelSelection, "resolveDefaultModelForAgent");
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>';
     const icon = `data:image/svg+xml,${encodeURIComponent(svg)}`;
@@ -281,6 +287,7 @@ describe("gateway sessions patch", () => {
     expect(store[MAIN_SESSION_KEY].icon).toBe(icon);
     expect(expectPatchOk(await patch({ icon: null })).icon).toBeUndefined();
     expect(store[MAIN_SESSION_KEY].color).toBe("purple");
+    expect(defaults).not.toHaveBeenCalled();
   });
 
   test("keeps manual renames independent of automatic device-label writes and clears", async () => {
@@ -337,51 +344,46 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("attributes the archive transition and clears attribution on restore", async () => {
-    const archivedBy = { type: "human" as const, id: "profile-ada", label: "Ada" };
-    const archived = await patchOk({
-      mainEntry: { pinnedAt: 10 },
-      archived: true,
-      expectedSessionId: "sess",
-      archivedBy,
-    });
-    expect(archived.archivedAt).toEqual(expect.any(Number));
-    expect(archived.archivedBy).toEqual(archivedBy);
-    expect(archived.archiveReason).toBe("manual");
-    expect(archived.pinnedAt).toBeUndefined();
-
-    const idempotent = await patchOk({
-      mainEntry: {
-        archivedAt: archived.archivedAt,
+  test.each([undefined, { type: "human" as const, id: "profile-ada", label: "Ada" }])(
+    "attributes the archive transition and clears attribution on restore: %j",
+    async (archivedBy) => {
+      const archived = await patchOk({
+        mainEntry: { pinnedAt: 10 },
+        archived: true,
+        expectedSessionId: "sess",
         archivedBy,
-        archiveReason: "manual",
-      },
-      archived: true,
-      expectedSessionId: "sess",
-      archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-    });
-    expect(idempotent.archivedAt).toBe(archived.archivedAt);
-    expect(idempotent.archivedBy).toEqual(archivedBy);
-    expect(idempotent.archiveReason).toBe("manual");
+      });
+      expect(archived.archivedAt).toEqual(expect.any(Number));
+      expect(archived.archivedBy).toEqual(archivedBy);
+      expect(archived.archiveReason).toBe("manual");
+      expect(archived.pinnedAt).toBeUndefined();
 
-    const restored = await patchOk({
-      store: { [MAIN_SESSION_KEY]: idempotent },
-      archived: false,
-      expectedSessionId: "sess",
-    });
-    expect([restored.archivedAt, restored.archivedBy, restored.archiveReason]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
-  });
+      const idempotent = await patchOk({
+        mainEntry: {
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        },
+        archived: true,
+        expectedSessionId: "sess",
+        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      });
+      expect(idempotent.archivedAt).toBe(archived.archivedAt);
+      expect(idempotent.archivedBy).toEqual(archivedBy);
+      expect(idempotent.archiveReason).toBe("manual");
 
-  test("does not fabricate archive attribution without an actor", async () => {
-    const archived = await patchOk({ mainEntry: {}, archived: true, expectedSessionId: "sess" });
-
-    expect(archived.archivedAt).toEqual(expect.any(Number));
-    expect(archived.archivedBy).toBeUndefined();
-  });
+      const restored = await patchOk({
+        store: { [MAIN_SESSION_KEY]: idempotent },
+        archived: false,
+        expectedSessionId: "sess",
+      });
+      expect([restored.archivedAt, restored.archivedBy, restored.archiveReason]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    },
+  );
 
   const childPinError = "cannot pin a child session; pin its parent session instead";
   test.each<[string, Partial<SessionEntry>, boolean, string?]>([
@@ -677,7 +679,6 @@ describe("gateway sessions patch", () => {
     {
       name: "provider auth alias",
       overrides: {
-        sessionId: "sess-alias",
         providerOverride: "byteplus",
         modelOverride: "seedance-1-0-lite-t2v-250428",
         authProfileOverride: "byteplus:work",
@@ -693,7 +694,6 @@ describe("gateway sessions patch", () => {
     {
       name: "unprefixed default provider",
       overrides: {
-        sessionId: "sess-unprefixed-default-provider",
         authProfileOverride: "work",
         authProfileOverrideSource: "user",
         authProfileOverrideCompactionCount: 4,
@@ -707,7 +707,6 @@ describe("gateway sessions patch", () => {
     {
       name: "unprefixed provider change",
       overrides: {
-        sessionId: "sess-unprefixed-provider-change",
         authProfileOverride: "work",
         authProfileOverrideCompactionCount: 4,
       },
@@ -867,7 +866,7 @@ describe("gateway sessions patch", () => {
           source: "agent-patch",
         },
       });
-      const input = store[MAIN_SESSION_KEY]!;
+      const input = Object.freeze(store[MAIN_SESSION_KEY]!);
       const before = structuredClone(input);
       const entry = await patchOk({ store, ...patch });
       expect(entry.thinkingLevel).toBe(thinking);
@@ -1411,9 +1410,9 @@ describe("gateway sessions patch", () => {
     { profile: "newprofile", existing: true },
     { profile: "openai:user@example.com", existing: false },
   ])("persists @profile=$profile (existing=$existing)", async ({ profile, existing }) => {
+    using previousProfile = vi.spyOn(authStore, "prepareAuthProfileProvider");
     const store = existing
       ? mainStoreEntry({
-          sessionId: "sess-live-profile-only",
           providerOverride: "anthropic",
           modelOverride: ANTHROPIC_SONNET_ID,
           authProfileOverride: "oldprofile",
@@ -1428,9 +1427,8 @@ describe("gateway sessions patch", () => {
     });
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
     expectAuthOverride(entry, { profile });
-    if (existing) {
-      expect(entry.liveModelSwitchPending).toBe(true);
-    }
+    expect(previousProfile).not.toHaveBeenCalled();
+    expect(entry.liveModelSwitchPending).toBe(existing ? true : undefined);
   });
 
   test("resolves bare allowlisted model ids before persisting @profile suffix", async () => {

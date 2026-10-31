@@ -1,10 +1,10 @@
-import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 // Reply-preview resolution: memoized quoted-source previews served from
 // already-loaded transcript rows first, then page-carried quoted originals.
+import { userTurnRunId } from "../../../lib/chat/history-message-identity.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
-import { userTurnRunId } from "../chat-thread-items.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown-view.tsx";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
@@ -97,6 +97,7 @@ function projectResolvedReplyPreview(
             assistantAvatarUrl: isCurrentAgent
               ? props.assistantAvatarUrl
               : props.senderAgentAvatars?.get(agentId),
+            assistantAvatarSource: isCurrentAgent ? props.assistantAvatarSource : undefined,
           }),
         }
       : { turnRunId: userTurnRunId(message) ?? undefined }),

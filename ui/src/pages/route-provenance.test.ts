@@ -4,7 +4,8 @@ import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
-import { page as agentsPage } from "./agents/route.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import { createRouteLoaderOptions } from "../test-helpers/route-loader-options.ts";
 import { page as devicesPage } from "./devices/route.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
 import { pages as pluginPages } from "./plugins/route.tsx";
@@ -22,28 +23,19 @@ type RouteContext = {
   settingsAgentSelection?: ReturnType<typeof selection>;
 };
 
-const loaderOptions: RouteLoaderOptions = {
-  signal: new AbortController().signal,
-  shouldRun: () => true,
-  revalidating: false,
-  location: { pathname: "/", search: "", hash: "" },
-  deps: "",
-  cause: "preload",
-};
+const loaderOptions: RouteLoaderOptions = createRouteLoaderOptions(
+  { pathname: "/", search: "", hash: "" },
+  "",
+  "preload",
+);
 
 function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), connected = true) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const original: ApplicationGatewaySnapshot = {
+  const original: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: connected ? client : null,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   let current = original;
   const gateway = {
     get snapshot() {
@@ -79,13 +71,6 @@ function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), c
 
 it("records the exact gateway source and snapshot for synchronous route state", async () => {
   const source = provenance(undefined, false);
-  await source.load(agentsPage, {
-    settingsAgentSelection: selection(null),
-    agents: {
-      state: { agentsList: null, agentsError: null },
-      ensureList: vi.fn(async () => null),
-    },
-  });
   await source.load(devicesPage);
 });
 

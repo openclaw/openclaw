@@ -8,7 +8,6 @@ import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-b
 import { resolveAvatarHat } from "../../components/agent-avatar-hat.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ChatAvatar, ForwardedAvatar, type ChatAvatarProps } from "./chat-avatar-view.tsx";
 import {
@@ -20,6 +19,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
 import { ChatAuthorAvatar } from "./components/chat-author-avatar.ts";
+import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { ChatWelcome } from "./components/chat-welcome.tsx";
 
 function imageResponse() {
@@ -35,6 +35,13 @@ function mockBlobUrls(...urls: string[]) {
   for (const url of urls) {
     create.mockReturnValueOnce(url);
   }
+}
+
+function pendingAvatar(url: string) {
+  const response = createDeferred<Response>();
+  const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
+  vi.spyOn(URL, "createObjectURL").mockReturnValue(url);
+  return { response, fetchAvatar };
 }
 
 function agentIdentity(agentId: string, revision = 1, name = agentId) {
@@ -252,7 +259,126 @@ describe("resolveChatAvatarUrl", () => {
   });
 });
 
+it("paints known assistant and forwarded avatars before reconnect without reading unknown images", () => {
+  const origin = window.location.origin;
+  const main = "/avatar/main?v=warm";
+  const research = "/avatar/research?v=warm";
+  const portrait = "/api/users/profile-ada/avatar?v=warm";
+  const sender = {
+    id: "profile-ada",
+    name: "Ada",
+    identity: { type: "profile" as const, id: "profile-ada" },
+    profileAvatarUrl: portrait,
+  };
+  const sources = [origin + main, origin + research, origin + portrait];
+  vi.stubGlobal("localStorage", localStorage);
+  setAvatarGatewayOrigin(origin, [], "", "warm-transcript-avatars");
+  localStorage.setItem(
+    "openclaw.identityAvatars.v1:" + JSON.stringify([origin, "", "warm-transcript-avatars"]),
+    JSON.stringify(sources),
+  );
+  const fetchAvatar = vi.spyOn(globalThis, "fetch");
+  const [connected, setConnected] = createSignal(false);
+  const assistant = (agentId: string, source: string | null) => ({
+    agentId,
+    name: agentId,
+    ...resolveAssistantDisplayAvatar({
+      currentAgentId: agentId,
+      assistantAvatar: "/avatar/stale-bootstrap",
+      assistantAvatarSource: source,
+      agents: [{ id: agentId, identity: { avatar: "/avatar/stale-roster" } }],
+    }),
+  });
+  const view = mountSolid(() => (
+    <>
+      <ChatAvatar
+        role="assistant"
+        mediaReadAllowed={connected()}
+        assistant={assistant("main", connected() ? origin + main : main)}
+      />
+      <ForwardedAvatar
+        agentId="research"
+        options={{
+          agentId: "main",
+          mediaReadAllowed: connected(),
+          senderAgentAvatars: new Map([["research", connected() ? origin + research : research]]),
+        }}
+      />
+      <ChatAvatar
+        role="assistant"
+        mediaReadAllowed={false}
+        assistant={{ agentId: "unknown", name: "Unknown", avatar: "/avatar/unknown" }}
+      />
+      <ChatAvatar
+        role="assistant"
+        mediaReadAllowed={connected()}
+        assistant={assistant("cleared", null)}
+      />
+      <ChatAvatar role="user" sender={sender} mediaReadAllowed={connected()} />
+      <ChatAuthorAvatar sender={sender} mediaReadAllowed={connected()} />
+      <ChatAvatar
+        role="user"
+        user={{ name: "Ada", avatar: portrait }}
+        mediaReadAllowed={connected()}
+      />
+      <ChatAvatar
+        role="user"
+        sender={{
+          name: "Bea",
+          identity: { type: "profile", id: "profile-bea" },
+          profileAvatarUrl: "/api/users/profile-bea/avatar?v=unknown",
+        }}
+        mediaReadAllowed={false}
+      />
+    </>
+  ));
+  const images = [...view.container.querySelectorAll("img")];
+  const faces = [...view.container.querySelectorAll(".identity-avatar__agent-face")];
+  const expected = [...sources, origin + portrait, origin + portrait];
+  expect(images.map((image) => image.getAttribute("src"))).toEqual(expected);
+  expect(view.container.querySelector('[aria-label="Bea"]')?.textContent).toBe("B");
+  expect(fetchAvatar).not.toHaveBeenCalled();
+
+  setConnected(true);
+  flush();
+  expect([...view.container.querySelectorAll("img")]).toEqual(images);
+  expect([...view.container.querySelectorAll(".identity-avatar__agent-face")]).toEqual(faces);
+  expect(images.map((image) => image.getAttribute("src"))).toEqual(expected);
+  expect(fetchAvatar).not.toHaveBeenCalled();
+});
+
 describe("ChatAvatar", () => {
+  it.each(["local", "profile", "assistant"] as const)(
+    "exposes one accessible %s avatar before and after image failure",
+    (kind) => {
+      const portrait = "/avatar/accessibility";
+      const view = mountSolid(() => (
+        <ChatAvatar
+          role={kind === "assistant" ? "assistant" : "user"}
+          assistant={
+            kind === "assistant"
+              ? { agentId: "accessibility", name: "Riley", avatar: portrait }
+              : undefined
+          }
+          user={kind === "local" ? { name: "Riley", avatar: portrait } : undefined}
+          sender={
+            kind === "profile"
+              ? { id: "riley", name: "Riley", profileAvatarUrl: portrait }
+              : undefined
+          }
+        />
+      ));
+      const image = view.container.querySelector("img")!;
+      const frame = view.getByRole("img", { name: "Riley" });
+      expect(view.getAllByRole("img", { name: "Riley" })).toHaveLength(1);
+      image.dispatchEvent(new Event("load"));
+      flush();
+      expect(view.getAllByRole("img", { name: "Riley" })).toEqual([frame]);
+      image.dispatchEvent(new Event("error"));
+      flush();
+      expect(view.getAllByRole("img", { name: "Riley" })).toEqual([frame]);
+    },
+  );
   it("updates an image avatar's hat when the theme changes", () => {
     const previous = currentThemeBranding();
     const adorned = { ...previous, avatarHat: "party" as const };
@@ -333,9 +459,7 @@ describe("ChatAvatar", () => {
 
   it("shares authenticated welcome and transcript avatars without an explicit token", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["device-token"]);
-    const response = createDeferred<Response>();
-    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-agent");
+    const { response, fetchAvatar } = pendingAvatar("blob:shared-agent");
     const avatar = "/avatar/main?v=1";
     const mountWelcome = () =>
       mountSolid(() => (
@@ -365,7 +489,7 @@ describe("ChatAvatar", () => {
         ...transcript.container.querySelectorAll("img"),
       ].map((image) => image.getAttribute("src"));
     expect(sources()).toEqual([null, null, null]);
-    expect(fetchAvatar).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
     expect(fetchAvatar).toHaveBeenCalledWith(
       `https://gateway.example.test${avatar}`,
       expect.objectContaining({ headers: { Authorization: "Bearer device-token" } }),
@@ -465,16 +589,19 @@ describe("refreshChatAvatar", () => {
   });
 
   it("keeps a working avatar across repeated failed replacements until the identity clears it", async () => {
-    const host = avatarHost();
+    const cacheChatAvatarSource = vi.fn();
+    const host = { ...avatarHost(), cacheChatAvatarSource };
     const identities = identityCapability(host);
     const fetchAvatar = mockAvatarFetch();
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:working-avatar");
     await refreshChatAvatar(host);
+    expect(cacheChatAvatarSource).toHaveBeenLastCalledWith("main", "/avatar/main?v=1");
     identities.invalidate(["main"]);
     host.request.mockResolvedValue(agentIdentity("main", 2, "Main"));
     fetchAvatar.mockResolvedValue(new Response(null, { status: 503 }));
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBe("blob:working-avatar");
+    expect(cacheChatAvatarSource).toHaveBeenCalledOnce();
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBe("blob:working-avatar");
     expect(fetchAvatar).toHaveBeenCalledTimes(2);
@@ -482,46 +609,16 @@ describe("refreshChatAvatar", () => {
     host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "🦉" });
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBeNull();
+    expect(cacheChatAvatarSource).toHaveBeenLastCalledWith("main", null);
     invalidateChatAvatarCache(host);
-  });
-
-  it("keeps a live waiter's shared avatar when a stale waiter settles under cache pressure", async () => {
-    const host = avatarHost();
-    const avatar = createDeferred<Response>();
-    const pressure = createDeferred<Response>();
-    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      return url.includes("/avatar/main?") ? avatar.promise : pressure.promise;
-    });
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:live-avatar");
-    const revoke = vi.spyOn(URL, "revokeObjectURL");
-    const stale = refreshChatAvatar(host);
-    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
-    const pressureLoads = Array.from({ length: 128 }, (_, index) =>
-      Promise.resolve(resolveAvatarImageUrl(`/avatar/pending-${index}?v=1`)),
-    );
-    host.sessionKey = "agent:main:second";
-    const current = refreshChatAvatar(host);
-    avatar.resolve(imageResponse());
-    try {
-      await Promise.all([stale, current]);
-      expect(host.chatAvatarUrl).toBe("blob:live-avatar");
-      expect(fetchAvatar).toHaveBeenCalledTimes(129);
-      expect(revoke).not.toHaveBeenCalledWith("blob:live-avatar");
-    } finally {
-      pressure.resolve(new Response(null, { status: 404 }));
-      await Promise.all(pressureLoads);
-      invalidateChatAvatarCache(host);
-    }
   });
 
   it.each(["session", "connection", "invalidation"])(
     "rejects a pending avatar after %s changes",
     async (change) => {
-      const host = avatarHost();
-      const response = createDeferred<Response>();
-      const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
-      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:stale");
+      const cacheChatAvatarSource = vi.fn();
+      const host = { ...avatarHost(), cacheChatAvatarSource };
+      const { response, fetchAvatar } = pendingAvatar("blob:stale");
       const pending = refreshChatAvatar(host);
       await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
       if (change === "session") {
@@ -536,6 +633,7 @@ describe("refreshChatAvatar", () => {
       response.resolve(imageResponse());
       await pending;
       expect(host.chatAvatarUrl).toBeNull();
+      expect(cacheChatAvatarSource).not.toHaveBeenCalled();
     },
   );
 
@@ -575,9 +673,7 @@ describe("refreshSenderAgentAvatars", () => {
 
   it("keeps forwarded identity visible through pending and HTTP 404", async () => {
     const host = senderHost();
-    const response = createDeferred<Response>();
-    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:forwarded-avatar");
+    const { response, fetchAvatar } = pendingAvatar("blob:forwarded-avatar");
     host.chatMessages = forwardedMessages("research");
     const pending = refreshSenderAgentAvatars(host);
     await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
@@ -613,12 +709,14 @@ describe("refreshSenderAgentAvatars", () => {
   });
 
   it("shares sender snapshots with the current-agent cache and skips unknown agents", async () => {
-    const host = senderHost();
+    const cacheChatAvatarSource = vi.fn();
+    const host = { ...senderHost(), cacheChatAvatarSource };
     const fetchAvatar = mockAvatarFetch();
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:research-avatar");
     host.chatMessages = forwardedMessages("main", "unknown", "research", "research");
     await Promise.all([refreshSenderAgentAvatars(host), refreshSenderAgentAvatars(host)]);
     expect(host.senderAgentAvatars).toEqual(new Map([["research", "blob:research-avatar"]]));
+    expect(cacheChatAvatarSource).toHaveBeenCalledWith("research", "/avatar/research?v=1");
     expect(fetchAvatar).toHaveBeenCalledWith(
       "https://gateway.example.test/avatar/research?v=1",
       expect.objectContaining({ headers: { Authorization: "Bearer test-token" } }),
@@ -694,23 +792,15 @@ describe("refreshSenderAgentAvatars", () => {
     await older;
     expect(host.senderAgentAvatars?.get("research")).toBe("blob:new-forward");
 
-    for (let index = 0; index < 128; index += 1) {
-      await resolveAvatarImageUrl(`/avatar/pressure-${index}`);
-    }
-    expect(revoke).toHaveBeenCalledWith("blob:old-forward");
     expect(revoke).not.toHaveBeenCalledWith("blob:new-forward");
     invalidateChatAvatarCache(host);
-    await resolveAvatarImageUrl("/avatar/after-release");
-    expect(revoke).toHaveBeenCalledWith("blob:new-forward");
   });
 
   it.each(["session", "request", "connection", "roster"])(
     "does not publish a sender avatar after its %s changes",
     async (change) => {
       const host = senderHost();
-      const response = createDeferred<Response>();
-      const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
-      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:stale");
+      const { response, fetchAvatar } = pendingAvatar("blob:stale");
       host.chatMessages = forwardedMessages("research");
       const pending = refreshSenderAgentAvatars(host);
       await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());

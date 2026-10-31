@@ -103,13 +103,14 @@ describe("qa channel transport", () => {
 
   it("implements the portable scenario transport actions", async () => {
     await transport.sendInbound({ conversation, senderId: "alice", text: "hello" });
+    const inboundCursor = state.getSnapshot().cursor;
     await transport.state.addOutboundMessage({ to: "dm:alice", text: "QA-PORTABLE-OK" });
 
     await expect(
       transport.waitForOutbound({ conversation, textIncludes: "QA-PORTABLE-OK" }),
     ).resolves.toMatchObject({ text: "QA-PORTABLE-OK" });
     // The synthetic fixture has no channel poller; record its completed turn.
-    state.resolvePollCursor({ acknowledgedCursor: state.getSnapshot().cursor });
+    state.recordPollReceipts({ completedEventCursors: [inboundCursor] });
     await transport.reset();
     expect(transport.state.getSnapshot().messages).toEqual([]);
   });

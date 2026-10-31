@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeSettlement as trackSettlement } from "../agents/promise-settlement.test-support.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -19,7 +20,6 @@ import {
   versionRow,
   closeDatabases,
   execSql,
-  trackSettlement,
 } from "./database-preflight-fixtures.test-support.js";
 import * as schemaInspection from "./openclaw-agent-schema-inspection-worker.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";

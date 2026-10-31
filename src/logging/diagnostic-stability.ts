@@ -713,7 +713,7 @@ export function startDiagnosticStabilityRecorder(): void {
   state.unsubscribe = onInternalDiagnosticEvent(
     (event) => appendRecord(sanitizeDiagnosticEvent(event)),
     {
-      // Recovery needs model-call telemetry; other trusted events have dedicated owners.
+      includePromptStats: false, // Recovery consumes lifecycle facts, not prompt sizes.
       includeTrusted: ["model.call.started", "model.call.completed", "model.call.error"],
       exclude: [
         "log.record",
@@ -786,10 +786,9 @@ export function selectDiagnosticStabilitySnapshot(
 export function resetDiagnosticStabilityRecorderForTest(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();
-  const next = createState(state.capacity);
   const globalStore = globalThis as typeof globalThis & {
     __openclawDiagnosticStabilityState?: DiagnosticStabilityState;
   };
-  globalStore["__openclawDiagnosticStabilityState"] = next;
+  globalStore["__openclawDiagnosticStabilityState"] = createState(state.capacity);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -84,12 +85,7 @@ function admissionHarness(label: string, body?: string, withSidebar = false) {
   };
 }
 
-const available = (mediaTicket: string) =>
-  Response.json({
-    available: true,
-    mediaTicket,
-    mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-  });
+const available = (mediaTicket: string) => Response.json(mediaTicketPayload(mediaTicket, 300_000));
 
 describe.runIf(browserMode)("attachment keyboard admission", () => {
   it.each([true, false])("retains Tab focus through metadata, sidebar=%s", async (withSidebar) => {

@@ -30,7 +30,7 @@ suite.define(() => {
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         const ghost = page.locator(".agent-chat__composer-prediction");
         const sendAndFinish = async () => {
-          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("sessions.messages.subscribe");
           await expect.poll(() => textarea.isDisabled()).toBe(false);
           const send = await sendChat(page, gateway, "Explain the trade-offs.");
           const runId = requireString(send.idempotencyKey, "run id");

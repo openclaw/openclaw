@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import "../../components/desktop/desktop-panel.ts";
+import "../../components/desktop/desktop-panel-solid.tsx";
 import {
   createReviewFixture,
   renderPanelFixture,

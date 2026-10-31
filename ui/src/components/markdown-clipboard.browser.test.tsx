@@ -9,9 +9,10 @@ import {
 } from "../pages/chat/components/chat-message-text-view.tsx";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.tsx";
+import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 
@@ -55,11 +56,7 @@ afterEach(() => {
     owner.remove();
   }
   vi.restoreAllMocks();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
 });
 
 afterAll(() => {

@@ -459,12 +459,14 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
       expect(patches).toBe(1);
       expect(actionButton(page, "Saving…").disabled).toBe(true);
       expect(lifetime.disabled).toBe(true);
+      expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
     });
     pending.reject(new Error("Synthetic profile save unavailable"));
     await waitText(() => page, "Synthetic profile save unavailable");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
     await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
 
     pending = createDeferred<unknown>();
     click(page, "Save");

@@ -144,6 +144,17 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
   }
 }
 
+function withZaloRouteFallback(handle: typeof tryHandleHostedZaloMediaRequest) {
+  return async (req: Parameters<typeof handle>[0], res: Parameters<typeof handle>[1]) => {
+    const handled = await handle(req, res);
+    if (!handled && !res.headersSent) {
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+    }
+  };
+}
+
 async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> {
   const { update, ...sharedContext } = params;
   const { account, core, runtime } = sharedContext;
@@ -706,14 +717,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         log: runtime.log,
         reuseExistingSameOwner: true,
         throwOnFailure: true,
-        handler: async (req, res) => {
-          const handled = await tryHandleHostedZaloMediaRequest(req, res);
-          if (!handled && !res.headersSent) {
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Not Found");
-          }
-        },
+        handler: withZaloRouteFallback(tryHandleHostedZaloMediaRequest),
       });
       stopHandlers.push(unregisterHostedMediaRoute);
     }
@@ -774,14 +778,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
             accountId: account.accountId,
             log: runtime.log,
             throwOnFailure: true,
-            handler: async (req, res) => {
-              const handled = await handleZaloWebhookRequest(req, res);
-              if (!handled && !res.headersSent) {
-                res.statusCode = 404;
-                res.setHeader("Content-Type", "text/plain; charset=utf-8");
-                res.end("Not Found");
-              }
-            },
+            handler: withZaloRouteFallback(handleZaloWebhookRequest),
           },
         },
       );

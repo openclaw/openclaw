@@ -57,7 +57,7 @@ import {
   type ImageMetadata,
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
-import { formatMediaSize } from "./store.shared.js";
+import { formatMediaSize, SaveMediaSourceError } from "./store.shared.js";
 
 export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -266,19 +266,25 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMediaSize(cap)} (got ${formatMediaSize(size)})`;
 }
 
-function toImageFileName(fileName: string | undefined, mimeType: string): string | undefined {
+// Queue custody keeps artifact paths; public image names describe the encoded bytes.
+function reconcileImageFileName(media: WebMediaResult): WebMediaResult {
+  if (media.kind !== "image" || !media.fileName) {
+    return media;
+  }
+  const fileName = basenameFromAnyPath(media.fileName.trim());
   if (!fileName) {
-    return undefined;
+    return media;
   }
-  const trimmed = basenameFromAnyPath(fileName.trim());
-  if (!trimmed) {
-    return fileName;
+  const contentType = normalizeMimeType(media.contentType);
+  const extension = extensionForMime(contentType);
+  if (!extension || mimeTypeFromFilePath(fileName) === contentType) {
+    return { ...media, fileName };
   }
-  const parsed = path.parse(trimmed);
-  const ext = extensionForMime(mimeType);
-  return mimeType !== "image/jpeg" && parsed.ext.toLowerCase() === ext
-    ? fileName
-    : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
+  const parsed = path.parse(fileName);
+  return {
+    ...media,
+    fileName: path.format({ name: parsed.name || fileName, ext: extension }),
+  };
 }
 
 const DEFAULT_VISION_MAX_SIDE = 2048;
@@ -485,12 +491,12 @@ export async function optimizeImageBufferForWebMedia(params: {
     })();
   }
   if (originalContentType) {
-    return {
+    return reconcileImageFileName({
       buffer: params.buffer,
       contentType: originalContentType,
       kind: "image",
       fileName: params.fileName,
-    };
+    });
   }
   const grid = resolveImageCompressionGrid(params.imageCompression);
   // Generic callers keep the shared decode limit. An owner with a bounded downscale path may
@@ -513,12 +519,12 @@ export async function optimizeImageBufferForWebMedia(params: {
       cap,
     );
   }
-  return {
+  return reconcileImageFileName({
     buffer: optimized.data,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName: toImageFileName(params.fileName, optimized.mimeType),
-  };
+    fileName: params.fileName,
+  });
 }
 
 async function loadWebMediaInternal(
@@ -559,39 +565,34 @@ async function loadWebMediaInternal(
   const clampAndFinalize = async (params: WebMediaResult): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
-    const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
-    if (params.kind === "image") {
-      if (optimizeImages) {
-        return await optimizeImageBufferForWebMedia({
-          buffer: params.buffer,
-          contentType: params.contentType,
-          fileName: params.fileName,
-          maxBytes: cap,
-          imageCompression,
-        });
-      }
-      const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
-      const isGif = params.contentType === "image/gif";
-      if (params.buffer.length > imageCap) {
-        throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
-      }
-      assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
-      return {
+    let cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
+    if (params.kind === "image" && optimizeImages) {
+      return await optimizeImageBufferForWebMedia({
         buffer: params.buffer,
         contentType: params.contentType,
-        kind: params.kind,
         fileName: params.fileName,
-      };
+        maxBytes: cap,
+        imageCompression,
+      });
+    }
+    if (params.kind === "image") {
+      cap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
     }
     if (params.buffer.length > cap) {
-      throw new Error(formatCapLimit("Media", cap, params.buffer.length));
+      const label = params.kind === "image" && params.contentType === "image/gif" ? "GIF" : "Media";
+      throw new SaveMediaSourceError("too-large", formatCapLimit(label, cap, params.buffer.length));
+    }
+    if (params.kind === "image") {
+      assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
     }
     return {
       buffer: params.buffer,
       contentType: params.contentType ?? undefined,
       kind: params.kind,
       fileName: params.fileName,
-      ...(params.trustedGeneratedHtmlSource ? { trustedGeneratedHtmlSource: true } : {}),
+      ...(params.kind !== "image" && params.trustedGeneratedHtmlSource
+        ? { trustedGeneratedHtmlSource: true }
+        : {}),
     };
   };
 
@@ -757,9 +758,11 @@ export async function loadWebMedia(
   maxBytesOrOptions?: number | WebMediaOptions,
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
-  return await loadWebMediaInternal(
-    mediaUrl,
-    resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: true }),
+  return reconcileImageFileName(
+    await loadWebMediaInternal(
+      mediaUrl,
+      resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: true }),
+    ),
   );
 }
 

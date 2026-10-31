@@ -7,7 +7,6 @@
   color: var(--text);
   position: relative;
   z-index: 1;
-  box-sizing: border-box;
   flex-shrink: 0;
   flex-wrap: wrap;
   font: 13px/1.4 var(--font-body, sans-serif);
@@ -48,7 +47,7 @@
   font: inherit;
 }
 .mcp-app-confirm__actions .mcp-app-confirm__accept {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
 }

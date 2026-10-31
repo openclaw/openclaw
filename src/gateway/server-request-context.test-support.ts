@@ -35,6 +35,7 @@ export function makeContextParams(
     runtime: {
       scheduler: createTestGatewayScheduler(),
       getSessionRowProjection: () => undefined,
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
       forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,

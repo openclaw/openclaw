@@ -46,7 +46,7 @@ type ProfileAuthorityBinding = (() => boolean) & {
 type ProfileAuthorityStore = {
   admission: OpenClawStateDatabaseReadAdmission;
   identityKey: string;
-  lifetime: ProfileAuthorityDescriptor["lifetime"];
+  lifetime: { revision: BigInt64Array<SharedArrayBuffer>; epoch: bigint };
   generation: Int32Array<SharedArrayBuffer>;
   revision: number;
   identityRevision: number;
@@ -73,7 +73,8 @@ const changes = {
 function isAuthorityStoreCurrent(store: ProfileAuthorityStore): boolean {
   if (
     store.admission.identity.key !== store.identityKey ||
-    Atomics.load(new BigInt64Array(store.lifetime.revision), 0) !== store.lifetime.epoch
+    Atomics.load(store.lifetime.revision, 0) !== store.lifetime.epoch ||
+    Atomics.load(store.generation, 0) !== 1
   ) {
     Atomics.store(store.generation, 0, 0);
     return false;
@@ -96,7 +97,7 @@ function authorityStore(admission: OpenClawStateDatabaseReadAdmission): ProfileA
     store = {
       admission,
       identityKey: admission.identity.key,
-      lifetime: { revision: lifetime.revision, epoch: lifetime.epoch },
+      lifetime: { revision: new BigInt64Array(lifetime.revision), epoch: lifetime.epoch },
       generation,
       revision: 0,
       identityRevision: 0,
@@ -181,7 +182,7 @@ function authorityDescriptor(
 ): ProfileAuthorityDescriptor {
   return {
     generation: store.generation.buffer,
-    lifetime: store.lifetime,
+    lifetime: { revision: store.lifetime.revision.buffer, epoch: store.lifetime.epoch },
     entries: cells.map((cell) => ({
       state: cell.buffer,
       ...(bound ? { revision: Atomics.load(cell, 0) } : {}),
@@ -458,9 +459,13 @@ export async function captureUserProfileAuthorityRead(
   admission.assertCurrent();
   const subjectCell = (value: string | undefined) =>
     value === undefined ? [] : [authorityCell(store, "channelIdentities", value)];
+  const settlementState = (kind: ProfileAuthorityKind, id: string) => {
+    const cell = store[kind].get(id);
+    return cell ? Atomics.load(cell, 1) : 0;
+  };
   const subjectIsSettled = (value = subject) =>
-    readProfileAuthority(authorityDescriptor(store, subjectCell(value))) === "current";
-  if (!subjectIsSettled()) {
+    value === undefined || settlementState("channelIdentities", value) === 0;
+  if (!isAuthorityStoreCurrent(store) || !subjectIsSettled()) {
     throw new UserProfileMutationUnsettledError("pending");
   }
   const currentRevision = () =>
@@ -488,12 +493,20 @@ export async function captureUserProfileAuthorityRead(
     /** Current-fact readers tolerate settled changes, but never borrow an unknown mutation. */
     assertSettled(this: void, profileIds: string | readonly string[]): void {
       admission.assertCurrent();
-      const status = readProfileAuthority(authorityDescriptor(store, profileCells(profileIds)));
-      if (!isAuthorityStoreCurrent(store) || status === "revoked") {
+      // This module owns every cell write. Local synchronous checks need no transfer descriptor.
+      let state = 0;
+      if (typeof profileIds === "string") {
+        state = settlementState(profileRevisions, profileIds);
+      } else {
+        for (const id of profileIds) {
+          state = Math.max(state, settlementState(profileRevisions, id));
+        }
+      }
+      if (!isAuthorityStoreCurrent(store)) {
         throw new Error("Profile authority store changed");
       }
-      if (status !== "current") {
-        throw new UserProfileMutationUnsettledError(status);
+      if (state !== 0) {
+        throw new UserProfileMutationUnsettledError(state === 1 ? "pending" : "uncertain");
       }
       if (!subjectIsSettled()) {
         throw new UserProfileMutationUnsettledError("pending");

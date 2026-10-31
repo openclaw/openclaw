@@ -71,7 +71,7 @@ describe("web auto-reply routing", () => {
     await handler(
       createTestWebInboundMessage({
         event: { id: "g1", timestamp: now },
-        payload: { body: "hello +2000" },
+        payload: { body: "hello @+2000" },
         platform: {
           chatJid: "123@g.us",
           recipientJid: "+2000",
@@ -107,7 +107,6 @@ describe("web auto-reply routing", () => {
     expect(routeParams).toEqual({
       storeAgentId: "main",
       sessionKey: `${groupSessionKey}:thread:whatsapp-account-work`,
-      channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
     });

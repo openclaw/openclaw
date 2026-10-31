@@ -13,6 +13,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
+import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 
 type FixtureHookContext = Pick<TestContext, "signal">;
 type FixtureHook = (context: FixtureHookContext) => unknown;
@@ -107,23 +108,7 @@ let env: ReturnType<typeof captureEnv>;
 beforeEach(() => {
   caseHooks.setup.length = 0;
   caseHooks.cleanup.length = 0;
-  env = captureEnv([
-    "HOME",
-    "USERPROFILE",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_AGENT_DIR",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-    "OPENCLAW_SKIP_GMAIL_WATCHER",
-    "OPENCLAW_SKIP_CANVAS_HOST",
-    "OPENCLAW_SKIP_CHANNELS",
-    "OPENCLAW_SKIP_PROVIDERS",
-    "OPENCLAW_SKIP_CRON",
-    "OPENCLAW_TEST_MINIMAL_GATEWAY",
-    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-    "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  ]);
+  env = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
 });
 afterEach(async () => {
   // Preserve cleanup even on the unfixed side of these regressions.
@@ -185,10 +170,7 @@ test("suite setup joins Gateway implementation preparation before releasing its 
   startupPreparation.held = true;
   gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
   const fixture = takeHooks();
-  let setupFinished = false;
-  const pendingSetup = setup(fixture).then(() => {
-    setupFinished = true;
-  });
+  const pendingSetup = setup(fixture);
   let pendingCleanup: Promise<void> | undefined;
   try {
     await awaitGateBeforeSettlement(
@@ -196,7 +178,6 @@ test("suite setup joins Gateway implementation preparation before releasing its 
       pendingSetup,
       "fixture setup completed before Gateway implementation preparation",
     );
-    expect(setupFinished).toBe(false);
     const home = process.env.HOME!;
     expect(fsSync.existsSync(home)).toBe(true);
     pendingCleanup = cleanup(fixture);
@@ -474,7 +455,7 @@ vi.mock("vitest", async (importOriginal) => ({
   beforeEach: (fn) => hooks.reset.push(fn),
   afterEach: (fn) => hooks.afterEach.push(fn),
 }));
-const { test } = await vi.importActual("vitest");
+const { test, expect } = await vi.importActual("vitest");
 fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
 const sessions = await import(${source("src/gateway/test/server-sessions.test-helpers.ts")});
 const gatewayHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
@@ -494,13 +475,8 @@ function containsFault(error) {
     (error instanceof AggregateError && error.errors.some(containsFault))
   ));
 }
-async function observeFailure(run) {
-  try {
-    await run();
-    return { rejected: false, faultPreserved: false };
-  } catch (error) {
-    return { rejected: true, faultPreserved: containsFault(error) };
-  }
+async function expectRefusal(run, preserveFault = false) {
+  await expect(run()).rejects.toSatisfy(error => !preserveFault || containsFault(error));
 }
 
 test("observes retained Gateway owners through fixture teardown", async () => {
@@ -538,15 +514,13 @@ test("observes retained Gateway owners through fixture teardown", async () => {
     })),
     selectorsIntact: [...selectors].every(([key, value]) => process.env[key] === value),
   });
+  const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
   const releaseProducer = createDeferredCore();
   let phase = "before-cleanup";
   const producer = releaseProducer.promise.then(() => {
-    const observation = { ...readState(), phase, writeSucceeded: false };
-    try {
-      fs.writeFileSync(path.join(dir, "late-producer.txt"), "joined");
-      observation.writeSucceeded = true;
-    } catch { /* The outer assertion reports a lost producer input, not a cleanup substitute. */ }
-    return observation;
+    expect(readState()).toEqual(retained);
+    expect(phase).toBe("after-cleanup");
+    fs.writeFileSync(path.join(dir, "late-producer.txt"), "joined");
   });
   let stopCalls = 0;
   // This independent producer belongs to the generic owner, not the connection scope.
@@ -565,36 +539,35 @@ test("observes retained Gateway owners through fixture teardown", async () => {
     }),
   );
   try {
-    const close = await observeFailure(() => harness.close());
-    const afterClose = readState();
-    const afterEach = await observeFailure(() => runHooks(fixture.afterEach));
-    const caseReset = await observeFailure(() => runHooks(fixture.reset));
-    const afterCaseReset = readState();
-    const cleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
-    const repeatedCleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
-    const afterCleanup = readState();
-    let harnessRetained = false;
-    try { harnessRetained = fixtureApi.getHarness() === harness; } catch { /* Observe release. */ }
+    await expectRefusal(() => harness.close(), true);
+    expect(readState()).toEqual(retained);
+    await expectRefusal(() => runHooks(fixture.afterEach));
+    await expectRefusal(() => runHooks(fixture.reset));
+    expect(readState()).toEqual(retained);
+    await expectRefusal(() => runHooks(fixture.cleanup.toReversed()), true);
+    await expectRefusal(() => runHooks(fixture.cleanup.toReversed()), true);
+    expect(readState()).toEqual(retained);
+    expect(fixtureApi.getHarness()).toBe(harness);
     phase = "after-cleanup";
     releaseProducer.resolve();
-    const producerObservation = await producer;
+    await producer;
+    expect(connectionCleanupFinished).toBe(true);
+    expect(stopCalls).toBe(0);
     // Retained ownership must outlive the module that originally acquired the Gateway.
     vi.resetModules();
     const freshHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
     freshHelpers.installGatewayTestHooks({ scope: "suite" });
     const successor = takeHooks();
-    const suiteSetup = await observeFailure(() => runHooks(successor.setup));
-    fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify({
-      close, afterEach, caseReset, cleanup, repeatedCleanup, suiteSetup,
-      afterClose, afterCaseReset, afterCleanup, afterModuleReset: readState(),
-      producer: producerObservation, connectionCleanupFinished, stopCalls,
-      harnessRetained,
-    }));
+    await expectRefusal(() => runHooks(successor.setup));
+    expect(readState()).toEqual(retained);
   } finally {
     releaseProducer.resolve();
-    await producer;
-    ws.terminate();
-    factory.mockRestore();
+    try {
+      await producer;
+    } finally {
+      ws.terminate();
+      factory.mockRestore();
+    }
     // No unpoison/reset escape hatch: native Vitest owns this disposable fork's exit.
   }
 });
@@ -602,25 +575,7 @@ test("observes retained Gateway owners through fixture teardown", async () => {
 }
 
 test("retains fixture state and fences successors after a required Gateway close failure", (context) =>
-  runGatewayFixtureFork(context, retainedGatewayFixtureSource, (journal, text) => {
-    const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
-    expect(journal, text).toMatchObject({
-      close: { rejected: true, faultPreserved: true },
-      afterEach: { rejected: true },
-      caseReset: { rejected: true },
-      cleanup: { rejected: true, faultPreserved: true },
-      repeatedCleanup: { rejected: true, faultPreserved: true },
-      suiteSetup: { rejected: true },
-      connectionCleanupFinished: true,
-      stopCalls: 0,
-      harnessRetained: true,
-      afterClose: retained,
-      afterCaseReset: retained,
-      afterCleanup: retained,
-      afterModuleReset: retained,
-      producer: { ...retained, phase: "after-cleanup", writeSucceeded: true },
-    });
-  }));
+  runGatewayFixtureFork(context, retainedGatewayFixtureSource));
 
 test.each([
   { scope: "test", interrupted: false },

@@ -10,6 +10,13 @@ import {
   resolveSlackReplyRenderPlan,
 } from "./reply-blocks.js";
 
+function commandButtons(command: string): MessagePresentation["blocks"][number] {
+  return {
+    type: "buttons",
+    buttons: [{ label: "Run", action: { type: "command", command } }],
+  };
+}
+
 describe("renderSlackMessagePresentationFallbackText", () => {
   it("uses complete authored fallback once when presentation has only text output", () => {
     const text = "Choose once: /run foo_bar & <!channel>\nThen inspect the report.";
@@ -214,20 +221,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
   it("marks command fallbacks with backticks as not copyable", () => {
     const rendered = renderSlackMessagePresentationFallbackText({
       presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Run",
-                action: {
-                  type: "command",
-                  command: "/run foo_bar C:\\tools\\run ` <!channel> <@U1>",
-                },
-              },
-            ],
-          },
-        ],
+        blocks: [commandButtons("/run foo_bar C:\\tools\\run ` <!channel> <@U1>")],
       },
     });
 
@@ -243,20 +237,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
         presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Run",
-                  action: {
-                    type: "command",
-                    command: "/run foo_bar C:\\tools\\run <!channel> <@U1>",
-                  },
-                },
-              ],
-            },
-          ],
+          blocks: [commandButtons("/run foo_bar C:\\tools\\run <!channel> <@U1>")],
         },
       }),
     ).toBe("- Run: `/run foo_bar C:\\tools\\run <!channel> <@U1>`");
@@ -417,15 +398,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       presentation: {
         blocks: [
           { type: "table", caption: "Owners", headers, rows: [values] },
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Run",
-                action: { type: "command", command: "/say ` <!channel>" },
-              },
-            ],
-          },
+          commandButtons("/say ` <!channel>"),
         ],
       },
     });

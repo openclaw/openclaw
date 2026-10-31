@@ -5,6 +5,7 @@ import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import { isCustodianPanelAvailable } from "../app/panel-availability.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectGateway, projectSidebarAttention } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
@@ -12,6 +13,7 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { showToast } from "../lib/toast.ts";
 import "../styles/sidebar-attention-floating.css";
 import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -25,6 +27,7 @@ import { Icon } from "./solid/icon.tsx";
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
 export type SidebarAttentionProps = {
+  cachedCount?: number;
   activeRouteId?: NavigationRouteId;
   onNavigate?: ApplicationContext["navigate"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
@@ -68,12 +71,18 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   let panelFocus: SidebarAttentionFocus | null = null;
   let panelGeneration = 0;
   let disposed = false;
-  const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
+  const count = createMemo(() => props.cachedCount ?? sidebarInboxTabCounts(attention.read()).all);
   const label = createMemo(() =>
     t(count() === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count()),
     }),
   );
+
+  function isCurrentPanel(generation: number, scope: ReturnType<typeof routeScope>) {
+    return (
+      !disposed && host.isConnected && generation === panelGeneration && scope === routeScope()
+    );
+  }
 
   function closePanel(restoreFocus: boolean) {
     approvalDecision.retire();
@@ -107,8 +116,19 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const generation = ++panelGeneration;
     const scope = routeScope();
     panelTrigger = { element: trigger, scope };
-    const runtime = await panelLoad.load();
-    if (disposed || !host.isConnected || generation !== panelGeneration || scope !== routeScope()) {
+    let runtime: Awaited<ReturnType<typeof panelLoad.load>>;
+    try {
+      runtime = await panelLoad.load();
+    } catch {
+      if (isCurrentPanel(generation, scope)) {
+        showToast({
+          message: `${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`,
+          severity: "error",
+        });
+      }
+      return;
+    }
+    if (!isCurrentPanel(generation, scope)) {
       return;
     }
     context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
@@ -159,16 +179,28 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       props.onNavigate?.(item.action.routeId);
       return;
     }
-    const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
-    custodianAlertStore.present(item.action.alert);
-    if (isCustodianPanelAvailable(context.gateway)) {
-      window.dispatchEvent(
-        new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
-      );
-    } else {
-      (props.onNavigate ?? context.navigate)("custodian");
+    const generation = panelGeneration;
+    const scope = routeScope();
+    try {
+      const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
+      if (!isCurrentPanel(generation, scope)) {
+        return;
+      }
+      custodianAlertStore.present(item.action.alert);
+      if (isCustodianPanelAvailable(context.gateway)) {
+        window.dispatchEvent(
+          new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
+        );
+      } else {
+        (props.onNavigate ?? context.navigate)("custodian");
+      }
+    } catch (error) {
+      if (isCurrentPanel(generation, scope)) {
+        showToast({ message: formatUiError(error), severity: "error" });
+      }
     }
   }
+
   const handleOutsideInteraction = (event: PointerEvent | KeyboardEvent) => {
     const dismiss =
       event instanceof KeyboardEvent
@@ -262,13 +294,14 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   });
 
   return (
-    <Show when={gateway.read().snapshot.phase === "connected" || attention.read().length > 0}>
+    <>
       <span class="sr-only" role="status" aria-live="polite">
         {label()}
       </span>
       <button
         type="button"
         class="sidebar-issues-button"
+        disabled={gateway.read().snapshot.phase !== "connected" && attention.read().length === 0}
         aria-expanded={panelOpen() ? "true" : "false"}
         aria-haspopup="dialog"
         aria-controls="sidebar-issues-panel"
@@ -323,7 +356,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
           />
         </Loading>
       </Show>
-    </Show>
+    </>
   );
 }
 
@@ -333,6 +366,7 @@ export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, Sidebar
     useOptionalApplication() ? renderSidebarAttentionContent(props, host) : props.children,
   {
     properties: {
+      cachedCount: { default: undefined, attribute: false },
       activeRouteId: { default: undefined, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       watchUpdateProgress: { default: undefined, attribute: false },

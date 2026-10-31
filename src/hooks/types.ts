@@ -1,4 +1,4 @@
-import type { RequirementRemote, RequirementsMetadata } from "../shared/requirements.js";
+import type { RequirementsMetadata } from "../shared/requirements.js";
 
 export type HookInstallSpec = {
   id?: string;
@@ -44,8 +44,4 @@ export type HookEntry = {
 
 export type HookPolicyEntry = Pick<HookEntry, "metadata"> & {
   hook: Pick<Hook, "name" | "source">;
-};
-
-export type HookEligibilityContext = {
-  remote?: Required<RequirementRemote> & { note?: string };
 };

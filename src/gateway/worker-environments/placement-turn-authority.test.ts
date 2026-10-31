@@ -42,6 +42,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -208,18 +209,13 @@ it("retains worker-parent source predicates through tool execution and rejects a
         runner({
           source: { ...SESSION, turnClaim: claim },
           request: {
-            identity: {
+            identity: createWorkerConnectionIdentity(claim, {
               environmentId: active.environmentId,
               ownerEpoch: active.activeOwnerEpoch,
-              sessionId: claim.sessionId,
-              runId: claim.runId,
-              turnClaim: claim,
               credentialHash: "synthetic-child-source",
               bundleHash: "synthetic-child-source",
-              rpcSetVersion: 1,
-              protocolFeatures: [],
               credentialExpiresAtMs: 1,
-            },
+            }),
             toolName: "sessions_spawn",
             request: { toolCallId: "child-source", arguments: {} },
             tool: () => {
@@ -648,18 +644,13 @@ it("retains original requester, transcript, and prompt cache facts while claim a
     promptCacheContext,
     requesterOrigin,
   );
-  const connection: WorkerConnectionIdentity = {
+  const connection: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
-    sessionId: claim.sessionId,
-    runId: claim.runId,
-    turnClaim: claim,
     credentialHash: "synthetic-credential-hash",
     bundleHash: "synthetic-bundle-hash",
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: 1,
-  };
+  });
   promptCacheContext.boundaryCount = 99;
   promptCacheContext.promptCacheKey = "replacement-cache";
   promptCacheContext.fastMode = false;

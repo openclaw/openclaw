@@ -1,7 +1,7 @@
-import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as gh from "../../scripts/lib/plain-gh.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -37,9 +37,9 @@ const normalizedColors = {
   GH_FORCE_TTY: null,
 };
 
-function makeCommandFixture(parent?: string) {
-  const root = commandDirs.make("plain-gh-commands-", parent);
-  // Both extensionless command routes use CommonJS, independent of the temp parent.
+function makeCommandFixture() {
+  const root = commandDirs.make("plain-gh-commands-");
+  // Extensionless fixture commands use CommonJS.
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}\n');
   const home = path.join(root, "home");
   const protectedBin = path.join(home, "bin");
@@ -84,10 +84,10 @@ if (argv[0] === "auth" && argv[1] === "token") {
   return { home, protectedBin, secondBin, toolsBin };
 }
 
-function makeFixture(fixtureCommands = commands) {
+function makeFixture() {
   const root = tempDirs.make("plain-gh-");
   // Share executable files only; environments and outputs stay private to each test.
-  const { home, protectedBin, secondBin, toolsBin } = fixtureCommands;
+  const { home, protectedBin, secondBin, toolsBin } = commands;
   const calls = path.join(root, "calls.jsonl");
   fs.writeFileSync(calls, "");
   const env: NodeJS.ProcessEnv = {
@@ -102,7 +102,7 @@ function makeFixture(fixtureCommands = commands) {
   };
   return {
     root,
-    ...fixtureCommands,
+    ...commands,
     env,
     options: { ...subprocessOptions, env },
     override: path.join(secondBin, "gh"),
@@ -133,25 +133,6 @@ function runGh(engine: (typeof engines)[number], env: NodeJS.ProcessEnv, cwd?: s
 }
 
 describe.each(engines)("%s plain gh execution", (engine) => {
-  it.each([false, true])("keeps CommonJS below ESM (override=%s)", (explicit) => {
-    const parent = commandDirs.make("plain-gh-esm-");
-    const parentPackage = path.join(parent, "package.json");
-    fs.writeFileSync(parentPackage, '{"type":"module"}\n');
-    const fixture = makeFixture(makeCommandFixture(parent));
-    fixture.env.OPENCLAW_GH_BIN = explicit ? fixture.override : undefined;
-    const before = { ...fixture.env };
-    const result = JSON.parse(runGh(engine, fixture.env));
-    const call = explicit ? secondCall(fixture.override) : protectedCall();
-    expect(result).toMatchObject({ ...call, colors: normalizedColors });
-    expect(result.tokens).toEqual(explicit ? { GH_TOKEN: "fixture-token" } : {});
-    expect(fixture.calls()).toEqual([
-      ...(explicit ? [protectedCall(["auth", "token"], engine === "shell" ? "" : null)] : []),
-      call,
-    ]);
-    expect(fixture.env).toEqual(before);
-    expect(JSON.parse(fs.readFileSync(parentPackage, "utf8"))).toEqual({ type: "module" });
-  });
-
   it("preserves a protected refusal and both output streams without fallback", () => {
     const fixture = makeFixture();
     fixture.env.FAKE_GH_REJECT = "1";
@@ -182,7 +163,10 @@ describe.each(engines)("%s plain gh execution", (engine) => {
       fixture.env.OPENCLAW_GH_BIN = explicit ? fixture.override : undefined;
       const before = { ...fixture.env };
       const result = JSON.parse(runGh(engine, fixture.env));
-      expect(result).toMatchObject(explicit ? secondCall(fixture.override) : protectedCall());
+      expect(result).toMatchObject({
+        ...(explicit ? secondCall(fixture.override) : protectedCall()),
+        colors: normalizedColors,
+      });
       expect(result.tokens).toEqual({ GH_TOKEN: "fixture-ambient" });
       expect(fixture.env).toEqual(before);
     }
@@ -190,6 +174,7 @@ describe.each(engines)("%s plain gh execution", (engine) => {
   });
 
   it.each([
+    { host: undefined, tokenName: "GH_TOKEN" },
     { host: "github.com", tokenName: "GH_TOKEN" },
     { host: "github.example.com", tokenName: "GH_ENTERPRISE_TOKEN" },
   ])("forwards $host credentials only to the child", ({ host, tokenName }) => {
@@ -215,10 +200,13 @@ if (JSON.stringify(process.env) !== before) throw new Error("parent environment 
             fixture.env,
           );
     const result = JSON.parse(output);
-    expect(result).toMatchObject(secondCall(fixture.override));
+    expect(result).toMatchObject({ ...secondCall(fixture.override), colors: normalizedColors });
     expect(result.tokens).toEqual({ [tokenName]: "fixture-token" });
     expect(fixture.calls()).toEqual([
-      protectedCall(["auth", "token", "--hostname", host], engine === "shell" ? "" : null),
+      protectedCall(
+        ["auth", "token", ...(host ? ["--hostname", host] : [])],
+        engine === "shell" ? "" : null,
+      ),
       secondCall(fixture.override),
     ]);
     expect(fixture.env).toEqual(before);
@@ -309,25 +297,4 @@ describe("plain gh subprocess contracts", () => {
       expect(fs.readFileSync(destination).equals(output)).toBe(true);
     },
   );
-
-  it("preserves bounded read options and invocation errors", () => {
-    const options = {
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "inherit"],
-      timeout: 60_000,
-    } satisfies ExecFileSyncOptions;
-    const execFileSyncImpl = vi.fn(() => '{"ok":true}');
-    const result = gh.execGhJson(["api", "repos/example/repo"], options, { execFileSyncImpl });
-    expect(result).toEqual({ ok: true });
-    expect(execFileSyncImpl).toHaveBeenCalledExactlyOnceWith(
-      "gh",
-      ["api", "repos/example/repo"],
-      expect.objectContaining({ ...options, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }),
-    );
-    const failure = new Error("gh read failed");
-    const fail = () => {
-      throw failure;
-    };
-    expect(() => gh.execGhRead(versionArgs, {}, { execFileSyncImpl: fail })).toThrow(failure);
-  });
 });

@@ -77,8 +77,8 @@ export async function installBenchmarkRegistryRuntime(mode: "memory" | "durable"
       } satisfies typeof persistence);
     }
 
-    const gatewayRuntime = await import("../src/gateway/server-recovery-runtime-context.js");
-    replaceModule("../src/gateway/server-recovery-runtime-context.ts", {
+    const gatewayRuntime = await import("../src/gateway/server-lifecycle-runtime-context.js");
+    replaceModule("../src/gateway/server-lifecycle-runtime-context.ts", {
       ...gatewayRuntime,
       bindGatewayLifecycleRequest: () => request,
     } satisfies typeof gatewayRuntime);

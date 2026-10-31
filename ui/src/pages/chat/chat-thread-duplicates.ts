@@ -1,9 +1,10 @@
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { isPendingSendMessage, readChatThreadMessageIdentity } from "./chat-thread-items.ts";
+import { isPendingSendMessage } from "./chat-thread-items.ts";
 
 type PreparedChatItem =
   | Exclude<ChatItem, { kind: "message" }>
@@ -100,14 +101,12 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
   const collapsed: PreparedChatItem[] = [];
   let previousParts: TextOnlyMessageParts = null;
   let previousSourceKey: string | null = null;
-  let previousSourceIsUnprovenImport = false;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
       previousParts = null;
       previousSourceKey = null;
-      previousSourceIsUnprovenImport = false;
       continue;
     }
     // These facts belong to this grouping pass, after canvas/tool projections
@@ -119,11 +118,6 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
     const parts = pending ? null : textOnlyMessageParts(normalized, role);
     const identity = readChatThreadMessageIdentity(item.message);
     const sourceKey = pending ? null : collapseDuplicateSourceKey(identity, role);
-    const sourceIsUnprovenImport =
-      sourceKey === null &&
-      identity?.isImported === true &&
-      identity.externalSource === null &&
-      identity.sequence === null;
     const previous = collapsed[collapsed.length - 1];
     if (
       sourceKey &&
@@ -137,25 +131,22 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
       }
       continue;
     }
-    // Distinct transcript identities cannot collapse. Compare full display text
-    // only for adjacent candidates whose source and role still permit a replay.
+    // Equal text is not message identity. Suppress only a replay of the same
+    // proven source, preserving distinct messages and unidentified transcript rows.
     if (
+      sourceKey &&
       previous?.kind === "message" &&
-      !sourceIsUnprovenImport &&
-      !previousSourceIsUnprovenImport &&
       sourceKey === previousSourceKey &&
       parts?.role === previousParts?.role
     ) {
       const signature = collapseDuplicateDisplaySignature(parts);
       if (signature && signature === collapseDuplicateDisplaySignature(previousParts)) {
-        previous.item.duplicateCount = (previous.item.duplicateCount ?? 1) + 1;
         continue;
       }
     }
     collapsed.push(prepared);
     previousParts = parts;
     previousSourceKey = sourceKey;
-    previousSourceIsUnprovenImport = sourceIsUnprovenImport;
   }
 
   return collapsed;

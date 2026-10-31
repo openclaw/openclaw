@@ -77,3 +77,19 @@ it("retains JSONL blank-record validation", async () => {
     "blank contains a blank JSONL record at line 2",
   );
 });
+
+it.each(["identity", "zstd"] as const)(
+  "rejects malformed UTF-8 in a later %s chunk before returning transformed bytes",
+  async (encoding) => {
+    const source = Buffer.concat([
+      Buffer.from('{"text":"first"}\n{"text":"' + "x".repeat(1024 * 1024) + '"}\n{"text":"'),
+      Buffer.from([0xf0, 0x9f]),
+    ]);
+    await expect(
+      transform(encode(source, encoding), "invalid-utf8", {
+        encoding,
+        transformLine: () => ({ changed: true, content: '{"text":"changed"}' }),
+      }),
+    ).rejects.toThrow("invalid-utf8 must be valid UTF-8");
+  },
+);

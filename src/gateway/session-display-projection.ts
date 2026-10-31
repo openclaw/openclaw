@@ -20,11 +20,6 @@ import { prepareAssistantHistoryMessage } from "./chat-display-projection.saniti
 const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
 const SESSION_DISPLAY_PROJECTION_MAX_CHARS = 800;
 
-type SessionDisplayProjection = {
-  role: "user" | "assistant";
-  text: string;
-};
-
 type SessionDisplayProjectionOptions = {
   flattenMarkdown?: boolean;
   view?: "display" | "model-context";
@@ -57,7 +52,10 @@ function extractUserText(message: Record<string, unknown>): string | undefined {
 export function projectSessionDisplayMessage(
   message: unknown,
   options: SessionDisplayProjectionOptions = {},
-): SessionDisplayProjection | null {
+): {
+  role: "user" | "assistant";
+  text: string;
+} | null {
   const entry = readRecord(prepareAssistantHistoryMessage(message));
   if (!entry || (options.view !== "model-context" && entry.display === false)) {
     return null;

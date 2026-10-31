@@ -28,7 +28,7 @@ vi.mock(import("../infra/agent-events.js"), async (importOriginal) => ({
 import {
   handleCompactionEnd,
   handleCompactionStart,
-} from "../agents/embedded-agent-subscribe.handlers.compaction.js";
+} from "../agents/embedded-agent-subscribe.handlers.lifecycle.js";
 
 describe("compaction hook wiring", () => {
   beforeEach(() => {
@@ -144,74 +144,53 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it.each([false, true])(
-    "retains completed compaction facts with terminalAborted=%s",
-    async (terminalAborted) => {
+  it.each([
+    ["completed", completedOutcome, false],
+    ["terminal abort after completion", completedOutcome, true],
+    ["retry", { ...completedOutcome, willRetry: true }, false],
+    ["aborted", { status: "aborted" }, false],
+    ["skipped", { status: "skipped", reason: "Nothing to compact (session too small)" }, false],
+    ["failed", { status: "failed", reason: "Summary generation failed" }, false],
+  ] as const)(
+    "settles %s compaction without starting ineligible hooks",
+    async (_name, outcome, terminalAborted) => {
       hookMocks.runner.hasHooks.mockReturnValue(true);
+      const completed = outcome.status === "completed";
+      const retry = completed && outcome.willRetry;
+      const usageMessage = assistant(184_297, 130_000, 2_000);
       const ctx = createCompactionEndCtx({
-        runId: "r2",
-        messages: [1, 2],
+        runId: "end",
+        messages: retry ? [usageMessage] : completed ? [1, 2] : [],
         sessionFile: "/tmp/session.jsonl",
         sessionKey: "agent:main:web-xyz",
-        compactionCount: 1,
+        compactionCount: completed ? 1 : 0,
+        withRetryHooks: retry,
         isTerminalAborted: () => terminalAborted,
       });
-
-      await runCompactionEnd(ctx);
-
-      expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
-      expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(50);
-      expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
-      expectEndEvent("r2", "completed");
-      expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(terminalAborted ? 0 : 1);
-      if (!terminalAborted) {
+      await runCompactionEnd(ctx, outcome);
+      expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(completed ? 1 : 0);
+      if (completed) {
+        expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(50);
+      } else {
+        expect(ctx.noteCompactionTokensAfter).not.toHaveBeenCalled();
+      }
+      expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(retry ? 0 : 1);
+      expectEndEvent("end", outcome.status, retry);
+      const runHook = completed && !retry && !terminalAborted;
+      expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(runHook ? 1 : 0);
+      if (runHook) {
         expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledWith(
           { messageCount: 2, compactedCount: 1, sessionFile: "/tmp/session.jsonl" },
           { sessionKey: "agent:main:web-xyz" },
         );
       }
+      if (retry) {
+        expect(ctx.noteCompactionRetry).toHaveBeenCalledTimes(1);
+        expect(ctx.resetForCompactionRetry).toHaveBeenCalledTimes(1);
+        expect(usageMessage.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
+      }
     },
   );
-
-  it("does not call runAfterCompaction when willRetry is true but still increments counter", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    const messages = [assistant(184_297, 130_000, 2_000)];
-
-    const ctx = createCompactionEndCtx({
-      runId: "r3",
-      messages,
-      compactionCount: 1,
-      withRetryHooks: true,
-    });
-
-    await runCompactionEnd(ctx, { ...completedOutcome, willRetry: true });
-
-    expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
-    // Counter is incremented even with willRetry — compaction succeeded (#38905)
-    expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
-    expect(ctx.noteCompactionRetry).toHaveBeenCalledTimes(1);
-    expect(ctx.resetForCompactionRetry).toHaveBeenCalledTimes(1);
-    expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();
-    expect(messages[0]?.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
-    expectEndEvent("r3", "completed", true);
-  });
-
-  it.each([
-    { status: "aborted" },
-    { status: "skipped", reason: "Nothing to compact (session too small)" },
-    { status: "failed", reason: "Summary generation failed" },
-  ] as const)("keeps $status compaction observable without success hooks", async (outcome) => {
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    const ctx = createCompactionEndCtx({ runId: "r3c" });
-
-    await runCompactionEnd(ctx, outcome);
-
-    expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
-    expect(ctx.noteCompactionTokensAfter).not.toHaveBeenCalled();
-    expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledOnce();
-    expectEndEvent("r3c", outcome.status);
-    expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
-  });
 
   it("retains queued compaction facts without starting hooks after unsubscribe", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);

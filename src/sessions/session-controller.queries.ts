@@ -4,11 +4,10 @@ import {
   activeSessionOperations,
   hasOperationBackendRunId,
   findSessionControllerEntries,
-  isReplyRunEvidenceStale,
   getSessionControllerOperation,
-  isReplyOperationPreBackendPhase,
   resolveReplyRunForCurrentSessionId,
   getSessionControllerEntryForOperation,
+  hasReplyOperationExecutionStarted,
 } from "./session-controller.state.js";
 import { rpcSourcesByRunId } from "./session-controller.storage.js";
 import type { SessionTarget } from "./session-controller.target.js";
@@ -17,16 +16,6 @@ export function isSessionRunActive(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId).kind !== "none";
 }
 
-export function isSessionRunCompactionBlocked(sessionId: string): boolean {
-  const resolution = resolveReplyRunForCurrentSessionId(sessionId);
-  const operations =
-    resolution.kind === "none"
-      ? []
-      : resolution.kind === "one"
-        ? [resolution.operation]
-        : resolution.operations;
-  return operations.some((operation) => !isReplyOperationPreBackendPhase(operation.phase));
-}
 export function getActiveSessionRunCount(): number {
   return [...activeSessionOperations()].length;
 }
@@ -40,8 +29,13 @@ export function listActiveSessionRunIds(): string[] {
 export function resolveActiveSessionRunId(
   sessionKey: string,
   target?: SessionTarget,
+  options?: { executionStartedOnly?: boolean },
 ): string | undefined {
-  return getSessionControllerOperation(sessionKey.trim(), target)?.sessionId;
+  const operation = getSessionControllerOperation(sessionKey.trim(), target);
+  return operation &&
+    (!options?.executionStartedOnly || hasReplyOperationExecutionStarted(operation))
+    ? operation.sessionId
+    : undefined;
 }
 
 /** A logical key is busy even when it selects multiple physical owners. */
@@ -51,22 +45,6 @@ export function isSessionRunActiveForKey(sessionKey: string): boolean {
     normalizedSessionKey &&
     findSessionControllerEntries(normalizedSessionKey).some((entry) => entry.active),
   );
-}
-
-/** Reads the active operation's delivery thread without selecting an ambiguous owner. */
-export function resolveActiveSessionRunThreadId(sessionKey: string): string | number | undefined {
-  return getSessionControllerOperation(sessionKey)?.routeThreadId;
-}
-
-export function isReplyRunEvidenceStaleBySessionId(sessionId: string): boolean {
-  const resolution = resolveReplyRunForCurrentSessionId(sessionId);
-  const operations =
-    resolution.kind === "none"
-      ? []
-      : resolution.kind === "one"
-        ? [resolution.operation]
-        : resolution.operations;
-  return operations.some(isReplyRunEvidenceStale);
 }
 
 export function listActiveReplyRunSessionKeys(): string[] {

@@ -62,27 +62,6 @@ function historyRowSortValue(message: IMessagePayload): number {
   return Number.isFinite(createdAtMs) ? createdAtMs : 0;
 }
 
-function isBeforeCurrentMessage(params: {
-  message: IMessagePayload;
-  currentMessage: IMessagePayload;
-}): boolean {
-  const { message, currentMessage } = params;
-  if (
-    typeof message.id === "number" &&
-    typeof currentMessage.id === "number" &&
-    Number.isFinite(message.id) &&
-    Number.isFinite(currentMessage.id)
-  ) {
-    return message.id < currentMessage.id;
-  }
-  const guid = normalizeOptionalString(message.guid);
-  const currentGuid = normalizeOptionalString(currentMessage.guid);
-  if (guid && currentGuid) {
-    return guid !== currentGuid;
-  }
-  return true;
-}
-
 function historyEntryFromMessage(message: IMessagePayload, fallbackSender: string) {
   const body = normalizeOptionalString(message.text);
   if (!body) {
@@ -137,7 +116,23 @@ export async function resolveIMessageDmHistoryContext(params: {
     .map((row) => parseIMessageNotification({ message: row }))
     .filter((message): message is IMessagePayload => Boolean(message))
     .filter((message) => message.is_group !== true)
-    .filter((message) => isBeforeCurrentMessage({ message, currentMessage: params.message }))
+    .filter((message) => {
+      const currentMessage = params.message;
+      if (
+        typeof message.id === "number" &&
+        typeof currentMessage.id === "number" &&
+        Number.isFinite(message.id) &&
+        Number.isFinite(currentMessage.id)
+      ) {
+        return message.id < currentMessage.id;
+      }
+      const guid = normalizeOptionalString(message.guid);
+      const currentGuid = normalizeOptionalString(currentMessage.guid);
+      if (guid && currentGuid) {
+        return guid !== currentGuid;
+      }
+      return true;
+    })
     .toSorted((a, b) => historyRowSortValue(a) - historyRowSortValue(b))
     .map((message) => historyEntryFromMessage(message, params.senderNormalized))
     .filter((entry): entry is IMessageDmHistoryEntry => Boolean(entry))

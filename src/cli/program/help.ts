@@ -129,7 +129,7 @@ export function configureProgramHelp(
     },
     writeErr: (str) => {
       const message = formatProgramHelpOutput(str);
-      process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
+      process.stderr.write(formatConsoleDiagnosticBlock({ message }));
     },
     outputError: (str, write) => {
       write(

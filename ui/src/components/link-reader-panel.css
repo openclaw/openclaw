@@ -1,3 +1,34 @@
+.link-reader-panel {
+  container: link-reader / inline-size;
+}
+.lr-external {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.lr-external:hover {
+  background: var(--border);
+}
+.lr-external-provider {
+  display: none;
+}
+@container link-reader (max-width: 560px) {
+  .lr-external-label {
+    display: none;
+  }
+  .lr-external-provider {
+    display: inline;
+  }
+}
 .bp--right {
   top: var(--shell-topbar-height, 0);
   right: calc(

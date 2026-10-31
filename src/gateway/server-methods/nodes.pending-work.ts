@@ -59,7 +59,6 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
       }
       const drained = drainNodePendingWork(nodeId, {
         maxItems: params.maxItems,
-        includeDefaultStatus: true,
         pairingGeneration: generation,
       });
       respond(true, { nodeId, ...drained }, undefined);

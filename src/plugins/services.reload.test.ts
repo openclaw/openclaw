@@ -107,17 +107,16 @@ function lateResource(event: string) {
   const { entered, release, run: wait } = heldOperation();
   const listener = () => {};
   const before = process.listenerCount(event);
-  cleanup.push(() => {
+  const detach = () => {
     process.off(event, listener);
-  });
+  };
+  cleanup.push(detach);
   return {
     entered,
     release,
     wait,
     attach: () => process.on(event, listener),
-    stop: vi.fn(() => {
-      process.off(event, listener);
-    }),
+    stop: vi.fn(detach),
     expectClean: () => expect(process.listenerCount(event)).toBe(before),
   };
 }
@@ -195,8 +194,7 @@ describe("plugin service reload", () => {
     "failed-cleanup",
   ] as const)("retains a timed-out reload until cleanup settles (%s)", async (recovery) => {
     vi.useFakeTimers();
-    const entered = deferred();
-    const release = deferred();
+    const { entered, release, run: stop } = heldOperation();
     const siblingStop = heldOperation();
     const restarted = deferred();
     let watching = false;
@@ -208,8 +206,7 @@ describe("plugin service reload", () => {
         }
       },
       async stop() {
-        entered.resolve();
-        await release.promise;
+        await stop();
         watching = false;
       },
     });
@@ -313,6 +310,62 @@ describe("plugin service reload", () => {
     emit(sibling.contexts[0], "alive");
     expect(() => emit(exporter.contexts[0], "stale")).toThrow("no longer active");
     expect(broadcastPluginEvent).toHaveBeenCalledOnce();
+  });
+
+  it("bounds config-only restart startup without releasing its physical cleanup", async () => {
+    vi.useFakeTimers();
+    const resource = lateResource("plugin-config-reload-late-start");
+    const held = service("held", {
+      async start() {
+        if (held.contexts.length === 2) {
+          await resource.wait();
+          resource.attach();
+        }
+      },
+      stop: resource.stop,
+    });
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "reload-owner" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const sibling = service("sibling");
+    registry.services.push(
+      ...registryFor(record.id, instance.wrap(held)).services,
+      ...registryFor(sibling.id, sibling).services,
+    );
+    const handle = await starter({ registry, broadcastPluginEvent: vi.fn() }).start();
+    try {
+      let reloaded = false;
+      const reloading = track(handle.reload({}, new Set([held.id]))).then(() => {
+        reloaded = true;
+      });
+      await resource.entered.promise;
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(reloaded).toBe(true);
+      await reloading;
+      expect(held.contexts[1]!.scheduler!.signal.aborted).toBe(true);
+      expect(() => emit(held.contexts[1], "late")).toThrow("no longer active");
+      expect(listPluginServiceHealthFailures(registry)).toMatchObject([
+        { serviceId: held.id, error: expect.stringContaining("plugin service startup timed out") },
+      ]);
+      expect(resource.stop).toHaveBeenCalledOnce();
+      await handle.reload({}, new Set([sibling.id]));
+      expect(sibling.start).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      const stopping = track(handle.stop()).then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      resource.release.resolve();
+      await stopping;
+      expect(resource.stop).toHaveBeenCalledTimes(2);
+      resource.expectClean();
+    } finally {
+      resource.release.resolve();
+      await stopHandles();
+      await instance.dispose();
+    }
   });
 
   it.each([false, true])("owns late startup cleanup (managed=%s)", async (managed) => {

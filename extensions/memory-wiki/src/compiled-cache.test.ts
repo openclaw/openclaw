@@ -1,206 +1,154 @@
 import assert from "node:assert/strict";
 import { gunzipSync } from "node:zlib";
 import type { PluginBlobEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
-  activateMemoryWikiCompiledCacheOwner,
+  activateMemoryWikiCompiledCacheOwner as activateOwner,
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
-  loadMemoryWikiCompiledCache,
-  readMemoryWikiDashboardState,
-  writeMemoryWikiCompiledCache,
+  loadMemoryWikiCompiledCache as loadCache,
+  writeMemoryWikiCompiledCache as writeCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./config.js";
-import { buildMemoryWikiImportInsights } from "./import-insights.js";
+import {
+  buildMemoryWikiImportInsights,
+  projectMemoryWikiImportInsight,
+} from "./import-insights.js";
 import type { WikiPageSummary } from "./markdown.js";
+import { createCompiledDigestPage, createCompiledSnapshot } from "./test-helpers.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 function createSnapshot(body: string): MemoryWikiCompiledCacheSnapshot {
   const text = body.slice(0, 700);
-  const shared = {
-    title: text,
-    kind: "entity" as const,
+  const digest = createCompiledDigestPage({
     aliases: [text],
-    sourceIds: [text],
-    contradictions: [text],
-    questions: [text],
-    bestUsedFor: [text],
-    notEnoughFor: [text],
     personCard: {
       handles: [text],
-      socials: [text],
-      emails: [text],
-      askFor: [text],
-      avoidAskingFor: [text],
-      bestUsedFor: [text],
-      notEnoughFor: [text],
+      socials: [],
+      emails: [],
+      askFor: [],
+      avoidAskingFor: [],
+      bestUsedFor: [],
+      notEnoughFor: [],
     },
-  };
+    topRelationships: [{ targetTitle: text, note: text }],
+    topClaims: [{ text, status: "supported", freshnessLevel: "fresh" }],
+  });
   const page: WikiPageSummary = {
-    ...shared,
+    ...digest,
     absolutePath: "/wiki/entities/snapshot.md",
-    relativePath: "entities/snapshot.md",
+    relativePath: digest.path,
     hasFrontmatter: true,
     linkTargets: [],
-    claims: [{ text, evidence: [] }],
-    relationships: [{ targetTitle: text, note: text }],
     bridgeAgentIds: [],
+    claims: [{ text, evidence: [] }],
+    relationships: digest.topRelationships,
+    questions: [text],
   };
-  return {
-    digest: {
-      claimCount: 1,
-      contradictionCount: 1,
-      pages: [
-        {
-          ...shared,
-          path: page.relativePath,
-          relationshipCount: 1,
-          topRelationships: page.relationships,
-          claimCount: 1,
-          topClaims: [{ text, status: "supported", freshnessLevel: "fresh" }],
-        },
-      ],
-    },
-    claims: [
-      {
-        pageTitle: page.title,
-        pageKind: page.kind,
-        pagePath: page.relativePath,
-        aliases: page.aliases,
-        sourceIds: page.sourceIds,
-        evidenceKinds: [text],
-        privacyTiers: [text],
-        text,
-      },
-    ],
-    dashboards: {
-      overview: buildMemoryWikiOverview([page], [projectMemoryWikiOverviewItem(page, body)]),
-      importInsights: buildMemoryWikiImportInsights([
-        {
-          pagePath: "sources/import.md",
-          title: text,
-          riskLevel: "low",
-          riskReasons: [text],
-          labels: [text],
-          topicKey: "topic/testing",
-          topicLabel: text,
-          digestStatus: "available",
-          activeBranchMessages: 2,
-          userMessageCount: 1,
-          assistantMessageCount: 1,
-          firstUserLine: text,
-          lastUserLine: text,
-          assistantOpener: text,
-          summary: text,
-          candidateSignals: [text],
-          correctionSignals: [text],
-          preferenceSignals: [text],
-        },
-      ]),
-    },
-  };
-}
-
-afterEach(() => {
-  configureMemoryWikiCompiledCacheStore(undefined);
-});
-
-describe("Memory Wiki compiled publication ownership", () => {
-  it.each(["plain-ascii", "漢字-é-😀-e\u0301-\ud800-x-\udc00"])(
-    "owns every compiled branch without changing persisted text: %s",
-    async (prefix) => {
-      const blobs: Uint8Array[] = [];
-      const store = createMemoryWikiCompiledCacheStore(<T>() => {
-        let entry: PluginBlobEntry<T> | undefined;
-        return {
-          register: vi.fn(async (key: string, bytes: Uint8Array, metadata: T) => {
-            entry = { key, bytes, metadata, sizeBytes: bytes.byteLength, createdAt: 0 };
-            blobs.push(bytes);
-          }),
-          lookup: vi.fn(async (key: string) => (entry?.key === key ? entry : undefined)),
-          registerIfAbsent: vi.fn(),
-          entries: vi.fn(),
-          delete: vi.fn(),
-          deleteExpiredKey: vi.fn(),
-          deleteExpired: vi.fn(),
-          clear: vi.fn(),
-        };
-      });
-      configureMemoryWikiCompiledCacheStore(store);
-      const config = resolveMemoryWikiConfig({ vault: { path: "/wiki" } });
-      activateMemoryWikiCompiledCacheOwner(config, "vault-generation");
-      // Exercise the real overview projection: its 700-character snippet can be a
-      // slice of this much larger page even after JSON.stringify has visited it.
-      const snapshot = createSnapshot(prefix + "x".repeat(2 * 1024 * 1024));
-      const digestPage = snapshot.digest.pages[0];
-      const claim = snapshot.claims[0];
-      const overview = snapshot.dashboards.overview.clusters[0]?.items[0];
-      const insight = snapshot.dashboards.importInsights.clusters[0]?.items[0];
-      assert.ok(digestPage && claim && overview && insight);
-      assert.ok(digestPage.personCard && claim.evidenceKinds);
-      const relationship = digestPage.topRelationships[0];
-      const topClaim = digestPage.topClaims[0];
-      assert.ok(relationship && topClaim);
-      const serialized = JSON.stringify(snapshot);
-      const identity = {
-        vaultGeneration: "vault-generation",
-        compiledCachePublicationId: "publication",
-      };
-      await writeMemoryWikiCompiledCache(
-        config,
-        snapshot,
-        identity.compiledCachePublicationId,
-        null,
-        async () => {
-          await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-          // Publication must use the already-persisted payload, not serialize a
-          // possibly changed compiler input again after its asynchronous gates.
-          claim.text = "changed during commit";
-        },
-        async () => identity,
-      );
-
-      const cached = await loadMemoryWikiCompiledCache(config);
-      assert.ok(cached);
-      expect(cached).not.toBe(snapshot);
-      expect(JSON.stringify(cached)).toBe(serialized);
-      expect(blobs).toHaveLength(1);
-      const [blob] = blobs;
-      assert.ok(blob);
-      expect(gunzipSync(blob).toString("utf8")).toBe(serialized);
-
-      // Cover nested digest, claim, and both dashboard payloads, not just the
-      // original overview snippet. None may remain shared with compiler state.
-      digestPage.aliases[0] = "changed alias";
-      digestPage.personCard.handles[0] = "changed handle";
-      relationship.note = "changed relationship";
-      topClaim.text = "changed top claim";
-      claim.evidenceKinds[0] = "changed evidence";
-      overview.snippet = "changed snippet";
-      overview.questions[0] = "changed question";
-      insight.summary = "changed summary";
-      insight.preferenceSignals[0] = "changed preference";
-      expect(JSON.stringify(await loadMemoryWikiCompiledCache(config))).toBe(serialized);
-      await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({
-        state: "ready",
-        dashboards: cached.dashboards,
-      });
-      await expect(loadMemoryWikiCompiledCache(config)).resolves.toBe(cached);
-
-      // A lifecycle reload must expose the identical payload, including Unicode
-      // and unpaired UTF-16 surrogates, without changing the durable generation.
-      configureMemoryWikiCompiledCacheStore(undefined);
-      configureMemoryWikiCompiledCacheStore(store);
-      activateMemoryWikiCompiledCacheOwner(
-        config,
-        identity.vaultGeneration,
-        identity.compiledCachePublicationId,
-      );
-      const reloaded = await loadMemoryWikiCompiledCache(config);
-      assert.ok(reloaded);
-      expect(reloaded).toEqual(cached);
-      expect(JSON.stringify(reloaded)).toBe(serialized);
+  const insight = projectMemoryWikiImportInsight(
+    { ...page, pageType: "source" },
+    {
+      frontmatter: { sourceType: "chatgpt-export" },
+      body: "## Auto Digest\n- Preference signals:\n  - " + text,
     },
   );
+  assert.ok(insight);
+  const snapshot = createCompiledSnapshot({
+    claimCount: 1,
+    contradictionCount: 0,
+    pages: [digest],
+  });
+  snapshot.claims = [
+    {
+      pageTitle: page.title,
+      pageKind: page.kind,
+      pagePath: page.relativePath,
+      evidenceKinds: [text],
+      text,
+    },
+  ];
+  snapshot.dashboards = {
+    overview: buildMemoryWikiOverview([page], [projectMemoryWikiOverviewItem(page, body)]),
+    importInsights: buildMemoryWikiImportInsights([insight]),
+  };
+  return snapshot;
+}
+
+afterEach(() => configureMemoryWikiCompiledCacheStore(undefined));
+
+it("owns every compiled branch without changing persisted text", async () => {
+  const blobs: Uint8Array[] = [];
+  const store = createMemoryWikiCompiledCacheStore(<T>() => {
+    let entry: PluginBlobEntry<T> | undefined;
+    return {
+      register: vi.fn(async (key: string, bytes: Uint8Array, metadata: T) => {
+        entry = { key, bytes, metadata, sizeBytes: bytes.byteLength, createdAt: 0 };
+        blobs.push(bytes);
+      }),
+      lookup: vi.fn(async (key: string) => (entry?.key === key ? entry : undefined)),
+      registerIfAbsent: vi.fn(),
+      entries: vi.fn(),
+      delete: vi.fn(),
+      deleteExpiredKey: vi.fn(),
+      deleteExpired: vi.fn(),
+      clear: vi.fn(),
+    };
+  });
+  configureMemoryWikiCompiledCacheStore(store);
+  const config = resolveMemoryWikiConfig({ vault: { path: "/wiki" } });
+  activateOwner(config, "vault");
+  // The real projection slices its snippet from a much larger source page.
+  const snapshot = createSnapshot(
+    "漢字-é-😀-e\u0301-\ud800-x-\udc00" + "x".repeat(2 * 1024 * 1024),
+  );
+  const digestPage = snapshot.digest.pages[0];
+  const claim = snapshot.claims[0];
+  const overview = snapshot.dashboards.overview.clusters[0]?.items[0];
+  const insight = snapshot.dashboards.importInsights.clusters[0]?.items[0];
+  assert.ok(digestPage && claim && overview && insight);
+  assert.ok(digestPage.personCard && claim.evidenceKinds);
+  const relationship = digestPage.topRelationships[0];
+  const topClaim = digestPage.topClaims[0];
+  assert.ok(relationship && topClaim);
+  const serialized = JSON.stringify(snapshot);
+  const identity = { vaultGeneration: "vault", compiledCachePublicationId: "publication" };
+  await writeCache(
+    config,
+    snapshot,
+    identity.compiledCachePublicationId,
+    null,
+    async () => {
+      await expect(loadCache(config)).resolves.toBeNull();
+      // Publish persisted bytes, not compiler input changed during the commit.
+      claim.text = "changed during commit";
+    },
+    async () => identity,
+  );
+
+  const cached = await loadCache(config);
+  assert.ok(cached);
+  expect(JSON.stringify(cached)).toBe(serialized);
+  const [blob] = blobs;
+  assert.ok(blob);
+  expect(gunzipSync(blob).toString("utf8")).toBe(serialized);
+
+  // All nested branches must detach from compiler state.
+  digestPage.aliases[0] = "changed alias";
+  digestPage.personCard.handles[0] = "changed handle";
+  relationship.note = "changed relationship";
+  topClaim.text = "changed top claim";
+  claim.evidenceKinds[0] = "changed evidence";
+  overview.snippet = "changed snippet";
+  overview.questions[0] = "changed question";
+  insight.summary = "changed summary";
+  insight.preferenceSignals[0] = "changed preference";
+  expect(JSON.stringify(await loadCache(config))).toBe(serialized);
+
+  // Reload must preserve Unicode, lone surrogates, and the durable generation.
+  configureMemoryWikiCompiledCacheStore(undefined);
+  configureMemoryWikiCompiledCacheStore(store);
+  activateOwner(config, identity.vaultGeneration, identity.compiledCachePublicationId);
+  const reloaded = await loadCache(config);
+  expect(JSON.stringify(reloaded)).toBe(serialized);
 });

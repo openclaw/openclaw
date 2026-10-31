@@ -997,7 +997,7 @@ rules:
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: oauth-state-reuses-pkce-verifier
   - id: ghsa-6mqc-jqh6-x8fc.openclaw-canvas-auth-local-direct-bypass
-    message: Canvas/A2UI auth helper allows local-direct requests before bearer-or-capability auth.
+    message: Canvas auth helper allows local-direct requests before bearer-or-capability auth.
     severity: ERROR
     languages:
       - typescript

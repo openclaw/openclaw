@@ -24,12 +24,7 @@ describe("QA Lab dashboard HTTP", () => {
       }
       return controller.signal;
     });
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ ok: true }), {
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
     await getJson("/api/bootstrap");

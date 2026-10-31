@@ -11,6 +11,11 @@ import type {
   WorkerComputerParams,
   WorkerComputerResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import {
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  type WorkerExecApprovalParams,
+  type WorkerExecApprovalResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import type {
   WorkerGatewayToolInvokeParams,
   WorkerGatewayToolCancelParams,
@@ -21,6 +26,7 @@ import type {
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { createPendingPromiseTracker } from "../shared/pending-promises.js";
@@ -213,6 +219,34 @@ export class WorkerConnection {
     // Desktop input is not a durable session operation. A lost response cannot
     // automatically replay clicks or typing on a reconnected transport.
     return this.frames.request("computer", params, undefined, params.timeoutMs);
+  }
+
+  captureExecApprovalAuthority(): () => void {
+    const generation = this.generation;
+    const assertCurrent = () => {
+      if (
+        this.stateValue.kind !== "ready" ||
+        this.generation !== generation ||
+        !this.stateValue.hello.protocolFeatures.includes(WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE)
+      ) {
+        throw new WorkerConnectionInterruptedError(
+          "Worker exec approval lost Gateway admission. Reconnect to an updated Gateway and retry.",
+        );
+      }
+    };
+    assertCurrent();
+    return assertCurrent;
+  }
+
+  requestExecApproval(params: WorkerExecApprovalParams): Promise<WorkerExecApprovalResponseFrame> {
+    // Decisions never replay across connection replacement; the caller must start a new exec.
+    this.captureExecApprovalAuthority()();
+    return this.frames.request(
+      "exec-approval",
+      params,
+      undefined,
+      Math.max(this.requestTimeoutMs, DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000),
+    );
   }
 
   private async requestReplayableOperation<T>(

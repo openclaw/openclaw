@@ -172,18 +172,13 @@ describe("markdownToTelegramRichBlocks", () => {
   });
 
   it("preserves authored https://example.com links with code-only labels", () => {
-    for (const [prefix, suffix] of [
-      ["", ""],
-      ["", "bar"],
-      ["a", "z"],
-    ]) {
-      const markdown = `${prefix ? `\`${prefix}\`` : ""}[\`foo\`](https://example.com)${suffix ? `\`${suffix}\`` : ""}`;
-      const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
-      const text = firstText(blocks);
-      expect(collectLinkTargets(text), markdown).toEqual(["https://example.com"]);
-      expect(hasStyle(text, "code"), markdown).toBe(true);
-      expect(plainText).toBe(`${prefix}foo${suffix}`);
-    }
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      "`a`[`foo`](https://example.com)`z`",
+    );
+    const text = firstText(blocks);
+    expect(collectLinkTargets(text)).toEqual(["https://example.com"]);
+    expect(hasStyle(text, "code")).toBe(true);
+    expect(plainText).toBe("afooz");
   });
 
   it("renders tables with header row, aligns, borders, and stripes", () => {
@@ -240,10 +235,9 @@ describe("splitTelegramRichBlocks", () => {
     expect(urls.every((url) => url.startsWith("https://example.com/"))).toBe(true);
   });
 
-  it("splits oversized blockquotes and tables at inner boundaries", () => {
+  it("splits oversized tables at inner boundaries", () => {
     const chunks = splitTelegramRichBlocks(
       [
-        { type: "blockquote", blocks: [paragraph("q".repeat(50)), paragraph("r".repeat(50))] },
         {
           type: "table",
           cells: [
@@ -289,20 +283,16 @@ describe("splitTelegramRichBlocks", () => {
         photo: { type: "photo" as const, media: `https://example.com/${index}.jpg` },
       })),
     };
-
     const tableChunks = splitTelegramRichBlocks([table], { blockLimit: 5 });
     const mediaChunks = splitTelegramRichBlocks([collage]);
     const tables = tableChunks.flat().filter((block) => block.type === "table");
     const albums = mediaChunks.flat().filter((block) => block.type === "collage");
-
     expectBudget(tableChunks, "blocks", 5);
     expect(tables.flatMap((part) => part.cells)).toEqual(table.cells);
-    expect(tables.flatMap((part) => (part.caption ? [part.caption] : []))).toEqual([
-      "Table caption",
-    ]);
+    expect(tables.map((part) => part.caption).filter(Boolean)).toEqual(["Table caption"]);
     expectBudget(mediaChunks, "media", 50);
     expect(albums.flatMap((album) => album.blocks)).toEqual(collage.blocks);
-    expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
+    expect(albums.flatMap(({ caption }) => (caption ? [caption.text] : []))).toEqual([
       "Album caption",
     ]);
   });

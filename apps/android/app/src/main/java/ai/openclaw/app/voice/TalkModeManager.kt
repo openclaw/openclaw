@@ -2,6 +2,7 @@ package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.ChatSendAck
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.TalkSessionCancelOutputResult
@@ -458,7 +459,7 @@ class TalkModeManager internal constructor(
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
-    mainSessionKey = trimmed
+    synchronized(realtimeCapturePauseLock) { mainSessionKey = trimmed }
   }
 
   fun setEnabled(enabled: Boolean) {
@@ -2567,17 +2568,27 @@ class TalkModeManager internal constructor(
     }
 
   private suspend fun sendChat(message: String): ChatSendAck {
+    val sessionKey = synchronized(realtimeCapturePauseLock) { mainSessionKey }
     val runId = UUID.randomUUID().toString()
     armPendingRun(runId)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey))
+        put("sessionKey", JsonPrimitive(sessionKey))
         put("message", JsonPrimitive(message))
         // Omit the run deadline so the Gateway's configured agent timeout applies.
         put("idempotencyKey", JsonPrimitive(runId))
       }
     try {
-      val res = requestGateway("chat.send", params.toString())
+      val lease =
+        session.captureRequestLease(gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() })
+          ?: throw GatewayRequestNotEnqueued("not connected")
+      val res =
+        lease.requestAwaitingStartup("chat.send", params.toString()) { enqueue ->
+          synchronized(realtimeCapturePauseLock) {
+            if (mainSessionKey != sessionKey) throw CancellationException("Talk session changed")
+            enqueue()
+          }
+        }
       val parsed = parseChatSendAck(json, res)
       val actualRunId = parsed.runId ?: runId
       if (actualRunId != runId) {

@@ -53,7 +53,6 @@ a.chat-details-people__row:focus-visible {
 }
 
 .chat-details-people__role,
-.chat-details-people__remaining,
 .chat-details-people__count {
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale));
@@ -65,21 +64,22 @@ a.chat-details-people__row:focus-visible {
   text-align: end;
 }
 
-.chat-details-people__remaining {
-  padding-block: 4px;
+[data-details-group="people"][data-expanded] > .chat-details-desktop-section__heading > svg {
+  visibility: hidden;
 }
 
+[data-details-group="people"]
+  > .chat-details-desktop-section__heading
+  > .chat-details-desktop-section__metadata,
 .chat-details-people__summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  margin-inline-start: auto;
-  font-variant-numeric: tabular-nums;
+  display: contents;
 }
 
 .chat-details-people__preview {
   display: inline-flex;
   align-items: center;
+  order: 2;
+  margin-inline-start: auto;
 }
 
 .chat-details-people__preview-avatar {

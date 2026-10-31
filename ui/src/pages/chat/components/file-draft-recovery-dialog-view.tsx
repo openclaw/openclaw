@@ -1,5 +1,4 @@
 import { For, createSignal, createStore, untrack } from "solid-js";
-import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadTextFile } from "../../../lib/download.ts";
@@ -8,7 +7,7 @@ import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
 
 registerFilePreviewEnglish();
 
-type FileDraft = {
+export type FileDraft = {
   name: string;
   path: string;
   context: FileSidebarContent["draftContext"];
@@ -17,19 +16,7 @@ type FileDraft = {
   discard: () => boolean;
 };
 
-export function reviewFileDrafts(drafts: readonly FileDraft[]): Promise<void> {
-  return withPromiseModalHost<void>(undefined, (modal) => {
-    modal.render(() => (
-      <FileDraftRecoveryDialog
-        drafts={drafts}
-        settled={() => modal.settled}
-        finish={modal.finish}
-      />
-    ));
-  });
-}
-
-function FileDraftRecoveryDialog(props: {
+export function FileDraftRecoveryDialog(props: {
   drafts: readonly FileDraft[];
   settled: () => boolean;
   finish: () => void;

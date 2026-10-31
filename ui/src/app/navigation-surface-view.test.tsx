@@ -24,6 +24,7 @@ describe("OpenClaw shell update affordance", () => {
         onRefresh={onRefresh}
       />
     ));
+    await vi.dynamicImportSettled();
     const attention = view.container.querySelector("openclaw-sidebar-attention");
     expect(attention).not.toBeNull();
     expect(view.container.querySelector("openclaw-sidebar-update-card")).toBeNull();

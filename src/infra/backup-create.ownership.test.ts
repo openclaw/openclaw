@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
@@ -21,6 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import {
   backupCase,
   isolateBackupScratch,
@@ -32,6 +32,7 @@ import {
   withDatabase,
 } from "./backup-create-family.test-support.js";
 import { listArchiveEntries } from "./backup-create.test-support.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
@@ -85,9 +86,8 @@ describe("backup SQLite ownership", () => {
       const restoredRoot = state.path("restored");
       await expect(restoreBackup(state, archive, runtime)).resolves.toMatchObject({ ok: true });
       if (alias === "namespace") {
-        const restoredAgents = (
-          await fs.readdir(restoredRoot, { recursive: true, withFileTypes: true })
-        )
+        const restoredAgents = (await listDirectoryTreeStrict(restoredRoot))
+          .map((walkEntry) => walkEntry.dirent)
           .filter((entry) => !entry.isDirectory() && entry.name === "openclaw-agent.sqlite")
           .map((entry) => path.join(entry.parentPath, entry.name));
         const expected = buildBackupArchivePath(archive.archiveRoot, agentPath).replaceAll(

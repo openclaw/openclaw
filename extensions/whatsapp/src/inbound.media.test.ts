@@ -69,6 +69,7 @@ const observedConsoleWarnings = vi.hoisted(() => vi.fn());
 function createMockSocket() {
   const { EventEmitter } = require("node:events") as typeof import("node:events");
   return {
+    authState: { creds: { accountSyncCounter: 0 } },
     ev: new EventEmitter(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
@@ -209,8 +210,8 @@ vi.mock("./session.js", async () => {
   };
 });
 
-let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
-let resetWebInboundDedupe: typeof import("./inbound.js").resetWebInboundDedupe;
+let monitorWebInbox: typeof import("./inbound/monitor.js").monitorWebInbox;
+let resetWebInboundDedupe: typeof import("./inbound/dedupe.js").resetWebInboundDedupe;
 let createWaSocket: typeof import("./session.js").createWaSocket;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
@@ -366,7 +367,8 @@ describe("web inbound media saves with extension", () => {
     );
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
     setLoggerOverride({ level: "trace", consoleLevel: "info", file: LOG_PATH });
-    ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
+    ({ monitorWebInbox } = await import("./inbound/monitor.js"));
+    ({ resetWebInboundDedupe } = await import("./inbound/dedupe.js"));
     ({ createWaSocket } = await import("./session.js"));
   });
 

@@ -33,6 +33,11 @@ function setPlugins(...plugins: Record<string, unknown>[]) {
 function suppressionPlugin(id: string, suppressions: Record<string, unknown>[], providers = [id]) {
   return { id, providers, modelCatalog: { suppressions } };
 }
+const rule = (fields: Record<string, unknown>) => ({
+  provider: "fixture",
+  model: "model",
+  ...fields,
+});
 
 function providerConfig(provider: string, config: ModelProviderConfig) {
   return { models: { providers: { [provider]: config } } };
@@ -87,9 +92,7 @@ describe("manifest model suppression", () => {
     const ownerA = createPluginCache();
     const ownerB = createPluginCache();
     const snapshots = ["first rules", "second rules"].map((reason) =>
-      createMetadataSnapshot([
-        suppressionPlugin("fixture", [{ provider: "fixture", model: "model", reason }]),
-      ]),
+      createMetadataSnapshot([suppressionPlugin("fixture", [rule({ reason })])]),
     );
     mocks.loadPluginMetadataSnapshot.mockImplementation(() =>
       getPluginCache() === ownerA ? snapshots[0] : snapshots[1],
@@ -103,7 +106,7 @@ describe("manifest model suppression", () => {
   });
 
   it("traverses plugin policy once per compilation while preserving owner restrictions", () => {
-    const ids = Array.from({ length: 8 }, (_, index) => `fixture-${index}`);
+    const ids = Array.from({ length: 5 }, (_, index) => `fixture-${index}`);
     let enumerations = 0;
     const entries = new Proxy(
       Object.fromEntries(ids.map((id) => [id, { enabled: id !== "fixture-1" }])),
@@ -117,7 +120,7 @@ describe("manifest model suppression", () => {
     const config = {
       plugins: {
         entries,
-        allow: ids.filter((id) => id !== "fixture-7"),
+        allow: ids.filter((id) => id !== "fixture-3"),
         deny: ["fixture-2"],
       },
     };
@@ -126,10 +129,7 @@ describe("manifest model suppression", () => {
 
     expect(ids.filter((provider) => resolver({ provider, id: "retired" }))).toEqual([
       "fixture-0",
-      "fixture-3",
       "fixture-4",
-      "fixture-5",
-      "fixture-6",
     ]);
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
     expect(enumerations).toBe(1);
@@ -152,30 +152,22 @@ describe("manifest model suppression", () => {
     };
     const config = providerConfig("fixture", fixture);
     setPlugins(
-      suppressionPlugin(
-        "z-fallback",
-        [{ provider: "fixture", model: "model", reason: "Fallback." }],
-        ["fixture"],
-      ),
+      suppressionPlugin("z-fallback", [rule({ reason: "Fallback." })], ["fixture"]),
       suppressionPlugin(
         "a-conditional",
         [
-          {
-            provider: "fixture",
-            model: "model",
+          rule({
             reason: "First route.",
             when: {
               baseUrlHosts: ["FIRST.EXAMPLE.", "shared.example"],
               providerConfigApiIn: ["OPENAI-COMPLETIONS", "fixture"],
             },
-          },
-          {
-            provider: "fixture",
-            model: "model",
+          }),
+          rule({
             reason: "Second route.",
             retirement: { replacedBy: "successor" },
             when: { baseUrlHosts: ["second.example", "shared.example"] },
-          },
+          }),
         ],
         ["fixture"],
       ),
@@ -213,13 +205,12 @@ describe("manifest model suppression", () => {
       const modelCatalog = normalizeModelCatalog(
         {
           suppressions: [
-            {
-              provider: "fixture",
+            rule({
               model: "old-model",
               reason: "This subscription model has retired.",
               retirement,
               when: { baseUrlHosts: ["subscription.example"] },
-            },
+            }),
           ],
         },
         { ownedProviders: new Set(["fixture"]) },

@@ -356,22 +356,15 @@ describe("codex detach command", () => {
     },
   );
 
-  it.each([
-    {
-      label: "an incognito source bound into an ordinary destination",
-      sourceSessionKey: "agent:main:dashboard:incognito-source",
-      destinationSessionKey: "agent:main:discord:ordinary-destination",
-      unsubscribes: true,
-    },
-    {
-      label: "an ordinary source bound into an incognito destination",
-      sourceSessionKey: "agent:main:discord:ordinary-source",
-      destinationSessionKey: "agent:main:dashboard:incognito-destination",
-      unsubscribes: false,
-    },
-  ])(
-    "retires untracked detach ownership from $label using its source session",
-    async ({ sourceSessionKey, destinationSessionKey, unsubscribes }) => {
+  it.each([true, false])(
+    "retires untracked detach ownership using its source session (incognito: %s)",
+    async (unsubscribes) => {
+      const sourceSessionKey = unsubscribes
+        ? "agent:main:dashboard:incognito-source"
+        : "agent:main:discord:ordinary-source";
+      const destinationSessionKey = unsubscribes
+        ? "agent:main:discord:ordinary-destination"
+        : "agent:main:dashboard:incognito-destination";
       const f = await nativeFixture({}, false);
       await expect(
         f.run({
@@ -509,7 +502,7 @@ describe("codex detach command", () => {
           senderIsOwner: true,
         },
         { channelId: "test", pluginBinding: f.conversation },
-        { bindingStore, timeoutMs: 500 },
+        { bindingStore },
       ),
     ).resolves.toEqual({ handled: true, reply: { text: "Original context kept" } });
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
@@ -849,40 +842,26 @@ describe("Codex diagnostics confirmation", () => {
   });
 
   it("uploads all Codex diagnostics sessions and reports their channel/thread breakdown", async () => {
-    const targets = [
-      {
-        agentId: "first",
-        sessionKey: "agent:first:whatsapp:one",
-        sessionId: "session-one",
-        channel: "whatsapp",
-        threadId: "thread-111",
-      },
-      {
-        agentId: "second",
-        sessionKey: "agent:second:discord:two",
-        sessionId: "session-two",
-        channel: "discord",
-        threadId: "thread-222",
-      },
-    ];
+    const makeTarget = (agentId: string, channel: string, id: string, threadId: string) => ({
+      agentId,
+      channel,
+      threadId,
+      sessionId: `session-${id}`,
+      sessionKey: `agent:${agentId}:${channel}:${id}`,
+    });
+    const first = makeTarget("first", "whatsapp", "one", "thread-111");
+    const second = makeTarget("second", "discord", "two", "thread-222");
+    const targets = [first, second];
     const f = await fixture(
-      { threadId: "thread-111", cwd: "/repo", authProfileId: "openai:first" },
+      { threadId: first.threadId, cwd: "/repo", authProfileId: "openai:first" },
       {
-        agentId: "first",
-        sessionId: "session-one",
-        sessionKey: "agent:first:whatsapp:one",
-        channel: "whatsapp",
+        ...first,
         diagnosticsSessions: targets,
       },
     );
     await writeTestBinding(
-      {
-        kind: "session",
-        agentId: "second",
-        sessionId: "session-two",
-        sessionKey: "agent:second:discord:two",
-      },
-      { threadId: "thread-222", cwd: "/repo", authProfileId: "openai:second" },
+      { kind: "session", ...second },
+      { threadId: second.threadId, cwd: "/repo", authProfileId: "openai:second" },
     );
     const upload = vi.fn(async (_config: unknown, _method: string, params: unknown) => {
       if (

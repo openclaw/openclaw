@@ -182,30 +182,6 @@ function resolveDuplicatePrecedenceRank(params: {
   return 5;
 }
 
-function isIntentionalInstalledBundledDuplicate(params: {
-  left: PluginCandidate;
-  right: PluginCandidate;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  return (
-    [
-      [params.left, params.right],
-      [params.right, params.left],
-    ] as const
-  ).some(
-    ([installed, bundled]) =>
-      matchesInstalledPluginRecord({
-        candidate: installed,
-        env: params.env,
-        installRecords: params.installRecords,
-      }) &&
-      !isStaleForeignBundledPin({ candidate: installed, env: params.env }) &&
-      bundled.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env: params.env }),
-  );
-}
-
 function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandidate): boolean {
   if (left.origin !== "global" || right.origin !== "global") {
     return false;
@@ -492,13 +468,21 @@ export function buildPluginManifestRegistry(
       if (candidateWins) {
         seenIds.set(effectivePluginId, { candidate, record });
       }
+      const existingCandidate = existing.candidate;
+      const installRecords = getInstallRecords();
       if (
-        isIntentionalInstalledBundledDuplicate({
-          left: candidate,
-          right: existing.candidate,
-          env,
-          installRecords: getInstallRecords(),
-        })
+        (
+          [
+            [candidate, existingCandidate],
+            [existingCandidate, candidate],
+          ] as const
+        ).some(
+          ([installed, bundled]) =>
+            matchesInstalledPluginRecord({ candidate: installed, env, installRecords }) &&
+            !isStaleForeignBundledPin({ candidate: installed, env }) &&
+            bundled.origin === "bundled" &&
+            !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env }),
+        )
       ) {
         continue;
       }
@@ -532,7 +516,7 @@ export function buildPluginManifestRegistry(
           ? `stale plugin install record: "${effectivePluginId}" is pinned to ${overriddenCandidate.rootDir}, which belongs to a different OpenClaw installation. This installation's bundled plugin is being used instead. No uninstall is needed to use the bundled plugin. Uninstalling, even with \`--keep-files\`, removes plugin configuration; re-enabling does not restore it.`
           : explicitOverride
             ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
-            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source}); ignored plugin source: ${overriddenCandidate.source}`,
       });
       continue;
     }

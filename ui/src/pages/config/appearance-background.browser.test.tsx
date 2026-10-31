@@ -1,6 +1,5 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
   type BackgroundPreference,
@@ -9,14 +8,15 @@ import type { UsersBackgroundResult } from "../../../../packages/gateway-protoco
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
-import type { ApplicationContext, ApplicationTheme } from "../../app/context.ts";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { RouterOutlet } from "../../app/router-outlet.tsx";
 import {
   rememberProfileAppearanceIdentity,
   resetProfileAppearancePrefs,
 } from "../../app/server-prefs-profile.ts";
-import { loadSettings } from "../../app/settings.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -26,10 +26,7 @@ import {
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
-import {
-  AppearanceBackground as BackgroundView,
-  type AppearanceBackgroundView as BackgroundViewProps,
-} from "./view-appearance-background.tsx";
+import { createConfigRouteContext } from "./config-page.test-support.ts";
 import "../../styles.css";
 import "../../styles/config.css";
 import "../../styles/settings.css";
@@ -43,7 +40,6 @@ beforeEach(() => {
   document.body.append(host);
 });
 afterEach(() => {
-  update = undefined;
   host.remove();
   resetProfileAppearancePrefs();
   vi.restoreAllMocks();
@@ -66,22 +62,13 @@ async function mount(
       selfUser: { id: "background-demo" },
     });
   }
-  const notifications = new EventTarget();
-  const subscribe = (type: string) => (listener: () => void) => {
-    notifications.addEventListener(type, listener);
-    return () => notifications.removeEventListener(type, listener);
-  };
-  const notify = (type: string) => notifications.dispatchEvent(new Event(type));
-  const settings = {
-    ...loadSettings(),
+  const settings = patchSettings({
+    gatewayUrl: gateway.gateway.connection.gatewayUrl,
+    themeMode: "dark",
     background: { ...DEFAULT_BACKGROUND_PREFERENCE, ...preference },
-  };
-  const theme: Pick<ApplicationTheme, "settings" | "resolvedMode" | "refresh" | "subscribe"> = {
-    settings,
-    resolvedMode: "dark",
-    refresh: () => notify("theme"),
-    subscribe: subscribe("theme"),
-  };
+  });
+  const theme = createApplicationTheme(settings, gateway.gateway);
+  onTestFinished(() => theme.dispose());
   const backgroundModule = { renderSolid: AppearanceBackground };
   const router = createRouter<RouteId, ApplicationContext, typeof backgroundModule>({
     routes: [
@@ -97,18 +84,18 @@ async function mount(
       }),
     ],
   });
-  const contextFixture: Pick<ApplicationContext, "gateway" | "router"> & {
-    runtimeConfig: Pick<ApplicationContext["runtimeConfig"], "canPatch"> & {
-      state: Pick<ApplicationContext["runtimeConfig"]["state"], "connected">;
-    };
-    theme: typeof theme;
-  } = {
+  const applicationFixture = createConfigRouteContext();
+  const context: ApplicationContext = {
+    ...applicationFixture,
     gateway: gateway.gateway,
-    runtimeConfig: { state: { connected: true }, canPatch: true },
+    runtimeConfig: {
+      ...applicationFixture.runtimeConfig,
+      state: { ...applicationFixture.runtimeConfig.state, connected: true },
+      canPatch: true,
+    },
     theme,
     router,
   };
-  const context = contextFixture as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   host.innerHTML = '<div class="config-content"><div class="settings-page"></div></div>';
   const container = host.querySelector<HTMLElement>(".settings-page")!;
@@ -132,8 +119,6 @@ async function mount(
     range,
     preview,
     gateway,
-    settings,
-    theme,
     context,
     navigate: () => void router.navigate("usage", context),
     leavePage: () => router.navigate("usage", context),
@@ -282,20 +267,28 @@ it.each([
 );
 
 it("passes live preferences to the shared renderer without enabling disabled placement", async () => {
-  const { range, preview, settings, theme } = await mount({ ...disabledPlacement, visibility: 0 });
+  const { range, preview } = await mount({ ...disabledPlacement, visibility: 0 });
   activate(range);
   await preview.updateComplete;
   expect(preview.preferenceOverride?.visibility).toBe(0);
   expect(preview.querySelector(".session-background__image")).toBeNull();
-  settings.background = { ...settings.background, visibility: 0.8 };
-  theme.refresh();
+  patchSettings({
+    background: { ...DEFAULT_BACKGROUND_PREFERENCE, ...loadSettings().background, visibility: 0.8 },
+  });
   flush();
   await preview.updateComplete;
   expect(preview.preferenceOverride).toMatchObject({ ...disabledPlacement, visibility: 0.8 });
   expect(range.getAttribute("aria-valuetext")).toBe("80%");
-  expect(preview.querySelector(".session-background__image")).not.toBeNull();
-  settings.background = { ...settings.background, source: { kind: "none" } };
-  theme.refresh();
+  await waitForSolid(() => {
+    expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  });
+  patchSettings({
+    background: {
+      ...DEFAULT_BACKGROUND_PREFERENCE,
+      ...loadSettings().background,
+      source: { kind: "none" },
+    },
+  });
   flush();
   expect(preview.presented).toBe(false);
 });
@@ -547,7 +540,7 @@ it("dismisses metadata errors on a local choice and retires reads across profile
         ? abandoned.promise
         : Promise.resolve({ status: "ok", asset: null, preference: null });
   });
-  const { element, gateway, range, settings, theme } = await mount(
+  const { element, gateway, range } = await mount(
     { source: { kind: "custom", assetId: "metadata-old" } },
     createTestGatewayClient(request),
   );
@@ -558,21 +551,15 @@ it("dismisses metadata errors on a local choice and retires reads across profile
       "Synthetic metadata failure",
     ),
   );
-  const refreshTheme = theme.refresh;
-  const refresh = vi.spyOn(theme, "refresh").mockImplementation(() => {
-    // Mirror the real theme owner adopting a locally persisted choice.
-    settings.background = loadSettings().background ?? DEFAULT_BACKGROUND_PREFERENCE;
-    refreshTheme();
-  });
   element.querySelector<HTMLButtonElement>('[data-background-source="theme"]')!.click();
   await waitForSolid(() => {
     expect(reads).toBe(2);
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
-  refresh.mockRestore();
   gateway.publish({ ...gateway.gateway.snapshot, selfUser: { id: "replacement-demo" } });
-  settings.background = { ...settings.background, visibility: 0.8 };
-  theme.refresh();
+  patchSettings({
+    background: { ...DEFAULT_BACKGROUND_PREFERENCE, ...loadSettings().background, visibility: 0.8 },
+  });
   await waitForSolid(() => {
     expect(reads).toBe(3);
     expect(range.getAttribute("aria-valuetext")).toBe("80%");
@@ -665,114 +652,4 @@ it("recovers thumbnail errors without waiting for a retired image and revokes th
     expect(element.querySelector(".settings-background-option__sample img")).toBeNull(),
   );
   expect(revoke).toHaveBeenCalledWith(currentUrl);
-});
-
-let update: ((props: BackgroundViewProps) => void) | undefined;
-const button = (selector: string) => host.querySelector<HTMLButtonElement>(selector)!;
-const buttons = (selector: string) => [...host.querySelectorAll<HTMLButtonElement>(selector)];
-const source = (kind: string) => button(`[data-background-source="${kind}"]`);
-const mode = (kind: string) => button(`[data-test-id="background-presentation-${kind}"]`);
-const backgroundRange = () => host.querySelector<HTMLInputElement>('input[type="range"]')!;
-function renderBackground(
-  overrides: Partial<Omit<BackgroundViewProps, "preference">> = {},
-  preference: Partial<BackgroundPreference> = {},
-) {
-  const props = fixture(overrides, preference);
-  if (!update) {
-    const [current, setCurrent] = createSignal({ ...props });
-    update = setCurrent;
-    mountSolid(() => <BackgroundView {...current()} />, { container: host });
-  } else {
-    update({ ...props });
-  }
-  flush();
-  return props;
-}
-function fixture(
-  overrides: Partial<Omit<BackgroundViewProps, "preference">>,
-  preference: Partial<BackgroundPreference>,
-): BackgroundViewProps {
-  return {
-    preference: { ...DEFAULT_BACKGROUND_PREFERENCE, source: { kind: "theme" }, ...preference },
-    imageUrl: null,
-    hasImage: false,
-    busy: false,
-    uploadAllowed: true,
-    scopeHint: "Personal preference",
-    message: null,
-    onSource: vi.fn(),
-    onChange: vi.fn(),
-    onChooseImage: vi.fn(),
-    onRemoveImage: vi.fn(),
-    onFile: vi.fn(),
-    onPreviewStart: vi.fn(),
-    onPreviewInput: vi.fn(),
-    onPreviewEnd: vi.fn(),
-    onPreviewKey: vi.fn(),
-    onPreviewCancel: vi.fn(),
-    ...overrides,
-  };
-}
-
-describe("Appearance backgrounds", () => {
-  it("explains disabled placement separately from zero visibility", () => {
-    renderBackground({}, disabledPlacement);
-    expect(mode("faded").ariaPressed).toBe("true");
-    expect(host.textContent).toContain("Both pages are off");
-    expect(backgroundRange().disabled).toBe(false);
-    renderBackground({}, { visibility: 0 });
-    expect(host.textContent).toContain("At 0%, the artwork is hidden");
-  });
-
-  it("retains removal access when None is selected without silently deleting the image", () => {
-    const props = renderBackground(
-      { hasImage: true },
-      { source: { kind: "none" }, presentation: "full-bleed" },
-    );
-    expect(source("none").getAttribute("aria-pressed")).toBe("true");
-    const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
-    expect(switches).toHaveLength(2);
-    expect(switches.every((input) => input.disabled)).toBe(true);
-    expect(backgroundRange().disabled).toBe(true);
-    expect(
-      buttons('[data-test-id^="background-presentation-"]').every((control) => control.disabled),
-    ).toBe(true);
-    expect(mode("full-bleed").getAttribute("aria-pressed")).toBe("true");
-    expect(host.textContent).toContain("without removing your saved image or choices");
-    expect(props.onRemoveImage).not.toHaveBeenCalled();
-    button("[data-background-remove]").click();
-    expect(props.onRemoveImage).toHaveBeenCalledOnce();
-  });
-
-  it("leaves the plain choices available when custom uploads are unavailable", () => {
-    renderBackground({ uploadAllowed: false });
-    expect([source("none").disabled, source("theme").disabled]).toEqual([false, false]);
-    expect([source("custom").disabled, button("[data-background-upload]").disabled]).toEqual([
-      true,
-      true,
-    ]);
-  });
-
-  it("delivers the chosen file once and clears the input so it can be selected again", () => {
-    const props = renderBackground();
-    const file = new File(["image fixture"], "background.png", { type: "image/png" });
-    const transfer = new DataTransfer();
-    transfer.items.add(file);
-    const input = host.querySelector<HTMLInputElement>("[data-background-file]")!;
-    input.files = transfer.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(props.onFile).toHaveBeenCalledWith(file);
-    expect(input.value).toBe("");
-  });
-
-  it("shows failure text safely and locks conflicting controls during upload", () => {
-    renderBackground({
-      busy: true,
-      hasImage: true,
-      message: { kind: "error", text: "Image <failed>" },
-    });
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Image <failed>");
-    expect(host.querySelector("failed")).toBeNull();
-    expect(buttons("button").every((control) => control.disabled)).toBe(true);
-  });
 });

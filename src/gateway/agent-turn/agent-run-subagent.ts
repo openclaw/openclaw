@@ -208,11 +208,16 @@ export function settleUnstartedGatewayParentResume(
     if (!ownsAdoption()) {
       return;
     }
-    const settled = await runtime.finalizeInterruptedSubagentRun({
+    const settled = await runtime.markSubagentRunTerminated({
       runId: adopted.runId,
-      expectedEntry: adopted,
-      error: failure ?? "Parent resume admission ended before acceptance.",
+      reason: failure ?? "Parent resume admission ended before acceptance.",
+      suppressTaskDelivery: true,
       suppressSessionEffects: true,
+      assertCurrent: () => {
+        if (!ownsAdoption()) {
+          throw new Error("Adopted parent resume changed before admission rejection settled");
+        }
+      },
     });
     if (!settled && ownsAdoption()) {
       throw new Error(

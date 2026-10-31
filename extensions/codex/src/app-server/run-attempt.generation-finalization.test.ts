@@ -39,21 +39,6 @@ import { getSharedCodexAppServerClient } from "./shared-client.js";
 
 setupRunAttemptTestHooks();
 
-const webSearchThreadConfigFingerprint = JSON.stringify({
-  "features.standalone_web_search": false,
-  web_search: "disabled",
-});
-
-function existingBinding(cwd: string) {
-  return {
-    threadId: "thread-existing",
-    cwd,
-    dynamicToolsFingerprint: "[]",
-    webSearchThreadConfigFingerprint,
-    historyCoveredThrough: new Date(1).toISOString(),
-  };
-}
-
 const superseded = { name: "AgentHarnessSessionSupersededError" };
 const successful = { aborted: false, timedOut: false, promptError: null };
 const settle = <T>(run: Promise<T>) =>
@@ -88,12 +73,21 @@ async function generationFixture(predecessor?: string) {
   const bindingStore = createCodexTestBindingStore();
   await bindingStore.mutate(previous, {
     kind: "set",
-    binding: existingBinding(params.workspaceDir),
+    binding: {
+      threadId: "thread-existing",
+      cwd: params.workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      webSearchThreadConfigFingerprint: JSON.stringify({
+        "features.standalone_web_search": false,
+        web_search: "disabled",
+      }),
+      historyCoveredThrough: new Date(1).toISOString(),
+    },
   });
   return { params, current, scope, bindingStore };
 }
 
-async function prepareGenerationAttempt(params: ReturnType<typeof createParams>) {
+async function prepareGenerationAttempt(params: ReturnType<typeof createTestParams>) {
   await resolveBootstrapFilesForPreparation({ ...params, agentId: "main" });
   await readMirroredSessionHistoryMessages({ ...params, agentId: "main" });
   await getSharedCodexAppServerClient({
@@ -121,7 +115,6 @@ it.each([true, false])(
     const storePath = supervision
       ? path.join(tempDir, "sessions.json")
       : resolveStorePath(undefined, { agentId: "main" });
-    const pluginConfig = { supervision: { enabled: true } };
     registerCodexTestSessionIdentity(sessionFile, boundSessionId, sessionKey);
     await writeCodexAppServerBinding(
       sessionFile,
@@ -157,7 +150,7 @@ it.each([true, false])(
     await expect(
       runCodexAppServerAttempt(params, {
         clientFactory,
-        ...(supervision ? { pluginConfig } : {}),
+        ...(supervision ? { pluginConfig: { supervision: { enabled: true } } } : {}),
       }),
     ).rejects.toMatchObject({
       ...superseded,
@@ -198,9 +191,6 @@ it("starts sequential ephemeral generations with the default session store", asy
     turnStarted = createDeferred<void>();
     const run = runCodexAppServerAttempt(params);
     await beforeSettlement(turnStarted.promise, run);
-    expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
-      expectedGeneration,
-    );
     const threadId = `thread-ephemeral-${expectedGeneration}`;
     const turnId = `turn-ephemeral-${expectedGeneration}`;
     await harness.completeTurn({ threadId, turnId });
@@ -239,16 +229,10 @@ it.each(["current", "lineage-replaced"] as const)(
             });
           }
           await withCurrent(() => {
-            const forbidden = vi
-              .spyOn(sessionStoreRuntime, "getSessionEntry")
-              .mockImplementation(() => {
-                throw new Error("synchronous host lineage read reached wire admission");
-              });
-            try {
-              write();
-            } finally {
-              forbidden.mockRestore();
-            }
+            using _ = vi.spyOn(sessionStoreRuntime, "getSessionEntry").mockImplementation(() => {
+              throw new Error("synchronous host lineage read reached wire admission");
+            });
+            write();
           });
         },
       });
@@ -260,14 +244,9 @@ it.each(["current", "lineage-replaced"] as const)(
       if (generation === "current") {
         await harness.waitForMethod("turn/start");
         await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-        expect(readAttemptTerminal(await run)).toMatchObject({
-          promptError: null,
-          aborted: false,
-        });
+        expect(readAttemptTerminal(await run)).toMatchObject(successful);
       } else {
-        await expect(settled).resolves.toMatchObject({
-          error: superseded,
-        });
+        await expect(settled).resolves.toMatchObject({ error: superseded });
         expect(harness.writes.some((line) => JSON.parse(line).method === "turn/start")).toBe(false);
       }
     } finally {
@@ -278,12 +257,7 @@ it.each(["current", "lineage-replaced"] as const)(
 );
 
 it("preserves successor continuity after agent_end outlives the recovered generation", async () => {
-  const {
-    params,
-    current,
-    scope,
-    bindingStore: baseStore,
-  } = await generationFixture("before-compaction");
+  const { params, current, scope, bindingStore } = await generationFixture("before-compaction");
   const { sessionFile, workspaceDir } = params;
   const successor = { ...current, sessionId: "after-compaction" };
   const enteredAgentEnd = createDeferred<void>();
@@ -306,11 +280,11 @@ it("preserves successor continuity after agent_end outlives the recovered genera
   vi.useFakeTimers({ toFake: ["Date"] });
   const harness = createResumeHarness();
   await prepareGenerationAttempt(params);
-  const run = runCodexAppServerAttempt(params, { bindingStore: baseStore });
+  const run = runCodexAppServerAttempt(params, { bindingStore });
   const settledRun = settle(run);
   try {
     await beforeSettlement(harness.waitForMethod("turn/start"), run);
-    const admittedBinding = baseStore.read(current);
+    const admittedBinding = bindingStore.read(current);
     expect(admittedBinding).toMatchObject({ threadId: "thread-existing" });
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await beforeSettlement(enteredAgentEnd.promise, run);
@@ -328,10 +302,10 @@ it("preserves successor continuity after agent_end outlives the recovered genera
     releaseAgentEnd.resolve();
     const outcome = await settledRun;
 
-    expect(baseStore.read(current)).toEqual(admittedBinding);
+    expect(bindingStore.read(current)).toEqual(admittedBinding);
     expect(outcome).toMatchObject({ error: superseded });
     const adopted = await resolveCodexSessionBinding({
-      bindingStore: baseStore,
+      bindingStore,
       identity: successor,
       storePath: scope.storePath,
     });
@@ -347,7 +321,7 @@ it("preserves successor continuity after agent_end outlives the recovered genera
     });
     nextParams.sessionTarget = { ...scope, sessionId: successor.sessionId };
     await prepareGenerationAttempt(nextParams);
-    const nextRun = runCodexAppServerAttempt(nextParams, { bindingStore: baseStore });
+    const nextRun = runCodexAppServerAttempt(nextParams, { bindingStore });
     await nextHarness.waitForMethod("turn/start");
     await nextHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     expect(readAttemptTerminal(await nextRun)).toMatchObject(successful);
@@ -380,7 +354,6 @@ it("clears a stale binding when completed-turn coverage persistence fails", asyn
   await harness.waitForMethod("turn/start");
 
   await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-  expect(readAttemptTerminal(await run)).toMatchObject({ promptError: null, aborted: false });
-  expect(bindingStore.mutate).toHaveBeenCalled();
+  expect(readAttemptTerminal(await run)).toMatchObject(successful);
   await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toBeUndefined();
 });

@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
@@ -17,6 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatDocsHelp } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 function addGmailDeliveryOptions(command: Command, defaults = false): Command {
   return command
@@ -140,11 +140,15 @@ function parseGmailCommonOptions(raw: Record<string, unknown>): Omit<GmailRunOpt
     hookToken: normalizeOptionalString(raw.hookToken),
     pushToken: normalizeOptionalString(raw.pushToken),
     bind: normalizeOptionalString(raw.bind),
-    port: numberOption(raw.port, "--port"),
+    port: parseOptionalPositiveInteger(raw.port ?? undefined, "--port", "."),
     path: normalizeOptionalString(raw.path),
     includeBody: raw.includeBody == null ? undefined : Boolean(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
-    renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
+    maxBytes: parseOptionalPositiveInteger(raw.maxBytes ?? undefined, "--max-bytes", "."),
+    renewEveryMinutes: parseOptionalPositiveInteger(
+      raw.renewMinutes ?? undefined,
+      "--renew-minutes",
+      ".",
+    ),
     tailscale: tailscaleModeOption(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
@@ -160,15 +164,4 @@ function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
     return mode;
   }
   throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
-}
-
-function numberOption(value: unknown, label: string): number | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  const n = parseStrictPositiveInteger(value);
-  if (n === undefined) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return n;
 }

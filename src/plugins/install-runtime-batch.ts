@@ -11,11 +11,11 @@ import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginRuntimeApplication } from "./lifecycle.js";
-import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
+import { inspectPluginGenerationSourcesAsync } from "./plugin-generation-worker.js";
 import {
   hasPluginLifecycleLease,
-  withPluginLifecycleLease,
-  type PluginLifecycleLeaseContext,
+  withPluginLifecycleLeaseAsync,
+  type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
@@ -142,16 +142,16 @@ export class PluginInstallRuntimeBatch {
   }
 
   /** Called before the original batch lease exits, after its compensation has settled. */
-  async prepare(lease: PluginLifecycleLeaseContext): Promise<void> {
+  async prepare(lease: PluginMetadataLeaseContext): Promise<void> {
     const databasePath = lease.databasePath;
-    lease.assertOwned();
+    await lease.assertOwned();
     this.databasePath = databasePath;
     if (!this.hasCommitted && this.retained.size === 0) {
       return;
     }
     // Settlement needs the final persisted row, even if this lease cached an earlier index.
     const row = await readPluginMetadataStateRow("installed-index", { path: databasePath });
-    lease.assertOwned();
+    await lease.assertOwned();
     const index = indexFromRow(row?.value_json);
     const current = index?.installRecords ?? {};
     const targets = new Map<string, PluginInstallBatchTarget>();
@@ -159,7 +159,7 @@ export class PluginInstallRuntimeBatch {
       if (!current[pluginId]) {
         throw new Error(`Resumable plugin ${pluginId} is no longer installed`);
       }
-      const source = inspectPluginGenerationSources(
+      const source = await inspectPluginGenerationSourcesAsync(
         (index?.plugins ?? [])
           .filter(
             (entry) =>
@@ -173,6 +173,7 @@ export class PluginInstallRuntimeBatch {
             entryFile: entry.source === entry.manifestPath ? entry.source : undefined,
           })),
       );
+      await lease.assertOwned();
       targets.set(pluginId, {
         pluginId,
         installHash: hashStableJson(current[pluginId]),
@@ -208,7 +209,7 @@ export class PluginInstallRuntimeBatch {
       }
       targets.set(pluginId, { pluginId, installHash, sourceDigests: commit.sourceDigests });
     }
-    lease.assertOwned();
+    await lease.assertOwned();
     this.targets = [...targets.values()].toSorted((a, b) => a.pluginId.localeCompare(b.pluginId));
   }
 
@@ -227,13 +228,14 @@ export class PluginInstallRuntimeBatch {
       for (const warning of application.warnings ?? []) {
         warn(warning);
       }
-      await withPluginLifecycleLease(this.options, async (lease) => {
+      await withPluginLifecycleLeaseAsync(this.options, async (lease) => {
         const assertOwned = () => {
-          lease.assertOwned();
+          lease.assertCurrent();
           if (lease.databasePath !== this.databasePath) {
             throw new Error("Plugin cleanup belongs to a different state database");
           }
         };
+        await lease.assertOwned();
         assertOwned();
         const sourceCleanups = this.installs.flatMap(({ commit, cleanups }) =>
           commit && targets.some((target) => target.pluginId === commit.pluginId) ? cleanups : [],
@@ -244,6 +246,7 @@ export class PluginInstallRuntimeBatch {
         const row = await readPluginMetadataStateRow("installed-index", {
           path: lease.databasePath,
         });
+        await lease.assertOwned();
         assertOwned();
         const index = indexFromRow(row?.value_json);
         if (!index) {
@@ -263,6 +266,7 @@ export class PluginInstallRuntimeBatch {
           }
         };
         for (const cleanup of sourceCleanups) {
+          await lease.assertOwned();
           assertCurrent();
           await cleanup(index, assertCurrent, warn);
           assertCurrent();

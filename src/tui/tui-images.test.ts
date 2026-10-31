@@ -13,10 +13,11 @@ import {
   makeTui,
   makeTuiBackend,
 } from "./tui-session-actions-test-support.js";
-import { getTuiSessionProjection, reduceTuiSessionProjection } from "./tui-session-projection.js";
+import { reduceTuiSessionProjection } from "./tui-session-projection.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
 const png = createSolidPngBuffer(80, 40, { r: 20, g: 140, b: 200 }).toString("base64");
+const portrait = createSolidPngBuffer(10, 300, { r: 20, g: 140, b: 200 }).toString("base64");
 const imageData = { data: png, mimeType: "image/png" };
 const image = { type: "image", data: png, mimeType: "image/png" };
 const makeMessage = (role: string, content: unknown, metadata = {}) => ({
@@ -106,34 +107,12 @@ async function loadHarness(...args: Parameters<typeof createHarness>) {
   return harness;
 }
 
-it("deduplicates mixed content and persisted images", async () => {
-  const first = "media://inbound/first.png";
-  const second = "media://inbound/second.png";
-  const media = [first, second].map((url) => ({ kind: "image", url }));
-  const harness = await loadHarness([
-    makeMessage("user", [{ type: "image", url: first }], {
-      media,
-    }),
-  ]);
-  await vi.waitFor(() => expect(harness.render().split(png)).toHaveLength(3));
-  expect(harness.loadImage.mock.calls.map(([request]) => request.source)).toEqual([first, second]);
-});
-it("bounds tall iTerm2 images to their reserved terminal rows", async () => {
-  setCapabilityOverrides({ images: "iterm2" });
-  const portrait = createSolidPngBuffer(10, 300, { r: 20, g: 140, b: 200 }).toString("base64");
-  const harness = await loadHarness(
-    [assistantImage],
-    vi.fn(async () => ({ ...imageData, data: portrait })),
-  );
-  await vi.waitFor(() => expect(harness.render()).toContain(portrait));
-  const output = harness.render();
-  expect(output).toContain("\x1b]1337;File=");
-  expect(output).toMatch(/;height=20:/);
-  expect(output).not.toContain("height=auto");
-});
-it.each(["kitty", "iterm2"] as const)(
-  "renders history and live finals with %s",
-  async (protocol) => {
+it.each([
+  ["kitty", png, "\x1b_Ga=T"],
+  ["iterm2", portrait, "\x1b]1337;File="],
+] as const)(
+  "renders deduplicated history and live finals with %s",
+  async (protocol, pixels, marker) => {
     setCapabilityOverrides({ images: protocol });
     const managed = "/api/chat/media/outgoing/agent%3Amain%3Amain/generated/full";
     const attachment = {
@@ -142,31 +121,40 @@ it.each(["kitty", "iterm2"] as const)(
       url: managed,
       artifactId: "artifact_managed_media_generated",
     };
-    const harness = await loadHarness([
-      makeMessage("user", "Compare this image", {
-        id: "user-1",
-        seq: 1,
-        media: [{ kind: "image", path: "media://inbound/photo.png" }],
-      }),
-      makeMessage(
-        "assistant",
-        [
-          { type: "text", text: "Here is the result" },
-          { type: "attachment", attachment },
-        ],
-        { id: "assistant-1", seq: 2 },
-      ),
-    ]);
-    await vi.waitFor(() => expect(harness.render().split(png)).toHaveLength(3));
+    const first = "media://inbound/photo.png";
+    const second = "media://inbound/second.png";
+    const harness = await loadHarness(
+      [
+        makeMessage("user", [{ type: "image", url: first }], {
+          id: "user-1",
+          seq: 1,
+          media: [first, second].map((path) => ({ kind: "image", path })),
+        }),
+        makeMessage(
+          "assistant",
+          [
+            { type: "text", text: "Here is the result" },
+            { type: "attachment", attachment },
+          ],
+          { id: "assistant-1", seq: 2 },
+        ),
+      ],
+      vi.fn(async () => ({ ...imageData, data: pixels })),
+    );
+    await vi.waitFor(() => expect(harness.render().split(pixels)).toHaveLength(4));
     expect(harness.loadImage.mock.calls.map(([request]) => request.source)).toEqual([
-      "media://inbound/photo.png",
+      first,
+      second,
       managed,
     ]);
-    const marker = protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=";
     expect(harness.render()).toContain(marker);
     expect(harness.render()).toContain("Here is the result");
     expect(harness.render(40)).toContain(marker);
-    expect(harness.loadImage).toHaveBeenCalledTimes(2);
+    expect(harness.loadImage).toHaveBeenCalledTimes(3);
+    if (protocol === "iterm2") {
+      expect(harness.render()).toMatch(/;height=20:/);
+      expect(harness.render()).not.toContain("height=auto");
+    }
 
     harness.handlers.handleChatEvent({
       runId: "live-run",
@@ -175,8 +163,8 @@ it.each(["kitty", "iterm2"] as const)(
       message: assistantImage,
     });
     harness.render();
-    await vi.waitFor(() => expect(harness.render().split(png)).toHaveLength(4));
-    expect(harness.loadImage.mock.calls[2]?.[0].source).toBe(`data:image/png;base64,${png}`);
+    await vi.waitFor(() => expect(harness.render().split(pixels)).toHaveLength(5));
+    expect(harness.loadImage.mock.calls[3]?.[0].source).toBe(`data:image/png;base64,${png}`);
   },
 );
 
@@ -363,18 +351,8 @@ describe("TUI attachment failure presentation", () => {
     },
   );
 
-  it("keeps failure-only aborts diagnostic and ignores a late attachment final", () => {
-    const harness = createDisplayHarness();
-    const event = {
-      runId: "run-1",
-      sessionKey: harness.state.currentSessionKey,
-      message: assistant([audioFailure]),
-    };
-    expect(extractTuiAbortedText(event.message, false)).toBe("");
-    harness.handlers.handleChatEvent({ ...event, state: "aborted" });
-    harness.handlers.handleChatEvent({ ...event, state: "final" });
-    expect(harness.visible()).toBe("run aborted");
-    expect(getTuiSessionProjection(harness.state).messages).toHaveLength(0);
+  it("does not present failure-only aborts as a delivered attachment receipt", () => {
+    expect(extractTuiAbortedText(assistant([audioFailure]), false)).toBe("");
   });
 
   it("does not invent failure output for empty or unsupported blocks", () => {

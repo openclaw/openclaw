@@ -1,28 +1,27 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show, useContext } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type {
-  ControlUiSessionPullRequest,
+  ControlUiSessionBranch,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
+import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
-  orderSessionPullRequests,
+  displaySessionPullRequests,
   sessionPullRequestStateIcons,
+  type SessionDisplayPullRequest,
 } from "../lib/session-pull-request-presentation.ts";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
-import { SessionColorDot } from "./session-color.tsx";
 import { SessionGitDiff } from "./session-git-diff.tsx";
-import {
-  SessionHovercardContext,
-  type SessionHovercardContextInput,
-} from "./session-hovercard-context-solid.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
@@ -32,46 +31,151 @@ import { ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
 import "./session-hovercard.css";
 import "./tooltip.ts";
 
-registerEnglishCatalog(registerGitHubEnglish);
+registerEnglishCatalog(registerSessionProgressEnglish);
 
-type SessionDisplayPullRequest = Omit<ControlUiSessionPullRequest, "state"> & {
-  state?: ControlUiSessionPullRequest["state"];
-  sourceSessionKey?: string;
-  sourceAgentId?: string;
-};
-
-/** Presentation only: task results never become evidence that the current branch was published. */
-function displaySessionPullRequests(
-  snapshot: ControlUiSessionPullRequestSnapshot | undefined,
-): SessionDisplayPullRequest[] {
-  const requests = new Map<string, SessionDisplayPullRequest>();
-  for (const task of snapshot?.taskPullRequests ?? []) {
-    requests.set(task.url, {
-      owner: task.owner,
-      repo: task.repo,
-      number: task.number,
-      branch: task.branch,
-      url: task.url,
-      title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
-      ...task.pullRequest,
-      sourceSessionKey: task.sourceSessionKey,
-      sourceAgentId: task.sourceAgentId,
-    });
-  }
-  for (const request of snapshot?.pullRequests ?? []) {
-    requests.set(request.url, { ...requests.get(request.url), ...request });
-  }
-  return orderSessionPullRequests([...requests.values()]);
+function ContextRow(props: {
+  icon: JSX.Element;
+  value: JSX.Element;
+  label: string;
+  title?: string;
+  end?: JSX.Element;
+}) {
+  return (
+    <div class="session-hovercard__context-row" aria-label={props.label} title={props.title}>
+      <span class="session-hovercard__context-icon" aria-hidden="true">
+        {props.icon}
+      </span>
+      <span class="session-hovercard__context-value session-hovercard__context-text">
+        {props.value}
+      </span>
+      {props.end}
+    </div>
+  );
 }
 
+function ProgressHeadsUp(props: { headsUp: ReturnType<typeof progressCardHeadsUp> }) {
+  const statusLabel = () =>
+    t(
+      props.headsUp?.status === "in_progress"
+        ? "sessionProgressCard.status.inProgress"
+        : props.headsUp?.status === "paused"
+          ? "sessionProgressCard.status.paused"
+          : "sessionProgressCard.status.pending",
+    );
+  return (
+    <Show when={props.headsUp}>
+      <div
+        class="session-hovercard__context-row session-hovercard__plan-row"
+        aria-label={t("sessionProgressCard.stepLabel", {
+          status: statusLabel(),
+          step: props.headsUp?.step ?? "",
+        })}
+        title={props.headsUp?.step}
+      >
+        <span class="session-hovercard__context-icon" aria-hidden="true">
+          <Show when={props.headsUp?.status === "in_progress"} fallback={<Icon name="clock" />}>
+            <span class="session-run-spinner" />
+          </Show>
+        </span>
+        <span class="session-hovercard__context-value session-hovercard__plan-step">
+          {props.headsUp?.step}
+        </span>
+        <span class="session-hovercard__plan-count">
+          {props.headsUp?.completed}/{props.headsUp?.total}
+        </span>
+      </div>
+    </Show>
+  );
+}
+
+function SessionHovercardContext(props: {
+  row?: SidebarSessionHovercardRow;
+  branch?: ControlUiSessionBranch;
+  showChanges: boolean;
+}) {
+  const context = () => props.row?.workContext;
+  const contextLabel = () =>
+    t(
+      context()?.kind === "project"
+        ? "sessionHovercard.projectLabel"
+        : "sessionHovercard.workspaceLabel",
+    );
+  const directory = () => {
+    const current = context();
+    return current?.kind === "project" ? current.cwd : current?.path;
+  };
+  const projectLocation = () => directory() ?? context()?.path;
+  const name = () => context()?.name ?? props.branch?.repo;
+  const branch = () => {
+    const current = context();
+    return (current?.kind === "project" ? current.branch : undefined) ?? props.branch?.branch;
+  };
+  const locationLabel = () =>
+    [
+      `${contextLabel()}: ${name() ?? ""}`,
+      branch() ? `${t("sessionHovercard.branchLabel")}: ${branch()}` : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+  const placement = createMemo(() =>
+    props.row?.placementProviderId && props.row.placementProfileId
+      ? {
+          label: `${props.row.placementProviderId} · ${props.row.placementProfileId}`,
+          title: t("sessionHovercard.runsOn", {
+            providerId: props.row.placementProviderId,
+            profileId: props.row.placementProfileId,
+          }),
+        }
+      : undefined,
+  );
+  return (
+    <div class="session-hovercard__context">
+      <Show when={name()}>
+        <ContextRow
+          icon={<Icon name={branch() ? "gitBranch" : "folder"} />}
+          value={
+            <>
+              {name()}
+              <Show when={branch()}>
+                {" "}
+                <span class="session-hovercard__context-separator">/</span> {branch()}
+              </Show>
+            </>
+          }
+          label={locationLabel()}
+          title={projectLocation() ? `${contextLabel()}: ${projectLocation()}` : undefined}
+          end={
+            <Show when={props.showChanges && props.branch}>
+              <SessionGitDiff classPrefix="session-hovercard" item={props.branch ?? {}} />
+            </Show>
+          }
+        />
+      </Show>
+      <Show when={placement()}>
+        <ContextRow
+          icon={<Icon name="server" />}
+          value={placement()?.label ?? ""}
+          label={placement()?.title ?? ""}
+          title={placement()?.title}
+        />
+      </Show>
+    </div>
+  );
+}
+
+registerEnglishCatalog(registerGitHubEnglish);
+
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
+const MAX_VISIBLE_PULL_REQUESTS = 10;
 type SessionHovercardAvatarAuth = { authTokens: readonly string[]; authReady: boolean };
-export type SessionHovercardInput = SessionHovercardContextInput & {
+export type SessionHovercardInput = {
+  row?: SidebarSessionHovercardRow;
   selfUserId?: string;
   avatarAuth?: SessionHovercardAvatarAuth;
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
+  connected?: boolean;
 };
 function ParticipantLink(props: {
   participant: SessionParticipant;
@@ -288,40 +392,35 @@ function Header(props: SessionHovercardInput) {
   };
   return (
     <header class="session-hovercard__header">
-      <span class="session-hovercard__heading">
-        <Show when={channel()}>
-          <span class="session-hovercard__channel">
-            <span aria-hidden="true">
-              <Icon name="link" />
-            </span>
-            {t("sessionHovercard.linkedChannel", { channel: channel()?.channelLabel ?? "" })}
+      <Show when={channel()}>
+        <span class="session-hovercard__channel">
+          <span aria-hidden="true">
+            <Icon name="link" />
           </span>
-        </Show>
-        <span class="session-hovercard__title">
-          <SessionColorDot value={props.row?.color} />
-          {props.row?.label}
+          {t("sessionHovercard.linkedChannel", { channel: channel()?.channelLabel ?? "" })}
         </span>
-        <Show when={channel()} fallback={<SessionAttribution {...props} />}>
-          <span class="session-hovercard__conversation">
-            <Show when={channel()?.kind} keyed>
-              {(kind) => (
-                <span>
-                  {channel()?.topicId
-                    ? t("sessionHovercard.topicNumber", { id: channel()?.topicId ?? "" })
-                    : t(`sessionHovercard.chatKinds.${kind}`)}
-                </span>
-              )}
-            </Show>
-            <For each={details()}>{(detail) => <span>{detail}</span>}</For>
-            <Show when={channel()?.account} keyed>
-              {(account) => <span>{t("sessionHovercard.viaAccount", { account })}</span>}
-            </Show>
-          </span>
-        </Show>
-      </span>
+      </Show>
+      <span class="session-hovercard__title">{props.row?.label}</span>
       <Show when={age()}>
         <span class="session-hovercard__created-age" title={age(true)}>
           {age()}
+        </span>
+      </Show>
+      <Show when={channel()} fallback={<SessionAttribution {...props} />}>
+        <span class="session-hovercard__conversation">
+          <Show when={channel()?.kind} keyed>
+            {(kind) => (
+              <span>
+                {channel()?.topicId
+                  ? t("sessionHovercard.topicNumber", { id: channel()?.topicId ?? "" })
+                  : t(`sessionHovercard.chatKinds.${kind}`)}
+              </span>
+            )}
+          </Show>
+          <For each={details()}>{(detail) => <span>{detail}</span>}</For>
+          <Show when={channel()?.account} keyed>
+            {(account) => <span>{t("sessionHovercard.viaAccount", { account })}</span>}
+          </Show>
         </span>
       </Show>
     </header>
@@ -341,6 +440,9 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
       checks(),
       props.request.additions === undefined ? null : `+${props.request.additions.toLocaleString()}`,
       props.request.deletions === undefined ? null : `−${props.request.deletions.toLocaleString()}`,
+      props.request.sourceSessionKey
+        ? t("sessionHovercard.taskBranch", { branch: props.request.branch })
+        : null,
     ].filter((detail): detail is string => Boolean(detail));
   const stateLabel = () => (checks() ? `${state()} · ${checks()}` : state());
   return (
@@ -368,88 +470,56 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
           }
         />
       </span>
-      <span class="session-hovercard__pr-main">
-        <span class="session-hovercard__pr-title">{props.request.title}</span>
-        <span class="session-hovercard__pr-meta">
-          <span class="session-hovercard__pr-number">
-            {formatGitHubItemReference(props.request)}
-          </span>
-          <span class="session-hovercard__pr-state">{state()}</span>
-          <SessionGitDiff classPrefix="session-hovercard" item={props.request} />
+      <span class="session-hovercard__pr-title">{props.request.title}</span>
+      <Show
+        when={props.request.checks?.state === "failing"}
+        fallback={
+          <Show
+            when={props.request.checks?.state === "pending"}
+            fallback={<span class="session-hovercard__pr-number">#{props.request.number}</span>}
+          >
+            <span class="session-run-spinner" aria-hidden="true" />
+          </Show>
+        }
+      >
+        <span class="session-hovercard__pr-checks">
+          {t("sessionHovercard.checks.failingCount", {
+            count: String(Math.max(1, props.request.checks?.failed ?? 0)),
+          })}
         </span>
-        <Show when={checks()}>
-          <span class="session-hovercard__pr-checks" data-checks={props.request.checks?.state}>
-            {checks()}
-          </span>
-        </Show>
-        <Show when={props.request.sourceSessionKey}>
-          <span class="session-hovercard__pr-source">
-            {t("sessionHovercard.taskBranch", { branch: props.request.branch })}
-          </span>
-        </Show>
-      </span>
+      </Show>
     </a>
   );
 }
 
 function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnapshot }) {
-  const branch = () => props.snapshot?.branch;
   const requests = createMemo(() => displaySessionPullRequests(props.snapshot));
+  const visible = createMemo(() => requests().slice(0, MAX_VISIBLE_PULL_REQUESTS));
   const count = createMemo(
     () =>
       props.snapshot?.pullRequestCount ??
       Math.max(requests().length, props.snapshot?.taskPullRequestCount ?? 0),
   );
-  const remaining = createMemo(() => Math.max(0, count() - requests().length));
-  const branchLabel = () =>
-    t("chat.pullRequests.createPrLabel", { branch: branch()?.branch ?? "" });
+  const remaining = createMemo(() => Math.max(0, count() - visible().length));
   return (
-    <>
-      <Show when={branch() && !props.snapshot?.pullRequests.length}>
-        <div class="session-hovercard__branch-row">
-          <span class="session-hovercard__branch-icon" aria-hidden="true">
-            <Icon name="gitBranch" />
-          </span>
-          <Show
-            when={branch()?.createUrl}
-            fallback={
-              <span class="session-hovercard__branch-label">{t("chat.sessionDiff.title")}</span>
-            }
-          >
-            <a
-              ref={createHovercardControlRef()}
-              class="session-hovercard__branch-action"
-              href={branch()?.createUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={branchLabel()}
-              title={branchLabel()}
-            >
-              {t("chat.pullRequests.createPr")}
-            </a>
-          </Show>
-          <SessionGitDiff classPrefix="session-hovercard" item={branch() ?? {}} />
+    <Show when={requests().length > 0}>
+      <div class="session-hovercard__pr-list">
+        <div class="session-hovercard__section-title">
+          {t("sessionHovercard.pullRequests")}
+          <span class="session-hovercard__pr-count">{count()}</span>
         </div>
-      </Show>
-      <Show when={requests().length > 0}>
-        <div class="session-hovercard__pr-list">
-          <div class="session-hovercard__pr-heading">
-            <span>{t("sessionHovercard.pullRequests")}</span>
-            <span class="session-hovercard__pr-count">{count()}</span>
+        <For each={visible()} keyed={(request) => request.url}>
+          {(request) => <PullRequestRow request={request()} />}
+        </For>
+        <Show when={remaining() > 0}>
+          <div class="session-hovercard__more">
+            {t("sessionHovercard.morePullRequests", {
+              count: String(remaining()),
+            })}
           </div>
-          <For each={requests()} keyed={(request) => request.url}>
-            {(request) => <PullRequestRow request={request()} />}
-          </For>
-          <Show when={remaining() > 0}>
-            <div class="session-hovercard__more">
-              {t("sessionHovercard.morePullRequests", {
-                count: String(remaining()),
-              })}
-            </div>
-          </Show>
-        </div>
-      </Show>
-    </>
+        </Show>
+      </div>
+    </Show>
   );
 }
 
@@ -460,62 +530,50 @@ export function SessionHovercard(props: SessionHovercardInput) {
       props.progressCard,
       props.row?.status,
       props.row?.startedAt,
-      props.row?.hasActiveRun ?? false,
+      props.connected !== false &&
+        (props.row?.gatewayHasActiveRun ?? props.row?.hasActiveRun) === true,
+      props.connected !== false && props.row?.hasActiveSubagentRun === true,
+      props.row?.endedAt,
     ),
   );
-  const hasPullRequests = () =>
+  const hasPullRequestSection = () =>
     Boolean(
       props.pullRequests &&
       (props.pullRequests.pullRequests.length > 0 ||
         (props.pullRequests.taskPullRequests?.length ?? 0) > 0 ||
-        props.pullRequests.branch ||
         props.pullRequests.status !== "ready"),
     );
   const hasContext = () =>
     Boolean(
       props.row?.workContext ||
-      (props.row?.placementProviderId && props.row?.placementProfileId) ||
-      props.row?.boardFace === "dashboard" ||
-      (props.row?.hasAutomation && props.automationLink) ||
-      headsUp(),
+      props.pullRequests?.branch ||
+      (props.row?.placementProviderId && props.row?.placementProfileId),
     );
+  const commentary = () => props.progressCard?.markdown?.trim() || undefined;
   const preview = () =>
     props.progressCard ? undefined : props.row?.lastMessagePreview?.trim() || undefined;
   return (
-    <Show when={Boolean(props.row || hasPullRequests() || props.progressCard)}>
+    <Show
+      when={Boolean(props.row || hasContext() || hasPullRequestSection() || props.progressCard)}
+    >
       <div class="session-hovercard">
-        <Show when={props.row}>
-          <section class="session-hovercard__section session-hovercard__section--header">
-            <Header {...props} />
-          </section>
-        </Show>
-        <Show when={hasContext()}>
-          <section class="session-hovercard__section session-hovercard__section--metadata">
-            <SessionHovercardContext
-              row={props.row}
-              automationLink={props.automationLink}
-              headsUp={headsUp()}
-            />
-          </section>
-        </Show>
-        <Show when={hasPullRequests()}>
-          <section class="session-hovercard__section session-hovercard__section--prs">
-            <PullRequestDetails snapshot={props.pullRequests} />
-            <Show when={props.pullRequests?.status !== "ready"}>
-              <div class="session-hovercard__more" role="status">
-                {t(
-                  props.pullRequests?.status === "rate-limited"
-                    ? "chat.pullRequests.rateLimited"
-                    : "chat.pullRequests.unavailable",
-                )}
-              </div>
+        <Show when={props.row || hasContext()}>
+          <div class="session-hovercard__top">
+            <Show when={props.row}>
+              <section class="session-hovercard__section session-hovercard__section--header">
+                <Header {...props} />
+              </section>
             </Show>
-          </section>
-        </Show>
-        <Show when={preview()}>
-          <section class="session-hovercard__section session-hovercard__section--optional">
-            <div class="session-hovercard__excerpt">{preview()}</div>
-          </section>
+            <Show when={hasContext()}>
+              <section class="session-hovercard__section session-hovercard__section--metadata">
+                <SessionHovercardContext
+                  row={props.row}
+                  branch={props.pullRequests?.branch}
+                  showChanges={!props.pullRequests?.pullRequests.length}
+                />
+              </section>
+            </Show>
+          </div>
         </Show>
         <Show when={props.row?.attention?.kind === "error"}>
           <section class="session-hovercard__section session-hovercard__error">
@@ -527,17 +585,43 @@ export function SessionHovercard(props: SessionHovercardInput) {
             </span>
           </section>
         </Show>
-        <Show when={props.progressCard?.markdown?.trim()}>
+        <Show when={commentary() || headsUp()}>
           <section
-            class="session-hovercard__section session-hovercard__notepad"
+            class="session-hovercard__section session-hovercard__task session-hovercard__notepad"
             aria-label={t("sessionHovercard.agentNotepad")}
           >
-            <div class="session-hovercard__notepad-title">{t("sessionHovercard.agentNotepad")}</div>
-            <ProgressCardMarkdown
-              markdown={props.progressCard?.markdown}
-              promoteProgress
-              registerControls={controls?.registerSource}
-            />
+            <div class="session-hovercard__section-title session-hovercard__notepad-title">
+              {t("sessionHovercard.agentNotepad")}
+            </div>
+            <Show when={commentary()}>
+              <div class="session-hovercard__commentary">
+                <ProgressCardMarkdown
+                  markdown={props.progressCard?.markdown}
+                  omitProgress
+                  registerControls={controls?.registerSource}
+                />
+              </div>
+            </Show>
+            <ProgressHeadsUp headsUp={headsUp()} />
+          </section>
+        </Show>
+        <Show when={preview()}>
+          <section class="session-hovercard__section session-hovercard__task">
+            <div class="session-hovercard__excerpt">{preview()}</div>
+          </section>
+        </Show>
+        <Show when={hasPullRequestSection()}>
+          <section class="session-hovercard__section session-hovercard__section--prs">
+            <PullRequestDetails snapshot={props.pullRequests} />
+            <Show when={props.pullRequests?.status !== "ready"}>
+              <div class="session-hovercard__more" role="status">
+                {t(
+                  props.pullRequests?.status === "rate-limited"
+                    ? "chat.pullRequests.rateLimited"
+                    : "chat.pullRequests.unavailable",
+                )}
+              </div>
+            </Show>
           </section>
         </Show>
         <Show

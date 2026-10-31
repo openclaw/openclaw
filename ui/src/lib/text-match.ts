@@ -12,6 +12,6 @@ export function matchQuery(text: string, query: string): RegExpExecArray | null 
  * run, so a phrase can cross rendered line and block boundaries.
  */
 export function phraseQueryPattern(query: string): RegExp | null {
-  const words = query.trim().split(/\s+/u).filter(Boolean);
+  const words = query.trim().normalize("NFC").split(/\s+/u).filter(Boolean);
   return words.length > 0 ? new RegExp(words.map(escapeRegExp).join("\\s+"), "giu") : null;
 }

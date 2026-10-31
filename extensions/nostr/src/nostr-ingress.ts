@@ -2,7 +2,6 @@ import type { Event } from "nostr-tools";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -66,8 +65,6 @@ export function createNostrIngress(options: {
   afterDurableAppend: (event: Event) => void;
   deliver: (event: Event, lifecycle: NostrIngressLifecycle) => Promise<void>;
   onError?: (error: Error, context: string) => void;
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
 }) {
   let queue = options.queue;
   let admissionFailure: Error | undefined;
@@ -169,13 +166,12 @@ export function createNostrIngress(options: {
       );
       throw admissionFailure;
     },
-    pollIntervalMs: options.pollIntervalMs ?? NOSTR_INGRESS_POLL_INTERVAL_MS,
+    pollIntervalMs: NOSTR_INGRESS_POLL_INTERVAL_MS,
     retention: {
       completedMaxEntries: 100_000,
       failedMaxEntries: 100_000,
     },
     drain: {
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: (error) =>
         error instanceof NostrIngressPermanentError
           ? { reason: error.reason, message: error.message }

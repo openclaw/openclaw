@@ -73,6 +73,9 @@ export function applyGatewayLaneConcurrency(
     clearGroups: hooksEnabled || retainInFlightHookBudget ? undefined : [CRON_HOOK_LANE_GROUP],
   });
   setCommandLaneConcurrency(CommandLane.Main, concurrency.main);
+  // Restore the same working set after a restart instead of silently imposing
+  // the queue's smaller bootstrap default. Keep interactive slots independent.
+  setCommandLaneConcurrency(CommandLane.RestartRecovery, concurrency.main);
   if (opts.gatewayStart) {
     // sessions.send work uses a shared nested lane with no config knob.
     setCommandLaneConcurrency(CommandLane.Nested, 1);

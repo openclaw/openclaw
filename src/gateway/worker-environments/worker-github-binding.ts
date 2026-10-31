@@ -22,8 +22,8 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationWorkspaceOwner,
   sameGitHubPublicationWorkspace,
-  type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
+import type { PublicationSessionIdentity } from "../github-publication-session.types.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";

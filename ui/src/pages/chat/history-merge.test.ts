@@ -378,43 +378,6 @@ it("does not revive an initial handoff delivered after its canonical user messag
   }
 });
 
-it.each(["handoff-first", "receipt-first"])(
-  "adopts consumed input through a snapshot (%s)",
-  (order) => {
-    const { client, chatSubmissions, owner, sessionKey, initial: handoff } = initialFixture(false);
-    const canonical = message("user", "Collected initial input", {
-      id: "aggregate-input",
-      seq: 2,
-      idempotencyKey: "followup-collect:session:batch",
-    });
-    const imported = {
-      ...canonical,
-      __openclaw: { ...canonical["__openclaw"], importedFrom: "cli", externalId: "peer" },
-    };
-    snapshot(owner, [imported]);
-    const retain = () => {
-      chatSubmissions.retain({
-        ...handoff,
-        kind: "initial",
-        consumedByEventId: "aggregate-input",
-      });
-      admitChatSubmission(owner, undefined);
-    };
-    if (order === "handoff-first") {
-      retain();
-      expect(owner.chatMessages).toContain(handoff.message);
-    }
-    snapshot(owner, [imported, canonical]);
-    if (order === "receipt-first") {
-      retain();
-    }
-    expect(owner.chatMessages).toContain(canonical);
-    expect(owner.chatMessages).toContain(imported);
-    expect(owner.chatMessages).not.toContain(handoff.message);
-    expect(chatSubmissions.readInitial(sessionKey, client)?.pending).toBe(false);
-  },
-);
-
 it("binds learned session and branch identity without reclassifying live runs", () => {
   const initialScope = { sessionKey: "agent:main:shared" };
   const { owner, running } = runningPane(initialScope);

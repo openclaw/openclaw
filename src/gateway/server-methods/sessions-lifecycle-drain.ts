@@ -42,11 +42,6 @@ import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js"
 import type { ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type LifecyclePlacementService = NonNullable<
-  GatewayRequestContext["workerSessionPlacementService"]
-> &
-  Partial<Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease" | "readProjection">>;
-
 type SessionLifecycleParams = {
   action: "archive" | "delete";
   authorize?: () => void;
@@ -257,8 +252,10 @@ export async function prepareSessionLifecycleDrain(
     // capturing runtime authority, or our own cleanup can invalidate that snapshot.
     await reclaimed;
     params.authorize?.();
-    const placementService: LifecyclePlacementService | undefined =
-      params.context.workerSessionPlacementService;
+    const placementService:
+      | (NonNullable<GatewayRequestContext["workerSessionPlacementService"]> &
+          Partial<Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease" | "readProjection">>)
+      | undefined = params.context.workerSessionPlacementService;
     let placement: WorkerSessionPlacementRecord | undefined;
     if (params.sessionId) {
       // Cleanup can advance placement while this consistent snapshot is in flight.

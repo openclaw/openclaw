@@ -1,13 +1,14 @@
 /** @jsxImportSource @solidjs/web */
 import type { CronJob } from "@openclaw/gateway-protocol";
 import type { WorkboardMetadata } from "@openclaw/workboard-contract";
-import { Show, createEffect } from "solid-js";
+import { Show, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.tsx";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { listen } from "../../lib/listener.ts";
 import { automationNextRunTime } from "./view-card-time.tsx";
 import { formatUpdatedTime, type BoardAutomationState } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
@@ -269,17 +270,8 @@ function BoardAutomationLink(props: {
   onNavigate?: (event: MouseEvent) => void;
 }) {
   let link!: HTMLAnchorElement;
-  createEffect(
-    () => props.onNavigate,
-    (navigate) => {
-      if (!navigate) {
-        return undefined;
-      }
-      // Navigation admission must precede native listeners and the browser's default action.
-      link.addEventListener("click", navigate);
-      return () => link.removeEventListener("click", navigate);
-    },
-  );
+  // Navigation admission must precede native listeners and the browser's default action.
+  onSettled(() => listen(link, "click", (event) => props.onNavigate?.(event)));
   return (
     <a
       ref={(element) => {

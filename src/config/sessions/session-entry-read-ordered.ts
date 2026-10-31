@@ -1,13 +1,19 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
-import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import type {
+  SessionEntryReadScope,
+  SessionEntryTargetPatchScope,
+} from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
@@ -43,13 +49,13 @@ type ReadSessionStore = <T>(
 /** Data-only return; decisions/effects consume withRead's synchronous callback directly. */
 export async function readAdmittedSessionEntry(
   reader: SessionEntryCohortReader,
-  input: SessionAccessScope,
+  input: SessionEntryReadScope,
   assertCurrent: () => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
 ) {
   assertCurrent();
   const key = assertSessionEntryCohortScope(reader, input);
-  const read = await reader.readEntry(assertCurrent);
+  const read = await reader.readEntry(assertCurrent, input.projection);
   assertCurrent();
   reader.assertCurrent();
   onReadTarget?.({
@@ -89,13 +95,16 @@ export function createAdmittedSessionEntryCohortReader(params: {
       ...new Set([...params.storePaths, database.path].map((p) => path.resolve(p))),
     ]),
     assertCurrent: assertOwnerCurrent,
-    async readEntry(assertCallerCurrent) {
+    async readEntry(assertCallerCurrent, projection) {
       const assertCurrent = () => {
         assertOwnerCurrent();
         assertCallerCurrent();
       };
       assertCurrent();
-      const request = { sessionKeys: [params.sessionKey] };
+      const request = {
+        sessionKeys: [params.sessionKey],
+        snapshotFields: projection === "list" ? [] : projection === "full" ? undefined : projection,
+      };
       const read = await readSessionEntriesWithRetainedFacts(database, request, () =>
         withSessionHistoryWorkerDatabase(
           database,
@@ -147,7 +156,10 @@ export function createAdmittedSessionEntryCohortReader(params: {
       const result = await params.execution.runExisting(
         source,
         async (worker) => {
-          const before = readSqliteDatabaseWriteTokenForPath(database.path);
+          const before =
+            !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+              ? readSqliteDatabaseWriteTokenForPath(database.path)
+              : undefined;
           const cached = readRetainedSessionEntryFacts(database, captured, params.generation);
           const read =
             cached ?? (await worker.execute({ type: "session.entry.read", input: captured }));
@@ -176,7 +188,6 @@ export function createAdmittedSessionEntryCohortReader(params: {
                   assertNativeCurrent = undefined;
                 }
               },
-              true,
               signal,
             ),
         },
@@ -219,10 +230,12 @@ export async function withOrderedSessionEntriesInWorker<T>(
   {
     readStore,
     onReadAdmitted,
+    prepareConsume,
     signal,
   }: {
     readStore: ReadSessionStore;
     onReadAdmitted?: () => void;
+    prepareConsume?: () => Promise<void>;
     signal?: AbortSignal;
   },
 ): Promise<T> {
@@ -315,7 +328,10 @@ export async function withOrderedSessionEntriesInWorker<T>(
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
             const request = captureSessionEntryWorkerRequest(selectedInput);
-            const before = readSqliteDatabaseWriteTokenForPath(database.path);
+            const before =
+              !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+                ? readSqliteDatabaseWriteTokenForPath(database.path)
+                : undefined;
             const cached = readRetainedSessionEntryFacts(database, request);
             const result =
               cached ??
@@ -333,6 +349,10 @@ export async function withOrderedSessionEntriesInWorker<T>(
             }
             reads.push({ result, database, assertCurrent });
           }
+          if (prepareConsume) {
+            await prepareConsume();
+            assertCurrent();
+          }
           const result = consume(reads);
           if (isPromiseLike(result)) {
             void Promise.resolve(result).catch(() => {});
@@ -344,7 +364,6 @@ export async function withOrderedSessionEntriesInWorker<T>(
           unsubscribe();
         }
       },
-      true,
       signal,
     );
   };

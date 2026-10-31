@@ -34,13 +34,8 @@ export function compactProgressText(
   if (maxChars <= 1) {
     return "…";
   }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
+  // Include the first omitted code point so a complete final word is retained.
+  const boundary = chars.slice(0, maxChars).findLastIndex((char) => /\s/u.test(char));
+  const end = boundary > Math.floor(maxChars * 0.6) ? boundary : maxChars - 1;
+  return `${chars.slice(0, end).join("").trimEnd()}…`;
 }

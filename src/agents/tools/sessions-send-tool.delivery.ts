@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readAgentSelfHeldRefusal } from "../../gateway/agent-turn/agent-admission-refusal.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
@@ -162,11 +163,6 @@ type SessionsSendDeliveryParams = {
   /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
   preparedTargetSessionId?: string;
   retainAcceptance?: boolean;
-  /** Returned input retains the exact recipient generation through consumption. */
-  recipientGeneration?: { assertCurrent: () => void; release: () => void };
-  /** Visible source input when model-facing steering includes runtime instructions. */
-  transcriptText?: string;
-  onQueueAccepted?: (accepted: boolean) => void;
   captureReplyAdmission?: (runId: string) => SessionSendReplyAdmission;
   assertDispatchCurrent?: () => void;
   // Destination policy fences input commit, not an already accepted acknowledgment.
@@ -193,7 +189,11 @@ export type SessionsSendStart =
       a2aSession?: AgentStepSession;
       replyAdmission?: SessionSendReplyAdmission;
     }
-  | { ok: false; result: ReturnType<typeof jsonResult<Record<string, unknown>>> };
+  | {
+      ok: false;
+      result: ReturnType<typeof jsonResult<Record<string, unknown>>>;
+      selfHeld?: ReturnType<typeof readAgentSelfHeldRefusal>;
+    };
 
 /** Rejections that leave a Cron run-scoped target to its durable parent session. */
 const FALLBACK_STEER_REJECTIONS = new Set<
@@ -256,7 +256,6 @@ export async function trySessionsSendActiveRunDelivery(
         let accepted = false;
         const assertInputCurrent = () => {
           assertCurrent();
-          params.recipientGeneration?.assertCurrent();
           if (!accepted) {
             params.assertSendCurrent?.();
           }
@@ -278,17 +277,8 @@ export async function trySessionsSendActiveRunDelivery(
           onQueueAccepted: (value) => {
             // Accepted guidance belongs to the receiver, not the sender's later policy.
             accepted ||= value;
-            params.onQueueAccepted?.(value);
             lifecycle.onQueueAccepted?.(value);
           },
-          ...(params.recipientGeneration
-            ? {
-                onQueueSettled: () => {
-                  params.recipientGeneration?.release();
-                  lifecycle.onQueueSettled?.();
-                },
-              }
-            : {}),
           // Source-bound authority admits only guarded (V2) injection.
           ...(guarded
             ? {
@@ -305,7 +295,7 @@ export async function trySessionsSendActiveRunDelivery(
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
             input: {
-              text: params.transcriptText ?? messageText,
+              text: messageText,
               provenance: inputProvenance,
               requesterOrigin,
               ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),
@@ -520,7 +510,9 @@ export async function startSessionsSendAgentRun(
         : {}),
     };
   } catch (err) {
-    return deliveryFailure(params, err);
+    const failure = deliveryFailure(params, err);
+    // A separately selected fallback has another operation identity; never retain it as this send.
+    return fallbackSessionKey ? { ok: false, result: failure.result } : failure;
   } finally {
     fallback?.close();
   }
@@ -528,6 +520,7 @@ export async function startSessionsSendAgentRun(
 
 function deliveryFailure(params: SessionsSendDeliveryParams, error: unknown) {
   return {
+    selfHeld: readAgentSelfHeldRefusal(error),
     ok: false as const,
     result: jsonResult({
       runId: params.runId,

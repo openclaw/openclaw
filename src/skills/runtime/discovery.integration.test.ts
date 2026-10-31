@@ -10,6 +10,7 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { completePassiveScan } from "./discovery.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
 import { getSkillsResourceVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -55,23 +56,6 @@ const descriptions = async (input = request(), watch = true) =>
   (await prepareLocalSkillSources(input, { watch })).entries.map(
     (entry) => entry.skill.description,
   );
-async function completePassiveScan(milliseconds = 30 * 60_000 + 50) {
-  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
-  try {
-    let settledTasks = 0;
-    for (let elapsed = 0; elapsed < milliseconds; elapsed += 60_000) {
-      await vi.advanceTimersByTimeAsync(Math.min(60_000, milliseconds - elapsed));
-      // Native events during a scan can start another pass before publication.
-      while (settledTasks < tasks.mock.results.length) {
-        const pending = tasks.mock.results.slice(settledTasks);
-        settledTasks += pending.length;
-        await Promise.all(pending.map((result) => result.value));
-      }
-    }
-  } finally {
-    tasks.mockRestore();
-  }
-}
 const write = (description: string, dir = workspace, relative = "skills/guide") =>
   writeSkill({ dir: path.join(dir, relative), name: path.basename(relative), description });
 async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
@@ -254,10 +238,6 @@ it("batches fresh agent discovery without separate root-planning passes", async 
     tasks.mockClear();
     await refreshSkillsDiscovery({ config, reason: "config-change" });
     expect(tasks).toHaveBeenCalledTimes(1);
-    expect(tasks).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "scan", requests: expect.any(Array) }),
-      expect.any(Object),
-    );
     expect(await instructions(workspace, "main")).toBe(description);
     expect(await instructions(other, "second")).toBe("Other");
     expect(tasks).toHaveBeenCalledTimes(1);
@@ -373,6 +353,45 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
     expect(await descriptions()).toEqual(description ? [description] : []);
   }
 });
+
+it.each([false, true])(
+  "narrows Windows personal skill watches (initially missing=%s)",
+  async (missing) => {
+    const home = temporary.make("skills-personal-");
+    const skills = path.join(home, ".agents", "skills");
+    if (!missing) {
+      await write("Personal", home, ".agents/skills/guide");
+    }
+    const input = request();
+    input.sourcePlan.roots = [{ dir: skills, source: "openclaw-workspace", tier: "workspace" }];
+    expect(await descriptions(input, false)).toEqual(missing ? [] : ["Personal"]);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const watch = vi.spyOn(nativeFs, "watch");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      await descriptions(input);
+      const opened = watch.mock.calls.filter(
+        (_, index) => watch.mock.results[index]?.type === "return",
+      );
+      expect(opened.map(([directory, options]) => [directory, options])).toEqual([
+        [missing ? home : skills, { persistent: false, recursive: !missing }],
+      ]);
+      if (missing) {
+        await write("Created later", home, ".agents/skills/guide");
+        const callback = opened[0]!.at(-1);
+        if (typeof callback !== "function") {
+          throw new Error("Expected a directory watch callback");
+        }
+        callback("rename", ".agents");
+        await completePassiveScan();
+        expect(await descriptions(input)).toEqual(["Created later"]);
+        expect(watch.mock.calls.at(-1)?.[0]).toBe(skills);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  },
+);
 
 it("refreshes supporting resources without publishing an unchanged catalog", async () => {
   await write("Stable catalog");

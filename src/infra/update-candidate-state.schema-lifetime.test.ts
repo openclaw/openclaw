@@ -10,6 +10,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import * as commands from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
@@ -110,13 +111,7 @@ it.each([
         files?: string[];
         mode?: string;
       };
-      const result = {
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-        stderr: "",
-      };
+      const result = createCommandResult();
       if (input.directory) {
         return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
       }
@@ -288,7 +283,6 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       }
       const failure = await rejected;
       if (outcome === "cancel") {
-        expect(failure).toMatchObject({ name: "AbortError" });
         expect(failure).toBe(cancellation);
       } else {
         expect(failure).toBeInstanceOf(Error);

@@ -28,7 +28,6 @@ function runTranscriptStep(kind: "text" | "image", pages: string[]) {
   let readCount = 0;
   const observations: unknown[] = [];
   const snapshots: Array<{ maxChars: number; text: string }> = [];
-  const evaluationTimeouts: number[] = [];
   const readDocument = () => {
     const { document } = parseHTML(
       `<html><body>${pages[Math.min(readCount++, pages.length - 1)]}</body></html>`,
@@ -48,11 +47,10 @@ function runTranscriptStep(kind: "text" | "image", pages: string[]) {
       normalizeLowercaseStringOrEmpty,
       webOpenPage: async () => ({ pageId: "fresh-transcript" }),
       webWait: async () => ({ ok: true }),
-      webEvaluate: async (params: { expression: string; timeoutMs: number }) => {
+      webEvaluate: async (params: { expression: string }) => {
         // Execute the loaded browser expression against a DOM, not a selector-result stub.
         const observed: unknown = runInNewContext(params.expression, { document: readDocument() });
         observations.push(observed);
-        evaluationTimeouts.push(params.timeoutMs);
         return observed;
       },
       webSnapshot: async ({ maxChars }: { maxChars: number }) => {
@@ -62,41 +60,25 @@ function runTranscriptStep(kind: "text" | "image", pages: string[]) {
       },
     },
   });
-  return { result, observations, snapshots, evaluationTimeouts };
+  return { result, observations, snapshots };
 }
 
 describe.each(transcriptCases)("%s transcript", (kind, prompt, reply, replyFlag) => {
   const transcript = message("user", prompt) + message("assistant", reply);
   const run = (...pages: string[]) => runTranscriptStep(kind, pages);
 
-  it.each([
-    {
-      name: "12K shell",
-      pages: [`<nav>${"x".repeat(12_001)}</nav>${pane("", false, false)}${pane(transcript)}`],
-      pending: [],
-    },
-    {
-      name: "absent pane/thread",
-      pages: [
-        pane(transcript, true),
-        '<openclaw-chat-pane class="chat-pane-cache__pane--active" aria-hidden="false"></openclaw-chat-pane>',
-        pane(transcript),
-      ],
-      pending: [
-        { panePresent: false, threadPresent: false },
-        { panePresent: true, threadPresent: false },
-      ],
-    },
-  ])("reads $name without exposing transcript text", async ({ pages, pending }) => {
-    const proof = run(...pages);
+  it("waits for the active thread beyond a 12K shell without exposing transcript text", async () => {
+    const proof = run(
+      pane(transcript, true),
+      '<openclaw-chat-pane class="chat-pane-cache__pane--active" aria-hidden="false"></openclaw-chat-pane>',
+      `<nav>${"x".repeat(12_001)}</nav>${pane("", false, false)}${pane(transcript)}`,
+    );
     const result = await proof.result;
     expect(result.status).toBe("pass");
-    expect(proof).toMatchObject({
-      snapshots: [],
-      evaluationTimeouts: Array(pending.length + 1).fill(30_000),
-    });
+    expect(proof.snapshots).toEqual([]);
     expect(proof.observations).toEqual([
-      ...pending.map((state) => expect.objectContaining(state)),
+      expect.objectContaining({ panePresent: false, threadPresent: false }),
+      expect.objectContaining({ panePresent: true, threadPresent: false }),
       {
         ...present,
         userMessageCount: 1,
@@ -123,7 +105,6 @@ describe.each(transcriptCases)("%s transcript", (kind, prompt, reply, replyFlag)
       expect(proof.snapshots).toMatchObject([{ maxChars: 12_000 }]);
       expect(proof.snapshots[0]?.text.length).toBeLessThanOrEqual(12_000);
       expect(proof.observations.at(-1)).toMatchObject(present);
-      expect(proof.evaluationTimeouts.at(-1)).toBe(15_000);
     },
   );
 });

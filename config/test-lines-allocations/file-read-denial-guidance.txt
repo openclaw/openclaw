@@ -1,0 +1,2 @@
+# Strengthen the existing file-read denial assertion with its code and complete recovery guidance.
+4

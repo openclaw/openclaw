@@ -5,7 +5,6 @@ import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import {
-  EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
   type SessionManagementAction,
   type SessionMenuData,
@@ -14,6 +13,7 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
 import { SessionMenuShortcut, useSessionMenuEntries } from "./session-menu-view.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
@@ -94,17 +94,14 @@ function SessionMenuContent(
     }
   };
   const actions = new SessionMenuActions(
-    {
-      get updateComplete() {
-        return host.updateComplete;
-      },
-      focusCurrentView() {
+    () => {
+      void host.updateComplete.then(() => {
         if (compactView() === "icon") {
           view.appearance.focusFirst();
         } else {
           menu?.focusFirst();
         }
-      },
+      });
     },
     readState,
     (action) => props.onAction(action),

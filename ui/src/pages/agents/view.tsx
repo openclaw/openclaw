@@ -1,4 +1,15 @@
-import { action, createMemo, createOptimistic, Match, onSettled, Show, Switch } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  lazy,
+  Loading,
+  Match,
+  onSettled,
+  Show,
+  Switch,
+} from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ConfigError } from "../../components/config-error.tsx";
@@ -8,30 +19,37 @@ import {
   SettingsEmpty,
   SettingsSection,
   SettingsNavRow,
+  SettingsLoadingSkeleton,
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
-import { AgentCron } from "./panel-cron.tsx";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
-import { AgentSkills } from "./panels-skills.tsx";
-import { AgentChannels } from "./panels-status-files.tsx";
-import { AgentTools } from "./panels-tools-skills.tsx";
 import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
+const AgentMemoryPanel = lazy(() => import("./memory/memory-panel.tsx"), {
+  export: "AgentMemoryPanel",
+});
+const AgentCron = lazy(() => import("./panel-cron.tsx"), { export: "AgentCron" });
+const AgentSkills = lazy(() => import("./panels-skills.tsx"), { export: "AgentSkills" });
+const AgentChannels = lazy(() => import("./panels-status-files.tsx"), { export: "AgentChannels" });
+const AgentTools = lazy(() => import("./panels-tools-skills.tsx"), { export: "AgentTools" });
 
 export type AgentsProps = Omit<
   AgentsPageView,
@@ -69,6 +87,7 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
+  const panel = createMemo(() => props.readData().agentsPanel);
   const [defaultPending, setSettingDefault] = createOptimistic(false);
   const settingDefault = () => defaultPending() || props.config.configSaving;
   const defaultAction = action(function* (completion: Promise<void>, retired: Promise<void>) {
@@ -92,8 +111,11 @@ export function Agents(props: AgentsProps) {
       : (props.readData().agentsList?.defaultId ?? null);
   const selectedAgent = createMemo(
     () =>
-      props.readData().agentsList?.agents.find((agent) => agent.id === props.selectedAgentId) ??
-      null,
+      props
+        .readData()
+        .agentsList?.agents.find(
+          (agent) => agent.kind !== "system" && agent.id === props.selectedAgentId,
+        ) ?? null,
   );
   const configActions = () => ({
     configForm: config(),
@@ -147,18 +169,29 @@ export function Agents(props: AgentsProps) {
                   <Show when={agent().id} keyed>
                     {(id) => {
                       let label!: HTMLSpanElement;
+                      let announcement!: HTMLSpanElement;
                       return (
-                        <button
-                          type="button"
-                          class="btn btn--sm btn--ghost"
-                          onClick={(event) =>
-                            void handleCopyButton(event, id, t("agents.copyId"), { label })
-                          }
-                        >
-                          <span ref={(element) => (label = element)} data-copy-label>
-                            {t("agents.copyId")}
-                          </span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            class="btn btn--sm btn--ghost"
+                            onClick={(event) =>
+                              void handleCopyButton(event, id, t("agents.copyId"), {
+                                label,
+                                announcement,
+                              })
+                            }
+                          >
+                            <span ref={(element) => (label = element)} data-copy-label>
+                              {t("agents.copyId")}
+                            </span>
+                          </button>
+                          <span
+                            ref={(element) => (announcement = element)}
+                            class="sr-only"
+                            role="status"
+                          />
+                        </>
                       );
                     }}
                   </Show>
@@ -256,86 +289,99 @@ export function Agents(props: AgentsProps) {
                     )}
                   </ConfigError>
                 </Show>
-                <Switch>
-                  <Match when={props.readData().agentsPanel === "overview"}>
-                    <Show when={agent().id} keyed>
-                      {(agentId) => (
-                        <AgentOverview
-                          {...props.overview}
-                          identitySavePending={props.identitySavePending ?? false}
+                <Loading on={panel()} fallback={<SettingsLoadingSkeleton />}>
+                  <Errored
+                    fallback={(error, reset) => (
+                      <div class="callout danger" role="alert">
+                        {formatUiError(error())}
+                        <button class="btn" onClick={() => reset()}>
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    )}
+                  >
+                    <Switch>
+                      <Match when={props.readData().agentsPanel === "overview"}>
+                        <Show when={agent().id} keyed>
+                          {(agentId) => (
+                            <AgentOverview
+                              {...props.overview}
+                              identitySavePending={props.identitySavePending ?? false}
+                              readData={props.readData}
+                              {...configActions()}
+                              agent={agent()}
+                              defaultId={defaultId()}
+                              agentFilesList={props.readData().agentFilesList}
+                              agentIdentity={props.agentIdentityById[agentId] ?? null}
+                              canUpdateIdentity={props.access.canUpdateIdentity}
+                              onSelectPanel={props.onSelectPanel}
+                            />
+                          )}
+                        </Show>
+                      </Match>
+                      <Match when={props.readData().agentsPanel === "files"}>
+                        <AgentFiles
+                          {...props.agentFiles}
+                          readData={props.readData}
+                          presentationRetired={props.presentationRetired}
+                          agentId={agent().id}
+                          canWrite={props.access.canWriteFiles}
+                        />
+                      </Match>
+                      <Match when={props.readData().agentsPanel === "tools"}>
+                        <AgentTools
+                          {...props.tools}
+                          {...configActions()}
+                          readData={props.readData}
+                          agentId={agent().id}
+                        />
+                      </Match>
+                      <Match when={props.readData().agentsPanel === "skills"}>
+                        <AgentSkills
+                          {...props.agentSkills}
                           readData={props.readData}
                           {...configActions()}
-                          agent={agent()}
-                          defaultId={defaultId()}
-                          agentFilesList={props.readData().agentFilesList}
-                          agentIdentity={props.agentIdentityById[agentId] ?? null}
-                          canUpdateIdentity={props.access.canUpdateIdentity}
+                          agentId={agent().id}
+                          canPatchConfig={props.access.canPatchConfig}
+                        />
+                      </Match>
+                      <Match when={props.readData().agentsPanel === "channels"}>
+                        <AgentChannels
+                          {...props.channels}
+                          readState={props.readChannels}
+                          context={context()}
+                          configForm={config()}
                           onSelectPanel={props.onSelectPanel}
                         />
-                      )}
-                    </Show>
-                  </Match>
-                  <Match when={props.readData().agentsPanel === "files"}>
-                    <AgentFiles
-                      {...props.agentFiles}
-                      readData={props.readData}
-                      presentationRetired={props.presentationRetired}
-                      agentId={agent().id}
-                      canWrite={props.access.canWriteFiles}
-                    />
-                  </Match>
-                  <Match when={props.readData().agentsPanel === "tools"}>
-                    <AgentTools
-                      {...props.tools}
-                      {...configActions()}
-                      readData={props.readData}
-                      agentId={agent().id}
-                    />
-                  </Match>
-                  <Match when={props.readData().agentsPanel === "skills"}>
-                    <AgentSkills
-                      {...props.agentSkills}
-                      readData={props.readData}
-                      {...configActions()}
-                      agentId={agent().id}
-                      canPatchConfig={props.access.canPatchConfig}
-                    />
-                  </Match>
-                  <Match when={props.readData().agentsPanel === "channels"}>
-                    <AgentChannels
-                      {...props.channels}
-                      readState={props.readChannels}
-                      context={context()}
-                      configForm={config()}
-                      onSelectPanel={props.onSelectPanel}
-                    />
-                  </Match>
-                  <Match when={props.readData().agentsPanel === "cron"}>
-                    <AgentCron
-                      {...props.cron}
-                      readState={() => props.readData().cron}
-                      basePath={props.basePath}
-                      context={context()}
-                      canRunNow={props.access.canRunCron}
-                      onSelectPanel={props.onSelectPanel}
-                    />
-                  </Match>
-                  <Match when={props.readData().agentsPanel === "memory"}>
-                    <div class="settings-group agent-memory-import-row">
-                      <SettingsNavRow
-                        title={t("tabs.memory")}
-                        description={t("subtitles.memory")}
-                        onClick={() => props.onOpenMemorySettings?.()}
-                      />
-                      <SettingsNavRow
-                        title={t("tabs.memoryImport")}
-                        description={t("subtitles.memoryImport")}
-                        onClick={() => props.onOpenMemoryImport?.()}
-                      />
-                    </div>
-                    <AgentMemoryPanel initialAgentTarget={props.memoryTarget} />
-                  </Match>
-                </Switch>
+                      </Match>
+                      <Match when={props.readData().agentsPanel === "cron"}>
+                        <AgentCron
+                          {...props.cron}
+                          readState={() => props.readData().cron}
+                          basePath={props.basePath}
+                          context={context()}
+                          canRunNow={props.access.canRunCron}
+                          onSelectPanel={props.onSelectPanel}
+                        />
+                      </Match>
+                      <Match when={props.readData().agentsPanel === "memory"}>
+                        <div class="settings-group agent-memory-import-row">
+                          <SettingsNavRow
+                            title={t("tabs.memory")}
+                            description={t("subtitles.memory")}
+                            onClick={() => props.onOpenMemorySettings?.()}
+                          />
+                          <SettingsNavRow
+                            title={t("tabs.memoryImport")}
+                            description={t("subtitles.memoryImport")}
+                            onClick={() => props.onOpenMemoryImport?.()}
+                          />
+                        </div>
+                        <AgentMemoryPanel initialAgentTarget={props.memoryTarget} />
+                      </Match>
+                    </Switch>
+                  </Errored>
+                </Loading>
               </div>
             </>
           )}

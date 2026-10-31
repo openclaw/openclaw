@@ -1,11 +1,14 @@
 import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "@openclaw/gateway-protocol/frame-guards";
 import {
   GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
+  GatewayPayloadLimitError,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
@@ -23,10 +26,6 @@ export type GatewayProtocolRequestTiming = {
   errorCode?: string;
 };
 
-type GatewayRequestSender = {
-  send: (data: string) => void;
-};
-
 type GatewayPendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -41,6 +40,7 @@ type GatewayPendingRequest = {
   retryStartup?: (retryAfterMs?: number) => void;
   prepareRetry: () => boolean;
   waitingForResume?: boolean;
+  afterHello?: () => void;
 };
 
 type GatewayPendingRequestsOptions = {
@@ -56,6 +56,7 @@ type GatewayPendingRequestsOptions = {
 
 /** Owns request deadlines, correlation, settlement, and generation-scoped IDs. */
 export class GatewayPendingRequests {
+  maxPayloadBytes: number | undefined = MAX_PREAUTH_PAYLOAD_BYTES;
   private pending = new Map<string, GatewayPendingRequest>();
   private requestSequence = 0;
   private bootstrapPause:
@@ -137,17 +138,30 @@ export class GatewayPendingRequests {
     return false;
   }
 
+  releaseHeldRequests(isCurrent: () => boolean): void {
+    for (const pending of this.pending.values()) {
+      if (!isCurrent()) {
+        return;
+      }
+      const send = pending.afterHello;
+      pending.afterHello = undefined;
+      send?.();
+    }
+  }
+
   request<T>(
-    sender: GatewayRequestSender,
+    sender: { send: (data: string) => void },
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
+    deferUntilHello = false,
   ): Promise<T> {
     let id: string;
     try {
-      id = this.allocateRequestId();
+      this.requestSequence += 1;
+      id = `${this.requestSequence}:${this.opts.createRequestId()}`;
     } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      return Promise.reject(toStringifiedError(error));
     }
     const requestedTimeoutMs =
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
@@ -254,6 +268,11 @@ export class GatewayPendingRequests {
             return;
           }
           try {
+            const limit = this.maxPayloadBytes;
+            const bytes = new TextEncoder().encode(frame).byteLength;
+            if (limit !== undefined && bytes > limit) {
+              throw new GatewayPayloadLimitError(bytes, limit);
+            }
             inFlight = true;
             sender.send(frame);
             if (this.pending.get(id) !== pending) {
@@ -264,7 +283,7 @@ export class GatewayPendingRequests {
             this.invoke("sent", () => options?.onSent?.(id));
           } catch (error) {
             if (retire("CLIENT_SEND_ERROR")) {
-              reject(error instanceof Error ? error : new Error(String(error)));
+              reject(toStringifiedError(error));
             }
           }
         };
@@ -288,10 +307,14 @@ export class GatewayPendingRequests {
         ) {
           pending.resend = send;
         }
-        send();
+        if (deferUntilHello) {
+          pending.afterHello = send;
+        } else {
+          send();
+        }
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
-          reject(error instanceof Error ? error : new Error(String(error)));
+          reject(toStringifiedError(error));
         }
       }
     });
@@ -381,6 +404,7 @@ export class GatewayPendingRequests {
   }
 
   flush(error: Error): void {
+    this.maxPayloadBytes = MAX_PREAUTH_PAYLOAD_BYTES;
     clearTimeout(this.bootstrapPause?.timer);
     this.bootstrapPause = undefined;
     const retired = this.pending;
@@ -393,11 +417,6 @@ export class GatewayPendingRequests {
       this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-  }
-
-  private allocateRequestId(): string {
-    this.requestSequence += 1;
-    return `${this.requestSequence}:${this.opts.createRequestId()}`;
   }
 
   private finishTiming(

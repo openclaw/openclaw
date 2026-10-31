@@ -11,6 +11,7 @@ import type {
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
 } from "./sqlite-worker-contract.js";
+import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerOperationAdmission,
@@ -64,7 +65,8 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
-  sharedState?: true;
+  carrierClass?: "agent" | "shared-state";
+  postgresPoolSent?: boolean;
   custody: SqliteWorkerSlotCustody;
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;
@@ -87,9 +89,10 @@ export type Actor = {
   markNativeStopped(): void;
   closeReceipt?: SqliteWorkerCloseReceipt;
   stateDatabasePath?: string;
-  stateAccess: ReturnType<typeof captureStateDatabaseAccess>;
+  stateAccess: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
   id: number;
   key: string;
+  identity: DatabasePathIdentity;
   databasePath: string;
   pathReferences: Map<string, number>;
   moduleUrl: string;
@@ -147,12 +150,12 @@ export type SqliteWorkerStoreOptions = {
   databasePath: string;
   input: unknown;
   existingOnly?: boolean;
-  admission?: { identity: string; assertCurrent(): void };
+  admission?: { identity: string; birthtime?: string; assertCurrent(): void };
 };
 
 export type PreparedSqliteWorkerOpen = {
-  /** Shared-state intake must not share a carrier with synchronous agent preparation. */
-  sharedState?: true;
+  /** Agent preparation must not block shared-state intake or unrelated plugin actors. */
+  carrierClass?: Slot["carrierClass"];
   /** The caching owner synchronously seals an idle client, or declines reclamation. */
   retireIdle?: () => Promise<void> | undefined;
   onNativeLost?: (reason: Error) => void;
@@ -161,6 +164,7 @@ export type PreparedSqliteWorkerOpen = {
   runtimeGeneration?: RuntimeWorkerGeneration;
   carrierUrl: URL;
   expectedIdentity?: string;
+  expectedBirthtime?: string;
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   cleanupAccess?: Pick<StateDatabaseSchemaLease, "assertDatabaseAccess">;
@@ -197,7 +201,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "onNativeLost"
   | "signal"
   | "retireIdle"
-  | "sharedState"
+  | "carrierClass"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

@@ -50,7 +50,10 @@ suite.define(() => {
       const card = page.locator(".workboard-card", { hasText: notesCard.title });
       await card.hover();
       await card.locator(".workboard-card__menu-trigger").click();
-      await card.getByRole("button", { name: "View details", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "Card actions", exact: true })
+        .getByRole("button", { name: "View details", exact: true })
+        .click();
       const notes = page.locator(".workboard-detail__text-trigger--notes");
       await notes.waitFor({ state: "visible" });
       const editor = page.locator("workboard-inline-text textarea");

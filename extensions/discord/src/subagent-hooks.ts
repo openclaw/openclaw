@@ -11,14 +11,6 @@ import {
   unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
 
-type DiscordSubagentEndedEvent = {
-  targetSessionKey: string;
-  accountId?: string;
-  targetKind?: ThreadBindingTargetKind;
-  reason?: string;
-  sendFarewell?: boolean;
-};
-
 type DiscordSubagentDeliveryTargetEvent = {
   expectsCompletionMessage?: boolean;
   childSessionKey: string;
@@ -40,7 +32,13 @@ type DiscordSubagentDeliveryTargetResult =
     }
   | undefined;
 
-export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+export async function handleDiscordSubagentEnded(event: {
+  targetSessionKey: string;
+  accountId?: string;
+  targetKind?: ThreadBindingTargetKind;
+  reason?: string;
+  sendFarewell?: boolean;
+}) {
   const targetKind = normalizeOptionalLowercaseString(event.targetKind);
   await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,

@@ -17,7 +17,6 @@ import { whatsappChannelOutbound as outbound, whatsappMessageAdapter } from "./c
 import { createWebSendApi } from "./inbound/send-api.js";
 import { createAcceptedWhatsAppSendResult as acceptedSend } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
-import { cacheInboundMessageMeta } from "./quoted-message.js";
 
 const mocks = vi.hoisted(() => ({
   controllers: new Map<string, unknown>(),
@@ -172,13 +171,12 @@ it.each(["batch", "payload"] as const)(
   },
 );
 
-it("preserves payloads, receipts, and callback order through the active web socket", async () => {
+it("preserves accepted receipts and callback order after caption failure", async () => {
   const order: string[] = [];
-  const nativeSendsToReject = new Set<number>();
   const socketSend = vi.fn(async (jid: string, _content: AnyMessageContent) => {
     const sequence = socketSend.mock.calls.length;
     order.push(`socket:${sequence}`);
-    if (nativeSendsToReject.delete(sequence)) {
+    if (sequence === 3) {
       throw new Error("fixture transport failed");
     }
     return {
@@ -202,12 +200,6 @@ it("preserves payloads, receipts, and callback order through the active web sock
   const mediaLocalRoots = ["/tmp/whatsapp-dispatch-legacy"];
   const mediaReadFile = vi.fn(async () => Buffer.from("legacy-read"));
   const media = {
-    "fixture://captionless.pdf": mediaFixture(
-      "document",
-      "captionless.pdf",
-      "application/pdf",
-      "pdf",
-    ),
     "fixture://forced.png": mediaFixture("image", "forced.png", "image/png", "png"),
     "fixture://voice.ogg": mediaFixture("audio", "voice.ogg", "audio/ogg", "ogg"),
   } as const;
@@ -220,15 +212,7 @@ it("preserves payloads, receipts, and callback order through the active web sock
   });
   type PayloadContext = Parameters<NonNullable<typeof outbound.sendPayload>>[0];
   const jid = "1555@s.whatsapp.net";
-  const audio = { audio: Buffer.from("ogg"), ptt: true, mimetype: "audio/ogg; codecs=opus" };
-  const document = (fileName: string, bytes: string, mimetype: string, caption?: string) => ({
-    document: Buffer.from(bytes),
-    fileName,
-    caption,
-    mimetype,
-  });
   const progress: string[] = [];
-  const expectedCalls: unknown[][] = [];
   const sendPayload = (payload: PayloadContext["payload"], extra: Partial<PayloadContext> = {}) =>
     outbound.sendPayload!({
       cfg,
@@ -247,84 +231,46 @@ it("preserves payloads, receipts, and callback order through the active web sock
       },
       ...extra,
     });
-  async function send(
-    payload: PayloadContext["payload"],
-    nativeCalls: unknown[][] = [[{ text: payload.text }]],
-    extra: Partial<PayloadContext> = {},
-  ) {
-    const messageId = "native-" + (expectedCalls.length + 1);
-    expectedCalls.push(...nativeCalls.map((args) => [jid, ...args]));
-    expect(await sendPayload(payload, extra)).toEqual({
-      channel: "whatsapp",
-      messageId,
-      toJid: jid,
-    });
-  }
-  await send({ text: "plain text" });
-  await send({ text: "", mediaUrl: "fixture://captionless.pdf" }, [
-    [document("captionless.pdf", "pdf", "application/pdf")],
-  ]);
-  await send(
-    { text: "document caption", mediaUrl: "fixture://forced.png" },
-    [[document("forced.png", "png", "image/png", "document caption")]],
-    { forceDocument: true },
-  );
-  await send({ text: "voice caption", mediaUrl: "fixture://voice.ogg", audioAsVoice: false }, [
-    [audio],
-    [{ text: "voice caption" }],
-  ]);
-  cacheInboundMessageMeta(accountId, jid, "quoted-1", { body: "original quote", fromMe: false });
-  await send(
-    { text: "quoted text" },
-    [
-      [
-        { text: "quoted text" },
-        {
-          quoted: expect.objectContaining({
-            key: expect.objectContaining({ id: "quoted-1", remoteJid: jid, fromMe: false }),
-            message: { conversation: "original quote" },
-          }),
-        },
-      ],
-    ],
-    { replyToId: "quoted-1", replyToIdSource: "explicit", replyToMode: "all" },
-  );
-  nativeSendsToReject.add(expectedCalls.length + 2);
+  // Native payload variants live in send.test.ts and inbound/send-api.test.ts;
+  // this boundary retains the adapter's receipts, media authority and callback order.
+  expect(
+    await sendPayload(
+      { text: "document", mediaUrl: "fixture://forced.png" },
+      { forceDocument: true },
+    ),
+  ).toEqual({ channel: "whatsapp", messageId: "native-1", toJid: jid });
   const failure = await sendPayload({
     text: "caption fails after voice acceptance",
     mediaUrl: "fixture://voice.ogg",
   }).catch((error: unknown) => error);
-  expectedCalls.push([jid, audio], [jid, { text: "caption fails after voice acceptance" }]);
-  expect(socketSend.mock.calls).toEqual(expectedCalls);
-  expect(progress).toEqual(Array.from({ length: 7 }, (_, index) => `native-${index + 1}`));
+  expect(progress).toEqual(Array.from({ length: 2 }, (_, index) => `native-${index + 1}`));
   expect(order).toEqual([
-    ...Array.from({ length: 7 }, (_, index) => [
+    ...Array.from({ length: 2 }, (_, index) => [
       "dispatch",
       `socket:${index + 1}`,
       `progress:native-${index + 1}`,
     ]).flat(),
     "dispatch",
-    "socket:8",
+    "socket:3",
   ]);
   expect(mocks.loadOutboundMediaFromUrl.mock.calls).toEqual(
-    [...Object.keys(media), "fixture://voice.ogg"].map((url, index) => [
+    Object.keys(media).map((url, index) => [
       url,
       {
         maxBytes: 50 * 1024 * 1024,
-        optimizeImages: index === 1 ? false : undefined,
+        optimizeImages: index === 0 ? false : undefined,
         mediaAccess,
         mediaLocalRoots,
         mediaReadFile,
       },
     ]),
   );
-  expect(isChannelPartialDeliveryError(failure)).toBe(true);
   if (!isChannelPartialDeliveryError(failure)) {
     throw new Error("accepted fixture voice delivery did not preserve its receipt");
   }
   expect(failure.deliveryResult).toMatchObject({
-    messageIds: ["native-7"],
-    receipt: { platformMessageIds: ["native-7"] },
+    messageIds: ["native-2"],
+    receipt: { platformMessageIds: ["native-2"] },
   });
   expect(failure).toHaveProperty(
     "cause",

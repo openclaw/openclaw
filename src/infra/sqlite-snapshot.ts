@@ -2,6 +2,7 @@
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   getPublishFileExclusiveFailureDetails,
@@ -13,12 +14,14 @@ import {
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { captureSqliteMaintenanceIntegrity } from "./sqlite-maintenance-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
 import {
   prepareSqliteReadOnlyLocationInProcess,
@@ -53,6 +56,11 @@ import { configureSqliteSnapshotPragmas } from "./sqlite-wal.js";
 
 export type { SqliteSnapshotValidator } from "./sqlite-snapshot.types.js";
 
+/** Reuse a bounded page cache when mappings are unavailable on an inspection copy. */
+export function configureSqliteSnapshotReadCache(database: DatabaseSync): void {
+  database.exec("PRAGMA cache_size = -16384; PRAGMA mmap_size = 268435456;");
+}
+
 export type SqliteReplacementReceipt = SqliteFileContent & {
   targetPath: string;
   identity: FileIdentityStat;
@@ -85,15 +93,9 @@ async function assertRegularSourceFile(
 }
 
 async function assertTargetAbsent(targetPath: string): Promise<void> {
-  try {
-    await fs.lstat(targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
-    }
-    throw error;
+  if (await pathEntryExists(targetPath)) {
+    throw new Error(`SQLite snapshot target already exists: ${targetPath}`);
   }
-  throw new Error(`SQLite snapshot target already exists: ${targetPath}`);
 }
 
 async function copyFileExclusive(
@@ -557,37 +559,64 @@ async function publishSqliteFile(
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
-  const sourcePath = options.sourceAcquisition
-    ? await fs.realpath(options.sourcePath)
-    : options.sourcePath;
-  await assertRegularSourceFile(sourcePath, options.requireNonEmptySource === true);
-  await assertTargetAbsent(options.targetPath);
+  const retained = options.sourceAcquisition?.preparedSource;
+  // Take cleanup custody before any asynchronous admission; a rejected transfer
+  // must retire this image rather than reacquire a different source generation.
+  const create = async () => {
+    const sourcePath = options.sourceAcquisition
+      ? await fs.realpath(options.sourcePath)
+      : options.sourcePath;
+    await assertRegularSourceFile(sourcePath, options.requireNonEmptySource === true);
+    await assertTargetAbsent(options.targetPath);
 
-  if (options.preserveRowIds && !options.sourceAcquisition) {
-    // Preserve physical pages as well as row IDs. Raw family descriptors must
-    // stay outside a live native owner's process so close cannot release its locks.
-    const recordSourceIntegrity = captureSqliteMaintenanceIntegrity(sourcePath, options.integrity);
-    const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
-      preserveSourceArtifacts: true,
-    });
-    return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-      verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
-    );
-  }
-  if (options.sourceAcquisition) {
-    const prepared = options.sourceAcquisition.preserveSourceArtifacts
-      ? await prepareSqliteReadOnlyCopyInProcess(sourcePath, options.sourceAcquisition.stagingRoot)
-      : await prepareSqliteReadOnlyLocationInProcess(
-          sourcePath,
-          options.sourceAcquisition.stagingRoot,
-          undefined,
-          options.onProgress,
-        );
-    return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-      verifyAndPublishSqliteSnapshot(options, privateSourcePath),
-    );
-  }
-  return verifyAndPublishSqliteSnapshot(options);
+    if (retained) {
+      const current = captureSqlitePrivateSnapshotFamily(
+        retained.prepared.location,
+        retained.family.root,
+      );
+      if (
+        sourcePath !== retained.sourcePath ||
+        current?.main !== retained.family.main ||
+        current?.wal !== retained.family.wal
+      ) {
+        throw new Error("SQLite snapshot prepared source changed before transfer");
+      }
+      return verifyAndPublishSqliteSnapshot(options, retained.prepared.location);
+    }
+
+    if (options.preserveRowIds && !options.sourceAcquisition) {
+      // Preserve physical pages as well as row IDs. Raw family descriptors must
+      // stay outside a live native owner's process so close cannot release its locks.
+      const recordSourceIntegrity = captureSqliteMaintenanceIntegrity(
+        sourcePath,
+        options.integrity,
+      );
+      const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
+        preserveSourceArtifacts: true,
+      });
+      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
+        verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
+      );
+    }
+    if (options.sourceAcquisition) {
+      const prepared = options.sourceAcquisition.preserveSourceArtifacts
+        ? await prepareSqliteReadOnlyCopyInProcess(
+            sourcePath,
+            options.sourceAcquisition.stagingRoot,
+          )
+        : await prepareSqliteReadOnlyLocationInProcess(
+            sourcePath,
+            options.sourceAcquisition.stagingRoot,
+            undefined,
+            options.onProgress,
+          );
+      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
+        verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+      );
+    }
+    return verifyAndPublishSqliteSnapshot(options);
+  };
+  return retained ? withPreparedSqliteSnapshot(retained.prepared, create) : create();
 }
 
 async function verifyAndPublishSqliteSnapshot(

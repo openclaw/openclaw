@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { afterEach, expect, test } from "vitest";
+import os from "node:os";
+import { afterEach, expect, test, vi } from "vitest";
 import { deleteSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
@@ -8,14 +9,42 @@ import { createProcessTool } from "./bash-tools.process.js";
 import { coerceEnv } from "./bash-tools.shared.js";
 
 afterEach(resetProcessRegistryForTests);
+afterEach(() => vi.restoreAllMocks());
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-}
+test.skipIf(process.platform !== "linux").each([false, true])(
+  "kills a memory-hog descendant and preserves the background diagnostic (PTY=%s)",
+  async (usePty) => {
+    // Scale the real host-derived default, never allocate the machine's actual budget.
+    vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+    vi.spyOn(process.memoryUsage, "rss").mockReturnValue(64 * 1024 ** 2);
+    const hog = `console.log('hog-started'); globalThis.held = Buffer.alloc(384 * 1024 * 1024, 1); setInterval(() => {}, 1000);`;
+    const root = `console.log('terminal=' + Boolean(process.stdout.isTTY)); require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(hog)}], {stdio: 'inherit'});`;
+    const { run, processTool, sessionId } = await startPtySession(root, { usePty, timeoutSec: 8 });
+    try {
+      const outcome = await run.promise;
+      expect(outcome).toMatchObject({
+        status: "failed",
+        exitReason: "memory-limit",
+        timedOut: false,
+        reason: expect.stringContaining("256 MiB limit"),
+      });
+      expect(outcome.aggregated).toContain("hog-started");
+      expect(outcome.aggregated).toContain(`terminal=${usePty}`);
+      const result = await processTool.execute("memory-poll", { action: "poll", sessionId });
+      expect(result.details).toMatchObject({ status: "failed", exitReason: "memory-limit" });
+      expect(JSON.stringify(result.content)).toContain("256 MiB limit");
+      expect(JSON.stringify(result.content)).toContain("Reduce concurrency");
+    } finally {
+      await stopProcess(run);
+    }
+  },
+);
 
 function currentNodeEvalCommand(source: string): string {
-  const node = shellQuote(process.execPath);
-  const script = shellQuote(source);
+  const [node, script] = [process.execPath, source].map(
+    (value) => `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`,
+  );
   return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
 }
 

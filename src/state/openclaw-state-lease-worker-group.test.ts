@@ -61,6 +61,7 @@ function fixture(context?: OpenClawStateWorkerContext, key = "collection") {
   const controller = new AbortController();
   const lease: OpenClawStateAsyncLeaseContext = {
     signal: controller.signal,
+    assertCurrent: () => controller.signal.throwIfAborted(),
     assertOwned: asyncNoop,
     renew: asyncNoop,
   };
@@ -281,6 +282,32 @@ describe("state lease group admission", () => {
     secondJob.settled.resolve({ kind: "completed" });
     await Promise.all(members.map(({ owner }) => owner.drain()));
     expectReleasable(true);
+    for (const { owner } of members) {
+      expect(() => owner.assertCurrent()).toThrow();
+    }
+  });
+
+  it("drains retained commit grants while refusing new effects and admissions", async () => {
+    const { context, members, run, expectReleasable } = group();
+    const draining: Promise<void>[] = [];
+    await run(async (scope) => {
+      const current = job(scope.createAdmission);
+      try {
+        expect(current.request("transaction", facts(scope.identities))).toBe(1);
+        for (const { owner, lease } of members) {
+          draining.push(owner.drain());
+          expect(() => owner.assertCurrent()).toThrow();
+          expect(() => withSingle(lease, context.admission.databasePath, asyncNoop)).toThrow();
+        }
+        expectReleasable(false);
+        expect(current.request("commit", facts(scope.identities))).toBe(1);
+      } finally {
+        current.admission.finish();
+        current.settled.resolve({ kind: "completed" });
+      }
+    });
+    await Promise.all(draining);
+    expectReleasable(true);
   });
 
   it.each<[string, (held: LeaseFacts) => LeaseFacts]>([
@@ -370,6 +397,7 @@ describe("state lease group admission", () => {
     ).rejects.toMatchObject({ code: "outcome-unknown" });
     for (const member of members) {
       expect(member.owner.canRelease()).toBe(false);
+      expect(() => member.owner.assertCurrent()).toThrow("outcome is unknown");
       expect(() => withSingle(member.lease, context.admission.databasePath, asyncNoop)).toThrow(
         "outcome is unknown",
       );

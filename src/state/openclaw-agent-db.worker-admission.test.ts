@@ -54,6 +54,7 @@ import {
 } from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution as captureExecution } from "./openclaw-agent-execution.js";
+import { expectRow, readRow } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -89,7 +90,7 @@ function observePublications(observe: (path: string, publish: () => void) => voi
 }
 
 function countSessions({ db }: { db: EngineConnection }) {
-  return db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
+  return readRow(db, "SELECT COUNT(*) AS count FROM session_nodes")?.count;
 }
 
 afterEach(async () => {
@@ -241,9 +242,9 @@ it("keeps a worker recreation private until its host creation claim joins native
   expect(opened?.db.isOpen).toBe(false);
   expect(() => assertNoOpenClawAgentDatabaseLeases(options.agentId, { env })).not.toThrow();
   using reader = openNodeSqliteDatabase(pathname, { readOnly: true });
-  expect(
-    reader.prepare("SELECT state_json FROM auth_profile_state WHERE state_key='created'").get(),
-  ).toEqual({ state_json: "{}" });
+  expectRow(reader, "SELECT state_json FROM auth_profile_state WHERE state_key='created'", {
+    state_json: "{}",
+  });
 });
 
 it("admits cold storage in its worker and lends facts to every later native handle", async () => {
@@ -318,7 +319,7 @@ it("recreates a closed database through its directory alias without revoking fre
   await expect(
     writeAgent(
       options,
-      ({ db }) => db.prepare("SELECT COUNT(*) AS count FROM auth_profile_state").get()?.count,
+      ({ db }) => readRow(db, "SELECT COUNT(*) AS count FROM auth_profile_state")?.count,
     ),
   ).resolves.toBe(0);
 });
@@ -397,13 +398,11 @@ it.each([
         expect(facts?.tables.has("session_key_contract")).toBe(true);
         expect(facts?.tables.has("rolled_back_fixture")).toBe(false);
         expect(facts?.indexes).toContain("idx_agent_cache_expiry");
-        expect(
-          reopened.db
-            .prepare(
-              "UPDATE auth_profile_state SET updated_at=updated_at+1 WHERE state_key='retained' RETURNING updated_at",
-            )
-            .get()?.updated_at,
-        ).toBe(2);
+        expectRow(
+          reopened.db,
+          "UPDATE auth_profile_state SET updated_at=updated_at+1 WHERE state_key='retained' RETURNING updated_at",
+          { updated_at: 2 },
+        );
         return countSessions(reopened);
       });
       expect(count).toBe(0);
@@ -429,7 +428,7 @@ it.each([
     if (change.endsWith("missing-index")) {
       using inspector = openNodeSqliteDatabase(database.path, { readOnly: true });
       expect(
-        inspector.prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'").get()
+        readRow(inspector, "SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'")
           ?.sql,
       ).toMatch(
         /^CREATE INDEX idx_agent_cache_expiry\s+ON cache_entries\(scope, expires_at, key\)\s+WHERE expires_at IS NOT NULL$/,
@@ -483,9 +482,7 @@ it.each([
         fs.writeFileSync(pathname, "damaged SQLite fixture");
       } else if (change !== "warm-schema") {
         using editor = openNodeSqliteDatabase(pathname);
-        const schemaBefore = metadataChange
-          ? editor.prepare("PRAGMA schema_version").get()
-          : undefined;
+        const schemaBefore = metadataChange ? readRow(editor, "PRAGMA schema_version") : undefined;
         editor.exec(
           change === "owner"
             ? "UPDATE schema_meta SET agent_id='another' WHERE meta_key='primary'"
@@ -496,7 +493,7 @@ it.each([
                 : "ALTER TABLE auth_profile_state RENAME COLUMN state_json TO drifted_state_json",
         );
         if (metadataChange) {
-          expect(editor.prepare("PRAGMA schema_version").get()).toEqual(schemaBefore);
+          expectRow(editor, "PRAGMA schema_version", schemaBefore);
         }
       }
       if (metadataChange && retainWorker) {

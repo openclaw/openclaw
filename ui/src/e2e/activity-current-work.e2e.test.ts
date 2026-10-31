@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
@@ -155,12 +156,10 @@ suite.define(() => {
         heldMethods: ["sessions.list"],
         sessions: activeRows,
         methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
+          "agents.list": makeBootRoster({
             scope: "global",
             agents: [{ id: "main" }, { id: "work" }],
-          },
+          }),
           "sessions.list": {
             cases: [
               // Only the held first snapshot predates the completion event.
@@ -200,8 +199,8 @@ suite.define(() => {
       expect(await page.locator(".activity-entry").count()).toBe(0);
       await work.click();
       await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/work" });
-      await gateway.waitForRequest("chat.startup", {
-        match: { sessionKey: "agent:work:main", agentId: "work" },
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:work:main", agentId: "work" },
       });
     });
   });

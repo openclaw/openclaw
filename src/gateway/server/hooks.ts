@@ -21,8 +21,8 @@ import type {
 } from "../../cron/isolated-agent/run.types.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronExecutionIdentityAdmission } from "../../cron/service/state.js";
-import type { DeferredHookWake } from "../../cron/service/wake.js";
 import type { CronJob } from "../../cron/types.js";
+import type { DeferredHookWake } from "../../cron/wake-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";

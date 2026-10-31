@@ -35,24 +35,8 @@ const MINIMAX_TOKEN_PLAN_ENV_VARS = [
   "MINIMAX_OAUTH_TOKEN",
 ] as const;
 
-type MiniMaxSearchResult = {
-  title?: string;
-  link?: string;
-  snippet?: string;
-  date?: string;
-};
-
 type MiniMaxRelatedSearch = {
   query?: string;
-};
-
-type MiniMaxSearchResponse = {
-  organic?: MiniMaxSearchResult[];
-  related_searches?: MiniMaxRelatedSearch[];
-  base_resp?: {
-    status_code?: number;
-    status_msg?: string;
-  };
 };
 
 function isMiniMaxCnHost(value: string | undefined): boolean {
@@ -90,15 +74,6 @@ function resolveMiniMaxRegion(
   return "global";
 }
 
-function resolveMiniMaxEndpoint(
-  searchConfig?: SearchConfigRecord,
-  config?: Record<string, unknown>,
-): string {
-  return resolveMiniMaxRegion(searchConfig, config) === "cn"
-    ? MINIMAX_SEARCH_ENDPOINT_CN
-    : MINIMAX_SEARCH_ENDPOINT_GLOBAL;
-}
-
 function missingMiniMaxKeyPayload() {
   return {
     error: "missing_minimax_api_key",
@@ -130,7 +105,10 @@ export async function executeMiniMaxWebSearchProviderTool(
   const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
 
   const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
-  const endpoint = resolveMiniMaxEndpoint(searchConfig, ctx.config);
+  const endpoint =
+    resolveMiniMaxRegion(searchConfig, ctx.config) === "cn"
+      ? MINIMAX_SEARCH_ENDPOINT_CN
+      : MINIMAX_SEARCH_ENDPOINT_GLOBAL;
 
   const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
@@ -162,10 +140,19 @@ export async function executeMiniMaxWebSearchProviderTool(
         throw await createProviderHttpError(res, "MiniMax Search API error");
       }
 
-      const data = await readProviderJsonResponse<MiniMaxSearchResponse>(
-        res,
-        "MiniMax Search API error",
-      );
+      const data = await readProviderJsonResponse<{
+        organic?: {
+          title?: string;
+          link?: string;
+          snippet?: string;
+          date?: string;
+        }[];
+        related_searches?: MiniMaxRelatedSearch[];
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>(res, "MiniMax Search API error");
 
       if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
         throw new Error(

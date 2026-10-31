@@ -1,12 +1,21 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
+import { acquireSessionInputActor, withSessionInputActor } from "./session-input-actor.js";
+import {
+  bindPublishedSessionSourceAdmission,
+  composeSessionSourceAssertion,
+} from "./session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "./transcript-write-context.js";
 
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", async (importOriginal) => ({
@@ -120,4 +129,132 @@ it.each([
         expect(f.events()).toEqual(eventsBefore);
       }
     }),
+);
+
+it.each(["published", "absent", "revoked"] as const)(
+  "admits a durable actor's foreign source only while its publication is current (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const foreignDatabase = openOpenClawAgentDatabase({ agentId: "coder" });
+      const foreign = {
+        agentId: "coder",
+        storePath: foreignDatabase.path,
+        sessionKey: "agent:coder:published-requester",
+        sessionId: "foreign-requester",
+      };
+      const foreignEntry = { sessionId: foreign.sessionId, updatedAt: 1 };
+      replaceSessionEntrySync(foreign, foreignEntry);
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...f.scope, target: f.target },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "durable transcript actor",
+      );
+      const before = f.read();
+      const eventsBefore = f.events();
+      const refusal = new Error("foreign publication revoked");
+      const refuse = (): never => {
+        throw refusal;
+      };
+      let publicationCurrent = true;
+      const publication = vi.fn(() => {
+        if (!publicationCurrent) {
+          refuse();
+        }
+      });
+      const foreignSource = captureSessionEntrySourceAssertion({
+        scope: foreign,
+        expected: foreignEntry,
+        fields: ["sessionId"],
+        assertCurrent() {},
+        refuse,
+      });
+      const prepareForeign = foreignSource.prepareSessionSource;
+      foreignSource.prepareSessionSource = async () => {
+        const prepared = await prepareForeign();
+        if (mode !== "absent") {
+          for (const check of prepared.checks) {
+            bindPublishedSessionSourceAdmission(check.predicate, publication);
+          }
+        }
+        return prepared;
+      };
+      const localMatches = vi.fn((alternatives: readonly number[]) => [...alternatives]);
+      const localSource = captureSessionEntrySourceAssertion({
+        scope: f.scope,
+        expected: before,
+        fields: ["sessionId", "lifecycleRevision"],
+        assertCurrent() {},
+        async prepareConversations() {
+          return {
+            alternatives: [[{ conversationRef: `conv_${"0".repeat(32)}`, sessionKey: null }]],
+            assertCurrent() {},
+            acceptMatches: localMatches,
+          };
+        },
+        refuse,
+      });
+      // Foreign first: the retained view must use the local writer's validation indices.
+      const source = composeSessionSourceAssertion([foreignSource, localSource]);
+      const releases: ReturnType<typeof vi.fn>[] = [];
+      const prepare = source.prepareSessionSource;
+      source.prepareSessionSource = async () => {
+        const prepared = await prepare();
+        const release = vi.fn(() => prepared.release?.());
+        releases.push(release);
+        return { ...prepared, release };
+      };
+      let reachedCommit = false;
+      probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          reachedCommit = true;
+          publicationCurrent = mode !== "revoked";
+        }
+        callback(request, grant);
+      });
+      const committed = vi.fn(() => {
+        expect(releases.every((release) => release.mock.calls.length === 0)).toBe(true);
+      });
+      try {
+        const work = withSessionInputActor(
+          { phase: "acceptInput", acquire: async () => input },
+          () =>
+            appendExpectedSessionTranscriptTurn(f.scope, {
+              expectedSessionId: f.scope.sessionId,
+              sessionFile: "synthetic-session.jsonl",
+              touchSessionEntry: true,
+              messages: [
+                {
+                  eventId: "published-source-input",
+                  message: { role: "user", content: "Authorized child input" },
+                  workerPreparation: { beforeFreshMessageCommit: source },
+                },
+              ],
+              onMessageCommitted: committed,
+            }),
+        );
+        if (mode === "published") {
+          expect((await work).appendedMessages[0]).toMatchObject({ appended: true });
+          expect(localMatches).toHaveBeenCalledWith([0]);
+          expect(committed).toHaveBeenCalledOnce();
+          expect(f.events().filter((event) => event.type === "message")).toHaveLength(1);
+        } else {
+          await expect(work).rejects.toThrow(
+            mode === "absent" ? "Session source publication is unavailable" : refusal.message,
+          );
+          expect(committed).not.toHaveBeenCalled();
+          expect(f.read()).toEqual(before);
+          expect(f.events()).toEqual(eventsBefore);
+        }
+        expect(reachedCommit).toBe(mode !== "absent");
+        expect(releases).toHaveLength(1);
+        expect(releases[0]).toHaveBeenCalledOnce();
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
 );

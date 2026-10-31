@@ -63,6 +63,7 @@ export function mountPage(
     container,
     request,
     registerBoardNavigation,
+    focus: () => mounted?.focus?.(),
     cards: (next: typeof cards) => void (cards = next),
     agents: (next: typeof agents) => void (agents = next),
     navigate(boardId: string) {

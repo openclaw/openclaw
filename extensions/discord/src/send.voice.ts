@@ -243,7 +243,7 @@ async function createVoiceRequestError(
   if (response.status === 429) {
     throw new RateLimitError(response, {
       message: readDiscordMessage(parsed, "You are being rate limited."),
-      retry_after: readRetryAfter(parsed, response, 1),
+      retry_after: readRetryAfter(parsed, response),
       global:
         parsed && typeof parsed === "object" && "global" in parsed ? Boolean(parsed.global) : false,
     });
@@ -266,6 +266,7 @@ type VoiceMessageOpts = Pick<
   | "reply"
   | "retry"
   | "silent"
+  | "signal"
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"

@@ -35,18 +35,34 @@ const voiceToggles = [
 ] as const;
 
 type VoiceToggle = (typeof voiceToggles)[number];
-type VoiceSetting = `voice.${VoiceToggle}` | "voice.microphone";
-type VoiceScope = { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
 type VoiceControlProps = {
-  scope: VoiceScope;
+  scope: { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
   snapshot: NativeDeviceSettingsSnapshot;
   isCurrent: () => boolean;
   presentationRetired: () => Promise<void>;
 };
 
+export function voiceControlErrorFallback(retry: () => void) {
+  return (error: () => unknown, reset: () => void) => (
+    <div class="callout danger" role="alert">
+      {formatUiError(error())}
+      <button
+        class="btn btn--sm"
+        type="button"
+        onClick={() => {
+          retry();
+          reset();
+        }}
+      >
+        {t("common.retry")}
+      </button>
+    </div>
+  );
+}
+
 function createVoiceEdit<T extends boolean | string | null>(
   props: VoiceControlProps,
-  key: () => VoiceSetting,
+  key: () => `voice.${VoiceToggle}` | "voice.microphone",
   read: () => T,
 ) {
   const [value, setValue] = createOptimistic(read);
@@ -138,25 +154,11 @@ function VoiceWriteStatus(props: {
           {t("common.saving")}
         </span>
       </Show>
-      <Errored
-        fallback={(error, reset) => (
-          <div class="callout danger" role="alert">
-            {formatUiError(error())}
-            <button
-              class="btn btn--sm"
-              type="button"
-              onClick={() => {
-                props.edit.retry();
-                reset();
-              }}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        )}
-      >
-        <Loading>{latest(props.edit.outcome)}</Loading>
-      </Errored>
+      <Show when={!props.edit.saving()}>
+        <Errored fallback={voiceControlErrorFallback(() => props.edit.retry())}>
+          <Loading>{latest(props.edit.outcome)}</Loading>
+        </Errored>
+      </Show>
     </>
   );
 }

@@ -16,19 +16,17 @@ import {
 } from "./provider-request-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-function buildOwners(): PluginMetadataSnapshotOwnerMaps {
-  return {
-    ...createEmptyPluginMetadataSnapshot().owners,
-    providerEndpoints: [
-      { endpointClass: "openai-public", hosts: ["prepared.example"] },
-      { endpointClass: "anthropic-public", hosts: ["projected.example"] },
-    ],
-    providerRequests: new Map([["openai", { family: "prepared-openai-family" }]]),
-  };
-}
+const owners: PluginMetadataSnapshotOwnerMaps = {
+  ...createEmptyPluginMetadataSnapshot().owners,
+  providerEndpoints: [
+    { endpointClass: "openai-public", hosts: ["prepared.example"] },
+    { endpointClass: "anthropic-public", hosts: ["projected.example"] },
+  ],
+  providerRequests: new Map([["openai", { family: "prepared-openai-family" }]]),
+};
 
-function preparedModel(owners = buildOwners()) {
-  return attachModelProviderRequestRouteFacts(
+it("keeps prepared metadata for headers, SSRF posture, and projected routes", () => {
+  const model = attachModelProviderRequestRouteFacts(
     makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.6-luna",
       provider: "openai",
@@ -37,10 +35,6 @@ function preparedModel(owners = buildOwners()) {
     }),
     owners,
   );
-}
-
-it("keeps headers, capabilities, and SSRF posture on the prepared metadata generation", () => {
-  const model = preparedModel();
   const host = getAiTransportHost();
   const route = { model, provider: model.provider, api: model.api, baseUrl: model.baseUrl };
   const request = { ...route, capability: "llm" as const, transport: "stream" as const };
@@ -54,17 +48,14 @@ it("keeps headers, capabilities, and SSRF posture on the prepared metadata gener
     knownProviderFamily: "prepared-openai-family",
   });
   expect(requestPolicy.trustConfiguredBaseUrlOrigin).toBe(false);
-});
+  const projected = host.inheritManagedTransport(model, {
+    ...model,
+    baseUrl: "https://projected.example/v1",
+  });
+  const projectedFacts = getModelProviderRequestRouteFacts(projected);
 
-it("re-resolves projected transport routes against the same metadata generation", () => {
-  const owners = buildOwners();
-  const source = preparedModel(owners);
-  const projection = { ...source, baseUrl: "https://projected.example/v1" };
-  const projected = getAiTransportHost().inheritManagedTransport(source, projection);
-  const routeFacts = getModelProviderRequestRouteFacts(projected);
-
-  expect(routeFacts?.providerMetadataOwners).toBe(owners);
-  expect(routeFacts).toMatchObject({
+  expect(projectedFacts?.providerMetadataOwners).toBe(owners);
+  expect(projectedFacts).toMatchObject({
     capabilities: { endpointClass: "anthropic-public" },
     providerOwner: "anthropic-public",
   });

@@ -2,6 +2,7 @@ import {
   ErrorCodes,
   errorShape,
   type SessionFileEntry,
+  type SessionsFilesGetResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
@@ -24,6 +25,7 @@ export function respondSessionFileTooLarge(
   respond: RespondFn,
   file: SessionFileEntry,
   filePath: string,
+  metadata: Pick<SessionsFilesGetResult, "root" | "source">,
 ) {
   respond(
     false,
@@ -32,6 +34,8 @@ export function respondSessionFileTooLarge(
       maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
       path: file.path || filePath,
       size: file.size,
+      ...(metadata.root ? { root: metadata.root } : {}),
+      ...(metadata.source ? { source: metadata.source } : {}),
     }),
   );
 }

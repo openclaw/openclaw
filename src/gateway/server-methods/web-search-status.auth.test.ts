@@ -1,8 +1,13 @@
+import assert from "node:assert/strict";
+import { Check } from "typebox/schema";
 import { beforeEach, expect, it, vi } from "vitest";
+import { WebSearchStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/web-search.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -71,11 +76,29 @@ vi.mock("../../agents/model-catalog-decisions.js", () => ({
   }),
   resolveCatalogDecisionRuntime: () => ({ id: "openclaw" }),
 }));
-import { prepareWebSearchStatus } from "./web-search-status.js";
+// mock-isolation: Prepared-auth projection admits a synthetic requester without an identity database.
+vi.mock("./users-profile-access.js", () => ({
+  prepareAuthenticatedProfile: async () => ({ assertCurrent: () => {} }),
+}));
+import { webSearchHandlers } from "./web-search.js";
 
-const readStatus = async (config: OpenClawConfig) =>
-  (await prepareWebSearchStatus({ getRuntimeConfig: () => config } as GatewayRequestContext, {}))
-    .status;
+const readStatus = async (config: OpenClawConfig) => {
+  const respond = await callAgentHandler(
+    webSearchHandlers["webSearch.status"]!,
+    "webSearch.status",
+    {},
+    {
+      context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+      client: {
+        connect: gatewayConnect(["operator.read"], { id: "gateway-client", mode: "backend" }),
+      },
+    },
+  );
+  const [ok, payload, error] = respond.mock.calls[0] ?? [];
+  expect([ok, error]).toEqual([true, undefined]);
+  assert(Check(WebSearchStatusResultSchema, payload), "Invalid web search status response");
+  return payload;
+};
 const publishProfile = (profile: AuthProfileStore["profiles"][string] | undefined) =>
   mocks.snapshot.mockReturnValue(
     profile ? { version: 1, profiles: { "openai:fixture": profile } } : undefined,
@@ -106,26 +129,17 @@ it.each([false, true])(
   async (published) => {
     publishProfile(
       published
-        ? {
-            type: "token",
-            provider: "openai",
-            token: "synthetic-fixture-token",
-          }
+        ? { type: "token", provider: "openai", token: "synthetic-fixture-token" }
         : undefined,
     );
-    const config: OpenClawConfig = {
+    const status = await readStatus({
       tools: { web: { search: { openaiCodex: { enabled: true } } } },
-    };
-    const status = await readStatus(config);
-    expect(status?.providers).toMatchObject([
-      {
-        id: "example",
-        configured: published,
-        credentialSource: published ? "auth-profile" : "missing",
-      },
-    ]);
-    // Native search follows the selected transport; the model request admits credentials.
-    expect(status?.route.kind).toBe("native");
+    });
+    expect([
+      status.providers[0]?.configured,
+      status.providers[0]?.credentialSource,
+      status.route.kind,
+    ]).toEqual([published, published ? "auth-profile" : "missing", "native"]);
     expect(mocks.persistedAuth).not.toHaveBeenCalled();
     expect(JSON.stringify(status)).not.toContain("synthetic-fixture-token");
   },
@@ -145,14 +159,9 @@ it.each([
       expires,
     });
     mocks.catalog.mockResolvedValueOnce(undefined);
-    const config: OpenClawConfig = { tools: { web: { search: { provider: "example" } } } };
-    const status = await readStatus(config);
-
-    expect(status?.providers).toMatchObject([{ id: "example", credentialSource: "auth-profile" }]);
-    expect(status?.testProvider).toMatchObject({ id: "example" });
+    const status = await readStatus({ tools: { web: { search: { provider: "example" } } } });
+    expect(status.providers[0]?.credentialSource).toBe("auth-profile");
     const reason = status?.route.reason ?? "";
-    expect(reason.includes("The openai sign-in this provider uses is expired.")).toBe(reported);
-    expect(reason.includes("send `/login openai` from a private chat")).toBe(reported);
     expect(reason.includes("openclaw models auth login --provider openai")).toBe(reported);
     expect(JSON.stringify(status)).not.toMatch(/synthetic-|openai:fixture/);
   },

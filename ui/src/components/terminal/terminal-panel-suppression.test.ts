@@ -6,6 +6,7 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { mountPanel, panelTestStorage } from "./terminal-panel-lifecycle.test-support.ts";
 import {
   createTerminalController,
+  createTerminalGatewayClient,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
@@ -48,14 +49,10 @@ it.each([false, true])(
     savePlacement();
     createTerminal.mockResolvedValue(createTerminalController());
     const requests: string[] = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string) => {
-        requests.push(method);
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
-      },
-      addEventListener: () => () => {},
-    };
+    const client: TerminalGatewayClient = createTerminalGatewayClient(async <T>(method: string) => {
+      requests.push(method);
+      return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
+    });
     const panel = mountPanel(tag, { client, available, suppressed: true }, false);
     await panel.updateComplete;
     if (!available) {

@@ -8,6 +8,7 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   withTestTimeout,
+  withinTest,
 } from "../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
@@ -15,6 +16,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
+import * as startupModels from "../server-startup-model-runtime.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -44,8 +46,20 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
 // Compile the server before starting the real Gateway.
 beforeAll(() => import("../server-start.js"));
 
-it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
+it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async ({
+  signal,
+}) => {
   const publications: ModelsSnapshotEvent[] = [];
+  const initialPublished = createDeferred();
+  const releaseInitialModels = createDeferred();
+  const publishModels = startupModels.publishConfiguredModelRuntimeSnapshots;
+  using _ = vi
+    .spyOn(startupModels, "publishConfiguredModelRuntimeSnapshots")
+    .mockImplementationOnce(async (...args) => {
+      await releaseInitialModels.promise;
+      await publishModels(...args);
+    });
+  signal.addEventListener("abort", () => releaseInitialModels.resolve(), { once: true });
   await using state = await createModelsTestState("models-connect-publication", {
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS },
   });
@@ -113,6 +127,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
     portClaim,
     configPath: state.configPath,
     modelCatalog: {},
+    sidecarStartup: "defer",
     cfg: {
       gateway: {
         mode: "local",
@@ -153,13 +168,19 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
     onEvent(event) {
       if (event.event === "models.snapshot") {
         publications.push(event.payload as ModelsSnapshotEvent);
+        initialPublished.resolve();
       }
     },
   });
   try {
-    await expect
-      .poll(() => publications, { timeout: 15_000 })
-      .toMatchObject(snapshot({ agentId: "alpha" }, [model("first")]));
+    // Authentication and healthy reads are usable while the model owner is still preparing.
+    expect(publications).toEqual([]);
+    await expect(client.request("sessions.list", {})).resolves.toMatchObject({
+      sessions: expect.any(Array),
+    });
+    releaseInitialModels.resolve();
+    await withinTest(initialPublished.promise, signal);
+    expect(publications).toMatchObject(snapshot({ agentId: "alpha" }, [model("first")]));
     for (const selection of [
       { hint: "bravo", agentId: "bravo", modelId: "second" },
       { hint: "missing", agentId: "alpha", modelId: "first" },
@@ -343,6 +364,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       expect(old.snapshots).toEqual([]);
     }
   } finally {
+    releaseInitialModels.resolve();
     await disconnectGatewayClient(client);
     await server.close({ reason: "catalog publication test complete" });
   }

@@ -83,7 +83,8 @@ async function open(owner: Overlay) {
 }
 const frame = () =>
   new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
+    // Anchor updates can run later in the same animation frame.
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)));
   });
 function expectAnchored(surface: HTMLElement, element: Element) {
   const source = element.getBoundingClientRect(),
@@ -123,6 +124,102 @@ it("samples frames only while the active binding crosses roots", () => {
   expect(requestFrame).toHaveBeenCalledTimes(2);
   hideOverlayAnchor(surface);
   expect(cancelFrame).toHaveBeenCalledTimes(2);
+});
+
+it("stops geometry reads while a stationary anchor's ancestor animates decorative paint", async () => {
+  const container = append(document.body, "div");
+  const element = anchor(container);
+  const { surface, owner } = popup(shadow("closed"), element);
+  const animation = container.animate(
+    { opacity: [0.8, 1], color: ["red", "blue"], boxShadow: ["0 0 1px red", "0 0 5px blue"] },
+    { duration: 1_000, iterations: Infinity },
+  );
+  try {
+    await open(owner);
+    await frame();
+    await frame();
+    const read = vi.spyOn(element, "getBoundingClientRect");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    expect(read).not.toHaveBeenCalled();
+    read.mockRestore();
+
+    element.style.left = "240.375px";
+    await frame();
+    expectAnchored(surface, element);
+  } finally {
+    animation.cancel();
+  }
+});
+
+it("follows outside layout shifts and a signaled ancestor animation", async () => {
+  const container = append(document.body, "div");
+  container.style.cssText = "position:absolute;left:150px;top:100px";
+  const spacer = append(container, "div");
+  spacer.style.height = "20px";
+  const element = anchor(container);
+  element.style.position = "static";
+  const { surface, owner } = popup(shadow("closed"), element);
+  await open(owner);
+  await frame();
+  spacer.style.height = "80px";
+  await expect
+    .poll(() => {
+      const source = element.getBoundingClientRect();
+      const target = surface.getBoundingClientRect();
+      return Math.abs(target.top - source.bottom - 6);
+    })
+    .toBeLessThan(1);
+
+  container.style.willChange = "transform";
+  const animation = container.animate(
+    [{ transform: "translate(0, 0) scale(1)" }, { transform: "translate(40px, 20px) scale(.9)" }],
+    { duration: 2_000, fill: "forwards" },
+  );
+  try {
+    // Keep frame tracking active without racing the compositor's wall clock.
+    animation.playbackRate = 0;
+    animation.currentTime = 500;
+    await animation.ready;
+    await frame();
+    await frame();
+    const animationReads = vi.spyOn(container, "getAnimations");
+    animation.currentTime = 1_000;
+    await frame();
+    await frame();
+    expect(animationReads).not.toHaveBeenCalled();
+    animationReads.mockRestore();
+    expect(animation.playState).toBe("running");
+    expectAnchored(surface, element);
+    animation.playbackRate = 1;
+    animation.finish();
+    await frame();
+    expectAnchored(surface, element);
+  } finally {
+    animation.cancel();
+  }
+});
+
+it("follows padding shrinkage from a stylesheet without an anchor mutation", async () => {
+  const element = anchor(document.body);
+  element.style.boxSizing = "content-box";
+  element.classList.add("anchor-padding-proof");
+  const style = append(document.head, "style");
+  style.textContent = ".anchor-padding-proof { padding: 20px !important }";
+  const { surface, owner } = popup(shadow("closed"), element);
+  await open(owner);
+  await frame();
+  expectAnchored(surface, element);
+
+  style.textContent = ".anchor-padding-proof { padding: 0 !important }";
+  await expect
+    .poll(() => {
+      const source = element.getBoundingClientRect();
+      const target = surface.getBoundingClientRect();
+      return Math.abs(target.top - source.bottom - 6);
+    })
+    .toBeLessThan(1);
 });
 
 it.each([false, true])("opens an adopted template (same-root=%s)", async (sameRoot) => {
@@ -177,7 +274,10 @@ it.each([
   const source = spatialSource(surface);
   expect(source.getRootNode()).toBe(surface.getRootNode());
   expect(source.matches(":popover-open")).toBe(true);
-  element.style.left = "240px";
+  element.style.left = "240.375px";
+  element.style.top = "125.25px";
+  element.style.width = "101.625px";
+  element.style.height = "35.5px";
   await frame();
   expectAnchored(surface, element);
   const hidden = after(surface, "hide");
@@ -185,16 +285,24 @@ it.each([
   await hidden;
   expect(source.matches(":popover-open")).toBe(false);
   const left = source.style.left;
-  element.style.left = "340px";
+  element.style.left = "340.625px";
+  element.style.top = "145.5px";
+  element.style.width = "112.25px";
+  element.style.height = "41.75px";
   await frame();
   expect(source.style.left).toBe(left);
+  await open(owner);
+  expectAnchored(surface, element);
+  const hiddenAgain = after(surface, "hide");
+  owner.request(false);
+  await hiddenAgain;
   binding.dispose();
   expect(source.isConnected).toBe(false);
   expect(element.style.getPropertyValue("anchor-name")).toBe("--author-anchor");
   expect(surface.style.getPropertyValue("position-anchor")).toBe("auto");
 });
 
-it("reanchors to cross-root SVG without reopening or blocking clicks", async () => {
+it("reanchors across roots without reopening or blocking clicks", async () => {
   const first = anchor(document.body),
     second = anchor(shadow("closed"), true);
   const { surface, owner, binding } = popup(document.body, first);
@@ -222,6 +330,14 @@ it("reanchors to cross-root SVG without reopening or blocking clicks", async () 
   await userEvent.click(action);
   expect(clicked).toHaveBeenCalledOnce();
   expect(owner.open).toBe(true);
+  document.body.append(second);
+  await frame();
+  expectAnchored(surface, second);
+  second.style.left = "330.375px";
+  await frame();
+  expectAnchored(surface, second);
+  expect(owner).toMatchObject({ open: true, phase: "open" });
+  expect(shown).toHaveBeenCalledOnce();
 });
 
 it("keeps native Tab entry and exit tied to the real cross-root invoker", async () => {
@@ -264,6 +380,8 @@ it("retains geometry during closing and disposes the spatial anchor on teardown"
   animation.pause();
   try {
     expect(owner.request(false)).toBe(true);
+    element.style.left = "210.375px";
+    element.style.top = "140.625px";
     await frame();
     expect(owner).toMatchObject({ open: false, phase: "closing" });
     expect(surface.inert).toBe(true);

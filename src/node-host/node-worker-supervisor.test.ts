@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-private.js";
@@ -20,7 +21,7 @@ import {
 } from "./node-worker-process-identity.js";
 import { projectNodeWorkerSupervisorReceipt } from "./node-worker-supervisor-contract.js";
 import {
-  createNodeWorkerSupervisorFixture,
+  createObservedNodeWorkerSupervisorFixture,
   observeNodeWorkerAdapters,
   waitForNodeWorkerTerminal as waitForTerminal,
 } from "./node-worker-supervisor.fixture.test-support.js";
@@ -31,6 +32,7 @@ import {
   TEST_WORKER_SOURCE,
   testNodeWorkerLaunchIdentity,
   testWorkerDescriptor,
+  testIsolatedWorkerLaunchInput as launchInput,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
@@ -46,31 +48,17 @@ afterEach(() => {
 });
 
 function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
-  const capacities: Array<{ total: number; available: number }> = [];
-  const value = createNodeWorkerSupervisorFixture(tempDirs.make("node-worker-supervisor-"), {
-    onCapacityChanged: (capacity) => capacities.push(capacity),
-    ...options,
-  });
-  const { env, supervisor, workspaceDir } = value;
+  const value = createObservedNodeWorkerSupervisorFixture(
+    tempDirs.make("node-worker-supervisor-"),
+    options,
+  );
+  const { supervisor, workspaceDir } = value;
   return {
     ...value,
-    capacities,
     launch: (input: ReturnType<typeof launchInput>) =>
       supervisor.launch(input, TEST_WORKER_ENDPOINT),
-    terminal: (id: string) => waitForTerminal(supervisor, id),
-    receipt: (id: string) =>
-      new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(id),
-    file: (name: string) => path.join(workspaceDir, name),
     json: (name: string) => JSON.parse(fs.readFileSync(path.join(workspaceDir, name), "utf8")),
-    [Symbol.asyncDispose]: () => supervisor.close(),
   };
-}
-
-function launchInput(workspaceDir: string, launchId: string, prompt = "success") {
-  const input = testWorkerLaunchInput(workspaceDir, launchId, prompt);
-  input.descriptor.admission.environmentId = `environment-${launchId}`;
-  input.descriptor.admission.sessionId = `session-${launchId}`;
-  return input;
 }
 
 function capacityHistory(...available: number[]) {
@@ -231,6 +219,19 @@ describe("node worker supervisor", () => {
     await supervisor.close();
     await rejected;
     expect(await f.receipt(waiting.launchId)).toBeUndefined();
+  });
+
+  it("launches a downloaded worker through the standalone executable's generic runtime", async () => {
+    await using f = fixture();
+    vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(f.workspaceDir).href);
+    try {
+      const input = launchInput(f.workspaceDir, "generic-worker-env", "env");
+      await f.launch(input);
+      expect((await f.terminal(input.launchId)).state).toBe("completed");
+      expect(f.json(`${input.launchId}.env.json`)).toMatchObject({ BUN_BE_BUN: "1" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("spawns workers with only supplied runtime essentials", async () => {

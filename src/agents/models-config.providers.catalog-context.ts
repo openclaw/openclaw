@@ -5,6 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import type {
   ProviderCatalogOutcome,
   ProviderCatalogResult,
@@ -212,6 +213,7 @@ export async function loadSelectedProviderAccountCatalog(params: {
   config: OpenClawConfig;
   agentDir: string;
   workspaceDir: string;
+  refresh?: boolean;
   isCurrent: () => boolean;
   assertCurrent: () => void;
   withCurrent?: CurrentReadAuthority["withCurrent"];
@@ -235,8 +237,21 @@ export async function loadSelectedProviderAccountCatalog(params: {
   ]);
   await withCurrentReadAuthority(authority, () => {});
   const selectedStore = { ...authStore, profiles: { [profileId]: credential } };
+  const authProvider = resolveProviderIdForAuth(providerId, { config: params.config });
+  // This local view selects the authorized profile, not the provider default.
+  // The catalog hook still receives the unchanged request/endpoint configuration below.
+  const selectedProviders = Object.fromEntries(
+    Object.entries(params.config.models?.providers ?? {}).map(([id, provider]) => {
+      if (resolveProviderIdForAuth(id, { config: params.config }) !== authProvider) {
+        return [id, provider];
+      }
+      const { apiKey: _apiKey, auth: _auth, ...route } = provider;
+      return [id, route];
+    }),
+  );
   const selectedConfig = {
     ...params.config,
+    models: { ...params.config.models, providers: selectedProviders },
     auth: {
       ...params.config.auth,
       order: { ...params.config.auth?.order, [providerId]: [profileId] },
@@ -245,7 +260,6 @@ export async function loadSelectedProviderAccountCatalog(params: {
   const preparedAuth = await withCurrentReadAuthority(authority, () =>
     createProviderAuthResolver(process.env, selectedStore, selectedConfig)(providerId),
   );
-  const authProvider = resolveProviderIdForAuth(providerId, { config: selectedConfig });
   // Provider callbacks stay synchronous and consume only the already-authorized auth facts.
   const lockedAuth: ReturnType<typeof createProviderAuthResolver> = (requested, options) => {
     assertCurrent();
@@ -313,7 +327,11 @@ export async function loadSelectedProviderAccountCatalog(params: {
   await withCurrentReadAuthority(authority, () =>
     withGuardedFetchRequestAuthority(
       assertCurrent,
-      async () => runProviderCatalogWithTimeout(catalogRequest),
+      // Selected-account refresh must reach HTTP caches, not just re-run the hook.
+      async () =>
+        captureProviderCatalogExpiries(() => runProviderCatalogWithTimeout(catalogRequest), {
+          refresh: params.refresh,
+        }),
       params.beforeRequest,
     ),
   );

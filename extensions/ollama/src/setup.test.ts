@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureOllamaModelPulled, promptAndConfigureOllama } from "./setup.js";
 import { checkOllamaCloudAuth } from "./setup.runtime.js";
@@ -69,9 +70,9 @@ describe("ollama setup", () => {
     fetchWithSsrFGuardMock.mockClear();
   });
 
-  it("Docker setup defaults to the host Ollama endpoint", async () => {
+  it("Docker setup hints the host Ollama endpoint and uses it for blank input", async () => {
     vi.stubEnv("OPENCLAW_DOCKER_SETUP", "1");
-    const text = vi.fn().mockResolvedValueOnce("http://host.docker.internal:11434");
+    const text = vi.fn().mockResolvedValueOnce("");
     const { result, fetchMock } = await configureInteractive({ tags: ["llama3:8b"] }, { text });
 
     const baseUrlPrompt = mockCallArg(text) as {
@@ -79,8 +80,9 @@ describe("ollama setup", () => {
       placeholder?: string;
       validate: (value: string) => string | undefined;
     };
+    expect(baseUrlPrompt.initialValue).toBeUndefined();
     expect(baseUrlPrompt).toMatchObject({
-      initialValue: "http://host.docker.internal:11434",
+      message: "Ollama base URL",
       placeholder: "http://host.docker.internal:11434",
     });
     expect(baseUrlPrompt.validate("https://ollama.com")).toContain("--auth-choice ollama-cloud");
@@ -474,25 +476,10 @@ describe("checkOllamaCloudAuth", () => {
   });
 
   it("bounds oversized 401 body and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024);
-    let readCount = 0;
-    let canceled = false;
-    const oversizedBody = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (readCount >= 64) {
-          controller.close();
-          return;
-        }
-        readCount += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
+    const oversized = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
 
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(oversizedBody, {
+      response: new Response(oversized.response.body, {
         status: 401,
         headers: { "Content-Type": "application/json" },
       }),
@@ -505,8 +492,8 @@ describe("checkOllamaCloudAuth", () => {
       signinUrl: undefined,
     });
 
-    expect(readCount).toBeLessThan(64);
-    expect(canceled).toBe(true);
+    expect(oversized.getReadCount()).toBeLessThan(64);
+    expect(oversized.wasCanceled()).toBe(true);
   });
 });
 

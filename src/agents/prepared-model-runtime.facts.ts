@@ -11,6 +11,10 @@ import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "../plugins/plugin-generation-metrics.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   getPreparedMessageToolCatalog,
@@ -112,6 +116,7 @@ export async function prepareWorkspaceBuildGroup(
   buildStats: Pick<
     PreparedModelRuntimeBuildStats,
     | "runtimePluginMs"
+    | "pluginPreparation"
     | "pluginMetadataMs"
     | "staticProviderCatalogMs"
     | "ambientCredentialsMs"
@@ -165,16 +170,19 @@ export async function prepareWorkspaceBuildGroup(
   await using _ = options.registryResources ? undefined : registryResources;
   registryResources.retainGeneration(reusablePluginGeneration);
   // Borrowing spans the caller's construction; registry acquisition is selected independently.
-  const preparingRegistries = prepareWorkspacePluginRegistries(
-    input,
-    pluginMetadataSnapshot,
-    (registry) => registryResources.retainRegistry(registry),
-    loadInboundPluginRegistry,
-    preferBuiltPluginArtifacts,
-    reusablePluginGeneration,
-    options.getConfiguredHarnessRuntimes,
-    undefined,
-    options.loadRuntimeRegistry,
+  const preparationMetrics = createPluginGenerationMetrics();
+  const preparingRegistries = withPluginGenerationMetrics(preparationMetrics, () =>
+    prepareWorkspacePluginRegistries(
+      input,
+      pluginMetadataSnapshot,
+      (registry) => registryResources.retainRegistry(registry),
+      loadInboundPluginRegistry,
+      preferBuiltPluginArtifacts,
+      reusablePluginGeneration,
+      options.getConfiguredHarnessRuntimes,
+      undefined,
+      options.loadRuntimeRegistry,
+    ),
   );
   const { inboundPluginRegistry, runtimePluginRegistry, primaryRegistry } =
     preparingRegistries instanceof Promise ? await preparingRegistries : preparingRegistries;
@@ -186,6 +194,8 @@ export async function prepareWorkspaceBuildGroup(
       ? Object.freeze({ registry: primaryRegistry, resources })
       : undefined;
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
+  // Descendant tasks can retain the scope after this measured phase has finished.
+  const pluginPreparation = { ...preparationMetrics };
   prepareOwnedPluginLoadContext(
     input,
     env,
@@ -236,22 +246,30 @@ export async function prepareWorkspaceBuildGroup(
       (options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
     );
     const configuredModelRefs: ConfiguredModelRef[] = [];
+    const configuredScopes = new Map<
+      PreparedModelRuntimeInput,
+      Parameters<typeof prepareAgentFacts>[2]
+    >();
     for (const candidate of inputs) {
       await nextTurn();
       options.assertCurrent?.(candidate);
       const { config, agentId } = candidate;
-      for (const provider of withAgentRosterFactsBatch(config, () => {
+      const scope = withAgentRosterFactsBatch(config, () => {
         const refs = collectPreparedModelRuntimeConfiguredRefs(
           config,
           agentId,
           candidate.readOnly ? candidate.runtimePluginSelections : undefined,
         );
         configuredModelRefs.push(...refs);
-        return [
+        const providerIds = [
           ...collectPreparedModelRuntimeProviderIds(config, {}, false, refs, agentId),
           ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
+          ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
         ];
-      })) {
+        return { configuredModelRefs: refs, providerIds };
+      });
+      configuredScopes.set(candidate, scope);
+      for (const provider of scope.providerIds) {
         configuredProviders.add(provider);
       }
     }
@@ -356,11 +374,10 @@ export async function prepareWorkspaceBuildGroup(
       agentBaseFacts.push(
         await prepareAgentFacts(
           candidate,
-          catalogMode,
           ambientCredentials,
+          configuredScopes.get(candidate)!,
           () => options.assertCurrent?.(candidate),
-          options.providerDiscoveryProviderIds,
-          options.includeCredentialProviders,
+          options.includeCredentialProviders ?? catalogMode === "live",
         ),
       );
     }
@@ -452,6 +469,7 @@ export async function prepareWorkspaceBuildGroup(
       agentFacts,
       buildStats: {
         runtimePluginMs,
+        pluginPreparation,
         pluginMetadataMs,
         staticProviderCatalogMs,
         ambientCredentialsMs,
@@ -484,10 +502,17 @@ export function captureModelsJsonContents(agentDir: string): string | null {
 /** Record discovery scope before config projection or auth-owner publication can replace it. */
 export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
   const { models, auth, env } = input.config;
-  const plugins = normalizePluginsConfig(input.config.plugins);
-  for (const entry of Object.values(plugins.entries)) {
-    entry.config ??= {};
-  }
+  const normalized = normalizePluginsConfig(input.config.plugins);
+  // Normalized policy is shared and frozen; key absent plugin config as empty without mutating it.
+  const plugins = {
+    ...normalized,
+    entries: Object.fromEntries(
+      Object.entries(normalized.entries).map(([id, entry]) => [
+        id,
+        entry.config === undefined || entry.config === null ? { ...entry, config: {} } : entry,
+      ]),
+    ),
+  };
   return fingerprintPreparedRuntimeFacts({
     ...input,
     config: { models, auth, env, plugins },
@@ -504,10 +529,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   assertCurrent?: (input: PreparedModelRuntimeInput) => void;
   registries?: PreparedConfiguredModelRegistries;
-}): Promise<{
-  catalogs: Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>;
-  registryCount: number;
-}> {
+}) {
   const catalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let registryCount = 0;
   const preparedStaticProviderConfigs = resolvePreparedProviderStaticConfigs(

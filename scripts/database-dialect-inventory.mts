@@ -19,10 +19,10 @@ type DialectSite = DialectMatch & { line: number; column: number };
 export type DialectInventoryRow = { file: string; matches: DialectSite[] };
 export type DialectInventoryCache = Map<string, { text: string; matches: DialectSite[] }>;
 const roots = ["src", "extensions", "packages"];
-const SQL_STATEMENT =
+export const SQL_STATEMENT =
   /^[\s(]*(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH|CREATE|DROP|ALTER|PRAGMA|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|VACUUM|ATTACH|DETACH|ANALYZE|REINDEX|EXPLAIN)\b/u;
 
-function productionFile(file: string) {
+export function productionFile(file: string) {
   return (
     /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) &&
     !excluded.test(file) &&
@@ -126,7 +126,13 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
         // The SQLite v31 schema transaction rebuilds this table without changing row identities.
         // PostgreSQL relaxes its constraint directly in openclaw-state-db-engine.ts.
         file === "src/state/openclaw-state-db-schema-v31-workspace-manifests.ts") &&
-        match.construct === "rowid");
+        match.construct === "rowid") ||
+      // Knowledge's keyword index is a rebuildable cache in its own per-store state.sqlite,
+      // never the selected Gateway engine: its FTS5 corpus, temp subset and rowid are engine-private.
+      (file === "extensions/knowledge/src/retrieval.ts" &&
+        (match.construct === "fts5" ||
+          match.construct === "temp-schema" ||
+          match.construct === "rowid"));
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,

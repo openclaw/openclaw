@@ -375,7 +375,6 @@ export async function preauthenticateRfb(params: {
   server: Duplex;
   browser: RfbPreauthPeer;
   preauth: RfbPreauthDescriptor;
-  timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<void> {
@@ -400,9 +399,8 @@ export async function preauthenticateRfb(params: {
   const browser = currentPeer(params.browser);
   const timeout = setTimeout(
     () => controller.abort(new RfbPreauthTimeoutError()),
-    params.timeoutMs ?? DEFAULT_PREAUTH_TIMEOUT_MS,
-  );
-  timeout.unref?.();
+    DEFAULT_PREAUTH_TIMEOUT_MS,
+  ).unref();
   try {
     await Promise.all([
       negotiateServer({ peer: currentPeer(server), preauth: params.preauth, signal }),

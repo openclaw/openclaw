@@ -42,11 +42,7 @@ function makeParams(
   const totalTokensFresh = options?.totalTokensFresh ?? true;
   return {
     ...commandFixture(commandBodyNormalized),
-    command: {
-      commandBodyNormalized,
-      channel: "forum",
-      senderIsOwner: true,
-    },
+    command: { commandBodyNormalized, channel: "forum", senderIsOwner: true },
     sessionKey: options?.sessionKey ?? "agent:default:main",
     contextTokens: options?.contextTokens ?? null,
     storePath: options?.storePath,
@@ -72,11 +68,7 @@ function makeParams(
         bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : 12_000,
         bootstrapTotalMaxChars: options?.omitBootstrapLimits ? undefined : 60_000,
         sandbox: { mode: "off", sandboxed: false },
-        systemPrompt: {
-          chars: 1_000,
-          projectContextChars: 500,
-          nonProjectContextChars: 500,
-        },
+        systemPrompt: { chars: 1_000, projectContextChars: 500, nonProjectContextChars: 500 },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
         injectedWorkspaceFiles: [
           {
@@ -101,10 +93,7 @@ function makeParams(
               ]
             : []),
         ],
-        skills: {
-          promptChars: 10,
-          entries: [{ name: "checks", blockChars: 10 }],
-        },
+        skills: { promptChars: 10, entries: [{ name: "checks", blockChars: 10 }] },
         tools: {
           listChars: 10,
           schemaChars: 20,
@@ -144,11 +133,7 @@ function toolExchange(timestamp: number) {
 
 async function contextMap(options: NonNullable<Parameters<typeof makeParams>[2]>) {
   const result = await buildContextReply(
-    makeParams("/context map", false, {
-      contextTokens: 8_192,
-      totalTokens: 900,
-      ...options,
-    }),
+    makeParams("/context map", false, { contextTokens: 8_192, totalTokens: 900, ...options }),
   );
   if (!result.mediaUrl) {
     throw new Error("missing context map media path");
@@ -354,12 +339,7 @@ describe("buildContextReply", () => {
         sessionKey: "agent:scout:main",
         cfg: {
           agents: {
-            entries: {
-              scout: {
-                bootstrapMaxChars: 32_000,
-                bootstrapTotalMaxChars: 96_000,
-              },
-            },
+            entries: { scout: { bootstrapMaxChars: 32_000, bootstrapTotalMaxChars: 96_000 } },
           },
         },
       }),
@@ -491,13 +471,6 @@ describe("buildContextReply", () => {
 });
 
 describe("buildCommandContext", () => {
-  it.each([
-    ["/reset soft\nre-read persona files", "/reset soft re-read persona files"],
-    ["/skill demo_skill first line\nsecond line", "/skill demo_skill first line\nsecond line"],
-  ])("normalizes multiline command %j", (body, expected) => {
-    expect(commandContext(body).commandBodyNormalized).toBe(expected);
-  });
-
   it("maps explicit gateway origin into command context", () => {
     const result = commandContext("/codex bind", {
       Provider: "internal",

@@ -18,7 +18,6 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
@@ -34,13 +33,13 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
   type ExecApprovalsTarget,
-  type DevicesPageDataState,
+  type DevicesPageDataState as DevicesState,
 } from "../../lib/nodes/page-operations.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
@@ -54,8 +53,6 @@ import {
 } from "./view-inventory-readiness.tsx";
 import { DevicesView } from "./view.tsx";
 import type { DevicesProps, DevicesRouteData } from "./view.types.ts";
-
-registerEnglishCatalog(registerDevicesEnglish);
 
 export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const context = useApplication();
@@ -102,7 +99,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     gatewayClient: () => gatewayBinding.client,
     gatewayUrl: () => context.gateway.connection.gatewayUrl,
     runPageTask,
-    runInventoryTask,
+    runInventoryTask: (task) => inventoryActions.run(() => runPageTask(task)).presented,
     rotateDevice: (params) =>
       inventoryActions.run(() => runPageTask((pageState) => rotateDeviceToken(pageState, params)))
         .result,
@@ -232,10 +229,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     read: inventoryRead,
     publish: () => publishData(),
   });
-  function runInventoryTask(task: (pageState: DevicesPageDataState) => unknown) {
-    return inventoryActions.run(() => runPageTask(task)).presented;
-  }
   onSettled(() => {
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     syncConfigCustody();
     // Config receipts record which connection owns the accepted policy draft.
     const stopConfig = configProjection.subscribe(syncConfigCustody);
@@ -462,9 +457,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     execApprovalsTargetNodeId = null;
   }
 
-  async function runPageTask<T>(
-    task: (pageState: DevicesPageDataState) => T | Promise<T>,
-  ): Promise<T> {
+  async function runPageTask<T>(task: (pageState: DevicesState) => T | Promise<T>): Promise<T> {
     const pageState = dataState;
     try {
       const result = task(pageState);
@@ -479,7 +472,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     }
   }
 
-  function runAdminTask(task: (pageState: DevicesPageDataState) => unknown) {
+  function runAdminTask(task: (pageState: DevicesState) => unknown) {
     if (canAdmin) {
       void runPageTask(task);
     }
@@ -627,6 +620,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       configRead: policyReads.config,
       execApprovalsRead: policyReads.approvals,
       loading: devices.nodesLoading,
+      initialInventoryReady: routeDataInitialized,
       inventoryRead,
       inventoryScope: inventoryScope(),
       onReloadInventory: () => {

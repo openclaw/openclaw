@@ -5,8 +5,7 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   isSqliteCorruptionError,
   isSqliteLockError,
@@ -329,8 +328,51 @@ function publishOpenClawStateDatabase(
   return database;
 }
 
-function getCachedOpenClawStateDatabase(pathname: string, options?: { readOnly: true }) {
-  return withCachedOpenClawStateDatabase(pathname, options, (database) => database);
+/** Looking up an admitted handle does not consume schema or row facts. */
+function getCachedOpenClawStateDatabase(
+  pathname: string,
+  options?: { readOnly: true },
+): OpenClawStateDatabase | undefined {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const runtimeFailure = terminalOpenLatch.get(resolvedPath);
+  if (runtimeFailure) {
+    throw runtimeFailure;
+  }
+  const database = readCachedOpenClawStateDatabase(resolvedPath, options?.readOnly === true);
+  if (database) {
+    touchStateDatabase(database);
+  }
+  return database;
+}
+
+function readCachedOpenClawStateDatabase(
+  resolvedPath: string,
+  readOnly: boolean,
+): OpenClawStateDatabase | undefined {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (readOnly) {
+    maintenance?.assertReadAdmission();
+  } else {
+    maintenance?.assertAdmission();
+  }
+  assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
+  const database = cachedDatabases.get(resolvedPath);
+  if (database && borrowers.get(database.db)?.retiring) {
+    throw new Error(`OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`);
+  }
+  return database;
+}
+
+/** Fact checks retain admission, not idle handles; native transactions expose staged facts. */
+export function prepareOpenClawStateCachedRead(pathname: string) {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  getCachedOpenClawStateDatabase(resolvedPath, { readOnly: true });
+  // Terminal failures invalidate this admission before closing the native owner.
+  const admission = asyncResources.capture(resolvedPath);
+  return () => {
+    admission.assertCurrent();
+    return readCachedOpenClawStateDatabase(resolvedPath, true);
+  };
 }
 
 /** Keep the admitted revision live while a synchronous reader consumes its row facts. */
@@ -339,25 +381,8 @@ function withCachedOpenClawStateDatabase<T>(
   options: { readOnly: true } | undefined,
   operation: (database: OpenClawStateDatabase) => T,
 ): T | undefined {
-  const resolvedPath = resolveDatabasePath({ path: pathname });
-  const maintenance = getOpenClawDatabaseMaintenanceScope();
-  if (options?.readOnly) {
-    maintenance?.assertReadAdmission();
-  } else {
-    maintenance?.assertAdmission();
-  }
-  assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
-  const runtimeFailure = terminalOpenLatch.get(resolvedPath);
-  if (runtimeFailure) {
-    throw runtimeFailure;
-  }
-  return cacheAdmission.read(resolvedPath, (database) => {
-    if (borrowers.get(database.db)?.retiring) {
-      throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
-    }
-    touchStateDatabase(database);
-    return operation(database);
-  });
+  const database = getCachedOpenClawStateDatabase(pathname, options);
+  return database && cacheAdmission.read(database, operation);
 }
 
 function getOpenClawStateDatabaseIfOpenAtPath(pathname: string): OpenClawStateDatabase | undefined {
@@ -433,29 +458,28 @@ function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: 
   notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: resolvedPath, error });
 }
 
-/** Reject a fresh shared-state open after known corruption until repair clears it. */
 function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   pathname: string,
   env: NodeJS.ProcessEnv,
   onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
+  refreshQuarantineIdentity?: true,
 ): void {
   assertOpenClawStateDatabaseOpenAllowed(pathname);
   let quarantineFailure: Error | undefined;
   try {
-    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
+    const options = { env, refreshIdentity: refreshQuarantineIdentity };
+    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, options);
   } catch (error) {
     if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
       throw error;
     }
     onNativeCleanupFailure?.(error);
-    return;
   }
   if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
     onNativeCleanupFailure?.(quarantineFailure.cause);
   }
   if (quarantineFailure) {
-    // Another process can record quarantine. Revoke admitted owners without a
-    // process-local latch that could outlive the durable decision's generation.
+    // Revoke owners without a process-local latch that could outlive the durable decision.
     cacheAdmission.closeTerminalFailure(pathname, quarantineFailure);
     throw quarantineFailure;
   }
@@ -548,6 +572,25 @@ export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseO
 /** Register a resource owner before it can admit any shared-state worker opens. */
 export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
 
+/** Close the admitted file or its canonical path, retaining first-creation identity getters. */
+export function registerOpenClawStatePathAsyncResource(
+  admission: Pick<OpenClawStateDatabaseReadAdmission, "identity">,
+  close: () => Promise<void>,
+): () => void {
+  return registerOpenClawStateDatabaseAsyncResource({
+    close(identity) {
+      if (
+        !identity ||
+        identity.key === admission.identity.key ||
+        identity.canonicalPath === admission.identity.canonicalPath
+      ) {
+        return close();
+      }
+      return Promise.resolve();
+    },
+  });
+}
+
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 
@@ -556,8 +599,12 @@ export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
 /** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
+  preparedIdentity?: DatabasePathIdentity,
 ): void {
-  asyncResources.publish(admission.databasePath);
+  if (preparedIdentity) {
+    admission.assertCurrent();
+  }
+  asyncResources.publish(admission.databasePath, preparedIdentity);
   admission.assertCurrent();
 }
 

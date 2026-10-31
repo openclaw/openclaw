@@ -31,7 +31,6 @@ import {
   handlePortalProxyUpgrade,
   type PortalTarget,
 } from "./portal-http-proxy.js";
-import { removePortalServers } from "./portal-listeners.js";
 import { resolvePortalTlsHostname } from "./portal-tls-hostname.js";
 
 type PortalEntry = {
@@ -61,6 +60,15 @@ type PortalRuntimeEntry = {
   revoked?: boolean;
   responses: Set<ServerResponse>;
 };
+
+function removePortalServers(shared: HttpServer[], owned: readonly HttpServer[]): void {
+  for (const server of owned) {
+    const index = shared.indexOf(server);
+    if (index >= 0) {
+      shared.splice(index, 1);
+    }
+  }
+}
 
 type GatewayPortalOpenParams = {
   targetPort: number;

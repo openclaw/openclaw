@@ -19,10 +19,12 @@ import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permi
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   assertDatabasePortRecoveryAllowed,
   assertDatabasePortStartupAllowed,
   DatabasePortRecoveryError,
+  type DatabasePortRecoveryIntent,
 } from "./database-port-recovery.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
@@ -31,7 +33,9 @@ import {
   describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   GatewayLockNamespaceError,
+  type GatewayLockRole,
   type LockPayload,
+  LockPayloadSchema,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -39,12 +43,12 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
-import type { GatewayLockHandle, GatewayLockOptions } from "./gateway-lock.types.js";
 import {
   acquireGatewayOwnerLease,
   assertGatewayOwnerLeaseStopped,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
+import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
 import {
@@ -56,7 +60,38 @@ import {
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
 
-export type { GatewayLockHandle, GatewayLockOptions } from "./gateway-lock.types.js";
+export type GatewayLockHandle = {
+  lockPath: string;
+  stateLockPath: string;
+  stateDir: string;
+  assertCurrent(this: void, assertPolicy?: () => void, access?: "read"): void;
+  assertDatabaseAccess(this: void, databasePath: string): void;
+  release: () => Promise<void>;
+  run<T>(operation: () => T): T;
+  markListening?: () => void;
+};
+
+export type GatewayLockOptions = {
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  lifecycleDeadlineMs?: number;
+  pollIntervalMs?: number;
+  allowInTests?: boolean;
+  platform?: NodeJS.Platform;
+  port?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  lockDir?: string;
+  role?: GatewayLockRole;
+  assertCurrent?: () => void;
+  onWait?: (message: string) => void;
+  /** Internal offline port recovery; validated only after acquiring fresh physical custody. */
+  databasePortRecovery?: DatabasePortRecoveryIntent;
+  /** Config-only repairs retain file custody without inspecting or admitting database work. */
+  databaseAccess?: "none";
+  listenerMode?: "foreground" | "supervised";
+  supervisor?: GatewayOwnerSupervisor | null;
+};
 
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");
@@ -126,7 +161,7 @@ function resolveGatewayOwnerStatusSync(
     return Math.max(1, Math.min(CMDLINE_EXEC_TIMEOUT_MS, Math.ceil(remaining)));
   };
   remainingTimeoutMs();
-  const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, opts.lockPath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, opts.lockPath);
   if (namespace !== "same") {
     return namespace;
   }
@@ -221,10 +256,7 @@ function shouldReclaimGatewayLock(params: {
   payload: LockPayload | null;
   platform: NodeJS.Platform;
 }): boolean {
-  if (
-    classifyGatewayLockProcessNamespace(params.payload?.processNamespace, params.lockPath) ===
-    "unknown"
-  ) {
+  if (classifyGatewayLockProcessNamespace(params.payload, params.lockPath) === "unknown") {
     throw new GatewayLockNamespaceError(params.payload ?? {}, params.lockPath);
   }
   const ownerPid = params.payload?.pid;
@@ -319,7 +351,7 @@ async function readVerifiedGatewayLockIdentity(
   }
   if (
     opts.requireInspection &&
-    classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown"
+    classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown"
   ) {
     const error = new GatewayLockNamespaceError(payload, lockPath);
     throw new GatewayLockError(error.message, error);
@@ -362,7 +394,7 @@ async function assertHistoricalGatewayOwnerStopped(
     if (!payload) {
       continue;
     }
-    if (classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown") {
+    if (classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown") {
       throw new GatewayLockNamespaceError(payload, lockPath);
     }
     const owner = await resolveGatewayOwnerStatus(
@@ -421,6 +453,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     role,
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
     ...(typeof opts.port === "number" &&
     Number.isInteger(opts.port) &&
@@ -574,10 +607,10 @@ export async function acquireGatewayLock(
     assertStateOwnerCurrent(opts.assertCurrent);
     // Shipped Gateways discover this PID sidecar before starting. Synchronous
     // schema work retains the same fs-safe owner through its final reference.
-    const shouldReclaim = (previous: LockPayload | null) =>
+    const shouldReclaim = ({ payload: previous }: { payload: unknown }) =>
       shouldReclaimGatewayLock({
         lockPath: paths.stateLockPath,
-        payload: previous,
+        payload: LockPayloadSchema.safeParse(previous).data ?? null,
         platform: opts.platform ?? process.platform,
       });
     if (!borrowedOwner) {
@@ -589,10 +622,8 @@ export async function acquireGatewayLock(
           staleRecovery: "remove-if-unchanged",
           reentrantOwner: payload.ownerId,
           payload: () => (role === "gateway" ? payload : { ...payload, role: "agent-embedded" }),
-          parsePayload: parseGatewayLockPayload,
-          shouldReclaim: ({ payload: previous }) => shouldReclaim(previous as LockPayload | null),
-          shouldRemoveStaleLock: ({ payload: previous }) =>
-            shouldReclaim(previous as LockPayload | null),
+          shouldReclaim,
+          shouldRemoveStaleLock: shouldReclaim,
         }),
       );
     }

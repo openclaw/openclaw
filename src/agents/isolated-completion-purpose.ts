@@ -7,4 +7,5 @@ export type IsolatedCompletionPurpose =
   | "composer-prediction"
   | "progress-narration"
   | "transcript-summary"
+  | "skill-diet"
   | "plugin-completion";

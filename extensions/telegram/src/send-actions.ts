@@ -6,6 +6,7 @@ import { buildTypingThreadParams } from "./bot/helpers.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
+  isTelegramMessageAlreadyDeletedError,
   isTelegramMessageDeleteNoopError,
   withTelegramApiContext,
   type TelegramApi,
@@ -164,6 +165,10 @@ export async function deleteMessageTelegram(
         logVerbose(
           `[telegram] Delete skipped for message ${messageId} in chat ${chatId}: ${detail}`,
         );
+        // A retry after a lost success response also lands here.
+        if (isTelegramMessageAlreadyDeletedError(err)) {
+          return { ok: true };
+        }
         return {
           ok: false,
           warning: `Message ${messageId} was not deleted: ${detail}`,

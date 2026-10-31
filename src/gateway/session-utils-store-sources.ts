@@ -97,7 +97,11 @@ function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>
     if (!memo.observations.has(observationKey)) {
       memo.observations.set(
         observationKey,
-        observeOwnedDirectory(directory, (filename) => {
+        observeOwnedDirectory(directory, (filename, event) => {
+          // Content writes do not replace the prepared source identities.
+          if (event === "change" && filename !== undefined) {
+            return;
+          }
           if (!memo.current || memo.observedThisTurn) {
             return;
           }
@@ -205,8 +209,6 @@ async function prepareSourceRequest(
 ): Promise<GatewaySessionStoreSourceRequest | undefined> {
   const paths = createOpenClawAgentDatabasePathMatcher();
   memo.pathsCurrent = () => paths.isCurrent();
-  paths(params.registryPath, params.registryPath);
-  observe(params.registryPath);
   const inventory = prepareSessionStoreTargetInventory(
     sessionStoreRoutingConfig(routing),
     routing.agentIds,

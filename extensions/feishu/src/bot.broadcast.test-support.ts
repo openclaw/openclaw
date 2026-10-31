@@ -1,22 +1,20 @@
 import {
   buildChannelInboundEventContext,
-  type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
-  type BuiltChannelInboundEventContext,
-  type ChannelInboundSupplementalResolutionOptions,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
-import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage as handleFeishuMessageImpl } from "./bot.js";
 import {
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
+  replyDispatcher,
   withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
 import { feishuDedupeState } from "./dedup-state.js";
@@ -25,12 +23,7 @@ import { setFeishuRuntime } from "./runtime.js";
 export { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 
 const mocks = vi.hoisted(() => {
-  const makeReplyDispatcher = () => ({
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: {},
-    ensureNoVisibleReplyFallback: vi.fn(),
-  });
+  const makeReplyDispatcher = () => replyDispatcher();
   return {
     builtInboundContextCalls: [] as Array<Record<string, unknown>>,
     createReplyDispatcher: makeReplyDispatcher,
@@ -42,36 +35,6 @@ const mocks = vi.hoisted(() => {
     mockResolveStorePath: vi.fn(
       (_store?: unknown, _options?: { agentId?: string }) => "/tmp/feishu-session-store.json",
     ),
-  };
-});
-
-vi.mock(import("openclaw/plugin-sdk/channel-inbound"), async (importOriginal) => {
-  const actual = await importOriginal();
-  const finalize: NonNullable<BuildChannelInboundEventContextParams["finalize"]> = (ctx) => {
-    mocks.builtInboundContextCalls.push(ctx);
-    return ctx;
-  };
-  function buildContext(
-    params: BuildChannelInboundEventContextAsyncParams,
-  ): Promise<BuiltChannelInboundEventContext>;
-  function buildContext(
-    params: BuildChannelInboundEventContextParams,
-  ): BuiltChannelInboundEventContext;
-  function buildContext(
-    params: BuildChannelInboundEventContextParams &
-      Partial<ChannelInboundSupplementalResolutionOptions>,
-  ): BuiltChannelInboundEventContext | Promise<BuiltChannelInboundEventContext> {
-    return params.resolveSupplementalMedia
-      ? actual.buildChannelInboundEventContext({
-          ...params,
-          finalize,
-          resolveSupplementalMedia: true,
-        })
-      : actual.buildChannelInboundEventContext({ ...params, finalize });
-  }
-  return {
-    ...actual,
-    buildChannelInboundEventContext: buildContext,
   };
 });
 
@@ -94,6 +57,10 @@ export function setupFeishuBroadcastTestHarness() {
   const mockGetChatInfo = vi.fn();
   const resolvedTurnCalls: ChannelInboundTurnPlan[] = [];
   const mockCurrentConfig = vi.fn(() => createBroadcastConfig());
+  const finalize: NonNullable<BuildChannelInboundEventContextParams["finalize"]> = (ctx) => {
+    mocks.builtInboundContextCalls.push(ctx);
+    return ctx;
+  };
   const runtimeStub = {
     config: { current: mockCurrentConfig },
     channel: {
@@ -102,10 +69,11 @@ export function setupFeishuBroadcastTestHarness() {
         resolveStorePath: mocks.mockResolveStorePath,
         recordInboundSession: mocks.mockRecordInboundSession,
       },
-      commands: { shouldComputeCommandAuthorized: vi.fn(() => false) },
+      commands: { shouldComputeCommandAuthorized: vi.fn(() => false), isControlCommandMessage },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
-        buildContext: buildChannelInboundEventContext,
+        buildContext: (params: BuildChannelInboundEventContextParams) =>
+          buildChannelInboundEventContext({ ...params, finalize }),
         run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
@@ -168,7 +136,7 @@ export function setupFeishuBroadcastTestHarness() {
     messageId: string;
     text: string;
     botMentioned?: boolean;
-  }): FeishuMessageEvent {
+  }) {
     const mentions = options.botMentioned
       ? [{ key: "@_user_1", id: { open_id: "bot-open-id" }, name: "Bot", tenant_key: "" }]
       : undefined;
@@ -196,13 +164,10 @@ export function setupFeishuBroadcastTestHarness() {
       createFeishuTestRoute({ sessionKey: "agent:main:feishu:group:oc-broadcast-group" }),
     );
     mocks.mockCreateFeishuReplyDispatcher.mockReturnValue(mocks.createReplyDispatcher());
+    mockGetChatInfo.mockResolvedValue({ code: 0, data: { name: "Broadcast Team" } });
     mocks.mockCreateFeishuClient.mockReturnValue({
       contact: { user: { get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }) } },
-      im: {
-        chat: {
-          get: mockGetChatInfo.mockResolvedValue({ code: 0, data: { name: "Broadcast Team" } }),
-        },
-      },
+      im: { chat: { get: mockGetChatInfo } },
     });
     setFeishuRuntime(runtimeStub);
   });

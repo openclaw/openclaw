@@ -182,17 +182,22 @@ function expectFollowUp(harness: ReturnType<typeof createHarness>, content: stri
   );
 }
 
-function expectEmptyAutocomplete(harness: ReturnType<typeof createHarness>) {
+function expectAutocomplete(
+  harness: ReturnType<typeof createHarness>,
+  choices: { name: string; value: string }[] = [],
+) {
   expect(harness.post).toHaveBeenCalledExactlyOnceWith(
     "/interactions/interaction1/test-token/callback",
     {
       body: {
         type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-        data: { choices: [] },
+        data: { choices },
       },
     },
   );
-  expect(harness.session).not.toHaveBeenCalled();
+  if (choices.length === 0) {
+    expect(harness.session).not.toHaveBeenCalled();
+  }
 }
 
 function denyThreadParent(harness: ReturnType<typeof createHarness>) {
@@ -288,14 +293,12 @@ it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
       sessionId,
       message: { role: "user", content: "Synthetic archived history", timestamp: 1 },
     });
-    await sessionStore.patchSessionEntry({
-      ...source,
-      update: () => ({
-        archivedAt: 2,
-        archivedBy: { type: "human", id: "test-operator" },
-        archiveReason: "manual",
-      }),
-    });
+    const archive = {
+      archivedAt: 2,
+      archivedBy: { type: "human" as const, id: "test-operator" },
+      archiveReason: "manual" as const,
+    };
+    await sessionStore.patchSessionEntry({ ...source, update: () => archive });
     await sessionStore.upsertSessionEntry({
       ...target,
       entry: { sessionId: "active-channel-session", updatedAt: Date.now() },
@@ -366,18 +369,16 @@ it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
     expect(after?.sessionId).toBe(sessionId);
     if (access === "allowed") {
       expectFollowUp(harness, expect.stringContaining("Help"));
-      expect(after?.archivedAt).toBeUndefined();
-      expect(after?.archivedBy).toBeUndefined();
-      expect(after?.archiveReason).toBeUndefined();
+      expect([after?.archivedAt, after?.archivedBy, after?.archiveReason]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
     } else {
       if (access === "denied") {
         expectFollowUp(harness, expect.stringContaining("not authorized"));
       }
-      expect(after).toMatchObject({
-        archivedAt: 2,
-        archivedBy: { type: "human", id: "test-operator" },
-        archiveReason: "manual",
-      });
+      expect(after).toMatchObject(archive);
       expect(harness.post).not.toHaveBeenCalledWith(
         "/webhooks/app1/test-token",
         { body: { content: expect.stringContaining("Help"), flags: 64 } },
@@ -395,38 +396,12 @@ it.each<Surface>(["status", "autocomplete", "picker"])(
     await harness.client.handleInteraction(interactionFor(surface, THREAD));
     const sessionKey = `agent:main:discord:channel:${THREAD}`;
     if (surface === "status") {
-      expect(
-        harness.status,
-        JSON.stringify(harness.post.mock.calls),
-      ).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          sessionKey,
-          channel: "discord",
-          senderId: USER,
-          isGroup: true,
-        }),
-      );
       expectFollowUp(harness, `Status for ${sessionKey}`);
     } else {
       expect(harness.session).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
       if (surface === "autocomplete") {
-        expect(harness.post).toHaveBeenCalledWith(
-          "/interactions/interaction1/test-token/callback",
-          {
-            body: {
-              type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-              data: { choices: [{ name: "test-model", value: "test-model" }] },
-            },
-          },
-        );
+        expectAutocomplete(harness, [{ name: "test-model", value: "test-model" }]);
       } else {
-        expect(harness.patch).toHaveBeenCalledWith(
-          "/webhooks/app1/test-token/messages/%40original",
-          expect.objectContaining({
-            body: expect.objectContaining({ components: expect.any(Array) }),
-          }),
-          expect.anything(),
-        );
         expect(JSON.stringify(harness.patch.mock.calls)).toContain("test-provider");
       }
     }
@@ -461,7 +436,7 @@ it.each<[Surface, "sender" | "parent" | "identity"]>([
   }
   await harness.client.handleInteraction(interaction);
   if (surface === "autocomplete") {
-    expectEmptyAutocomplete(harness);
+    expectAutocomplete(harness);
   } else {
     expect(harness.dispatch).not.toHaveBeenCalled();
     expect(JSON.stringify(harness.post.mock.calls)).toContain(
@@ -498,7 +473,7 @@ it.each<Surface>(["status", "autocomplete", "picker"])(
     expect(harness.status).not.toHaveBeenCalled();
     expect(harness.dispatch).not.toHaveBeenCalled();
     if (surface === "autocomplete") {
-      expectEmptyAutocomplete(harness);
+      expectAutocomplete(harness);
     } else if (surface === "status") {
       expectFollowUp(harness, "Access policy changed. Try this interaction again.");
     } else {

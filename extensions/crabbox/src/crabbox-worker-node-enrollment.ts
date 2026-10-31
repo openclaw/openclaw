@@ -1,12 +1,42 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
+import {
+  CRABBOX_LOCAL_RUNTIME_ARCHIVE_SOURCE,
+  validateCrabboxOfflineRuntimeArchives,
+  type CrabboxOfflineRuntimeSetupOptions,
+} from "./crabbox-worker-offline-archives.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
-import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
+import {
+  CRABBOX_RUNTIME_VERIFICATION_SOURCE,
+  type CrabboxRuntimeInstallationIdentity,
+} from "./crabbox-worker-runtime-verification.js";
+import {
+  createCrabboxWorkerStateDirScript,
+  wrapCrabboxNodeScript,
+} from "./crabbox-worker-script.js";
 import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
+const CLOUD_WORKER_CODEX_ENV = "CRABBOX_WORKER_CODEX_CONFIG";
+
+// Snapshot forks skip profile setup, but providers can inject fresh platform certificates.
+const LINUX_PLATFORM_TRUST_SETUP = `set -eu
+if [ -x /usr/sbin/update-ca-certificates ]; then
+  (
+    unset ${CLOUD_SETUP_CODE_ENV} ${CLOUD_BOOTSTRAP_TOKEN_ENV} ${CLOUD_WORKER_CODEX_ENV}
+    if [ "$(id -u)" = 0 ]; then
+      /usr/sbin/update-ca-certificates
+    else
+      sudo -n -- /usr/sbin/update-ca-certificates
+    fi
+  ) || {
+    echo 'Cloud worker platform trust registration failed; repair system certificate setup before enrollment' >&2
+    exit 1
+  }
+fi
+`;
 // Tolerate brief network pauses while resuming stalls well before the command deadline.
 const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
 
@@ -41,20 +71,68 @@ export function createCrabboxNodeRuntimeSetup(params: {
   return createCrabboxNodeSetup(params);
 }
 
-function createCrabboxNodeSetup(params: {
-  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
-  leaseId: string;
-  enrollment?: CrabboxWorkerNodeEnrollment;
-  workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
-  desktop?: boolean;
-  desktopSetup?: string;
-  target?: CrabboxOperatingSystem;
-}): { command: string; forwardedEnv: Record<string, string> } {
+/** Install verified local runtime archives without enrollment or a logical lease. */
+export function createCrabboxOfflineRuntimeSetup(params: CrabboxOfflineRuntimeSetupOptions): {
+  command: string;
+  forwardedEnv: Record<string, string>;
+} {
+  validateCrabboxOfflineRuntimeArchives(params);
+  return createCrabboxNodeSetup({ ...params, offline: true });
+}
+
+/** Verify the retained cache without repairing, publishing or enrolling it. */
+export function createCrabboxRuntimeCacheVerification(
+  params: CrabboxRuntimeInstallationIdentity & { target?: CrabboxOperatingSystem },
+): { command: string; forwardedEnv: Record<string, string> } {
+  for (const artifact of [params.nodeBootstrap, params.workerBundle]) {
+    if (
+      !/^[a-f0-9]{64}$/u.test(artifact.sha256) ||
+      !Number.isSafeInteger(artifact.bytes) ||
+      artifact.bytes <= 0
+    ) {
+      throw new Error("Runtime cache archive identity is invalid");
+    }
+  }
+  return createCrabboxNodeSetup({
+    offline: true,
+    verifyOnly: true,
+    nodeBootstrap: params.nodeBootstrap,
+    workerBundle: params.workerBundle,
+    target: params.target,
+  });
+}
+
+function createCrabboxNodeSetup(
+  params: {
+    enrollment?: CrabboxWorkerNodeEnrollment;
+    desktop?: boolean;
+    desktopSetup?: string;
+    target?: CrabboxOperatingSystem;
+  } & (
+    | ({ offline: true; leaseId?: never; verifyOnly?: false } & CrabboxOfflineRuntimeSetupOptions)
+    | ({ offline: true; leaseId?: never; verifyOnly: true } & CrabboxRuntimeInstallationIdentity)
+    | {
+        offline?: false;
+        verifyOnly?: false;
+        nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+        leaseId: string;
+        workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
+      }
+  ),
+): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, linuxToolchainSetup, ...nodeBootstrap } = params.nodeBootstrap;
-  const workerBundle = params.workerBundle
-    ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
+  const { token, linuxToolchainSetup, installLock } = params.offline ? {} : params.nodeBootstrap;
+  const nodeBootstrap = params.offline
+    ? params.nodeBootstrap
+    : (({ token: _token, linuxToolchainSetup: _setup, installLock: _lock, ...artifact }) =>
+        artifact)(params.nodeBootstrap);
+  const lockArtifact = installLock
+    ? (({ token: _token, ...artifact }) => artifact)(installLock)
     : undefined;
+  const workerBundle =
+    !params.offline && params.workerBundle
+      ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
+      : params.workerBundle;
   const desktopTarget = params.desktop ? (params.target ?? "linux") : undefined;
   const desktopEnvironment =
     desktopTarget === "linux"
@@ -75,23 +153,31 @@ const http = require("node:http");
 const https = require("node:https");
 const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
+const { performance } = require("node:perf_hooks");
 const { setTimeout: delay } = require("node:timers/promises");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const workerBundle = ${JSON.stringify(workerBundle)};
+const installLock = ${JSON.stringify(lockArtifact)};
 const leaseId = ${JSON.stringify(leaseId)};
 const displayName = ${JSON.stringify(enrollment?.displayName)};
 const mode = ${JSON.stringify(enrollment?.mode)};
 const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const desktopSetup = ${JSON.stringify(params.desktopSetup)};
-const credentials = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
-const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
+const credentials = ${params.offline ? "undefined" : `process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV}`};
+const setupCode = ${params.offline ? "undefined" : `process.env.${CLOUD_SETUP_CODE_ENV}`};
+const workerCodexBase64 = ${params.offline ? "undefined" : `process.env.${CLOUD_WORKER_CODEX_ENV}`};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
+delete process.env.${CLOUD_WORKER_CODEX_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
+let phaseStarted = performance.now();
 const failureMessage = (artifact, failedPhase, code, origin) => "Cloud worker " + artifact + " " + failedPhase + " failed" + (code ? " (" + code + ")" : "") + (origin ? " from " + origin : "");
 const setPhase = (next) => {
   if (phase === next) return;
+  const now = performance.now();
+  if (phase) console.error("CRABBOX_TIMING:openclaw-bootstrap-" + phase.toLowerCase().replaceAll(" ", "-") + ":" + Math.round(now - phaseStarted));
+  phaseStarted = now;
   phase = next;
   console.error("CRABBOX_PHASE:openclaw-bootstrap-" + next.toLowerCase().replaceAll(" ", "-"));
 };
@@ -101,14 +187,48 @@ setPhase("preparation");
   try { tokens = JSON.parse(credentials || "{}"); }
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
-  const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const stateDir = ${leaseId === undefined ? "undefined" : createCrabboxWorkerStateDirScript(leaseId)};
+  const stageWorkerCodex = () => {
+    if (!workerCodexBase64) return;
+    let settings;
+    try { settings = JSON.parse(Buffer.from(workerCodexBase64, "base64").toString("utf8")); }
+    catch { throw new Error("Cloud worker Codex settings are invalid"); }
+    const { configToml, helperScript, helperPath, configVersion } = settings;
+    if (![configToml, helperScript, helperPath, configVersion].every((value) => typeof value === "string" && value.length > 0) || !/^[a-f0-9]{64}$/.test(configVersion)) throw new Error("Cloud worker Codex settings are incomplete");
+    if ([configToml, helperScript].some((value) => Buffer.byteLength(value, "utf8") > 16 * 1024)) throw new Error("Cloud worker Codex settings exceed their size limit");
+    const helperName = path.basename(helperPath);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\\.mjs$/.test(helperName) || configToml.split(helperPath).length !== 2) throw new Error("Cloud worker Codex helper path is missing or ambiguous");
+    const directory = path.join(stateDir, "codex-runtime");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (!fs.lstatSync(directory).isDirectory() || fs.realpathSync(directory) !== directory) throw new Error("Cloud worker Codex settings directory is unsafe");
+    if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+    const config = configToml.replace(helperPath, path.join(directory, helperName));
+    const versionFile = path.join(directory, "version");
+    // A replay must not change the configuration behind an already advertised command identity.
+    if (fs.existsSync(versionFile) && (
+      fs.readFileSync(versionFile, "utf8") !== configVersion ||
+      fs.readFileSync(path.join(directory, "config.toml"), "utf8") !== config ||
+      fs.readFileSync(path.join(directory, helperName), "utf8") !== helperScript
+    )) throw new Error("Cloud worker Codex version changed on an existing lease; reprovision the worker");
+    const writePrivate = (name, content) => {
+      const destination = path.join(directory, name);
+      const temporary = destination + "." + crypto.randomUUID();
+      try {
+        fs.writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, destination);
+      } finally { fs.rmSync(temporary, { force: true }); }
+    };
+    writePrivate(helperName, helperScript);
+    writePrivate("config.toml", config);
+    writePrivate("version", configVersion);
+  };
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
-  const pidFile = path.join(stateDir, "node.pid");
-  const launchFile = path.join(stateDir, "node-launch.json");
-  const setupFile = path.join(stateDir, "setup-code");
-  const runtimeLink = path.join(stateDir, "runtime");
+  const pidFile = stateDir && path.join(stateDir, "node.pid");
+  const launchFile = stateDir && path.join(stateDir, "node-launch.json");
+  const setupFile = stateDir && path.join(stateDir, "setup-code");
+  const runtimeLink = stateDir && path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   // Tools travel inside the verified full-node artifact and share its preparation identity.
   if (process.platform !== "win32") {
@@ -149,7 +269,7 @@ setPhase("preparation");
   // overlaps that with SSH readiness. Best effort: images without cron keep the cold start.
   // Only a Crabbox run on this lease edits the crontab; local executions (tests) never do.
   const installRuntimePrefetch = () => {
-    if (process.platform !== "linux" || process.env.CRABBOX_LEASE_ID !== leaseId) return;
+    if (!leaseId || process.platform !== "linux" || process.env.CRABBOX_LEASE_ID !== leaseId) return;
     try {
       const script = path.join(runtimeRoot, ".prefetch.sh");
       const nodeDir = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
@@ -171,39 +291,7 @@ setPhase("preparation");
     delete nodeEnv.XDG_RUNTIME_DIR;
     Object.assign(nodeEnv, JSON.parse(desktop.stdout));
   }
-  if (mode) {
-    fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
-    if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
-  }
-  ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
-  if (desktopTarget === "macos") finishDesktopSetup();
-  if (reuseNodeProcess()) {
-    if (desktopTarget !== "macos") finishDesktopSetup();
-    setPhase("complete");
-    return;
-  }
-  const verifyRuntime = (root) => {
-    setPhase("runtime verification");
-    if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
-    const packageRoot = path.join(root, "node_modules", "openclaw");
-    const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-    if (manifest.name !== "openclaw" || manifest.version !== bootstrap.openclawVersion) throw new Error("Cloud worker bootstrap package identity does not match the Gateway");
-    const probe = spawnSync(process.execPath, [path.join(packageRoot, "openclaw.mjs"), "--version"], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
-    const version = probe.stdout?.trim();
-    const expected = "OpenClaw " + bootstrap.openclawVersion;
-    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw subprocessError("Cloud worker bootstrap CLI could not verify its Gateway version", probe);
-  };
-  const verifyArchive = async (source, artifact) => {
-    const hash = crypto.createHash("sha256");
-    let bytes = 0;
-    for await (const chunk of source) {
-      bytes += chunk.byteLength;
-      if (bytes > artifact.bytes) throw new Error("Cloud worker bootstrap archive exceeds its declared size");
-      hash.update(chunk);
-    }
-    if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
-  };
-  const downloadAbort = new AbortController();
+  ${CRABBOX_RUNTIME_VERIFICATION_SOURCE}
   const downloadAttempt = async (artifact, token, archive, offset, reportPhase) => {
     reportPhase("download connection");
     // A reset after the final bytes needs verification, not an unsatisfiable range.
@@ -286,7 +374,7 @@ setPhase("preparation");
       await verifyArchive(fs.createReadStream(archive), artifact);
     } finally { response.destroy(); }
   };
-  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
+  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase, optional = false) => {
     let downloadPhase;
     let origin;
     const downloadArtifact = artifact === workerBundle ? "archive" : "node bootstrap";
@@ -300,6 +388,7 @@ setPhase("preparation");
     let retainedAnyBytes = false;
     const partial = archive + ".partial";
     try {
+      ${CRABBOX_LOCAL_RUNTIME_ARCHIVE_SOURCE}
       origin = new URL(artifact.url).origin;
       for (;;) {
         try {
@@ -333,33 +422,12 @@ setPhase("preparation");
         }
       }
     } catch (error) {
+      if (optional) throw error;
       if (!downloadAbort.signal.aborted) {
         downloadAbort.abort(Object.assign(new Error(failureMessage(downloadArtifact, downloadPhase || phase, error.code, origin) + ": " + error.message, { cause: error }), { code: error.code, downloadPhase, downloadArtifact }));
       }
       throw downloadAbort.signal.reason;
     } finally { fs.rmSync(partial, { force: true }); }
-  };
-  const workerArchivePath = (root) => {
-    const relative = workerBundle.packageRelativePath;
-    const parts = relative.split("/");
-    if (parts.length !== 2 || !/^[a-z][a-z-]*$/.test(parts[0]) || parts[1] !== workerBundle.sha256 + ".tgz" || !/^[a-f0-9]{64}$/.test(workerBundle.sha256)) throw new Error("Cloud worker archive package path is invalid");
-    return path.join(root, "node_modules", "openclaw", ...parts);
-  };
-  const verifyWorkerArchive = async (root) => {
-    setPhase("worker archive verification");
-    const archive = workerArchivePath(root);
-    let handle;
-    // A non-regular artifact (including a FIFO) must reject without blocking preparation.
-    try { handle = await fsp.open(archive, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
-    catch (error) { if (error.code === "ENOENT") return false; throw error; }
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.nlink !== 1 || stat.size !== workerBundle.bytes || fs.realpathSync(archive) !== archive) throw new Error("Cloud worker prepared archive path or length is unsafe");
-      const source = handle.createReadStream({ autoClose: false });
-      try { await verifyArchive(source, workerBundle); }
-      finally { source.destroy(); }
-    } finally { await handle.close(); }
-    return true;
   };
   const publishWorkerArchive = (root, downloaded) => {
     if (!workerBundle) return;
@@ -377,15 +445,45 @@ setPhase("preparation");
       }
     }
   };
+  // Verify before state creation, archive pruning/publication or runtime binding.
+  if (${Boolean(params.verifyOnly)}) {
+    await verifyRuntime(runtimeDir);
+    if (!await verifyWorkerArchive(runtimeDir)) throw new Error("Cloud worker prepared archive is missing");
+    reportRuntimeInstallation("existing-verified");
+    setPhase("complete");
+    return;
+  }
+  if (mode) {
+    fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
+    if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
+    else if (path.dirname(stateDir) === path.join(path.parse(home).root, "ocw")) {
+      // The drive root does not inherit the worker profile's private permissions.
+      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
+      const secureState = "$ErrorActionPreference = 'Stop'; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; icacls.exe " + quote(stateDir) + " /inheritance:r /grant:r ('*' + $sid + ':(OI)(CI)F') /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' | Out-Null; exit $LASTEXITCODE";
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", secureState], { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: 10000 });
+      if (result.error || result.status !== 0) throw subprocessError("Cloud worker state directory permissions could not be secured", result);
+    }
+  }
+  ${leaseId === undefined ? "const desktopTarget = undefined;" : createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  // Lease-private settings are never part of runtime-only preparation or its captured image.
+  if (mode) stageWorkerCodex();
+  if (desktopTarget === "macos") finishDesktopSetup();
+  if (mode && reuseNodeProcess()) {
+    if (desktopTarget !== "macos") finishDesktopSetup();
+    setPhase("complete");
+    return;
+  }
+  const downloadAbort = new AbortController();
   fs.mkdirSync(runtimeRoot, { recursive: true, ...directoryOptions });
   const existingRuntime = fs.existsSync(runtimeDir);
-  if (existingRuntime) verifyRuntime(runtimeDir);
-  if (existingRuntime && (!workerBundle || await verifyWorkerArchive(runtimeDir))) {
+  if (existingRuntime) await verifyRuntime(runtimeDir);
+  const reusedRuntime = existingRuntime && (!workerBundle || await verifyWorkerArchive(runtimeDir));
+  if (reusedRuntime) {
     publishWorkerArchive(runtimeDir);
   } else {
   const stage = fs.mkdtempSync(path.join(runtimeRoot, "node-bootstrap-"));
   try {
-    const archive = path.join(stage, "openclaw.tgz");
+    const archive = path.join(stage, "node-runtime.tgz");
     const downloadedWorker = workerBundle ? path.join(stage, "worker.tgz") : undefined;
     const installDir = existingRuntime ? runtimeDir : path.join(stage, "runtime");
     const overlap = downloadedWorker && !existingRuntime;
@@ -395,55 +493,135 @@ setPhase("preparation");
         if (existingRuntime) return;
         await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
         downloadAbort.signal.throwIfAborted();
-        setPhase(overlap ? "installation and worker download" : "installation");
         fs.mkdirSync(installDir, directoryOptions);
-        // npm 12 requires a project policy even when ignore-scripts is false.
-        // Trust only the verified artifact; dependency script policy stays unchanged.
-        fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ private: true, allowScripts: { ["file:" + archive]: true } }), { mode: 0o600 });
+        if (bootstrap.install === "npm") {
+        let locked = false;
+        const warnUnlocked = (reason) => console.error("CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:" + reason);
+        if (installLock) {
+          try {
+            setPhase("lock download");
+            await downloadArchive(installLock, tokens.installLock, path.join(installDir, "package-lock.json"), () => {}, true);
+            locked = true;
+          } catch (error) {
+            downloadAbort.signal.throwIfAborted();
+            warnUnlocked("lock download failed " + (error.code || error.statusCode || "integrity or transport error"));
+          }
+        } else warnUnlocked("lock unavailable from Gateway");
+        const writeProject = () => fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({
+          private: true,
+          // npm 12 trusts only this verified package; dependency script policy stays unchanged.
+          allowScripts: { ["file:" + archive]: true },
+          ...(locked ? { dependencies: { openclaw: "file:../node-runtime.tgz" } } : {}),
+        }), { mode: 0o600 });
+        writeProject();
+        setPhase(overlap ? "installation and worker download" : "installation");
         const logPath = path.join(stage, "install.log");
-        const log = fs.openSync(logPath, "w", 0o600);
-        let installed;
-        try {
-          const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-          if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
-          installed = await new Promise((resolve) => {
-            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", log, log] });
-            let error;
-            const stopInstall = () => {
-              if (!child.pid) return;
-              // Kill the owned npm group, including lifecycle scripts, then join close below.
-              try {
-                if (process.platform === "win32") {
-                  const stopped = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
-                  if (stopped.error) error = stopped.error;
-                } else process.kill(-child.pid, "SIGKILL");
-              } catch (cause) { if (cause.code !== "ESRCH") error = cause; }
-            };
-            const timeout = setTimeout(() => {
-              error = new Error("Cloud worker bootstrap package installation timed out");
-              stopInstall();
-            }, 600000);
-            const cancelInstall = () => downloadAbort.abort(new Error("Cloud worker bootstrap installation cancelled"));
-            process.once("SIGTERM", cancelInstall);
-            process.once("SIGINT", cancelInstall);
-            child.once("error", (cause) => { error = cause; });
-            child.once("close", (status, signal) => {
-              clearTimeout(timeout);
-              process.removeListener("SIGTERM", cancelInstall);
-              process.removeListener("SIGINT", cancelInstall);
-              downloadAbort.signal.removeEventListener("abort", stopInstall);
-              resolve({ status, signal, error });
+        const runInstall = async () => {
+          const log = fs.openSync(logPath, "w", 0o600);
+          try {
+            const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+            if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
+            return await new Promise((resolve) => {
+              const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), ...(locked ? ["ci"] : ["install", "--no-save", "--package-lock=false"]), "--prefix", installDir, "--omit=dev", "--no-audit", "--no-fund", "--ignore-scripts=false", ...(locked ? [] : [archive])], { cwd: stage, env: nodeEnv, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", log, log] });
+              let error;
+              const stopInstall = () => {
+                if (!child.pid) return;
+                // Kill the owned npm group, including lifecycle scripts, then join close below.
+                try {
+                  if (process.platform === "win32") {
+                    const stopped = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                    if (stopped.error) error = stopped.error;
+                  } else process.kill(-child.pid, "SIGKILL");
+                } catch (cause) { if (cause.code !== "ESRCH") error = cause; }
+              };
+              const timeout = setTimeout(() => {
+                error = new Error("Cloud worker bootstrap package installation timed out");
+                stopInstall();
+              }, 600000);
+              const cancelInstall = () => downloadAbort.abort(new Error("Cloud worker bootstrap installation cancelled"));
+              process.once("SIGTERM", cancelInstall);
+              process.once("SIGINT", cancelInstall);
+              child.once("error", (cause) => { error = cause; });
+              child.once("close", (status, signal) => {
+                clearTimeout(timeout);
+                process.removeListener("SIGTERM", cancelInstall);
+                process.removeListener("SIGINT", cancelInstall);
+                downloadAbort.signal.removeEventListener("abort", stopInstall);
+                resolve({ status, signal, error });
+              });
+              downloadAbort.signal.addEventListener("abort", stopInstall, { once: true });
+              if (downloadAbort.signal.aborted) stopInstall();
             });
-            downloadAbort.signal.addEventListener("abort", stopInstall, { once: true });
-            if (downloadAbort.signal.aborted) stopInstall();
-          });
-        } finally { fs.closeSync(log); }
+          } finally { fs.closeSync(log); }
+        };
+        let installed = await runInstall();
         downloadAbort.signal.throwIfAborted();
+        if (locked && (installed.status !== 0 || installed.error)) {
+          const code = /npm (?:error|ERR!) code ([A-Z0-9_]+)/.exec(fs.readFileSync(logPath, "utf8"))?.[1];
+          warnUnlocked("npm ci rejected lock " + (code || installed.signal || "exit " + installed.status));
+          locked = false;
+          fs.rmSync(path.join(installDir, "package-lock.json"), { force: true });
+          fs.rmSync(path.join(installDir, "node_modules"), { recursive: true, force: true });
+          writeProject();
+          installed = await runInstall();
+          downloadAbort.signal.throwIfAborted();
+        }
         if (installed.status !== 0 || installed.error) {
           const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
           throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
         }
-        verifyRuntime(installDir);
+        } else {
+        const packageRoot = path.join(installDir, "node_modules", "openclaw");
+        fs.mkdirSync(packageRoot, { recursive: true, ...directoryOptions });
+        const runTar = (args) => new Promise((resolve, reject) => {
+          const child = spawn(process.platform === "win32" ? "tar.exe" : "tar", args, { env: nodeEnv, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+          const output = []; let bytes = 0; let failure;
+          const kill = () => {
+            if (!child.pid) return;
+            try {
+              if (process.platform === "win32") {
+                const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                if (result.error) failure ||= result.error;
+              }
+              else process.kill(-child.pid, "SIGKILL");
+            } catch (error) { if (error.code !== "ESRCH") failure ||= error; }
+          };
+          const stop = () => { failure ||= downloadAbort.signal.reason; kill(); };
+          const cancel = () => downloadAbort.abort(new Error("Cloud worker runtime extraction cancelled"));
+          const timeout = setTimeout(() => { failure = new Error("Cloud worker runtime extraction timed out"); kill(); }, 600000);
+          process.once("SIGTERM", cancel); process.once("SIGINT", cancel);
+          downloadAbort.signal.addEventListener("abort", stop, { once: true });
+          child.stdout.on("data", (chunk) => {
+            bytes += chunk.length;
+            if (bytes > 32 * 1024 * 1024) { failure = new Error("Cloud worker runtime archive listing exceeds its limit"); kill(); }
+            else output.push(chunk);
+          });
+          child.stderr.resume();
+          child.once("error", (error) => { failure = error; });
+          child.once("close", (status) => {
+            clearTimeout(timeout); process.removeListener("SIGTERM", cancel); process.removeListener("SIGINT", cancel);
+            downloadAbort.signal.removeEventListener("abort", stop);
+            if (failure || status !== 0) reject(failure || new Error("Cloud worker runtime archive extraction failed; verify tar is available in the image"));
+            else resolve(Buffer.concat(output).toString("utf8"));
+          });
+          if (downloadAbort.signal.aborted) stop();
+        });
+        // Only regular producer-owned files/directories enter the private staging tree.
+        // Listing before extraction prevents tar from following archive links or escaping package/.
+        setPhase("extraction");
+        const names = (await runTar(["-tzf", archive])).trimEnd().split("\\n");
+        const seen = new Set();
+        if (names.length > 250000) throw new Error("Cloud worker runtime archive exceeds its entry limit");
+        for (const name of names) {
+          const relative = name.endsWith("/") ? name.slice(0, -1) : name;
+          if (seen.has(relative) || relative.includes("\\\\") || path.posix.normalize(relative) !== relative || (relative !== "package" && !relative.startsWith("package/")) || relative.split("/").some((part) => !part || part === ".." || part === ".")) throw new Error("Cloud worker runtime archive path is unsafe");
+          seen.add(relative);
+        }
+        const types = (await runTar(["-tvzf", archive])).trimEnd().split("\\n");
+        if (types.some((entry) => !["-", "d"].includes(entry[0]))) throw new Error("Cloud worker runtime archive contains an unsafe entry type");
+        await runTar(["-xzf", archive, "--strip-components=1", "--no-same-owner", "--no-same-permissions", "-C", packageRoot]);
+        }
+        await verifyRuntime(installDir, true);
       })().catch((error) => {
         if (!downloadAbort.signal.aborted) downloadAbort.abort(Object.assign(error, { downloadPhase: phase }));
         throw downloadAbort.signal.reason;
@@ -461,6 +639,8 @@ setPhase("preparation");
   installRuntimePrefetch();
   // A project snapshot contains only verified runtime bytes, never enrollment state.
   if (!mode) {
+    // npm installations do not carry the manifest/build identity this receipt certifies.
+    if (workerBundle && bootstrap.install !== "npm") reportRuntimeInstallation(reusedRuntime ? "existing-verified" : "installed");
     setPhase("complete");
     return;
   }
@@ -489,19 +669,33 @@ setPhase("preparation");
 `;
   return {
     command:
-      ((params.target ?? "linux") === "linux" ? (linuxToolchainSetup ?? "") : "") +
+      ((params.target ?? "linux") === "linux"
+        ? (enrollment ? LINUX_PLATFORM_TRUST_SETUP : "") + (linuxToolchainSetup ?? "")
+        : "") +
       wrapCrabboxNodeScript(
         script.trimEnd(),
         params.target,
         "CRABBOX_NODE_ENROLLMENT_SCRIPT",
-        "bootstrap",
+        params.verifyOnly ? "runtime" : "bootstrap",
       ),
-    forwardedEnv: {
-      [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
-        nodeBootstrap: token,
-        workerBundle: params.workerBundle?.token,
-      }),
-      ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
-    },
+    forwardedEnv: params.offline
+      ? {}
+      : {
+          ...(enrollment?.workerCodex
+            ? {
+                [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
+                  JSON.stringify(enrollment.workerCodex),
+                ).toString("base64"),
+              }
+            : {}),
+          [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
+            nodeBootstrap: token,
+            workerBundle: params.workerBundle?.token,
+            installLock: installLock?.token,
+          }),
+          ...(enrollment?.mode === "connect"
+            ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode }
+            : {}),
+        },
   };
 }

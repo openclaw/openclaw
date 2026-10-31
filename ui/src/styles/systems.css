@@ -77,12 +77,22 @@ openclaw-systems-page {
   width: 17px;
   height: 17px;
 }
+/* Telemetry and backups settle independently. Their shared viewport keeps those
+   arrivals, or a selected worker removing Gateway backups, above a stable desktop. */
+.systems-overview {
+  flex: 0 0 225px;
+  max-height: 40%;
+  overflow: auto;
+}
+.systems-overview--compact {
+  flex-basis: 90px;
+}
+.systems-overview__telemetry {
+  min-height: 150px;
+}
 .systems-metrics {
   padding: 12px 18px 8px;
   border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
-  max-height: 50%;
-  overflow-y: auto;
 }
 .systems-vitals {
   display: grid;
@@ -143,9 +153,6 @@ openclaw-systems-page {
   border-bottom: 1px solid var(--border);
 }
 .systems-backups {
-  flex: 0 1 auto;
-  max-height: 36%;
-  overflow: auto;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   font-size: 11px;
@@ -351,8 +358,6 @@ openclaw-systems-page {
 .systems-details .systems-metrics {
   padding: 0;
   border: 0;
-  max-height: none;
-  overflow: visible;
 }
 .systems-details .systems-vitals {
   grid-template-columns: minmax(0, 1fr);
@@ -629,6 +634,7 @@ openclaw-systems-page {
   height: 14px;
 }
 .systems-sidebar__empty {
+  margin: 0;
   padding: 8px var(--sidebar-inset, 8px);
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale, 1));
@@ -692,6 +698,11 @@ openclaw-systems-page {
   }
 }
 @media (max-width: 640px) {
+  /* Keep the persistent outlet at the chat inset; pad only this page's content. */
+  .systems-workspace {
+    padding: 8px 8px 16px;
+  }
+
   .systems-workspace > .content-header.hub-page-header.systems-page-header {
     margin-top: 0;
   }

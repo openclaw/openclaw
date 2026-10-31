@@ -317,8 +317,9 @@ opens from Finder, the Dock, or login startup. It discovers these folders once
 on first use and reuses them for approval and execution without loading shell
 startup files. Relaunch the app after changing tool installation folders;
 installing a tool into an already listed folder needs no restart. Request-level
-`PATH` overrides remain blocked. The CLI and separately managed node services
-keep their own environment configuration.
+`PATH` overrides remain blocked, and the Gateway's `tools.exec.pathPrepend` does
+not apply to this node; install tools into one of these folders instead. The CLI
+and separately managed node services keep their own environment configuration.
 
 In the embedded Control UI, **Dashboard → Settings → Notifications** shows the app's native
 notification permission instead of browser push because the app delivers notifications natively.

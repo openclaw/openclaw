@@ -128,6 +128,7 @@ export function markdownVisibleText(
       // As in the renderer, failed parses keep literal source. Cache that result too.
     }
   }
+  text = text.normalize("NFC");
   if (cacheOwner) {
     visibleTexts.set(cacheOwner, {
       markdown,

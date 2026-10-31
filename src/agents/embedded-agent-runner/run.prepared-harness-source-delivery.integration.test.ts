@@ -105,10 +105,11 @@ describe("prepared harness source delivery", () => {
     openOpenClawAgentDatabase({ agentId });
     const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
     setRuntimeConfigSnapshot({});
-    // Dispatch and the real runner share the database admitted above.
-    sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(
-      path.join(state.sessionsDir(agentId), "sessions.json"),
-    );
+    // Both mocked session modules must use the database admitted above.
+    const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
+    sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(storePath);
+    const sessions = await import("../../config/sessions.js");
+    vi.mocked(sessions.resolveSessionStorePathCore).mockReturnValue(storePath);
     return loaded;
   }
   afterEach(async () => {

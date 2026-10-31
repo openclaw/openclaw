@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { create } from "tar";
 import type { CommandFixture } from "../helpers/command-fixture.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const owner = ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs";
 const currentWrapperAnchor =
@@ -33,18 +34,11 @@ export function createPnpmArchiveFixture(
   const store = fs.realpathSync.native(storeDir);
   function archive(name: string, native: boolean) {
     const stage = path.join(root, native ? "native" : "wrapper");
-    fs.mkdirSync(stage);
-    fs.writeFileSync(path.join(stage, "package.json"), JSON.stringify({ version }));
-    fs.writeFileSync(
-      path.join(stage, "pnpm"),
-      options.image ? name : native ? "native-fixture\n" : "wrapper-fixture\n",
-    );
+    const { write, json } = fixtureFiles(stage);
+    json("package.json", { version });
+    write("pnpm", options.image ? name : native ? "native-fixture\n" : "wrapper-fixture\n");
     if (options.image) {
-      fs.mkdirSync(path.join(stage, "bin"));
-      fs.writeFileSync(
-        path.join(stage, "bin/pnpm.mjs"),
-        `console.log(${JSON.stringify(version)});`,
-      );
+      write("bin/pnpm.mjs", `console.log(${JSON.stringify(version)});`);
     }
     const dest = path.join(registry, name);
     create({ cwd: root, file: dest, gzip: true, sync: true }, [path.basename(stage)]);

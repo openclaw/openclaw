@@ -45,6 +45,7 @@ import {
   type SessionStopRequest,
 } from "../../sessions/session-controller.stop.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { stopSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
 import { setAbortMemory } from "./abort-primitives.js";
@@ -54,14 +55,45 @@ import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { resolveSessionConversationBindingContext } from "./session-conversation-binding.js";
 
 type ChannelStopTarget = SessionControllerInput | ReplyOperation;
+/** Selected agent/session pair whose Workshop review this Stop cancels. */
+type ChannelStopReviewTarget = { agentId: string; sessionKey: string };
 export type ChannelStopCapture = {
   controller: SessionControllerStopCapture;
   sessionId?: string;
+  /** One entry per combined capture: every selected conversation keeps its review identity. */
+  reviewTargets: readonly ChannelStopReviewTarget[];
   mcpSessionIds: ReadonlyMap<ChannelStopTarget, readonly string[]>;
   idleMcpRetirements: readonly NonNullable<ReturnType<typeof captureSessionMcpRuntimeRetirement>>[];
   commands: readonly ReturnType<typeof captureExecRequestCancellation>[];
   requestRunIds: ReadonlySet<string>;
 };
+
+function mergeStopReviewTargets(
+  targets: Iterable<{ agentId?: string; sessionKey?: string }>,
+): ChannelStopReviewTarget[] {
+  const merged = new Map<string, ChannelStopReviewTarget>();
+  for (const target of targets) {
+    if (!target.agentId || !target.sessionKey) {
+      continue;
+    }
+    merged.set(`${target.agentId}\u0000${target.sessionKey}`, {
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+    });
+  }
+  return [...merged.values()];
+}
+
+/** Attach one selected conversation's review identity without re-capturing its resources. */
+function withChannelStopReviewTarget(
+  capture: ChannelStopCapture,
+  target: { agentId?: string; sessionKey?: string },
+): ChannelStopCapture {
+  return {
+    ...capture,
+    reviewTargets: mergeStopReviewTargets([...capture.reviewTargets, target]),
+  };
+}
 
 function matchesStopCandidate(
   candidate: Pick<
@@ -89,8 +121,6 @@ export function captureChannelSessionStop(params: {
   sessionId?: string;
   storePath: string;
   agentId?: string;
-  aliases?: readonly (string | undefined)[];
-  includeQueued?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
 }): ChannelStopCapture {
   const key = normalizeOptionalString(params.key);
@@ -113,13 +143,11 @@ export function captureChannelSessionStop(params: {
             sessionKey: key,
             incarnation: params.sessionId,
             agentId: params.agentId,
-            aliases: params.aliases,
           }),
         ]
       : [],
     inputs: candidates.flatMap((candidate) => candidate.capture.inputs),
     operations: candidates.flatMap((candidate) => candidate.capture.operations),
-    includeQueued: params.includeQueued,
     resolveGatewayContext: params.resolveGatewayContext,
   });
   return captureChannelStopResources(controller, params.sessionId, {
@@ -133,6 +161,7 @@ function captureChannelStopResources(
   controller: SessionControllerStopCapture,
   capturedSessionId?: string,
   commandTarget?: ExecRequestIdentity,
+  reviewTarget?: { agentId?: string; sessionKey?: string },
 ): ChannelStopCapture {
   const selectedSessionId =
     controller.activeInputs[0]?.claim?.operation?.sessionId ??
@@ -184,6 +213,13 @@ function captureChannelStopResources(
   return {
     controller,
     sessionId: selectedSessionId,
+    reviewTargets: mergeStopReviewTargets(
+      reviewTarget
+        ? [reviewTarget]
+        : commandTarget
+          ? [{ agentId: commandTarget.agentId, sessionKey: commandTarget.sessionKey }]
+          : [],
+    ),
     mcpSessionIds,
     idleMcpRetirements: idleMcpRetirement ? [idleMcpRetirement] : [],
     commands,
@@ -203,6 +239,7 @@ function combineChannelStopCaptures(captures: readonly ChannelStopCapture[]): Ch
       effects: captures.flatMap((capture) => [...capture.controller.effects]),
       pendingCaptures: captures.map((capture) => capture.controller),
     }),
+    reviewTargets: mergeStopReviewTargets(captures.flatMap((capture) => capture.reviewTargets)),
     mcpSessionIds: new Map(captures.flatMap((capture) => [...capture.mcpSessionIds])),
     idleMcpRetirements: captures.flatMap((capture) =>
       capture.idleMcpRetirements.filter((retirement) => retirement.sessionId === capture.sessionId),
@@ -216,7 +253,6 @@ function combineChannelStopCaptures(captures: readonly ChannelStopCapture[]): Ch
 export function abortSessionRunTargetWithOutcome(params: {
   capture: ChannelStopCapture | (() => ChannelStopCapture);
   assertCurrent?: () => void;
-  afterQueued?: () => void;
   hookContext: SessionStopHookContext;
   messageIdentity?: unknown;
   recordAbortTarget?: SessionStopRequest["recordAbortTarget"];
@@ -278,7 +314,9 @@ export function abortSessionRunTargetWithOutcome(params: {
     },
     afterQueued: () => {
       const capture = resolveCapture();
-      params.afterQueued?.();
+      // The Stop kernel calls afterQueued only after revalidating the captured Stop's live
+      // target, so review cancellation cannot outrun a rejected foreground cancellation.
+      stopSkillExperienceReview({ sessions: capture.reviewTargets, runIds: capture.requestRunIds });
       for (const retirement of capture.idleMcpRetirements) {
         trackRetirement(retirement.sessionId, () =>
           retirement.retire(() => params.assertCurrent?.()),
@@ -537,7 +575,12 @@ export async function executeFastAbortRequest(
                       agentId: boundAgentId,
                     }),
                   )
-                  .map((candidate) => candidate.channel),
+                  .map((candidate) =>
+                    withChannelStopReviewTarget(candidate.channel, {
+                      agentId: candidate.agentId ?? boundAgentId,
+                      sessionKey: boundKey,
+                    }),
+                  ),
               );
             }
             if (

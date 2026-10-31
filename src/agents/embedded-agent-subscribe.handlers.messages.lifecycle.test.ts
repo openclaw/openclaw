@@ -746,6 +746,7 @@ it("preserves phase-aware voice and reply directives while deferring final media
   const ctx = createMessageUpdateContext({
     state: { blockReplyBreak: "message_end" },
   });
+  ctx.params.onBlockReply = vi.fn();
   const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
 
   for (const type of ["text_delta", "text_end"] as const) {

@@ -1,6 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
-import * as cliGrant from "../agents/cli-runner/mcp-grant-context.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import * as gatewayRequests from "../agents/tools/in-process-gateway.js";
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
@@ -57,28 +55,15 @@ it.each([false, true])(
         invoke,
       };
       const config = { session: { mainKey: "main" } };
-      const context = cliGrant.buildCliMcpGrantContext({
-        run: {
-          ...session,
-          sessionFile: "/tmp/library-session",
-          workspaceDir: "/tmp/library-workspace",
-          provider: "test-cli",
-          prompt: "List my skills",
-          timeoutMs: 1_000,
-          skillLibraryAuthoring,
-        },
-        config,
-        requireExplicitMessageTarget: false,
-        agentId: "main",
-        modelProvider: "openai",
-        modelId: "gpt-5.6-luna",
-      });
-      const preparedGrant = expectDefined(
-        cliGrant.finalizeCliMcpGrant(context, undefined, false, { config }),
-        "Expected prepared CLI grant",
-      );
       const grant = grants.mintMcpLoopbackClientGrant({
-        ...preparedGrant,
+        context: {
+          ...session,
+          workspaceDir: "/tmp/library-workspace",
+          agentId: "main",
+          senderIsOwner: false,
+          nodeExecAllowed: true,
+        },
+        toolPolicyConfig: config,
         runtimeOwnerToken: runtime().ownerToken,
         admittedRunContext: turn.admittedRunContext,
         personalToolParticipants: turn.operation.personalToolParticipants,

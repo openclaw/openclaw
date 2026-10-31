@@ -13,7 +13,6 @@ import {
 } from "./openclaw-agent-db-additive-columns.js";
 import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-db-contract.js";
 import { SESSION_GOAL_OPERATIONS_TABLE } from "./openclaw-agent-goal-operations-schema.js";
-import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import {
   SESSION_PENDING_INPUTS_TABLE,
   SESSION_INPUT_COMPLETIONS_TABLE,
@@ -35,7 +34,7 @@ export const AGENT_SCHEMA_COMPATIBILITY = {
     MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
     MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
-    MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
+    "message_tool_run_outcomes",
     SESSION_GOAL_OPERATIONS_TABLE,
     SESSION_PENDING_INPUTS_TABLE,
     SESSION_INPUT_COMPLETIONS_TABLE,
@@ -56,12 +55,16 @@ export const AGENT_SCHEMA_COMPATIBILITY = {
     ),
   ],
   allowedColumnDefinitions: {
+    // Historical import evidence remains stored but never grants replay authority.
+    "session_pending_inputs.recovery_intent_json": ["recovery_intent_json TEXT"],
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
   allowedMissingIndexes: [
     "idx_agent_transcript_context_pending",
     "idx_agent_session_nodes_label",
     "idx_agent_session_nodes_entry_not_valid",
+    "idx_agent_session_input_completions_session_key",
+    "idx_agent_conversation_deliveries_source_session",
   ],
   optionalCanonicalTriggerGroups: [
     {

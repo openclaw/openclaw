@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
@@ -33,6 +34,17 @@ import {
 } from "./prepared-model-runtime.owner.js";
 import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
 
 const fixture = usePreparedModelRuntimeHarness(undefined, () => {
   vi.useRealTimers();
@@ -283,20 +295,15 @@ describe("prepared build candidate lifetime", () => {
       const input = { config: {}, agentDir: fixture.state.agentDir("timeout") };
       const started = createDeferred();
       const finish = createDeferred();
-      const wait = async () => {
+      const pausedBuild = async () => {
         started.resolve();
         await finish.promise;
+        return {};
       };
       if (admission) {
-        mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
-          await wait();
-          return {};
-        });
+        mocks.resolveAmbientCredentials.mockImplementationOnce(pausedBuild);
       } else {
-        mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-          await wait();
-          return {};
-        });
+        mocks.ensureOpenClawModelsJson.mockImplementationOnce(pausedBuild);
       }
       using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
       const first = admission
@@ -374,11 +381,7 @@ describe("prepared build candidate lifetime", () => {
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
       if (workspace) {
         expect(await reader).toBe(initial);
-        expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
-          firstInput.config,
-          agentDir,
-          expect.objectContaining({ workspaceDir: "/tmp/workspace-new" }),
-        );
+        expect(next?.workspaceDir).toBe("/tmp/workspace-new");
         expect(await prepareModelRuntimeSnapshot(nextInput)).toBe(next);
       } else {
         expect(initial?.config).toBe(firstInput.config);
@@ -691,7 +694,9 @@ describe("legacy provider catalog retention", () => {
 });
 
 it("preserves the primary publication error when terminal generation cleanup also fails", async () => {
-  const primary = new Error("plugin generation retired before publication");
+  const primary = new Error("plugin generation retired before publication", {
+    cause: { generation: "superseded" },
+  });
   const cleanup = new Error("registration cleanup failed");
   let failedOwner: PreparedModelRuntimeOwner | undefined;
   vi.spyOn(pluginLifetime, "publishPreparedPluginGeneration").mockImplementationOnce((owner) => {
@@ -720,7 +725,12 @@ it("preserves the primary publication error when terminal generation cleanup als
   ).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(SuppressedError);
   expect(failure).toMatchObject({ error: cleanup, suppressed: primary });
-  expect(failedOwner?.refreshError).toBe(primary);
+  expect(failedOwner?.refreshError).not.toBe(primary);
+  expect(failedOwner?.refreshError).toMatchObject({
+    message: primary.message,
+    stack: primary.stack,
+  });
+  expect(failedOwner?.refreshError?.cause).toBeUndefined();
   expect(failedOwner?.pending).toBeUndefined();
 });
 

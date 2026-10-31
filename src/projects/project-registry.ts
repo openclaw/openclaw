@@ -13,6 +13,7 @@ import {
   registerPreparedProjectRegistry,
 } from "./project-registration.js";
 import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
+import { isWorkspaceProjectId, WORKSPACE_PROJECT_ID_PREFIX } from "./workspace-project-id.js";
 
 export {
   ProjectCheckoutError,
@@ -23,7 +24,7 @@ export {
 function workspaceProject(cfg: OpenClawConfig, agentId: string): ProjectRegistryRecord {
   const repoRoot = resolveAgentWorkspaceDir(cfg, agentId);
   return {
-    id: `workspace:${agentId}`,
+    id: `${WORKSPACE_PROJECT_ID_PREFIX}${agentId}`,
     displayName: path.basename(repoRoot) || agentId,
     repoRoot,
     source: "workspace",
@@ -82,10 +83,10 @@ export function resolveWorkspaceProject(
   cfg: OpenClawConfig,
   id: string,
 ): ProjectRegistryRecord | undefined {
-  if (!id.startsWith("workspace:")) {
+  if (!isWorkspaceProjectId(id)) {
     return undefined;
   }
-  const agentId = id.slice("workspace:".length);
+  const agentId = id.slice(WORKSPACE_PROJECT_ID_PREFIX.length);
   return listAgentIds(cfg).includes(agentId) ? workspaceProject(cfg, agentId) : undefined;
 }
 
@@ -94,7 +95,7 @@ export async function resolveProjectRegistry(
   id: string,
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<ProjectRegistryRecord | undefined> {
-  if (id.startsWith("workspace:")) {
+  if (isWorkspaceProjectId(id)) {
     return resolveWorkspaceProject(cfg, id);
   }
   const context = captureOpenClawStateWorkerContext(options);
@@ -118,6 +119,7 @@ type ProjectRegistrySelection = {
       assertCheckoutCurrent: () => void;
       signal: AbortSignal;
     }) => T | Promise<T>,
+    acquisition?: { waitMs?: number },
   ) => Promise<T>;
   withRollback: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
 };
@@ -155,7 +157,7 @@ export async function selectStoredProjectRegistry(
           );
         },
       ),
-    withCurrent: async (run) => {
+    withCurrent: async (run, acquisitionOptions) => {
       const acquisition = new AbortController();
       const abortAcquisition = () => acquisition.abort(signal?.reason);
       signal?.addEventListener("abort", abortAcquisition, { once: true });
@@ -165,7 +167,12 @@ export async function selectStoredProjectRegistry(
       try {
         return await withProjectCheckoutLifecycle(
           repoRoot,
-          { path: context.admission.databasePath, env, signal: acquisition.signal },
+          {
+            path: context.admission.databasePath,
+            env,
+            signal: acquisition.signal,
+            waitMs: acquisitionOptions?.waitMs,
+          },
           async (lease) => {
             // Cancellation stops new effects; checkout custody also owns their rollback.
             signal?.removeEventListener("abort", abortAcquisition);

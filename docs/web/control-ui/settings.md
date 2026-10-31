@@ -22,11 +22,13 @@ Model menus with more than eight choices include search. Filter by model name or
 
 When the Gateway rejects an invalid setting, **Settings not applied** keeps your draft and offers **Show reason**, **Retry**, and **Discard draft and reload**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
 
+Typing in Form fields copies the edited path instead of cloning and formatting the full configuration on every keystroke. Full JSON formatting happens when saving or opening **Advanced → Raw**. The Raw editor still shows the current draft, including newer edits made while an earlier save is in flight.
+
 Global model defaults apply to every agent. Switching the Settings agent while saving does not change the save target. If a save fails, **Retry** resubmits that change; after recovery, the controls follow the saved configuration, including later updates from another client.
 
 In **Models**, thinking choices follow the primary model's reported reasoning levels, including provider-specific levels. Fast-mode choices follow its reported speed capabilities, with **Ultrafast** shown separately from **On**. A saved preference that is no longer supported stays visible but cannot be selected anew. A saved account-pinned model does not borrow speed capabilities from another account's catalog; unverified speed preferences remain visible but unavailable for new selections. Switching models does not rewrite a saved preference; choose another supported value or **Default** to return to model policy. **Auto** is a timed fast-mode preference, not inheritance.
 
-Configuration edits, including reverting a value while a save is pending, survive refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only.
+Configuration edits, including reverting a value while a save is pending, survive configuration refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only. Unsaved configuration edits live only in the open page: while an edit is unsaved or a save is still in flight, the browser asks for confirmation before an ordinary reload or tab close. Cancel keeps the draft; confirming discards it without saving.
 
 An unsettled Save or Apply stays bound to its original Gateway. Switching Gateways does not transfer that pending change: reconnect to the original Gateway to retry it, or discard the retained draft before editing the new Gateway.
 
@@ -158,12 +160,12 @@ including Gateway request handling. It is not ICMP ping or model response time.
 
 The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings → Appearance → Language**.
 
-- Supported locales: `en`, `ar`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
+- Supported locales: `en`, `ar`, `ca`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
-- Missing translation keys fall back to English.
+- Missing translation keys fall back to English. Catalan (`ca`) uses English until its first post-merge locale refresh completes.
 
-Docs translations are generated for the same non-English locale set, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
+Docs translations are generated for the same non-English locale set except Catalan, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
 
 ## Appearance themes
 
@@ -355,8 +357,11 @@ restarting the Gateway. Ordinary plugin config edits also apply automatically
 in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 for application failures, cleanup warnings, and source-edit reloads.
-OAuth-backed MCP connectors need a one-time
-`openclaw mcp login <name>` from the CLI after they are added.
+Plugins that declare OAuth-backed MCP servers list them under **Accounts** on
+the plugin's page; an administrator selects **Sign in** to sign in once after
+the plugin is added. Until then, the plugin page and the chat install card show
+**Sign in** where the Install button was. `openclaw mcp login <name>` signs in only to servers
+defined under `mcp.servers`, not to servers a plugin declares.
 
 The page intentionally focuses on inventory, discovery, install, enablement,
 and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
@@ -438,6 +443,11 @@ visible at your reading position while the schema refreshes. Form and Setup
 controls cannot be edited until that refresh finishes. The first load still
 shows **Loading schema…** until a schema is available.
 
+In an agent's **Tools** tab, expand a tool group to browse its tools and policy
+details. Browser Find searches group summaries and tools in expanded groups.
+Selecting a tool in **Tool preview** opens its group and focuses its details.
+Collapsing a group closes its tool details.
+
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or
 process creates it first, the editor keeps your draft and reports a conflict.
@@ -483,6 +493,7 @@ IDs return `stale-document`, and unknown commands return `unsupported`. Navigati
 switches sessions in place and reports success after the target state reaches the
 host. It settles within 15 seconds of receipt, including queued commands and host
 acknowledgements; failures return `navigate-timeout` or `navigate-rejected`.
+The deadline measures elapsed time, so system-clock corrections do not consume or renew it.
 The `visible` flag controls pane presentation. A visible, inactive window keeps
 rendering and accepting navigation; `active` only gates composer focus requests.
 Change-only `state` messages carry a monotonic revision,
@@ -579,17 +590,17 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
-## Claws (Labs)
+## Templates (Labs)
 
-Enable **Settings → Labs → Claws** to browse official Claw packages from
+Enable **Settings → Labs → Templates** to browse official Template packages from
 ClawHub on the **Agents** page. Search the catalog, review the files and
-capabilities a Claw will install, then select **Add** to create its agent.
+capabilities a Template will install, then select **Add** to create its agent.
 Add creates an ordinary agent and opens its chat. It does not create a separate
-installed Claw to update or remove. Delete the agent through normal agent
+installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
-[Claws](/cli/claws) for the package contract and local-source CLI commands.
+[Templates](/cli/templates) for the package contract and local-source CLI commands.
 
-Turning the Labs switch off hides Claw discovery and Add. Existing agents keep
+Turning the Labs switch off hides Template discovery and Add. Existing agents keep
 running.
 
 ## Speech bubbles
@@ -604,21 +615,23 @@ Control UI pages without restarting the Gateway.
 
 ## Custom plugin UI
 
-Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.
+Enabled plugins can add native pages, widgets, actions, and view replacements
+by default. Custom plugin UI is no longer a Labs setting. Installed plugin
+details and existing enable reviews disclose native UI from the inspected
+manifest; catalog install surfaces explain that plugin code may also include
+native UI when the catalog does not provide that information.
 
-**Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
-and view replacements from user-installed plugins. It defaults to off and
-writes `gateway.controlUi.experimental.customPlugins`. Changes apply without
-restarting the Gateway, and connected pages refresh their plugin views
-automatically. After disabling it, reload browser tabs to clear plugin
-JavaScript that already ran.
-
-Only enable it for plugin authors you trust: native UI runs in the Control UI
-origin with the signed-in operator's Gateway authority. Native UI from enabled
-bundled plugins, including Workboard, remains available with the lab off.
-Backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and
-MCP Apps are unaffected. All plugin APIs are experimental; see
+Only install plugins from authors you trust: native UI runs in the Control UI
+origin with each signed-in viewer's Gateway authority. It is not sandboxed.
+All plugin APIs remain experimental; see
 [Feature plugins](/plugins/feature-plugins) for authoring and the trust model.
+
+The existing `gateway.controlUi.experimental.customPlugins: false` remains an
+advanced opt-out for user-installed native UI. Existing explicit `false` values
+stay off on upgrade; omission and `true` allow native UI. Changes hot-apply and
+refresh connected pages without a Gateway restart. After disabling, reload
+browser tabs to clear JavaScript that already ran. Enabled bundled plugin views,
+backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
 On non-local plain HTTP, plugin pages explain how to open a supported URL;
@@ -676,7 +689,7 @@ Typical workflow:
 1. Open **MCP** from the sidebar.
 2. Check the summary cards for total, enabled, OAuth, and filtered server counts.
 3. Review each server row for transport, enablement, auth, filters, timeouts, and command hints.
-4. Add, enable, disable, or remove servers directly on the MCP page. Choose Streamable HTTP, SSE, or stdio explicitly; stdio command lines accept quoted arguments such as paths with spaces. Use the **Plugins** page for one-click connectors and discovery.
+4. Add, enable, disable, or remove servers directly on the MCP page. Choose Streamable HTTP, SSE, or stdio explicitly; stdio command lines accept quoted arguments such as paths with spaces. Use the **Plugins** page for one-click plugin installs and discovery.
 5. Edit the scoped `mcp` config section for advanced server fields such as environment variables, working directories, headers, TLS/mTLS paths, OAuth metadata, tool filters, and Codex projection metadata.
 6. Use **Save** for a config write, or **Save & Publish** when the running Gateway should apply the changed config.
 7. Run `openclaw mcp status --verbose`, `openclaw mcp doctor --probe`, or `openclaw mcp reload` from a terminal for static diagnostics, live proof, or cached-runtime disposal.
@@ -699,9 +712,11 @@ The Sessions view owns its query independently of the sidebar. Its people filter
 
 The Sessions view collects session-change events in a randomized four-to-five-second window that later events cannot postpone. After an automatic refresh completes, the next waits three times its duration, bounded between five and 15 seconds. Event-driven refreshes pause while the browser tab is hidden and catch up once when you return, respecting that cooldown. Changing filters or retrying a failed request still loads immediately. The sidebar's session capability also [reuses row snapshots and paces list reads](/web/control-ui/sessions-and-sidebar#sidebar-navigation). Activity links retain their search and people filters during initial loading and navigation.
 
-The Gateway updates recaps when new work happens, throttling ongoing updates and catching up after a run ends. A shared queue runs at most two recap calls at once and retries temporary overload or rate-limit failures up to three times with increasing delays, honoring provider retry timing. Authentication, configuration, and exhausted subscription failures require correction before retrying. Idle sessions make no repeated model calls, including when concurrent recap requests carry an older cached recap. Archiving retains the recap and requests catch-up; an agent still running in an archived session can update it when work finishes. Reopening or new work resumes freshness checks. Older sessions backfill in bounded chronological chunks when requested from Activity. Recaps read user and assistant conversation text, preferring final answers and skipping tool calls/results. Existing cached recaps gradually adopt the shorter format through the same queue while retaining their previous coverage. Incognito sessions and subagent sessions do not generate recaps. Recaps are generated text and do not determine whether a task is complete or grant access to a session.
+The Gateway refreshes recaps after a run ends, not when a turn starts or new input arrives. A shared queue runs at most two recap calls at once and retries temporary overload or rate-limit failures up to three times with increasing delays, honoring provider retry timing. Without a usable Gateway credential for the utility model, the recap becomes unavailable immediately and the Gateway records “recap unavailable: no Gateway model credential” without attempting a provider call or scheduling retries. Authentication, configuration, and exhausted subscription failures require correction before retrying. Idle sessions make no repeated model calls, including when concurrent recap requests carry an older cached recap. Archiving retains the recap and requests catch-up; an agent still running in an archived session can update it when work finishes. Reopening requests a freshness check; new work is recapped after its run ends. Older sessions backfill in bounded chronological chunks when requested from Activity. Recaps read user and assistant conversation text, preferring final answers and skipping tool calls/results. Existing cached recaps gradually adopt the shorter format through the same queue while retaining their previous coverage. Incognito sessions and subagent sessions do not generate recaps. Recaps are generated text and do not determine whether a task is complete or grant access to a session.
 
 Visible conversations created by an agent receive recaps too, including spawned dashboard chats and conversations assigned to a sidebar group. Their parent-session link does not exclude them from recap generation; hidden background subagents remain excluded.
+
+Recap generation honors the session's assigned human owner's model policy, or its authenticated profile creator's policy when no human owner is assigned. Denying or revoking that policy stops new provider calls, including retries and fallbacks; the Gateway logs the reason and keeps the previous recap. Refreshes use the session owner's policy even when another viewer requests them. Assigning a task to an agent or the system does not remove its authenticated creator's policy. Sessions without an assigned human owner or authenticated profile creator retain Gateway service authority. To stop all recap generation for an agent, disable its utility routing with `utilityModel: ""`; this also disables its other utility routing. Session access still controls who can read recaps or request refreshes. See [operator model policy](/gateway/operator-scopes#named-operator-roles).
 
 The oversized-message notice applies only to omitted user or assistant messages. Oversized tool results, including screenshots, do not trigger it. Older cached notices remain visible until the next recap refresh, which clears screenshot-only notices while retaining notices for earlier oversized conversation messages. Legacy omission flags are rechecked once and marked with the current cache revision. Correcting an otherwise current recap does not call the model.
 
@@ -710,6 +725,8 @@ To find an older archived conversation, choose **Sessions**, **All time**, and *
 **Active sessions** loads when you open Live activity and refreshes after reconnecting, so sessions already running or queued appear before new tool events arrive. It shows up to 100 sessions you are allowed to see, including work on other agents and agent-owned global sessions. A limit notice appears when more sessions match. Select a linked row to open that session. Reserved `unknown` sessions show status without a conversation link; raw `global` sessions do the same outside global session scope, where the Home URL addresses a different session. Changes update this snapshot while the view is open; disconnected or failed reads show a visible status instead of claiming that sessions are idle. **Clear** only clears the received-event list. It does not clear or stop active sessions.
 
 Live activity keeps up to 100 bounded summaries with truncated output previews. Preview text is not secret-masked and can contain credentials. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count.
+
+Live activity search is case-insensitive and matches equivalent composed and decomposed Unicode text, such as either spelling of an accented character. Only the local comparison is normalized; displayed output and identifiers remain unchanged.
 
 Live activity collects events only while this view is open and the browser tab is visible. It watches the bounded, authorized **Active sessions** roster and releases those subscriptions when you hide the tab or leave the view. Activity from before you opened the view is not shown. Use the search, tool, and status filters to narrow received entries. Leaving the Activity page, reloading, changing Gateway or authentication context, and **Clear** reset the list. Ordinary reconnects preserve received entries and expansion state, then resume subscriptions from the refreshed roster. This browser-local feed is not a durable record of work performed while the view was closed, hidden, or disconnected.
 

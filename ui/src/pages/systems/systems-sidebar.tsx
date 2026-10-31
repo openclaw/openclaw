@@ -77,7 +77,6 @@ export function systemPlatform(row: SystemsInventoryRow): string | undefined {
 }
 
 type SystemsSidebarProps = { controller?: Systems };
-type SystemsSidebarElement = SolidBridgeElement<SystemsSidebarProps>;
 function SystemsSidebarContent(props: SystemsSidebarProps) {
   const projection = createMemo(() =>
     props.controller ? projectOwner(props.controller, (value) => value) : null,
@@ -97,7 +96,9 @@ function SystemsInventory(props: { controller: Systems }) {
     latest(inventoryRead.read);
     return null;
   };
-  const query = createMemo(() => controller().state.query.trim().toLocaleLowerCase());
+  const query = createMemo(() =>
+    controller().state.query.trim().toLocaleLowerCase().normalize("NFC"),
+  );
   const rows = createMemo(() => {
     const sortMode = controller().state.sortMode;
     return controller()
@@ -113,7 +114,7 @@ function SystemsInventory(props: { controller: Systems }) {
             row.environment.id,
             systemPlatform(row) ?? "",
             row.environment.platform ?? row.node?.platform ?? "",
-          ].some((value) => value.toLocaleLowerCase().includes(query()))
+          ].some((value) => value.toLocaleLowerCase().normalize("NFC").includes(query()))
         );
       })
       .toSorted((a, b) => {
@@ -303,6 +304,6 @@ defineSolidBridge<SystemsSidebarProps>("openclaw-systems-sidebar", SystemsSideba
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-systems-sidebar": SystemsSidebarElement;
+    "openclaw-systems-sidebar": SolidBridgeElement<SystemsSidebarProps>;
   }
 }

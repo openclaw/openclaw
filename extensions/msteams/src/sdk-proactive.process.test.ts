@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { listDirectoryTreeStrictSync } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 
@@ -15,8 +16,8 @@ it("keeps SDK root exports intact when quoted behavior is the first SDK access",
     { cwd: process.cwd() },
   );
   const outDir = path.join(process.cwd(), "extensions/msteams/dist");
-  const proactiveArtifact = fs
-    .readdirSync(outDir, { recursive: true, encoding: "utf8" })
+  const proactiveArtifact = listDirectoryTreeStrictSync(outDir)
+    .map((walkEntry) => walkEntry.relativePath)
     .filter((entry) => entry.endsWith(".cjs"))
     .map((entry) => path.join(outDir, entry))
     .find((entry) =>
@@ -74,22 +75,19 @@ it("keeps SDK root exports intact when quoted behavior is the first SDK access",
               quotedCreates.push(activity);
               return { id: "quoted-replay" };
             },
-            update: async () => ({}), delete: async () => ({}),
           }) },
       } };
       const reference = {
+        serviceUrl: "https://smba.trafficmanager.net/amer",
         agent: { id: "28:bot", role: "bot" },
         user: { id: "29:user" },
         conversation: { id: "19:conversation@thread.v2", conversationType: "groupChat" },
       };
+      const send = (text, options, serviceUrl = reference.serviceUrl) =>
+        sendMSTeamsActivityWithReference(app, { ...reference, serviceUrl }, { type: "message", text }, options);
 
       // The structural app selects the quote path without loading the full Teams app first.
-      await sendMSTeamsActivityWithReference(
-        app,
-        { ...reference, serviceUrl: "https://smba.trafficmanager.net/amer" },
-        { type: "message", text: "Recovered reply" },
-        { quoteActivityId: "incoming-activity" },
-      );
+      await send("Recovered reply", { quoteActivityId: "incoming-activity" });
       assert.equal(quotedCreates[0].text, '<quoted messageId="incoming-activity"/> Recovered reply');
 
       const api = await import("@microsoft/teams.api");
@@ -107,11 +105,7 @@ it("keeps SDK root exports intact when quoted behavior is the first SDK access",
             return config;
       } }] });
       app.api = new api.Client("https://smba.trafficmanager.net/amer", http);
-      await sendMSTeamsActivityWithReference(
-        app,
-        { ...reference, serviceUrl: "https://smba.trafficmanager.net/teams" },
-        { type: "message", text: "Normal send" },
-      );
+      await send("Normal send", undefined, "https://smba.trafficmanager.net/teams");
       assert.equal(posts.length, 1);
       assert.equal(posts[0].url, "https://smba.trafficmanager.net/teams/v3/conversations/19:conversation@thread.v2/activities");
       assert.equal(posts[0].activity.text, "Normal send");

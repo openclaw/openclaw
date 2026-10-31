@@ -103,7 +103,10 @@
   color: var(--text);
 }
 
-.sessions-transcript-search__clear:focus-visible {
+.sessions-transcript-search__clear:focus-visible,
+.sessions-transcript-search__result:focus-visible,
+.session-actions .icon-btn:focus-visible,
+.session-details-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -183,11 +186,6 @@
   background: var(--bg-hover);
 }
 
-.sessions-transcript-search__result:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sessions-transcript-search__result-header > strong {
   overflow: hidden;
   color: var(--text-strong);
@@ -210,64 +208,6 @@
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.sessions-filter-popover__search {
-  position: relative;
-  width: 100%;
-}
-
-.sessions-filter-popover__search > svg {
-  position: absolute;
-  top: 50%;
-  inset-inline-start: 9px;
-  width: 14px;
-  height: 14px;
-  translate: 0 -50%;
-  stroke: var(--muted);
-  stroke-width: 1.8px;
-  pointer-events: none;
-}
-
-.sessions-filter-popover__search input {
-  padding-inline: 30px 34px;
-}
-
-.sessions-filter-popover__clear {
-  position: absolute;
-  inset-inline-end: 1px;
-  top: 50%;
-  translate: 0 -50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: transparent;
-}
-
-.sessions-filter-popover__clear[hidden] {
-  display: none;
-}
-
-.sessions-filter-popover__clear:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.sessions-filter-popover__clear:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.sessions-filter-popover__clear svg {
-  width: 14px;
-  height: 14px;
-  pointer-events: none;
 }
 
 @media (max-width: 768px), (pointer: coarse) {
@@ -295,7 +235,6 @@
   align-items: center;
   gap: var(--space-1);
   height: 30px;
-  box-sizing: border-box;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -324,7 +263,6 @@
 .session-filter-input {
   width: 48px;
   height: 24px;
-  box-sizing: border-box;
   padding: 0 6px;
   color: var(--text);
   background: transparent;
@@ -419,10 +357,6 @@
   width: min(280px, calc(100vw - 48px));
   gap: var(--space-3);
   padding: var(--space-3);
-  background: var(--bg-elevated);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--overlay-shadow);
 }
 
 .sessions-filter-popover__fields {
@@ -520,9 +454,15 @@
 }
 
 /* Keep the expanded row visually attached to its drawer. */
-.session-data-row--expanded > td,
-.session-data-row--menu-open > td {
-  background: var(--bg-hover);
+.sessions-table .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open) {
+  --data-table-row-bg: var(--data-table-selected-bg);
+
+  background: var(--data-table-row-bg);
+}
+
+.sessions-table
+  .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open):hover {
+  --data-table-row-bg: var(--data-table-selected-hover-bg);
 }
 
 /* The row loses :hover once the pointer moves into the menu; keep its kebab lit. */
@@ -558,11 +498,10 @@
   width: 100%;
 }
 
-.session-actions .icon-btn svg,
-.session-details-toggle svg {
+.session-actions .icon-btn .session-css-icon,
+.session-details-toggle .session-css-icon {
   width: 14px;
   height: 14px;
-  stroke-width: 2px;
 }
 
 .session-key-cell__text {
@@ -737,12 +676,6 @@
   border-color: var(--border);
 }
 
-.session-actions .icon-btn:focus-visible,
-.session-details-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .session-actions .icon-btn:disabled {
   cursor: not-allowed;
   opacity: 0.3;
@@ -757,7 +690,7 @@
     border-color var(--duration-fast) ease;
 }
 
-.session-details-toggle svg {
+.session-details-toggle .session-css-icon {
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -765,7 +698,7 @@
   color: var(--text);
 }
 
-.session-data-row--expanded .session-details-toggle svg {
+.session-data-row--expanded .session-details-toggle .session-css-icon {
   transform: rotate(180deg);
 }
 
@@ -912,6 +845,13 @@
 .session-detail-stat__value {
   font-weight: 600;
   line-height: 1.35;
+}
+
+/* The agent chooser arrives after the initial page frame. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  openclaw-sessions-page .hub-page-header__actions {
+    min-block-size: 34px;
+  }
 }
 
 @media (max-width: 768px) {

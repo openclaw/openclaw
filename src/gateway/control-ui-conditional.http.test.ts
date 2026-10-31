@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
@@ -6,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { ControlUiFileRead } from "./control-ui-file.js";
@@ -80,6 +80,8 @@ describe.each([
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
+    await write("sw.js.gz", gzipSync(assetBody));
+    await write("sw.js.br", brotliCompressSync(assetBody));
     await write(
       "index.html",
       `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
@@ -104,13 +106,7 @@ describe.each([
         res.end(error instanceof Error ? error.message : String(error));
       });
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected a TCP listener for the static asset fixture");
-    }
-    baseUrl = `http://127.0.0.1:${address.port}${basePath}`;
+    baseUrl = `${await httpFixtures.listenLoopback(server)}${basePath}`;
     assetUrl = `${baseUrl}/assets/app-fixture.js`;
   });
 
@@ -188,6 +184,53 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it.each(["gzip", "br"] as const)(
+      "negotiates bundled worker %s while retaining revalidation",
+      async (encoding) => {
+        const headers = { "Accept-Encoding": encoding };
+        const { response, body } = await requestAsset(
+          `${baseUrl}/sw.js?v=fixture-build`,
+          method,
+          headers,
+        );
+        const encoded = kind === "bundled";
+        expect(response.statusCode).toBe(200);
+        expect(response.headers).toMatchObject({
+          "cache-control": "no-cache",
+          "last-modified": lastModified,
+          vary: "Accept-Encoding",
+        });
+        expect(response.headers["content-encoding"]).toBe(encoded ? encoding : undefined);
+        const expected = encoded
+          ? (encoding === "br" ? brotliCompressSync : gzipSync)(assetBody)
+          : assetBody;
+        expect(response.headers["content-length"]).toBe(String(expected.byteLength));
+        expect(body).toEqual(method === "HEAD" ? Buffer.alloc(0) : expected);
+        const unchanged = await requestAsset(`${baseUrl}/sw.js?v=fixture-build`, method, {
+          ...headers,
+          "If-Modified-Since": lastModified,
+        });
+        expect(unchanged.response.statusCode).toBe(304);
+        expect(unchanged.response.headers["cache-control"]).toBe("no-cache");
+        expect(unchanged.body.byteLength).toBe(0);
+      },
+    );
+
+    it.each(["gzip", "br", ""])(
+      "serves the original without sidecars (Accept-Encoding: %s)",
+      async (encoding) => {
+        const { response, body } = await requestAsset(
+          `${baseUrl}/assets/cold.js`,
+          method,
+          encoding ? { "Accept-Encoding": encoding } : {},
+        );
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["content-encoding"]).toBeUndefined();
+        expect(response.headers["content-length"]).toBe(String(assetBody.byteLength));
+        expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+      },
+    );
+
     it.each(["themes/absolutely.css", "sw.js"])(
       "versions public %s only for the active bundled build",
       async (asset) => {

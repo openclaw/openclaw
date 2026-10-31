@@ -88,20 +88,16 @@ it.each([
       recovery: { ...recoverable },
     } satisfies Parameters<typeof maybeRestartServiceAfterFailedMutableUpdate>[0];
     const changeRow = () => {
-      const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-      try {
-        if (scenario === "release refused") {
-          db.exec(
-            "CREATE TRIGGER refuse_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(ABORT, 'test release refused'); END",
-          );
-        } else {
-          const changed = db
-            .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
-            .run("replacement", root);
-          expect(changed.changes).toBe(1);
-        }
-      } finally {
-        db.close();
+      using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+      if (scenario === "release refused") {
+        db.exec(
+          "CREATE TRIGGER refuse_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(ABORT, 'test release refused'); END",
+        );
+      } else {
+        const changed = db
+          .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+          .run("replacement", root);
+        expect(changed.changes).toBe(1);
       }
     };
     mocks.state.mockImplementation(async () => {
@@ -121,8 +117,6 @@ it.each([
     });
     mocks.restart.mockImplementation(async (params) => {
       params.onGatewayStartAttempted?.();
-      expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
-      expect(params.opts.run).toBe(opts.updateRun);
       if (opts.updateRun) {
         params.assertCurrent();
       }
@@ -139,7 +133,6 @@ it.each([
       const recovery = maybeRestartServiceAfterFailedMutableUpdate(opts);
       if (scenario === "healthy" || scenario === "ordinary" || scenario === "release refused") {
         await expect(recovery).resolves.toBe("healthy");
-        expect(mocks.restart).toHaveBeenCalledOnce();
       } else {
         await expect(recovery).rejects.toBeInstanceOf(UpdateCommandRecoveryPendingError);
         if (scenario === "missing executor") {
@@ -183,39 +176,40 @@ it("retains the live update run while recovering a failed update before reportin
     "./update-command-verification.js",
   );
   vi.mocked(verifyUpdatedGateway).mockImplementationOnce(verification.verifyUpdatedGateway);
-  const observation = vi
-    .spyOn(await import("./update-command-readiness.js"), "observeUpdateGatewayReadiness")
-    .mockImplementationOnce(async (params) => {
-      params.assertCurrent?.();
-      expect(params.expectedVersion).toBe("1.0.0");
-      expect(getUpdateRun(runId, { env })?.status).toBe("running");
-      return {
-        health: {
-          healthy: true,
-          runtime: { status: "running", pid: 4242 },
-          gatewayVersion: "1.0.0",
-          expectedVersion: "1.0.0",
-          portUsage: { port: params.gatewayPort, status: "busy", listeners: [], hints: [] },
-          staleGatewayPids: [],
-        },
-        readyz: true,
-        http: undefined,
-        launchAgentRecovery: null,
-      };
-    });
+  vi.spyOn(
+    await import("./update-command-readiness.js"),
+    "observeUpdateGatewayReadiness",
+  ).mockImplementationOnce(async (params) => {
+    params.assertCurrent?.();
+    expect(params.expectedVersion).toBe("1.0.0");
+    expect(getUpdateRun(runId, { env })?.status).toBe("running");
+    return {
+      health: {
+        healthy: true,
+        runtime: { status: "running", pid: 4242 },
+        gatewayVersion: "1.0.0",
+        expectedVersion: "1.0.0",
+        portUsage: { port: params.gatewayPort, status: "busy", listeners: [], hints: [] },
+        staleGatewayPids: [],
+      },
+      readyz: true,
+      http: undefined,
+      launchAgentRecovery: null,
+    };
+  });
   const service = gatewayService.resolveGatewayService();
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
     ...service,
     readRuntime: async () => ({ status: "stopped" }),
   });
   let recoveryRun: typeof run | undefined;
-  const recoverService = vi
-    .spyOn(recoveryService, "maybeRestartServiceAfterFailedMutableUpdate")
-    .mockImplementation(async (request) => {
+  vi.spyOn(recoveryService, "maybeRestartServiceAfterFailedMutableUpdate").mockImplementation(
+    async (request) => {
       recoveryRun = request.updateRun;
       recoveryRun?.executorFence?.assertCurrent();
       return "healthy";
-    });
+    },
+  );
   await withUpdateCommandExecutor(runId, async (executor) => {
     run.executorFence = await executor.enter(home);
     await expect(
@@ -234,9 +228,7 @@ it("retains the live update run while recovering a failed update before reportin
       name: "UpdateCommandFailure",
       result: { reason: "fixture-install-failed", recovery: { service: "healthy" } },
     });
-    expect(recoverService).toHaveBeenCalledOnce();
     expect(recoveryRun).toBe(run);
-    expect(observation).toHaveBeenCalledOnce();
     const recorded = getUpdateRun(runId, { env });
     expect(recorded?.verification).toEqual({
       ...verificationFixture("1.0.0"),

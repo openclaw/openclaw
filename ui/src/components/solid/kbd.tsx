@@ -5,6 +5,7 @@ import {
   isApplePlatform,
   type KeyboardShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
+import { keyboardHintsVisible } from "../../lib/reactive/keyboard-hints.ts";
 import { hasKeyboardIcon, KeyboardIcon } from "./icon.tsx";
 
 export type KbdOptions = {
@@ -13,6 +14,8 @@ export type KbdOptions = {
   slot?: string;
   ariaHidden?: boolean;
   hidden?: boolean;
+  /** Reference surfaces (the shortcuts dialog) list keys even without a keyboard. */
+  always?: boolean;
   ref?: (element: HTMLElement) => void;
 };
 
@@ -55,23 +58,28 @@ function Key(props: { value: string }) {
   );
 }
 
-/** Literal key labels; chords use KeyboardShortcut rather than parsed display strings. */
+/**
+ * Literal key labels; chords use KeyboardShortcut rather than parsed display strings.
+ * Every keycap renders here, so keyboard-hints.ts decides visibility for all of them.
+ */
 export function Kbd(props: KbdOptions & { keys: string | number | readonly string[] }) {
   const parts = () =>
     typeof props.keys === "string" || typeof props.keys === "number"
       ? [String(props.keys)]
       : props.keys;
   return (
-    <kbd
-      class={["shortcut-kbd", props.class]}
-      style={props.inline ? { font: "inherit" } : undefined}
-      slot={props.slot}
-      aria-hidden={props.ariaHidden ? "true" : undefined}
-      hidden={props.hidden}
-      ref={(element) => props.ref?.(element)}
-    >
-      <For each={parts()}>{(key) => <Key value={key} />}</For>
-    </kbd>
+    <Show when={props.always || keyboardHintsVisible()}>
+      <kbd
+        class={["shortcut-kbd", props.class]}
+        style={props.inline ? { "font-size": "inherit" } : undefined}
+        slot={props.slot}
+        aria-hidden={props.ariaHidden ? "true" : undefined}
+        hidden={props.hidden}
+        ref={(element) => props.ref?.(element)}
+      >
+        <For each={parts()}>{(key) => <Key value={key} />}</For>
+      </kbd>
+    </Show>
   );
 }
 
@@ -107,16 +115,25 @@ export function ShortcutHint(props: { label: string; combo: KeyboardShortcutComb
   );
 }
 
-/** Each placeholder gets its own nodes, preserving translated sentence order. */
-export function ShortcutText(props: { text: string; shortcut: () => JSX.Element }) {
+/**
+ * Each placeholder gets its own nodes, preserving translated sentence order.
+ * Without a keyboard, the sentence is replaced by `fallback` (nothing when omitted).
+ */
+export function ShortcutText(props: {
+  text: string;
+  shortcut: () => JSX.Element;
+  fallback?: JSX.Element;
+}) {
   return (
-    <For each={props.text.split("{shortcut}")}>
-      {(part, index) => (
-        <>
-          {index() > 0 && props.shortcut()}
-          {part}
-        </>
-      )}
-    </For>
+    <Show when={keyboardHintsVisible()} fallback={props.fallback}>
+      <For each={props.text.split("{shortcut}")}>
+        {(part, index) => (
+          <>
+            {index() > 0 && props.shortcut()}
+            {part}
+          </>
+        )}
+      </For>
+    </Show>
   );
 }

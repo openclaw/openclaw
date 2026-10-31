@@ -17,6 +17,7 @@ import {
   publishSqliteDatabaseSchemaChange,
   readSqliteDatabaseWriteRevision,
   suspendSqliteDatabaseAdmission,
+  settleSqliteDatabaseAdmissionPublication,
 } from "./sqlite-database-admission.js";
 import {
   observeSqliteNativeClose,
@@ -36,6 +37,7 @@ import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
   finishSqliteReadScope,
   observeSqliteTransactionState as observeTransactionState,
+  sqliteSchemaOwners as owners,
   type SqliteSchemaOwner as SchemaOwner,
   type SchemaMutationListener,
   type SqliteReadOperationRevision,
@@ -52,11 +54,6 @@ export type {
   SqliteReadOperationRevision,
   SqliteReadScopeRevision,
 } from "./sqlite-schema-scope.js";
-
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteSchemaFacts"),
-  () => new WeakMap<DatabaseSync, SchemaOwner>(),
-);
 
 const postgresReadSnapshots = resolveGlobalSingleton(
   Symbol.for("openclaw.postgresReadSnapshots"),
@@ -335,7 +332,7 @@ function trackSchemaChanges(
           owner.transactionCatalogBound = true;
         }
       },
-      finish: (succeeded, abandoned) => {
+      finish: (succeeded, abandoned, noEffect) => {
         if (iterator && owner.unmanagedSnapshots.delete(iterator) && owner.iteratorFacts) {
           invalidate(owner);
           owner.iteratorFacts = false;
@@ -407,7 +404,7 @@ function trackSchemaChanges(
         );
         // A parked read cursor cannot retain custody of a settled sibling statement's write.
         if (owner.mutationDepth === 0 && !database.isTransaction) {
-          finishSqliteDatabaseWrite(database);
+          finishSqliteDatabaseWrite(database, noEffect);
         }
         // A control batch may open a transaction and read before returning, even on error.
         owner.transactionRead ||= database.isTransaction && Boolean(control && !control.single);
@@ -466,7 +463,9 @@ export function readSqliteNativeMutationRevision(database: EngineConnection): nu
 /** Derived caches may retain reads from a tracked transaction until its first mutation. */
 export function hasUncommittedSqliteWrites(database: EngineConnection): boolean {
   if (isPostgresSqlConnection(database)) {
-    return database.isTransaction;
+    // PostgreSQL read-only snapshots are cacheable; only writable transaction ownership
+    // invalidates derived facts. The scope is installed after the read-only BEGIN.
+    return database.isTransaction && !postgresReadSnapshots.has(database);
   }
   const owner = owners.get(database);
   if (owner) {
@@ -604,6 +603,7 @@ export function trackSqliteSchema(
   if (!owners.has(database)) {
     const owner: SchemaOwner = {
       admitted: false,
+      publicationReady: false,
       revision: 0,
       readDepth: 0,
       mutationRevision: 0,
@@ -653,7 +653,17 @@ export function admitSqliteSchema(
     throw new Error("SQLite schema admission requires a connection tracked from native open");
   }
   owner.admitted = true;
-  getAdmittedSqliteSchemaFacts(database, validateUserVersion);
+  const facts = getAdmittedSqliteSchemaFacts(database, validateUserVersion);
+  // A captured or inherited catalog is not proof that its first publication settled.
+  // Only initial readiness waits; later refreshes must keep lease workers independent.
+  if (
+    !owner.publicationReady &&
+    facts &&
+    owner.unmanagedSnapshots.size === 0 &&
+    !getSqlitePinnedReadSnapshot(database)
+  ) {
+    owner.publicationReady = settleSqliteDatabaseAdmissionPublication(database);
+  }
 }
 
 /** Match transferred proof against the schema owner's current admitted catalog. */

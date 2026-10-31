@@ -1,8 +1,6 @@
 import { createMemo, createStore, onCleanup } from "solid-js";
 import { createPendingFocus } from "./reactive/pending-focus.ts";
 
-type TabsActivation = "auto" | "manual";
-
 export function activeElementFor(element: Element): Element | null {
   const root = element.getRootNode();
   return root instanceof ShadowRoot
@@ -58,7 +56,7 @@ export type TabFocus = ReturnType<typeof createTabFocus>;
 export type TabsOptions = {
   /** Null deliberately leaves every tab unselected. */
   active: string | null;
-  activation?: TabsActivation;
+  activation?: "auto" | "manual";
   onSelect?: (value: string, tab: HTMLElement, event: MouseEvent | KeyboardEvent) => boolean | void;
   /** Returning false consumes direct activation without changing selection. */
   onActivate?: (
@@ -97,6 +95,11 @@ export function createTabList(
     { active: null, value: undefined },
   );
 
+  const revealTab = (tab: HTMLElement) =>
+    typeof options.revealActive === "function"
+      ? options.revealActive(tab)
+      : tab.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+
   if (options.revealActive) {
     const layoutKey = createMemo(() =>
       JSON.stringify([active(), items().map((item) => item.value)]),
@@ -118,11 +121,7 @@ export function createTabList(
             if (!root().isConnected || !selected) {
               return;
             }
-            if (typeof options.revealActive === "function") {
-              options.revealActive(selected);
-            } else {
-              selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-            }
+            revealTab(selected);
             // Keyed movement may blur a retained node; newer user focus always wins.
             if (focused === selected && focusNeedsRecovery(selected)) {
               selected.focus({ preventScroll: true });
@@ -208,11 +207,7 @@ export function createTabList(
       select(target, event, false);
     }
     target.focus({ preventScroll: true });
-    if (typeof options.revealActive === "function") {
-      options.revealActive(target);
-    } else {
-      target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-    }
+    revealTab(target);
   }
 
   return {

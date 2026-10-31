@@ -77,11 +77,12 @@ export function createDownstreamTurnFixture(
     ) => Promise<{ queuedFinal: boolean; counts: { block: number; final: number; tool: number } }>
   >,
 ) {
+  const emptyTurn = () => ({ queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } });
   function captureNextDownstreamTurn() {
     const dispatched = createDeferred<MsgContext>();
     downstreamTurns.mockImplementationOnce(async (turn) => {
       dispatched.resolve(turn);
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      return emptyTurn();
     });
     return dispatched.promise;
   }
@@ -97,56 +98,15 @@ export function createDownstreamTurnFixture(
     return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
   }
 
-  async function assertAlbumTurnAndTombstones(params: {
-    stateDir: string;
-    updateIds: number[];
-    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
-  }) {
-    await params.monitor.waitForDeferredClaims();
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("Two photo album");
-    expect(turn.media).toMatchObject([
-      { path: "/tmp/photo-1.jpg", kind: "image" },
-      { path: "/tmp/photo-2.jpg", kind: "image" },
-    ]);
-    await assertSpoolTombstoned(params);
-  }
-
-  function holdFirstDownstreamTurn() {
-    const headDispatched = createDeferred<void>();
-    const releaseHead = createDeferred<void>();
-    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (downstreamTurns.mock.calls.length === 1) {
-        if (!lifecycle?.deferredHeartbeatIntervalMs) {
-          throw new Error("Expected the deferred turn's heartbeat cadence");
-        }
-        lifecycle.onDeferred?.();
-        const heartbeat = setInterval(
-          () => lifecycle.onDeferredHeartbeat?.(),
-          lifecycle.deferredHeartbeatIntervalMs,
-        );
-        headDispatched.resolve();
-        try {
-          await releaseHead.promise;
-          if (!abortSignal?.aborted) {
-            await lifecycle.onAdopted();
-          }
-        } finally {
-          clearInterval(heartbeat);
-        }
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    return { headDispatched, releaseHead };
-  }
-
-  function holdDownstreamLane() {
+  function holdTurns(serial: boolean) {
     const releaseHead = createDeferred<void>();
     const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
     let turnIndex = 0;
-    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
     let laneTail: Promise<void> = releaseHead.promise;
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (!serial && downstreamTurns.mock.calls.length !== 1) {
+        return emptyTurn();
+      }
       if (!lifecycle?.deferredHeartbeatIntervalMs) {
         throw new Error("Expected the deferred turn's heartbeat cadence");
       }
@@ -169,17 +129,16 @@ export function createDownstreamTurnFixture(
         clearInterval(heartbeat);
         finished.resolve();
       }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      return emptyTurn();
     });
-    return { releaseHead, turnsDeferred };
+    return { releaseHead, turnsDeferred, headDispatched: turnsDeferred[0] };
   }
 
   return {
     captureNextDownstreamTurn,
     awaitSingleDownstreamTurn,
-    assertAlbumTurnAndTombstones,
-    holdFirstDownstreamTurn,
-    holdDownstreamLane,
+    holdFirstDownstreamTurn: () => holdTurns(false),
+    holdDownstreamLane: () => holdTurns(true),
   };
 }
 

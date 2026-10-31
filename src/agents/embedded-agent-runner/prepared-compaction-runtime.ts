@@ -430,6 +430,7 @@ export async function buildPreparedCompactionRuntime(
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
       customInlineButtonHint,
+      blind: params.sessionEntry?.blindPrompt,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,

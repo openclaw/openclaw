@@ -24,6 +24,7 @@ vi.mock("@panzoom/panzoom", () => ({
 
 import "../lib/toast-host.tsx";
 import "./image-lightbox.tsx";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 
 type Lightbox = HTMLElementTagNameMap["openclaw-image-lightbox"];
 const button = (modal: Lightbox, selector: string) =>
@@ -32,13 +33,6 @@ function pressKey(target: EventTarget, key: string, init: KeyboardEventInit = {}
   const event = new KeyboardEvent("keydown", { key, bubbles: true, ...init });
   target.dispatchEvent(event);
   return event;
-}
-function expectFocusCycle(first: HTMLElement, last: HTMLElement, init: KeyboardEventInit = {}) {
-  last.focus();
-  pressKey(last, "Tab", init);
-  expect(document.activeElement).toBe(first);
-  pressKey(first, "Tab", { shiftKey: true, ...init });
-  expect(document.activeElement).toBe(last);
 }
 function mockDecoder(decode = async () => {}) {
   vi.stubGlobal(
@@ -66,6 +60,7 @@ function attachLightbox(props: Partial<Lightbox>) {
   return modal;
 }
 
+const animateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
 let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => string>>;
@@ -88,6 +83,10 @@ async function renderLightbox(props: Partial<ImageLightboxProps> = {}, target = 
 
 beforeEach(() => {
   restoreDialogPolyfill = installDialogPolyfill();
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ finished: Promise.resolve(), cancel: vi.fn() }),
+  });
   createObjectUrl = vi.fn(() => "blob:lightbox-original");
   revokeObjectUrl = vi.fn();
   fetchImage = vi.fn(async () => ({
@@ -115,6 +114,7 @@ afterEach(async () => {
     vi.useRealTimers();
   }
   restoreDialogPolyfill();
+  restorePropertyDescriptor(Element.prototype, "animate", animateDescriptor);
   vi.unstubAllGlobals();
 });
 
@@ -137,7 +137,11 @@ it("renders video playback, footer actions and live labels", async () => {
   expect(openOriginal.href).toBe(originalSrc);
   const close = button(modal, ".close");
   expect(close.getAttribute("aria-label")).toBe("Close video preview");
-  expectFocusCycle(close, openOriginal, { composed: true });
+  openOriginal.focus();
+  pressKey(openOriginal, "Tab", { composed: true });
+  expect(document.activeElement).toBe(close);
+  pressKey(close, "Tab", { shiftKey: true, composed: true });
+  expect(document.activeElement).toBe(openOriginal);
   modal.imageTitle = "Renamed video";
   await modal.updateComplete;
   expect(video.getAttribute("aria-label")).toBe("Renamed video");
@@ -160,6 +164,7 @@ it.each([false, true])(
     if (gallery) {
       expect(pendingLink?.getAttribute("aria-disabled")).toBe("true");
       expect(pendingLink?.hasAttribute("href")).toBe(false);
+      expect(pendingLink?.tabIndex).toBe(-1);
     } else {
       expect(pendingLink).toBeNull();
     }
@@ -326,7 +331,6 @@ it("replaces video connections and disconnects before close", async () => {
   modal.connectVideo = replacement;
   await waitForSolid(() => expect(replacement).toHaveBeenCalledOnce());
   expect(order).toEqual(["disconnect", "connect"]);
-  expect(replacement).toHaveBeenCalledWith(video, expect.any(Function), false);
   expect(modal.querySelector("video")).toBe(video);
 
   const closed = vi.fn(() => expect(replacementDisconnect).toHaveBeenCalledOnce());
@@ -433,15 +437,15 @@ it.each(["open", "closed", "reopened"] as const)(
 );
 
 it.each([
-  ["data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/svg+xml", false],
-  ["blob:untrusted-svg", "image/svg+xml", false],
-  ["blob:safe-png", "image/png", true],
-] as const)("downloads only inert image bytes on request: %s", async (src, type, allowed) => {
+  ["blob:original-svg", "image/svg+xml", "application/octet-stream"],
+  ["blob:safe-png", "image/png", "image/png"],
+  ["blob:untrusted-html", "text/html", undefined],
+] as const)("downloads only inert bytes on request: %s", async (src, type, downloadType) => {
   fetchImage.mockResolvedValueOnce({
     ok: true,
     blob: async () => new Blob(["image"], { type }),
   });
-  const { modal } = await renderLightbox({ src });
+  const { modal } = await renderLightbox({ src, imageTitle: "parcel flow.svg" });
   expect(fetchImage).not.toHaveBeenCalled();
   expect(modal.querySelector(".open-original")).toBeNull();
   const click = interceptDownload();
@@ -450,25 +454,30 @@ it.each([
     expect(modal.querySelector(".download-image")?.hasAttribute("disabled")).toBe(false),
   );
   expect(fetchImage).toHaveBeenCalledExactlyOnceWith(src);
-  expect(createObjectUrl).toHaveBeenCalledTimes(allowed ? 1 : 0);
-  expect(click).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  expect(createObjectUrl).toHaveBeenCalledTimes(downloadType ? 1 : 0);
+  expect(click).toHaveBeenCalledTimes(downloadType ? 1 : 0);
+  if (downloadType) {
+    expect(createObjectUrl.mock.calls[0]?.[0]).toHaveProperty("type", downloadType);
+    expect(click.mock.contexts[0]).toHaveProperty(
+      "download",
+      type === "image/svg+xml" ? "parcel flow.svg" : "parcel flow.png",
+    );
+  }
 });
 
-it.each(["url", "blob", "gallery-url", "gallery-blob"] as const)(
+it.each(["url", "blob", "gallery"] as const)(
   "downloads the selected original only on request: %s",
   async (source) => {
     const original = createDeferred<Blob>();
-    const gallery = source.startsWith("gallery");
+    const gallery = source === "gallery";
     const blob = source === "blob";
-    const readOriginalBlob = vi.fn(() =>
-      blob ? original.promise : Promise.resolve(new Blob(["first"], { type: "image/png" })),
-    );
+    const readOriginalBlob = vi.fn(() => original.promise);
     const first = "https://example.com/first.png",
       next = "https://example.com/next.png";
     const { modal } = await renderLightbox({
       src: "blob:preview",
       originalSrc: blob ? "" : first,
-      readOriginalBlob: source.endsWith("blob") ? readOriginalBlob : undefined,
+      readOriginalBlob: source === "url" ? undefined : readOriginalBlob,
     });
     expect(readOriginalBlob).not.toHaveBeenCalled();
     expect(fetchImage).not.toHaveBeenCalled();
@@ -519,7 +528,7 @@ it("offers browser access for external images", async () => {
   expect(modal.querySelector(".external-image")).toBeNull();
 });
 
-it("gates zoom shortcuts and traps Tab focus", async () => {
+it("gates zoom shortcuts", async () => {
   const { modal, dialogAdapter } = await renderLightbox();
   const image = modal.querySelector<HTMLImageElement>(".image")!;
   expect(image).toMatchObject({
@@ -539,10 +548,32 @@ it("gates zoom shortcuts and traps Tab focus", async () => {
   image.dispatchEvent(new Event("load"));
   flush();
   expect(zoomIn?.getAttribute("aria-disabled")).toBe("false");
-  const availableShortcut = pressKey(dialogAdapter, "+", { cancelable: true });
-  expect(availableShortcut.defaultPrevented).toBe(true);
+  const panzoom = vi.mocked(Panzoom).mock.results.at(-1)!.value;
+  for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
+    for (const key of ["=", "+", "-", "0"]) {
+      const shortcut = pressKey(zoomIn, key, {
+        cancelable: true,
+        shiftKey: key === "+",
+        [modifier]: true,
+      });
+      expect(shortcut.defaultPrevented, `${modifier} ${key}`).toBe(false);
+    }
+  }
+  expect(panzoom.zoomIn).not.toHaveBeenCalled();
+  expect(panzoom.zoomOut).not.toHaveBeenCalled();
+  expect(panzoom.reset).not.toHaveBeenCalled();
 
-  expectFocusCycle(button(modal, ".close"), button(modal, ".download-image"));
+  for (const [key, command] of [
+    ["=", panzoom.zoomIn],
+    ["+", panzoom.zoomIn],
+    ["-", panzoom.zoomOut],
+    ["0", panzoom.reset],
+  ] as const) {
+    vi.mocked(command).mockClear();
+    const shortcut = pressKey(zoomIn, key, { cancelable: true, shiftKey: key === "+" });
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(command).toHaveBeenCalledOnce();
+  }
 });
 
 it("captures gallery shortcuts and releases them on removal", async () => {
@@ -622,11 +653,7 @@ it.each(["document", "shadow"] as const)(
     const image = modal.querySelector<HTMLImageElement>(".image");
     const elementFromPoint = Object.getOwnPropertyDescriptor(hitTestRoot, "elementFromPoint");
     onTestFinished(() => {
-      if (elementFromPoint) {
-        Object.defineProperty(hitTestRoot, "elementFromPoint", elementFromPoint);
-      } else {
-        Reflect.deleteProperty(hitTestRoot, "elementFromPoint");
-      }
+      restorePropertyDescriptor(hitTestRoot, "elementFromPoint", elementFromPoint);
     });
     Object.defineProperty(hitTestRoot, "elementFromPoint", {
       configurable: true,

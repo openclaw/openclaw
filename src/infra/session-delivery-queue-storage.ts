@@ -17,7 +17,6 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
 import {
   prepareClaimedSessionDelivery,
-  prepareSessionDelivery,
   SESSION_DELIVERY_QUEUE_NAME,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
@@ -26,7 +25,6 @@ import {
   type QueuedSessionDeliveryPayload,
   type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue.records.js";
-import type { SessionDeliveryAgentRunUpdate } from "./session-delivery-queue.worker-contract.js";
 import type { SessionDeliveryWorkerOperations } from "./session-delivery-queue.worker.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 
@@ -173,15 +171,6 @@ function publishSessionDelivery<
   );
 }
 
-export async function enqueueSessionDelivery(
-  params: QueuedSessionDeliveryPayload,
-  context: OpenClawStateWorkerContext,
-): Promise<string> {
-  const entry = prepareSessionDelivery(params);
-  await publishSessionDelivery(entry, "sessionDelivery.enqueue", context);
-  return entry.id;
-}
-
 export async function enqueueClaimedSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   initialAttemptLeaseMs: number,
@@ -207,17 +196,6 @@ export async function deferSessionDelivery(
   context: OpenClawStateWorkerContext,
 ): Promise<void> {
   return executeSessionDelivery(context, { type: "sessionDelivery.defer", input: { id, delayMs } });
-}
-
-export async function advanceSessionDeliveryAgentRun(
-  id: string,
-  updates: SessionDeliveryAgentRunUpdate | undefined,
-  context: OpenClawStateWorkerContext,
-): Promise<void> {
-  return executeSessionDelivery(context, {
-    type: "sessionDelivery.advanceAgentRun",
-    input: { id, updates },
-  });
 }
 
 export async function mergeSessionDeliveryPreparedMediaBlocks(

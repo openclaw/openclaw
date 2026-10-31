@@ -1,6 +1,6 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { createSystemPromptCacheBoundaryStripper } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
@@ -9,7 +9,6 @@ import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
-import { wrapStreamFnWithSessionFork, type EmbeddedSessionForkIdentity } from "./session-fork.js";
 
 const embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 
@@ -80,7 +79,6 @@ type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
   assertCurrent?: () => void;
-  sessionFork?: EmbeddedSessionForkIdentity;
 };
 
 export function resolveEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
@@ -111,7 +109,6 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     authProfileId: params.authProfileId,
     promptCacheKey: params.promptCacheKey,
     assertCurrent: params.assertCurrent,
-    sessionFork: params.sessionFork,
   };
   const wrapRunApiKey = (streamFn: StreamFn) =>
     wrapEmbeddedAgentStreamApiKey(streamFn, {
@@ -131,17 +128,9 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   });
   // Vertex and session-owned streams resolve their own auth.
   const keepStreamAuth = (streamFn: StreamFn) => streamFn;
-  const stripCacheBoundary = (context: Parameters<StreamFn>[1]) =>
-    context.systemPrompt
-      ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
-      : context;
   if (params.providerStreamFn) {
     // Provider stream creation owns the plugin's cache-boundary capability.
-    return wrapCredentialedStream(
-      params.providerStreamFn,
-      { ...wrapOptions, sessionFork: undefined },
-      "provider",
-    );
+    return wrapCredentialedStream(params.providerStreamFn, wrapOptions, "provider");
   }
 
   const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
@@ -170,7 +159,11 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   ) {
     return wrapCredentialedStream(
       currentStreamFn,
-      { ...wrapOptions, sessionId: params.sessionId, transformContext: stripCacheBoundary },
+      {
+        ...wrapOptions,
+        sessionId: params.sessionId,
+        transformContext: createSystemPromptCacheBoundaryStripper(),
+      },
       "openclaw-native-codex-responses",
     );
   }
@@ -201,13 +194,12 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   const promptCacheKey = params.promptCacheKey?.trim();
   return {
     streamFn:
-      !promptCacheKey && !params.signal && !params.assertCurrent && !params.sessionFork
+      !promptCacheKey && !params.signal && !params.assertCurrent
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
             runSignal: params.signal,
             promptCacheKey,
             assertCurrent: params.assertCurrent,
-            sessionFork: params.sessionFork,
           }),
     strategy: isDefault ? "stream-simple" : "session-custom",
     wrapApiKey: keepStreamAuth,
@@ -219,9 +211,9 @@ function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): Ab
   const composedSignal = AbortSignal.any([callerSignal, runSignal]);
   // The activity registry owns this bridge weakly; an abort listener on either
   // reusable source would retain its composite after a successful request.
-  onLlmRequestActivity(composedSignal, (progress) => {
+  onLlmRequestActivity(composedSignal, (...activity) => {
     if (!composedSignal.aborted) {
-      notifyLlmRequestActivity(callerSignal, progress);
+      notifyLlmRequestActivity(callerSignal, ...activity);
     }
   });
   return composedSignal;
@@ -236,14 +228,10 @@ function wrapEmbeddedAgentStreamFn(
     promptCacheKey?: string;
     transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
     assertCurrent?: () => void;
-    sessionFork?: EmbeddedSessionForkIdentity;
   },
 ): StreamFn {
   const transformContext =
     params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
-  const transport = params.sessionFork
-    ? wrapStreamFnWithSessionFork(inner, params.sessionFork)
-    : inner;
   const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
     const embeddedOptions = options as EmbeddedStreamOptions | undefined;
     const callerSignal = embeddedOptions?.signal;
@@ -270,7 +258,7 @@ function wrapEmbeddedAgentStreamFn(
     return admitProviderRateLimitStream(
       m,
       mergedOptions,
-      (admittedOptions) => transport(m, transformContext(context), admittedOptions),
+      (admittedOptions) => inner(m, transformContext(context), admittedOptions),
       params.assertCurrent,
     );
   };

@@ -283,32 +283,6 @@ function parseResolvedSpecFromId(id: string): string | undefined {
   return `${name}@${version}`;
 }
 
-function normalizeNpmPackEntry(
-  entry: unknown,
-): { filename?: string; metadata: NpmSpecResolution } | null {
-  const rec = asNullableObjectRecord(entry);
-  if (!rec) {
-    return null;
-  }
-  const name = normalizeOptionalString(rec.name);
-  const version = normalizeOptionalString(rec.version);
-  const id = normalizeOptionalString(rec.id);
-  const resolvedSpec =
-    (name && version ? `${name}@${version}` : undefined) ??
-    (id ? parseResolvedSpecFromId(id) : undefined);
-
-  return {
-    filename: normalizeOptionalString(rec.filename),
-    metadata: {
-      name,
-      version,
-      resolvedSpec,
-      integrity: normalizeOptionalString(rec.integrity),
-      shasum: normalizeOptionalString(rec.shasum),
-    },
-  };
-}
-
 function parseNpmPackJsonOutput(
   raw: string,
 ): { filename?: string; metadata: NpmSpecResolution } | null {
@@ -327,10 +301,27 @@ function parseNpmPackJsonOutput(
     const entries = resolveNpmJsonEntries(tryParseJson(candidate));
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
-      const normalized = normalizeNpmPackEntry(entries[i]);
-      if (!normalized) {
+      const rec = asNullableObjectRecord(entries[i]);
+      if (!rec) {
         continue;
       }
+      const name = normalizeOptionalString(rec.name);
+      const version = normalizeOptionalString(rec.version);
+      const id = normalizeOptionalString(rec.id);
+      const resolvedSpec =
+        (name && version ? `${name}@${version}` : undefined) ??
+        (id ? parseResolvedSpecFromId(id) : undefined);
+
+      const normalized = {
+        filename: normalizeOptionalString(rec.filename),
+        metadata: {
+          name,
+          version,
+          resolvedSpec,
+          integrity: normalizeOptionalString(rec.integrity),
+          shasum: normalizeOptionalString(rec.shasum),
+        },
+      };
       if (!fallback) {
         fallback = normalized;
       }

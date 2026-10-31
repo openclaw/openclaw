@@ -41,15 +41,13 @@ it("round-trips escaped and quoted Environment values", () => {
   }
 });
 
-it("round-trips escaped and quoted ExecStart arguments", () => {
-  const programArguments = ["/usr/bin/openclaw", "gateway", ...values];
+it("round-trips escaped, quoted and empty ExecStart arguments without shifting positions", () => {
+  const programArguments = ["run", "", ...values, "tail", ""];
   const unit = build(programArguments);
+  expect(execStart(unit)).toBe(
+    String.raw`run "" plain "mix \\ and \" here" "trailing\\" "apostrophe's" "'quoted'" tail ""`,
+  );
   expect(parseSystemdExecStart(execStart(unit))).toEqual(programArguments);
-});
-
-it("quotes empty ExecStart arguments without shifting later arguments", () => {
-  const unit = build(["/usr/bin/node", "gateway", "--label", "", "--port", "18789", ""]);
-  expect(execStart(unit)).toBe('/usr/bin/node gateway --label "" --port 18789 ""');
 });
 
 it("preserves explicit NODE_OPTIONS while omitting other empty values", () => {
@@ -61,7 +59,6 @@ it("preserves explicit NODE_OPTIONS while omitting other empty values", () => {
     expect(directives(unit, "Environment").flatMap(parseSystemdEnvAssignments)).toEqual([
       { key: "NODE_OPTIONS", value: nodeOptions },
     ]);
-    expect(parseSystemdExecStart(execStart(unit))).toEqual(programArguments);
   }
 });
 
@@ -78,6 +75,8 @@ it("renders the gateway unit with safe lifecycle policy and ordered environment 
       "TimeoutStartSec=30",
       "SuccessExitStatus=0 143",
       "OOMPolicy=continue",
+      "Delegate=yes",
+      "DelegateSubgroup=gateway",
       "StartLimitBurst=10",
       "StartLimitIntervalSec=300",
       "RestartSec=5",
@@ -89,6 +88,9 @@ it("renders the gateway unit with safe lifecycle policy and ordered environment 
   expect(unit.indexOf("EnvironmentFile=-/home/test/.openclaw/.env")).toBeLessThan(
     unit.indexOf("Environment=OPENCLAW_GATEWAY_PORT=18789"),
   );
+  expect(
+    build(["node", "node-host"], { environment: { OPENCLAW_SERVICE_KIND: "node" } }),
+  ).not.toContain("Delegate=");
 });
 
 it("rejects environment values with line breaks", () => {
@@ -101,13 +103,18 @@ it("rejects environment values with line breaks", () => {
 
 it.each([
   ['run "a b"', "none", ["run", "a b"]],
-  ['run "a \\"b\\"" c', "backslash", ["run", 'a "b"', "c"]],
   ['run "C:\\\\a b\\\\c"', "backslash-quote-only", ["run", "C:\\\\a b\\\\c"]],
   ['run "a \\"b\\" c"', "backslash-quote-only", ["run", 'a "b" c']],
+  ['  "" run "" tail ""  ', "none", ["", "run", "", "tail", ""]],
+  ['  "" run "" tail ""  ', "backslash-quote-only", ["", "run", "", "tail", ""]],
 ] as const)("splits %s using %s escaping", (input, escapeMode, expected) => {
   expect(
     splitArgsPreservingQuotes(input, escapeMode === "none" ? undefined : { escapeMode }),
   ).toEqual(expected);
+});
+
+it("preserves empty single-quoted ExecStart arguments", () => {
+  expect(parseSystemdExecStart("run '' next ''")).toEqual(["run", "", "next", ""]);
 });
 
 it("parses quoted assignments while preserving unquoted apostrophes", () => {

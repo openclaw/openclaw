@@ -29,8 +29,10 @@ export async function createReplyBoundary(
     channel?: Partial<Channel>;
     account?: NonNullable<Channel["accounts"]>[string];
     agents?: OpenClawConfig["agents"];
+    kind?: "direct" | "group";
   } = {},
 ) {
+  const kind = options.kind ?? "direct";
   const cfg: OpenClawConfig = {
     agents: { defaults: { workspace: path.join(root, "workspace") }, ...options.agents },
     session: { dmScope: "per-channel-peer" },
@@ -48,7 +50,7 @@ export async function createReplyBoundary(
     cfg,
     channel: "whatsapp",
     accountId: boundaryAccount,
-    peer: { kind: "direct", id: peer },
+    peer: { kind, id: peer },
   });
   const backgroundTasks = new Set<Promise<unknown>>();
   return {
@@ -62,7 +64,7 @@ export async function createReplyBoundary(
         route,
         replyResolver,
         backgroundTasks,
-        groupHistoryKey: `whatsapp:${boundaryAccount}:direct:${peer}`,
+        groupHistoryKey: `whatsapp:${boundaryAccount}:${kind}:${peer}`,
         groupHistories: new Map(),
         groupMemberNames: new Map(),
         connectionId: "reply-boundary-proof",

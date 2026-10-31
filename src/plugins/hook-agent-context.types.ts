@@ -3,13 +3,11 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { MemoryAudience } from "./memory-provider-types.js";
 
-type PluginHookContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
-
 export type PluginHookContextWindow = {
   /** Resolved effective context-token budget after model/config/agent caps. */
   contextTokenBudget?: number;
   /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
+  contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
   /** Native/configured reference window when a lower cap wins. */
   contextWindowReferenceTokens?: number;
 };
@@ -19,6 +17,8 @@ export type PluginHookToolAuthority = {
   readonly fingerprint: string;
   /** Checks whether the finalized turn surface contains this exact tool. */
   allows(toolName: string): boolean;
+  /** Lists only the frozen canonical tool names checked by allows(); absent on older hosts. */
+  list?(): readonly string[];
   /** Rejects retained or timed-out capabilities after the host dispatch closes. */
   assertActive(): void;
 };
@@ -29,8 +29,6 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
-  /** Heartbeat owner's resolved system-event queue key; supplied to before_agent_reply only. */
-  heartbeatEventQueueSessionKey?: string;
   sessionId?: string;
   /** Host-resolved memory partition for this turn. */
   memoryAudience?: MemoryAudience;

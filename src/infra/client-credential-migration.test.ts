@@ -17,6 +17,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { importClientCredentialLegacy } from "./client-credential-legacy.js";
 import {
@@ -701,10 +702,12 @@ it("decrypts a pre-cutover public-session token with the exactly migrated identi
   const token =
     "v1.BwcHBwcHBwcHBwcHwqVwqlDFAwNPJ4TDoOKwRBzmmVH2zD4hlWSM9INXdYUuW35wvupzTDJq6OCFmLkD2varXqKRCJOHZq6zmCs_5a138mgvyTNU00swEQPLnTdZ5VEr2n-115k4EmS30yAm0EtylQ6rpbzjqNtSCCySwtnlYtDQrzcc-uV3cucEmEgsYpLSIf4qFVHiP0Ohc6JxVSv1xofWUQBR29jEQWdv9PyiJix1YE7n4vNCcEZA";
   f.migrate();
-  await expect(resolvePublicSessionShareToken(token, { env: f.env })).resolves.toEqual({
-    agentId: "synthetic",
-    sessionKey: "agent:synthetic:public",
-    sessionId: "migration-proof",
-    shareId: "a".repeat(48),
+  await withEnvAsync({ OPENCLAW_STATE_DIR: f.env.OPENCLAW_STATE_DIR }, async () => {
+    await expect(resolvePublicSessionShareToken(token)).resolves.toEqual({
+      agentId: "synthetic",
+      sessionKey: "agent:synthetic:public",
+      sessionId: "migration-proof",
+      shareId: "a".repeat(48),
+    });
   });
 });

@@ -4,11 +4,7 @@
  */
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type {
-  SearchConfigRecord,
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-} from "openclaw/plugin-sdk/provider-web-search";
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -62,30 +58,6 @@ const BraveSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-function createBraveToolDefinition(
-  searchConfig?: SearchConfigRecord,
-  config?: Parameters<typeof isDiagnosticFlagEnabled>[1],
-): WebSearchProviderToolDefinition {
-  const braveMode = resolveBraveMode(asOptionalRecord(searchConfig?.brave));
-  const diagnosticsEnabled = isDiagnosticFlagEnabled("brave.http", config);
-
-  return {
-    description:
-      braveMode === "llm-context"
-        ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
-    parameters: BraveSearchSchema,
-    execute: async (args, context) => {
-      context?.signal?.throwIfAborted();
-      const { executeBraveSearch } = await loadBraveWebSearchRuntime();
-      return await executeBraveSearch(args, searchConfig, {
-        diagnosticsEnabled,
-        signal: context?.signal,
-      });
-    },
-  };
-}
-
 export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "brave",
@@ -104,15 +76,32 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
       searchCredential: { type: "top-level" },
       configuredCredential: { pluginId: "brave" },
     }),
-    createTool: (ctx) =>
-      createBraveToolDefinition(
-        mergeScopedSearchConfig(
-          ctx.searchConfig,
-          "brave",
-          resolveProviderWebSearchPluginConfig(ctx.config, "brave"),
-          { mirrorApiKeyToTopLevel: true },
-        ),
-        ctx.config,
-      ),
+    createTool: (ctx) => {
+      const searchConfig = mergeScopedSearchConfig(
+        ctx.searchConfig,
+        "brave",
+        resolveProviderWebSearchPluginConfig(ctx.config, "brave"),
+        { mirrorApiKeyToTopLevel: true },
+      );
+      const config = ctx.config;
+      const braveMode = resolveBraveMode(asOptionalRecord(searchConfig?.brave));
+      const diagnosticsEnabled = isDiagnosticFlagEnabled("brave.http", config);
+
+      return {
+        description:
+          braveMode === "llm-context"
+            ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
+        parameters: BraveSearchSchema,
+        execute: async (args, context) => {
+          context?.signal?.throwIfAborted();
+          const { executeBraveSearch } = await loadBraveWebSearchRuntime();
+          return await executeBraveSearch(args, searchConfig, {
+            diagnosticsEnabled,
+            signal: context?.signal,
+          });
+        },
+      };
+    },
   };
 }

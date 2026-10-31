@@ -26,6 +26,21 @@ afterEach(() => {
 });
 
 describe("SQLite session owner assignment", () => {
+  it("drops released predicate rows and refuses late acknowledgements", () => {
+    const entry = { sessionId: "retained", updatedAt: 1 };
+    const predicate = retainPreparedSessionEntryPredicate({
+      databaseIdentity: "file:released-predicate",
+      sessionKey: "agent:main:released",
+      entry,
+      acquiring: true,
+      matches: (before, after) => before?.sessionId === after?.sessionId,
+    });
+    predicate.release();
+    expect(predicate.readRetainedEntry()).toBeUndefined();
+    expect(predicate.acknowledge(entry, predicate.captureRevision())).toBe(false);
+    expect(predicate.readRetainedEntry()).toBeUndefined();
+    expect(predicate.isCurrent()).toBe(false);
+  });
   it("guards incognito owner assignments without querying session rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});

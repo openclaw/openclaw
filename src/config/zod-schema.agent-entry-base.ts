@@ -3,6 +3,11 @@ import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
 
+export const WorkspaceFileModeSchema = z.enum(["0600", "0620", "0640", "0660"], {
+  error:
+    "Expected an octal string: 0600, 0620, 0640, or 0660 (owner read/write; group access optional)",
+});
+
 export const AgentRuntimePolicySchema = z
   .strictObject({
     id: z.string().optional(),
@@ -83,6 +88,7 @@ export const AgentEntryBaseSchema = z.strictObject({
   name: z.string().optional(),
   description: z.string().optional(),
   workspace: z.string().optional(),
+  workspaceFileMode: WorkspaceFileModeSchema.optional(),
   cwd: z.string().optional(),
   agentDir: z.string().optional(),
   model: AgentModelSchema.optional(),

@@ -111,20 +111,16 @@ fn publishes_nested_package_bytes_and_rejects_modified_or_traversing_resources()
         "package/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
     );
     assert!(codex.to_string_lossy().encode_utf16().count() < 260);
-    if cfg!(target_os = "macos") {
-        assert!(fixture.seed().is_err());
-        return;
-    }
     let runtime = fixture.seed().unwrap();
     let entry = runtime
-        .bun
+        .executable
         .parent()
         .unwrap()
         .parent()
         .unwrap()
         .join(PACKAGE_ENTRY);
     assert_eq!(fs::read(&entry).unwrap(), b"synthetic package bytes");
-    assert_eq!(fixture.seed().unwrap().bun, runtime.bun);
+    assert_eq!(fixture.seed().unwrap().executable, runtime.executable);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -141,10 +137,10 @@ fn publishes_a_durable_verified_copy_and_reuses_it() {
     let fixture = Fixture::new();
     let runtime = fixture.seed().unwrap();
     assert!(runtime
-        .bun
+        .executable
         .starts_with(fixture.prefix.join("tools/desktop-runtime")));
     assert!(runtime
-        .bun
+        .executable
         .parent()
         .unwrap()
         .parent()
@@ -153,27 +149,52 @@ fn publishes_a_durable_verified_copy_and_reuses_it() {
         .unwrap()
         .to_string_lossy()
         .starts_with("test-fork-"));
-    assert_eq!(fs::read(&runtime.bun).unwrap(), b"synthetic runtime");
-    assert_eq!(fixture.seed().unwrap().bun, runtime.bun);
+    assert_eq!(fs::read(&runtime.executable).unwrap(), b"synthetic runtime");
+    assert_eq!(fixture.seed().unwrap().executable, runtime.executable);
     fs::remove_dir_all(&fixture.source).unwrap();
     assert!(
-        runtime.bun.is_file(),
+        runtime.executable.is_file(),
         "the service must survive an AppImage unmount"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn darwin_jit_requires_and_verifies_its_bundled_sqlite() {
+    let fixture = Fixture::new();
+    let runtime = fixture.seed().unwrap();
+    let sqlite = runtime.sqlite.unwrap();
+    assert_eq!(fs::read(&sqlite).unwrap(), b"synthetic sqlite");
+    fs::remove_file(&sqlite).unwrap();
+    fs::write(&sqlite, "modified sqlite").unwrap();
+    assert!(fixture.seed().unwrap_err().contains("checksum changed"));
+
+    let mut manifest: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
+    manifest["files"]
+        .as_object_mut()
+        .unwrap()
+        .remove("lib/libsqlite3.dylib");
+    fs::remove_file(fixture.source.join("lib/libsqlite3.dylib")).unwrap();
+    fs::remove_dir(fixture.source.join("lib")).unwrap();
+    let bytes = manifest.to_string();
+    fs::write(fixture.source.join("manifest.json"), &bytes).unwrap();
+    let error = seed_at(&fixture.source, &fixture.prefix, &bytes, &|_, _| Ok(()))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("identity does not match"), "{error}");
 }
 
 #[test]
 fn staging_an_update_retains_the_runtime_referenced_by_an_existing_service() {
     let fixture = Fixture::new();
     let previous = fixture.seed().unwrap();
-    let service =
-        serde_json::json!({ "programArguments": [previous.bun, "/app/entry.js", "gateway"] });
+    let service = serde_json::json!({ "programArguments": [previous.executable, "/app/entry.js", "gateway"] });
     let mut next: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
     next["tag"] = "newer-bundle".into();
     let next = next.to_string();
     fs::write(fixture.source.join("manifest.json"), &next).unwrap();
     let current = seed_at(&fixture.source, &fixture.prefix, &next, &|_, _| Ok(())).unwrap();
-    assert_ne!(previous.bun, current.bun);
+    assert_ne!(previous.executable, current.executable);
     let referenced = Path::new(service["programArguments"][0].as_str().unwrap());
     assert_eq!(fs::read(referenced).unwrap(), b"synthetic runtime");
     assert!(referenced
@@ -198,26 +219,26 @@ fn successive_healthy_collections_retain_current_previous_service_pin_and_live_s
     fs::create_dir(&unknown).unwrap();
     fs::write(unknown.join("keep"), "operator data").unwrap();
     let references = [
-        current.bun.clone(),
-        previous.bun.clone(),
-        service.bun.clone(),
-        pin.bun.clone(),
+        current.executable.clone(),
+        previous.executable.clone(),
+        service.executable.clone(),
+        pin.executable.clone(),
     ];
     retention::collect(&fixture.prefix, &references, &|_| {
-        Ok(vec![live.bun.clone()])
+        Ok(vec![live.executable.clone()])
     })
     .unwrap();
-    assert!(!obsolete.bun.exists());
+    assert!(!obsolete.executable.exists());
     for runtime in [&current, &previous, &service, &pin, &live] {
-        assert!(runtime.bun.is_file());
+        assert!(runtime.executable.is_file());
     }
     // Once the service, pin and live process release them, the next healthy cycle reclaims them.
     retention::collect(&fixture.prefix, &references[..2], &|_| Ok(vec![])).unwrap();
     for runtime in [&service, &pin, &live] {
-        assert!(!runtime.bun.exists());
+        assert!(!runtime.executable.exists());
     }
-    assert!(current.bun.is_file());
-    assert!(previous.bun.is_file());
+    assert!(current.executable.is_file());
+    assert!(previous.executable.is_file());
     assert_eq!(
         fs::read_to_string(unknown.join("keep")).unwrap(),
         "operator data"
@@ -230,20 +251,20 @@ fn unreadable_processes_or_references_prune_nothing() {
     let old = fixture.next_seed("old");
     let current = fixture.next_seed("current");
     assert!(
-        retention::collect(&fixture.prefix, &[current.bun.clone()], &|_| Err(
+        retention::collect(&fixture.prefix, &[current.executable.clone()], &|_| Err(
             "unreadable census".into()
         ))
         .is_err()
     );
-    assert!(old.bun.is_file());
+    assert!(old.executable.is_file());
     assert!(
         retention::collect(&fixture.prefix, &[fixture.root.join("missing")], &|_| Ok(
             vec![]
         ))
         .is_err()
     );
-    assert!(old.bun.is_file());
-    assert!(current.bun.is_file());
+    assert!(old.executable.is_file());
+    assert!(current.executable.is_file());
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -265,7 +286,7 @@ fn running_seed_is_retained_until_the_process_exits() {
         .into();
     fixture.manifest = manifest.to_string();
     let live = fixture.next_seed("live");
-    let mut command = Command::new(&live.bun);
+    let mut command = Command::new(&live.executable);
     #[cfg(target_os = "windows")]
     command.args([
         "/d",
@@ -299,7 +320,7 @@ fn running_seed_is_retained_until_the_process_exits() {
     let pid = child.id();
     let collect = || {
         #[cfg(target_os = "linux")]
-        return retention::collect(&fixture.prefix, &[current.bun.clone()], &|_| {
+        return retention::collect(&fixture.prefix, &[current.executable.clone()], &|_| {
             // The hosted runner can hide unrelated processes; inspect only this owned fixture.
             Ok(
                 retention::executable_path(&PathBuf::from(format!("/proc/{pid}")))?
@@ -308,15 +329,15 @@ fn running_seed_is_retained_until_the_process_exits() {
             )
         });
         #[cfg(target_os = "windows")]
-        collect_after_healthy(&fixture.prefix, &[current.bun.clone()])
+        collect_after_healthy(&fixture.prefix, &[current.executable.clone()])
     };
     collect().unwrap();
-    assert!(live.bun.is_file());
+    assert!(live.executable.is_file());
     drop(child.stdin.take());
     assert!(child.wait().unwrap().success());
     collect().unwrap();
-    assert!(!live.bun.exists());
-    assert!(current.bun.is_file());
+    assert!(!live.executable.exists());
+    assert!(current.executable.is_file());
 }
 
 #[test]
@@ -326,10 +347,13 @@ fn rejects_modified_source_and_installed_payload_without_overwriting() {
     assert!(fixture.seed().unwrap_err().contains("checksum changed"));
     write_source(&fixture.source, b"synthetic runtime");
     let runtime = fixture.seed().unwrap();
-    fs::remove_file(&runtime.bun).unwrap();
-    fs::write(&runtime.bun, "operator replacement").unwrap();
+    fs::remove_file(&runtime.executable).unwrap();
+    fs::write(&runtime.executable, "operator replacement").unwrap();
     assert!(fixture.seed().is_err());
-    assert_eq!(fs::read(&runtime.bun).unwrap(), b"operator replacement");
+    assert_eq!(
+        fs::read(&runtime.executable).unwrap(),
+        b"operator replacement"
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -451,4 +475,156 @@ fn rejects_redirected_install_directory_and_source_file() {
     )
     .unwrap();
     assert!(fixture.seed().is_err());
+}
+
+#[cfg(unix)]
+fn aot_fixture() -> Fixture {
+    let mut fixture = Fixture::new();
+    fs::remove_dir_all(&fixture.source).unwrap();
+    fs::create_dir_all(fixture.source.join("standalone/runtime")).unwrap();
+    let executable = b"#!/bin/sh\nprintf '%s\\n' \"$@\"\n";
+    let hash = |bytes: &[u8]| {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let standalone = serde_json::json!({
+        "schemaVersion": 1, "mode": "aot", "openclaw": {"version": "2026.10.1"},
+        "target": {"platform": if cfg!(target_os = "macos") {"darwin"} else {"linux"},
+            "arch": if cfg!(target_arch = "aarch64") {"arm64"} else {"x64"}},
+        "executable": {"path": "openclaw", "sha256": hash(executable)},
+        "runtime": {"path": "runtime"}
+    });
+    let standalone_bytes = standalone.to_string();
+    let files = [
+        ("standalone/openclaw", executable.as_slice()),
+        ("standalone/manifest.json", standalone_bytes.as_bytes()),
+        (
+            "standalone/runtime/asset.txt",
+            b"retained sidecar".as_slice(),
+        ),
+    ];
+    let mut inventory = BTreeMap::new();
+    for (name, bytes) in files {
+        let resource = if cfg!(target_os = "linux") {
+            [LINUX_RESOURCE_PREFIX, bytes].concat()
+        } else {
+            bytes.to_vec()
+        };
+        fs::write(fixture.source.join(name), resource).unwrap();
+        inventory.insert(name, hash(bytes));
+    }
+    let mut manifest: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
+    manifest["files"] = serde_json::to_value(inventory).unwrap();
+    manifest["runtime"] = serde_json::json!({"flavor": "aot", "executable": "standalone/openclaw", "standalone": standalone});
+    fixture.manifest = manifest.to_string();
+    fs::write(fixture.source.join("manifest.json"), &fixture.manifest).unwrap();
+    fixture
+}
+
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "x86_64"))))]
+#[test]
+fn aot_seed_preserves_sidecar_and_launches_cli_arguments_without_a_bun_entry() {
+    let fixture = aot_fixture();
+    let runtime = fixture.seed().unwrap();
+    assert_eq!(runtime.flavor, RuntimeFlavor::Aot);
+    assert!(runtime.entry.is_none());
+    let mut command = runtime.command(Path::new("/must-not-run/openclaw.mjs"));
+    command.args(["doctor", "--non-interactive", "literal $input"]);
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "doctor\n--non-interactive\nliteral $input\n"
+    );
+    assert_eq!(
+        fs::read(
+            runtime
+                .executable
+                .parent()
+                .unwrap()
+                .join("runtime/asset.txt")
+        )
+        .unwrap(),
+        b"retained sidecar"
+    );
+    assert_eq!(fixture.seed().unwrap(), runtime);
+    let mut mismatched: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
+    mismatched["runtime"]["standalone"]["target"]["arch"] = "wrong".into();
+    assert!(validate_manifest(&serde_json::from_value(mismatched).unwrap()).is_err());
+    let sidecar = runtime
+        .executable
+        .parent()
+        .unwrap()
+        .join("runtime/asset.txt");
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(sidecar, "changed").unwrap();
+    assert!(fixture.seed().unwrap_err().contains("checksum changed"));
+}
+
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "x86_64"))))]
+#[test]
+fn jit_to_aot_and_aot_to_aot_seeding_keep_previous_runtime_bytes() {
+    let mut fixture = Fixture::new();
+    let jit = fixture.seed().unwrap();
+    let aot = aot_fixture();
+    fixture.source = aot.source.clone();
+    fixture.manifest = aot.manifest.clone();
+    let first = fixture.seed().unwrap();
+    let second = fixture.next_seed("aot-next-build");
+    assert_ne!(jit.executable, first.executable);
+    assert_ne!(first.executable, second.executable);
+    for runtime in [jit, first, second] {
+        assert!(runtime.executable.is_file());
+    }
+}
+
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "x86_64"))))]
+#[test]
+fn aot_version_admission_has_private_state_and_removes_its_probe_files() {
+    const CHILD: &str = "OPENCLAW_AOT_VERSION_PROBE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = aot_fixture();
+    let runtime = fixture.seed().unwrap();
+    fs::remove_file(&runtime.executable).unwrap();
+    assert!(Command::new("/bin/cp")
+        .arg(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/standalone-version-probe.sh")
+        )
+        .arg(&runtime.executable)
+        .status()
+        .unwrap()
+        .success());
+    fs::set_permissions(&runtime.executable, fs::Permissions::from_mode(0o555)).unwrap();
+    let directory = runtime.executable.parent().unwrap();
+    let names = || {
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<BTreeSet<_>>()
+    };
+    let before = names();
+    verify_revision(
+        &runtime.executable,
+        &serde_json::from_str(&fixture.manifest).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(names(), before);
 }

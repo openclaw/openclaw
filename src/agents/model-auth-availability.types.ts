@@ -1,9 +1,17 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
 } from "../plugin-sdk/provider-model-types.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { SelectedModelCredential } from "./model-auth-selected-credential.js";
+import type { CliRuntimeAuthDirectories } from "./model-runtime-aliases.js";
+import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
 import type { ProviderModelAuthEvidence } from "./provider-model-auth-source-plan.js";
 
 export type ModelAuthAvailability = boolean | undefined;
@@ -55,3 +63,46 @@ export type ModelAuthAvailabilityResolver = {
     ref?: ModelAuthAvailabilityRef,
   ): ModelAuthAvailability;
 };
+
+export type CreateModelAuthAvailabilityResolverParams = {
+  evaluatePluginAuth?: (
+    provider: string,
+    ref: ModelAuthAvailabilityRef,
+  ) => ModelAuthAvailabilityEvaluation;
+  cfg: OpenClawConfig;
+  preparedCliRuntimeAuthDirectories?: CliRuntimeAuthDirectories;
+  agentId?: string;
+  authStore: AuthProfileStore;
+  agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  syntheticAuthProviderRefs?: readonly string[];
+  metadataSnapshot?: PluginMetadataSnapshot;
+  externalCliProviderIds?: readonly string[];
+  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  preparedRuntimeAuthStore?: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
+  preparedSyntheticAuthComplete?: boolean;
+  /**
+   * Ids the credential's own ready account listing returned, including hidden rows; absent when
+   * that credential has no ready listing. Another account's listing says nothing about this one.
+   */
+  accountListedModelIds?: (
+    provider: string,
+    profileId: string | undefined,
+  ) => ReadonlySet<string> | undefined;
+};
+
+export type AuthTarget = ModelAuthAvailabilityRef & {
+  authRequirement?: ProviderModelRouteAuthRequirement;
+};
+export type AuthSourceEvaluation = Pick<
+  ModelAuthAvailabilityEvaluation,
+  | "availability"
+  | "selectedAuthMode"
+  | "evidence"
+  | "selectedProfileId"
+  | "unavailableReason"
+  | "unavailableUntil"
+>;

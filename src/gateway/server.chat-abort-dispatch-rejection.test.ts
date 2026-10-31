@@ -15,7 +15,6 @@ import {
   createAgentRunRestartAbortError,
 } from "../agents/run-termination.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
-import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { clearConfigCache } from "../config/config.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
@@ -146,6 +145,14 @@ function textAttachment(bytes: string) {
   };
 }
 
+async function history(socket: GatewaySocket, sessionKey = "main") {
+  const result = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", { sessionKey });
+  expect(result.ok).toBe(true);
+  return result.payload?.messages;
+}
+
+const containingMessages = (...messages: Record<string, unknown>[]) =>
+  expect.arrayContaining(messages.map((message) => expect.objectContaining(message)));
 describe("gateway WebSocket chat abort ownership", () => {
   test("preserves committed native input across a profile-bound reconnect", async () => {
     const scope = await prepareChatSession("native-reconnect", "native-reconnect-bound");
@@ -371,7 +378,8 @@ describe("gateway WebSocket chat abort ownership", () => {
   test.for([false, true])(
     "retains dispatch failure and rejects late abort after yielded waiting end=%s",
     async (yielded, { signal }) => {
-      const { storePath } = await prepareChatSession("error-late-abort");
+      const scope = await prepareChatSession("error-late-abort");
+      const { storePath } = scope;
 
       const socket = await gateway.openWs();
       const dispatchEntered = createDeferred();
@@ -390,7 +398,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           }
           dispatchEntered.resolve();
           await dispatchRelease.promise;
-          throw new Error("dispatch rejected before a late abort");
+          throw new Error(`${"warning: ".repeat(80)}dispatch rejected before a late abort`);
         });
 
         const sendParameters = {
@@ -435,14 +443,20 @@ describe("gateway WebSocket chat abort ownership", () => {
         const established = await rpcReq(socket, "chat.send", sendParameters);
         expectRun(established, runId, "error", false);
         expect(terminalStates).toEqual(yielded ? ["final", "error"] : ["error"]);
-        const history = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
-          sessionKey: "main",
-        });
-        expect(history.payload?.messages).toContainEqual(
-          expect.objectContaining({
+        expect(await history(socket)).toEqual(
+          containingMessages({
             role: "custom",
             customType: "run-failed-before-reply",
-            content: expect.stringContaining("dispatch rejected before a late abort"),
+            content: "Your request couldn't be completed.",
+          }),
+        );
+        expect(loadTranscriptEventsSync(scope)).toContainEqual(
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            details: expect.objectContaining({
+              runId,
+              error: expect.stringContaining("dispatch rejected before a late abort"),
+            }),
           }),
         );
 
@@ -450,8 +464,10 @@ describe("gateway WebSocket chat abort ownership", () => {
           sessionKey: "main",
           runId,
         });
-        expect(lateAbort.ok).toBe(true);
-        expect(lateAbort.payload).toMatchObject({ ok: true, aborted: false, runIds: [] });
+        expect(lateAbort).toMatchObject({
+          ok: true,
+          payload: { ok: true, aborted: false, runIds: [] },
+        });
 
         const replay = await rpcReq(socket, "chat.send", sendParameters);
         expect(replay.ok).toBe(false);
@@ -564,19 +580,15 @@ describe("gateway WebSocket chat abort ownership", () => {
         });
         if (!runtimeTerminal) {
           const settled = await rpcReq(socket, "agent.wait", { runId, timeoutMs: 1_000 });
-          expect(settled.ok).toBe(true);
-          expect(settled.payload).toMatchObject({
-            runId,
-            status: "error",
-            stopReason: "aborted",
-            endedAt: expect.any(Number),
+          expect(settled).toMatchObject({
+            ok: true,
+            payload: { runId, status: "error", stopReason: "aborted", endedAt: expect.any(Number) },
           });
         }
 
         // The history RPC response follows every previously emitted chat
         // event on this socket, so it exposes any contradictory late terminal.
-        const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
-        expect(barrier.ok).toBe(true);
+        await history(socket);
         expect(terminalStates).toEqual([terminalState]);
       } finally {
         dispatchRelease.resolve();
@@ -693,14 +705,8 @@ describe("gateway WebSocket chat abort ownership", () => {
       await withinTest(failureEntered.promise, signal);
       await lifecycle;
       // The same-socket response fences delivered events while the notice commit is held.
-      const heldHistory = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
-        sessionKey: scope.sessionKey,
-      });
-      expect(heldHistory.ok).toBe(true);
-      expect(heldHistory.payload?.messages).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ customType: "run-failed-before-reply" }),
-        ]),
+      expect(await history(socket, scope.sessionKey)).not.toEqual(
+        containingMessages({ customType: "run-failed-before-reply" }),
       );
       expect.soft(terminalStates).toEqual([]);
       failureRelease.resolve();
@@ -708,24 +714,20 @@ describe("gateway WebSocket chat abort ownership", () => {
       expect.soft(terminalStates).toEqual(["error"]);
       expect.soft(terminalFrame.payload?.errorMessage).toBe(warning);
       expect(loadSessionEntry(scope)).toMatchObject({ status: "failed", lastRunId: runId });
-      const history = await rpcReq<{ messages: unknown[] }>(reader, "chat.history", {
-        sessionKey: scope.sessionKey,
-      });
-      expect(history.ok).toBe(true);
-      expect(history.payload?.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
+      expect(await history(reader, scope.sessionKey)).toEqual(
+        containingMessages(
+          {
             role: "assistant",
             content: expect.arrayContaining([
               expect.objectContaining({ type: "text", text: "Running it now." }),
             ]),
-          }),
-          expect.objectContaining({
+          },
+          {
             role: "custom",
             customType: "run-failed-before-reply",
             content: warning,
-          }),
-        ]),
+          },
+        ),
       );
       expect(loadTranscriptEventsSync(scope)).toContainEqual(
         expect.objectContaining({
@@ -771,21 +773,26 @@ describe("gateway WebSocket chat abort ownership", () => {
     await writeMainSession("sess-attachment-abort");
 
     const socket = await gateway.openWs();
-    const stageRelease = createDeferred();
-    const stageEntered = createDeferred();
+    const offloadRelease = createDeferred();
+    const offloadEntered = createDeferred();
     const reason = createAgentRunDirectAbortError();
     const runId = "real-websocket-pre-ack-attachment-cancellation";
-    const bytes = "synthetic attachment awaiting staging";
+    const bytes = "synthetic attachment awaiting admission";
     let inboundPath: string | undefined;
     let filePresentAtResponse: boolean | undefined;
     let interruption: ReturnType<typeof startSessionControllerInterruption> | undefined;
     let send: ReturnType<typeof rpcReq> | undefined;
-    const stageSpy = vi.spyOn(staging, "stageSandboxMedia").mockImplementation(async ({ ctx }) => {
-      inboundPath = ctx.media?.[0]?.path;
-      stageEntered.resolve();
-      await stageRelease.promise;
-      throw reason;
-    });
+    const attachments = await import("./chat-attachments.js");
+    const parse = attachments.parseMessageWithAttachments;
+    const parseSpy = vi
+      .spyOn(attachments, "parseMessageWithAttachments")
+      .mockImplementation(async (...args) => {
+        const parsed = await parse(...args);
+        inboundPath = parsed.offloadedRefs[0]?.path;
+        offloadEntered.resolve();
+        await offloadRelease.promise;
+        return parsed;
+      });
 
     try {
       await connectOk(socket);
@@ -802,14 +809,14 @@ describe("gateway WebSocket chat abort ownership", () => {
         filePresentAtResponse = inboundPath !== undefined && existsSync(inboundPath);
         return response;
       });
-      // Cancel at the staging boundary, independently of RPC setup and filesystem latency.
+      // Cancel before parser custody transfers to the admitted input, after the real write.
       await Promise.race([
-        stageEntered.promise,
+        offloadEntered.promise,
         send.then(() => {
-          throw new Error("chat.send completed before attachment staging");
+          throw new Error("chat.send completed before attachment offload custody transferred");
         }),
       ]);
-      expect(stageSpy).toHaveBeenCalledOnce();
+      expect(parseSpy).toHaveBeenCalledOnce();
       if (!inboundPath) {
         throw new Error("the real Gateway did not persist the inbound attachment");
       }
@@ -821,7 +828,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         identities: ["main", "agent:main:main", "sess-attachment-abort"],
         reason,
       });
-      stageRelease.resolve();
+      offloadRelease.resolve();
       const response = await send;
       expect(response.ok).toBe(true);
       expect(response.payload).toMatchObject({
@@ -834,15 +841,15 @@ describe("gateway WebSocket chat abort ownership", () => {
       await expect(interruption.released).resolves.toBeUndefined();
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
-      stageRelease.resolve();
+      offloadRelease.resolve();
       await Promise.allSettled([send, interruption?.released]);
-      stageSpy.mockRestore();
+      parseSpy.mockRestore();
       testState.agentConfig = previousAgentConfig;
       socket.close();
     }
   });
 
-  test("waits for pass-through attachment cleanup after sessions.abort before replying to chat.send", async () => {
+  test("waits for offloaded attachment cleanup after sessions.abort before replying to chat.send", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-pass-through-abort-");
     testState.sessionStorePath = path.join(sessionDirectory, "sessions.json");
     const previousAgentConfig = testState.agentConfig;
@@ -874,13 +881,11 @@ describe("gateway WebSocket chat abort ownership", () => {
         };
         await writeMainSession("sess-pass-through-abort");
         // Eager chat.send imports bind the real dispatcher before fixture mocks exist.
-        const [sandboxContext, attachments, chatSend] = await Promise.all([
-          import("../agents/sandbox/context.js"),
+        const [attachments, chatSend] = await Promise.all([
           import("./chat-attachments.js"),
           import("./server-methods/chat-send-handler.js"),
         ]);
         const parse = attachments.parseMessageWithAttachments;
-        const ensureSandbox = sandboxContext.ensureSandboxWorkspaceForSession;
         const discard = attachments.discardPreparedInboundMedia;
         const handleSend = chatSend.handleChatSend;
         const parseSpy = vi
@@ -888,21 +893,11 @@ describe("gateway WebSocket chat abort ownership", () => {
           .mockImplementation(async (...args) => {
             const result = await parse(...args);
             inboundPath = result.offloadedRefs[0]?.path;
+            prepared.resolve();
+            await releasePreparation.promise;
             return result;
           });
         restoreSpies.push(() => parseSpy.mockRestore());
-        const sandboxSpy = vi
-          .spyOn(sandboxContext, "ensureSandboxWorkspaceForSession")
-          .mockImplementation(async (...args) => {
-            const result = await ensureSandbox(...args);
-            if (inboundPath) {
-              expect(result).toBeNull();
-              prepared.resolve();
-              await releasePreparation.promise;
-            }
-            return result;
-          });
-        restoreSpies.push(() => sandboxSpy.mockRestore());
         const discardSpy = vi
           .spyOn(attachments, "discardPreparedInboundMedia")
           .mockImplementation((...args) => {
@@ -947,7 +942,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           prepared.promise,
           send.then((response) => {
             throw new Error(
-              `chat.send completed before real attachment preparation: ${JSON.stringify(response)}`,
+              `chat.send completed before real offload custody transferred: ${JSON.stringify(response)}`,
             );
           }),
         ]);
@@ -978,23 +973,18 @@ describe("gateway WebSocket chat abort ownership", () => {
         const response = await send;
         await sendWork;
         await discardWork;
-        expect(response.ok).toBe(true);
-        expect(response.payload).toMatchObject({
+        const terminal = {
           runId,
           status: "timeout",
           summary: "aborted",
           stopReason: "rpc",
-        });
+        };
+        expect(response).toMatchObject({ ok: true, payload: terminal });
         expect(responses).toEqual([
           {
             filePresent: false,
             cleanupSettled: true,
-            payload: expect.objectContaining({
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "rpc",
-            }),
+            payload: expect.objectContaining(terminal),
           },
         ]);
         expect(discardSpy).toHaveBeenCalledOnce();

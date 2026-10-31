@@ -1,9 +1,12 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { Show } from "solid-js";
 import { BoardView } from "../components/board/board-view.tsx";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import type { acquireBoardProviderForSession, BoardViewCallbacks } from "../lib/board/provider.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 export function PluginSessionDashboardBoard(props: {
   board: {

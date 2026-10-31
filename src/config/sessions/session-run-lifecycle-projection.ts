@@ -6,10 +6,8 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
-import { projectMainSessionRecoveryLifecycle } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
-import { isMainRestartRecoveryCandidate, recordLifecycleFence } from "./restart-recovery-state.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleProviderReview = Pick<
@@ -26,6 +24,7 @@ export type SessionLifecyclePatchInput = {
   exactCronRun: boolean;
   providerReview?: SessionLifecycleProviderReview;
   expectedWriter?: {
+    allowUnstartedFailure?: true;
     requireYielded?: true;
     runId: string;
     sessionId: string;
@@ -34,12 +33,12 @@ export type SessionLifecyclePatchInput = {
 };
 
 export type SessionLifecyclePatchEffects = {
-  terminalRecovery?: { runId: string; outcome: AgentRunTerminalOutcome };
   failedRun?: {
     runId: string;
     error: unknown;
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
+    notice?: string;
   };
 };
 
@@ -47,12 +46,10 @@ export type LifecyclePhase = "start" | "end" | "error";
 
 export type LifecycleEventLike = { ts: number; sessionId?: string } & {
   controlUiVisible?: boolean;
-  isHeartbeat?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
   lifecycleGeneration?: string;
-  mainSessionRestartRecovery?: true;
   data?: {
     phase?: unknown;
     startedAt?: unknown;
@@ -62,6 +59,8 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     error?: unknown;
     errorKind?: unknown;
     suppressErrorNotice?: unknown;
+    /** Host-authored failure copy the requester already saw; recorded verbatim. */
+    errorNotice?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
@@ -86,12 +85,7 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  | keyof LifecycleSessionShape
-  | "status"
-  | "restartRecoveryRuns"
-  | "restartRecoveryForceSafeTools"
-  | "mainRestartRecovery"
-  | "lifecycleRunId"
+  keyof LifecycleSessionShape | "status" | "lifecycleRunId"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
@@ -168,17 +162,11 @@ function resolveRuntimeMs(params: {
 }
 
 export function resolveSessionLifecycleTerminal(event: LifecycleEventLike) {
-  // Cancellation must preserve recovery even when the bulk shutdown marker failed.
-  // Use the normalized outcome so a prior hard timeout still owns the terminal state.
   const terminal = resolveSettledLifecycleTerminalOutcome(event);
-  const interruptedForRestart =
-    terminal?.reason === "cancelled" && terminal.stopReason === "restart";
-  const status: SessionEntry["status"] = interruptedForRestart
-    ? "interrupted"
-    : terminal
-      ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
-      : undefined;
-  return { terminal, status, interruptedForRestart };
+  const status = terminal
+    ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
+    : undefined;
+  return { terminal, status };
 }
 
 export function deriveSessionLifecycleSnapshot(params: {
@@ -215,13 +203,14 @@ export function deriveSessionLifecycleSnapshot(params: {
 
   const endedAt = resolveLifecycleTimestamp(params.event.data?.endedAt, params.event.ts);
   const updatedAt = endedAt ?? existing?.updatedAt;
-  const { terminal, status, interruptedForRestart } = resolveSessionLifecycleTerminal(params.event);
+  const { terminal, status } = resolveSessionLifecycleTerminal(params.event);
+  const stoppedForRestart = terminal?.reason === "cancelled" && terminal.stopReason === "restart";
   return {
     updatedAt,
     status,
-    suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
-    lastRunError: interruptedForRestart
-      ? "Run interrupted by a Gateway restart."
+    suppressErrorNotice: stoppedForRestart || params.event.data?.suppressErrorNotice === true,
+    lastRunError: stoppedForRestart
+      ? undefined
       : terminal && status
         ? params.lastRunError
         : undefined,
@@ -229,13 +218,12 @@ export function deriveSessionLifecycleSnapshot(params: {
     endedAt,
     runtimeMs: resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
     ...(terminal &&
-    !interruptedForRestart &&
+    !stoppedForRestart &&
     params.event.controlUiVisible === true &&
-    params.event.isHeartbeat !== true &&
     endedAt !== undefined
       ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
       : {}),
-    abortedLastRun: interruptedForRestart || status === "killed",
+    abortedLastRun: status === "killed",
   };
 }
 
@@ -246,8 +234,13 @@ export function derivePersistedSessionLifecyclePatch(params: {
   lastRunError?: string;
 }): Partial<PersistedLifecycleSessionShape> {
   const phase = resolveLifecyclePhase(params.event);
-  // Queued request settlement cannot end the turn that owns this session.
-  if ((phase === "end" || phase === "error") && params.event.data?.executionStarted === false) {
+  const runId = normalizeLifecycleRunId(params.event.runId);
+  // An admitted input can stop before execution; a queued sibling cannot end its owner.
+  if (
+    (phase === "end" || phase === "error") &&
+    params.event.data?.executionStarted === false &&
+    (!runId || params.entry?.lifecycleRunId !== runId)
+  ) {
     return {};
   }
   const snapshot = deriveSessionLifecycleSnapshot({
@@ -255,27 +248,13 @@ export function derivePersistedSessionLifecyclePatch(params: {
     event: params.event,
     lastRunError: params.lastRunError,
   });
-  const runId = normalizeLifecycleRunId(params.event.runId);
-  const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
-    ...snapshot,
-    ...(snapshot.status === "interrupted" ? { restartRecoveryForceSafeTools: true } : {}),
-  };
-  const projection = projectMainSessionRecoveryLifecycle({
-    currentLifecycleGeneration: params.currentLifecycleGeneration,
-    entry: params.entry,
-    event: params.event,
-    snapshotPatch,
-  });
-  if (projection.action === "suppress") {
-    return {};
-  }
   const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
   // Execution ownership survives yielded outcomes until the continuation settles.
   return {
-    ...projection.patch,
+    ...snapshot,
     ...(phase === "start"
       ? { lifecycleRunId: runId, lastRunId: undefined }
-      : projection.patch.status && resolveSettledLifecycleTerminalOutcome(params.event)
+      : snapshot.status && resolveSettledLifecycleTerminalOutcome(params.event)
         ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
   };
@@ -357,11 +336,21 @@ export function projectSessionLifecyclePatch(
     return { patch: null };
   }
   const expected = params.expectedWriter;
+  // Preparation can fail before a writer starts. Only its captured input may
+  // terminalize an otherwise unowned row; session, revision and time fences remain.
+  const unstartedFailure =
+    expected?.allowUnstartedFailure === true &&
+    phase === "error" &&
+    params.event.runId === expected.runId &&
+    entry.activeWriterRunId === undefined &&
+    entry.lifecycleRunId === undefined;
   if (
     expected &&
     (entry.sessionId !== expected.sessionId ||
       entry.lifecycleRevision !== expected.lifecycleRevision ||
-      (entry.activeWriterRunId !== expected.runId && entry.lifecycleRunId !== expected.runId) ||
+      (!unstartedFailure &&
+        entry.activeWriterRunId !== expected.runId &&
+        entry.lifecycleRunId !== expected.runId) ||
       (entry.activeWriterRunId !== undefined && entry.activeWriterRunId !== expected.runId) ||
       (entry.lifecycleRunId !== undefined && entry.lifecycleRunId !== expected.runId))
   ) {
@@ -413,18 +402,6 @@ export function projectSessionLifecyclePatch(
     currentLifecycleGeneration: params.currentLifecycleGeneration,
     lastRunError: params.lastRunError,
   });
-  if (
-    eventRunId &&
-    isMainRestartRecoveryCandidate(entry, params.canonicalKey) &&
-    (patch.status === "interrupted" || (phase === "start" && patch.lifecycleRunId === eventRunId))
-  ) {
-    // Source-less starts and restart aborts arm custody in their existing write.
-    patch.restartRecoveryRuns = entry.restartRecoveryRuns;
-    recordLifecycleFence(patch, {
-      runId: eventRunId,
-      lifecycleGeneration: params.event.lifecycleGeneration ?? params.currentLifecycleGeneration,
-    });
-  }
   if (providerReview && Object.keys(patch).length > 0) {
     patch.providerReview = providerReview.review;
   }
@@ -459,24 +436,13 @@ export function projectSessionLifecyclePatch(
       error:
         resolveTerminalOutcome(params.event).error ??
         (patch.status === "timeout" ? "Run timed out" : undefined),
-    };
-  }
-  const recoveryTerminalIsCurrent =
-    params.event.mainSessionRestartRecovery === true &&
-    params.event.lifecycleGeneration === params.currentLifecycleGeneration &&
-    eventRunId !== undefined &&
-    (phase === "end" || phase === "error");
-  const terminalOutcome = recoveryTerminalIsCurrent
-    ? resolveSettledLifecycleTerminalOutcome(params.event)
-    : undefined;
-  if (terminalOutcome && eventRunId && Object.keys(patch).length > 0) {
-    effects.terminalRecovery = {
-      runId: eventRunId,
-      outcome: terminalOutcome,
+      ...(typeof params.event.data?.errorNotice === "string"
+        ? { notice: params.event.data.errorNotice }
+        : {}),
     };
   }
   return {
     patch: Object.keys(patch).length > 0 ? patch : null,
-    effects: effects.failedRun || effects.terminalRecovery ? effects : undefined,
+    effects: effects.failedRun ? effects : undefined,
   };
 }

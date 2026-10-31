@@ -10,7 +10,12 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
-import { appendHistoryMessage, historyStream } from "./sessions-history-http-read.test-support.js";
+import {
+  appendHistoryMessage,
+  historyStream,
+  historyTexts,
+  readSessionHistoryBody,
+} from "./sessions-history-http-read.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -29,19 +34,20 @@ function assistantMessage(text: string) {
   return makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 }
 
-type AppendOptions = Parameters<typeof appendHistoryMessage>[0];
 async function appendMessage(
   storePath: string,
   text: string,
   key = sessionKey,
-  expected: Pick<AppendOptions, "expectedSessionId" | "expectedLifecycleRevision"> = {},
+  expectedLifecycleRevision?: string,
 ) {
   const result = await appendHistoryMessage({
     agentId: "main",
     sessionKey: key,
     storePath,
     message: assistantMessage(text),
-    ...expected,
+    ...(expectedLifecycleRevision
+      ? { expectedSessionId: sessionId, expectedLifecycleRevision }
+      : {}),
   });
   return result.messageId;
 }
@@ -54,8 +60,6 @@ async function captureAppend(storePath: string, text: string, key: string) {
   const id = await appendMessage(storePath, text, key);
   return updates.find((update) => update.messageId === id);
 }
-
-const historyMessage = (text: string) => ({ content: [{ text }] });
 
 installGatewayTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -94,9 +98,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
       await using stream = historyStream(response);
       using _ = { [Symbol.dispose]: () => clearTimeout(deadline) };
       const { reader } = stream;
-      expect(await stream.next()).toMatchObject({
-        messages: [historyMessage("bound initial message")],
-      });
+      await stream.expectTexts(["bound initial message"]);
       if (mismatch === "lifecycle owner") {
         const reset = await resetSessionEntryLifecycle({
           agentId: "main",
@@ -119,10 +121,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
           5_000,
         );
         const replacementText = "replacement lifecycle message";
-        await appendMessage(storePath, replacementText, requestedKey, {
-          expectedSessionId: sessionId,
-          expectedLifecycleRevision: "after-reset",
-        });
+        await appendMessage(storePath, replacementText, requestedKey, "after-reset");
         let remaining = stream.streamState.buffer;
         const decoder = new TextDecoder();
         for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
@@ -130,25 +129,18 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         }
         expect(remaining).not.toContain(replacementText);
         clearTimeout(deadline);
-        const current = await fetch(url, { headers });
-        expect(current.status).toBe(200);
-        expect(JSON.stringify(await current.json())).toContain(replacementText);
+        expect(
+          historyTexts(await readSessionHistoryBody(harness.port, requestedKey, { headers })),
+        ).toContain(replacementText);
         return;
       }
       const foreignText = `unrelated payload from ${mismatch}`;
       if (mismatch === "physical store") {
         const foreignUpdate = await captureAppend(otherStorePath, foreignText, requestedKey);
-        const owner = {
-          target: {
-            agentId: initialUpdate.target.agentId,
-            sessionId: initialUpdate.target.sessionId,
-            sessionKey: initialUpdate.target.sessionKey,
-            storePath: expect.any(String),
-          },
+        expect(foreignUpdate).toMatchObject({
+          target: { ...initialUpdate.target, storePath: expect.any(String) },
           lifecycleRevision: "copied-history-owner",
-        };
-        expect(initialUpdate).toMatchObject(owner);
-        expect(foreignUpdate).toMatchObject(owner);
+        });
         expect(foreignUpdate?.target?.storePath).not.toBe(initialUpdate.target.storePath);
         expect(foreignUpdate?.messageSeq).toBeGreaterThan(initialUpdate.messageSeq);
       } else {
@@ -173,11 +165,9 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         published = JSON.stringify((await readSseEvent(reader, stream.streamState)).data);
         expect(published).not.toContain(foreignText);
       } while (!published.includes(visibleText));
-      const history = await fetch(url, { headers });
-      expect(history.status).toBe(200);
-      expect(await history.json()).toMatchObject({
-        messages: [historyMessage("bound initial message"), historyMessage(visibleText)],
-      });
+      expect(
+        historyTexts(await readSessionHistoryBody(harness.port, requestedKey, { headers })),
+      ).toEqual(["bound initial message", visibleText]);
     } finally {
       await harness.close();
     }

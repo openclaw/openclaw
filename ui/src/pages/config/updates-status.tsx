@@ -1,16 +1,27 @@
 import { createMemo } from "solid-js";
+import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
 } from "../../app/update-schedule-projection.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesViewProps } from "./updates-types.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function UpdatesStatus(props: UpdatesViewProps & { checking: boolean }) {
   const status = createMemo(() => {
     getLocale();
     const run = props.update.updateRun;
+    const historical =
+      run &&
+      props.connected &&
+      projectUpdateRunHistory(run, {
+        version: props.gatewayVersion,
+        buildId: props.gatewayBuildId,
+      });
     const running = run?.status === "running";
     const campaign = props.update.updateSchedule?.campaign;
     const campaignLabel = formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs);
@@ -31,7 +42,10 @@ export function UpdatesStatus(props: UpdatesViewProps & { checking: boolean }) {
     } else if (campaignLabel) {
       kind = campaign?.state === "waiting-for-idle" ? "warn" : "accent";
       label = campaignLabel;
-    } else if (props.update.updateStatusBanner) {
+    } else if (
+      props.update.updateStatusBanner &&
+      (!historical || props.update.updateStatusBanner.source === "read")
+    ) {
       kind =
         props.update.updateStatusBanner.tone === "danger"
           ? "danger"

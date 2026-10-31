@@ -1,5 +1,8 @@
 import type { CronRunResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+
+registerCronEnglish();
 
 const NOT_STARTED_MESSAGES = new Map([
   ["not-due", "cron.runNotStarted.notDue"],

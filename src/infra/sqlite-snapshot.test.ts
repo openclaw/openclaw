@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import {
@@ -304,8 +304,8 @@ describe("createVerifiedSqliteSnapshot", () => {
 
       await expectSnapshotSuccess({ sourcePath, targetPath });
       expect(hidJournal).toBe(hideJournal);
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      assert(sourceBefore.equals(await fs.readFile(sourcePath)), "source");
+      assert(journalBefore.equals(await fs.readFile(`${sourcePath}-journal`)), "journal");
       expect(query("SELECT value, COUNT(*) AS count FROM records GROUP BY value")).toEqual([
         { value: "committed", count: 256 },
       ]);
@@ -327,8 +327,8 @@ describe("createVerifiedSqliteSnapshot", () => {
 
       await expect(snapshot()).rejects.toThrow(/super-journal.*cannot be recovered privately/iu);
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      assert(sourceBefore.equals(await fs.readFile(sourcePath)), "source");
+      assert(journalBefore.equals(await fs.readFile(`${sourcePath}-journal`)), "journal");
       await expect(fs.readFile(superJournalPath)).resolves.toEqual(superJournalBefore);
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -446,6 +446,15 @@ describe("createVerifiedSqliteSnapshot", () => {
   it("rejects an existing target without modifying it", async () => {
     await fs.writeFile(targetPath, "keep");
     await expectPreservedTarget(/target already exists/u, {}, "keep");
+  });
+
+  it.runIf(process.platform !== "win32")("preserves a dangling target link", async () => {
+    await fs.symlink("missing.sqlite", targetPath);
+
+    await expect(snapshot()).rejects.toThrow(
+      `SQLite snapshot target already exists: ${targetPath}`,
+    );
+    await expect(fs.readlink(targetPath)).resolves.toBe("missing.sqlite");
   });
 
   it("preserves a target created while the snapshot is being prepared", async () => {

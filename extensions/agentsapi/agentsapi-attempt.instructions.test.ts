@@ -419,6 +419,8 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   await fixture.run();
   const instructions = fixture.requests[0]?.agent.instructions;
   expect(instructions).toContain("## UI Presentation");
+  expect(instructions).toContain("Permission blocks:");
+  expect(instructions).toContain("Omit unverified remediation advice");
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
   expect(instructions).toContain("Use or store credentials the user supplies as requested");
@@ -449,9 +451,11 @@ it("refreshes temporal, delivery, and watched-session context on resumed turns",
     sourceReplyDeliveryMode: "message_tool_only",
     messageChannel: "telegram",
     currentChannelId: "123",
+    messageToolFinalByDefault: false,
   });
   expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
   expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");
+  expect(promptFixture.turnInputs[1]).toContain("A send ends this turn only with `final=true`.");
   expect(promptFixture.turnInputs[1]).toContain("Watched fixture session: fixture-two");
   expect(watchedSessionsContextMock).toHaveBeenLastCalledWith(
     expect.objectContaining({

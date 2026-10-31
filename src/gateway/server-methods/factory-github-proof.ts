@@ -1,5 +1,6 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { redeemFactoryGitHubProof } from "../factory-github-proof.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -17,10 +18,10 @@ export const factoryGitHubProofHandlers: GatewayRequestHandlers = {
       !client.connId ||
       context.isConnectionActive?.(client.connId) === false
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "Private GitHub proof redemption is unavailable."),
+      respondError(
+        respond,
+        ErrorCodes.FORBIDDEN,
+        "Private GitHub proof redemption is unavailable.",
       );
       return;
     }
@@ -33,11 +34,7 @@ export const factoryGitHubProofHandlers: GatewayRequestHandlers = {
       Object.keys(params).length !== 1 ||
       typeof proof !== "string"
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "GitHub proof request is invalid."),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "GitHub proof request is invalid.");
       return;
     }
     try {
@@ -50,7 +47,7 @@ export const factoryGitHubProofHandlers: GatewayRequestHandlers = {
       }
       respond(true, verdict);
     } catch {
-      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "GitHub proof is unavailable."));
+      respondError(respond, ErrorCodes.FORBIDDEN, "GitHub proof is unavailable.");
     }
   },
 };

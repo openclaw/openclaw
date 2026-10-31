@@ -12,7 +12,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageSender } from "../../lib/chat/sender-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { resolveChatDefaultAvatarPlacement } from "../chat/components/chat-author-avatar.ts";
@@ -28,7 +28,6 @@ export const preloadNewSessionSubmission = () =>
   void NewSessionSubmission.preload().catch(() => undefined);
 
 type DraftAction = { label: string; onClick: () => void; disabled?: boolean };
-export type DraftErrorProps = { message: string; action?: DraftAction };
 export type NewSessionBodyProps = {
   error: string | null;
   errorAction?: DraftAction;
@@ -51,7 +50,7 @@ function newSessionAnnouncement(
     : undefined;
 }
 
-export function DraftError(props: DraftErrorProps) {
+export function DraftError(props: { message: string; action?: DraftAction }) {
   return (
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">
@@ -81,7 +80,9 @@ export function NewSessionBody(props: NewSessionBodyProps) {
   const avatarPlacement = createMemo(() =>
     resolveChatDefaultAvatarPlacement(
       true,
-      props.pendingMessage && normalizeMessage(props.pendingMessage).sender ? props.userId : null,
+      props.pendingMessage && resolveMessageSender(props.pendingMessage["__openclaw"])
+        ? props.userId
+        : null,
     ),
   );
   // Late cleanup can fail while a replacement submission is still pending.
@@ -96,6 +97,7 @@ export function NewSessionBody(props: NewSessionBodyProps) {
           props.inChat ? "" : "new-session-page__scroll",
           {
             "chat-thread": Boolean(props.pendingMessage || props.inChat),
+            "chat-thread--annotations": Boolean(props.pendingMessage || props.inChat),
             "chat-thread--direct":
               Boolean(props.pendingMessage || props.inChat) && avatarPlacement() === "footer",
           },

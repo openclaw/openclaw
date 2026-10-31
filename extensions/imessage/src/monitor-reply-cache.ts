@@ -1,7 +1,7 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIMessageChatMatch, type IMessageChatContext } from "./chat-context.js";
+import { createPersistenceFailureReporter } from "./persistence-failure.js";
 import { getIMessageRuntime } from "./runtime.js";
 import {
   IMESSAGE_REPLY_CACHE_NAMESPACE,
@@ -17,14 +17,7 @@ export type { IMessageChatContext } from "./chat-context.js";
 
 /** Recency window for the "react to the latest message" fallback. */
 const LATEST_FALLBACK_MS = 10 * 60 * 1000;
-let persistenceFailureLogged = false;
-function reportPersistenceFailure(scope: string, err: unknown): void {
-  if (persistenceFailureLogged) {
-    return;
-  }
-  persistenceFailureLogged = true;
-  logVerbose(`imessage reply-cache: ${scope} disabled after first failure: ${String(err)}`);
-}
+const reportPersistenceFailure = createPersistenceFailureReporter("reply-cache");
 
 type IMessageReplyCacheEntry = IMessageChatContext & {
   accountId: string;
@@ -300,7 +293,7 @@ export async function resolveIMessageMessageId(
   return messageId;
 }
 
-export async function isKnownFromMeIMessageMessageId(
+async function isKnownFromMeIMessageMessageId(
   messageId: string | undefined,
   ctx: IMessageChatContext & { accountId?: string },
 ): Promise<boolean> {
@@ -322,15 +315,11 @@ export async function isKnownFromMeIMessageTarget(params: {
   chatId?: number;
   chatGuid?: string;
   chatIdentifier?: string;
-  isKnownFromMeMessageId?: (
-    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
-  ) => boolean | Promise<boolean>;
 }): Promise<boolean> {
   const { accountId, chatId, chatGuid, chatIdentifier } = params;
   const ctx = { accountId, chatId, chatGuid, chatIdentifier };
-  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
   for (const messageId of params.messageIds) {
-    if (await isKnownFromMe(messageId, ctx)) {
+    if (await isKnownFromMeIMessageMessageId(messageId, ctx)) {
       return true;
     }
   }

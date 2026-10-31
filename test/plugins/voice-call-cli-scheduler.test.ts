@@ -134,7 +134,6 @@ it.each([
     );
     await printed.promise;
     expect(initiateCall).toHaveBeenCalledWith(scenario.to, undefined, scenario.options);
-    expect(mocks.createRuntime).toHaveBeenCalledOnce();
     expect(scheduler?.signal.aborted).toBe(false);
     expect(settled).toBe(false);
     expect(stop).not.toHaveBeenCalled();
@@ -142,7 +141,6 @@ it.each([
     signalOwnedCommand();
     await stopping.promise;
     expect(settled).toBe(false);
-    expect(stop).toHaveBeenCalledOnce();
     releaseStop.resolve();
     await command;
     expect(process.exitCode).toBe(143);

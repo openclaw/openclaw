@@ -7,7 +7,7 @@ import {
 } from "../../sessions/provider-review.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { projectSessionProviderReview } from "../session-provider-review-projection.js";
+import { buildGatewaySessionRow } from "../session-utils-row.js";
 import type { handleProviderReviewContinuationChat as ReviewHandoff } from "./chat-send-handler.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -177,7 +177,23 @@ it.each(["client-supplied authority", "synthetic UI", "ordinary API"])(
       options.client!.internal = { syntheticClient: true };
     } else if (source === "ordinary API") {
       Object.assign(entry.providerReview!, { runtimeId: "openclaw", api: "openai-responses" });
-      expect(projectSessionProviderReview(entry, sessionKey)).toEqual({
+      expect(
+        buildGatewaySessionRow({
+          cfg: {},
+          agentId: "main",
+          key: sessionKey,
+          entry,
+          store: { [sessionKey]: entry },
+          storePath: "",
+          now: 1,
+          preparedAcpMeta: null,
+          preparedRuntimeOwnership: null,
+          preparedModelMetadata: null,
+          modelCatalog: [],
+          skipTranscriptUsageFallback: true,
+          lightweightListRow: true,
+        }).providerReview,
+      ).toEqual({
         id: "review-a",
         runId: "failed-run",
         explanation: "Review the proposed operation.",

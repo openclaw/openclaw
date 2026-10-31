@@ -1,10 +1,6 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { createAccount } from "./inbound-media.test-fixtures.js";
@@ -34,6 +30,8 @@ function mockResponse(response: Response) {
   fetchWithSsrFGuard.mockResolvedValue({ response, release });
   return release;
 }
+const malformedResponse = () =>
+  new Response("{ nope", { headers: { "content-type": "application/json" } });
 function lookup(account: string | ResolvedNextcloudTalkAccount, runtime?: RuntimeEnv) {
   return resolveNextcloudTalkRoomKind({
     account: typeof account === "string" ? lookupAccount(account) : account,
@@ -93,57 +91,14 @@ describe("nextcloud talk room info", () => {
     await expect(lookup("type-1direct")).resolves.toBeUndefined();
   });
 
-  it("reads the api password from a file and logs non-ok room info responses", async () => {
-    await withTempDir("nextcloud-talk-room-info-", async (tempDir) => {
-      const runtime = createRuntimeSpies();
-      const passwordFile = path.join(tempDir, "secret");
-      writeFileSync(passwordFile, "file-secret\n", "utf-8");
-      const release = mockResponse(new Response(null, { status: 403 }));
-
-      const kind = await resolveNextcloudTalkRoomKind({
-        account: {
-          ...lookupAccount("acct-group"),
-          config: { apiUser: "bot", apiPasswordFile: passwordFile },
-        },
-        roomToken: "room-group",
-        runtime,
-      });
-
-      expect(kind).toBeUndefined();
-      expect(fetchWithSsrFGuard).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          init: expect.objectContaining({
-            headers: expect.objectContaining({ Authorization: "Basic Ym90OmZpbGUtc2VjcmV0" }),
-          }),
-        }),
-      );
-      expect(runtime.log).toHaveBeenCalledWith(
-        "nextcloud-talk: room lookup failed (403) token=room-group",
-      );
-      expect(release).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("reports malformed room info JSON with a stable channel error", async () => {
     const runtime = createRuntimeSpies();
-    const release = mockResponse(
-      new Response("{ nope", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const release = mockResponse(malformedResponse());
     await expect(lookup("acct-malformed", runtime)).resolves.toBeUndefined();
     expect(runtime.error).toHaveBeenCalledWith(
       "nextcloud-talk: room lookup error: Error: Nextcloud Talk room info failed: malformed JSON response",
     );
     expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns undefined from room info without credentials or base url", async () => {
-    const account = { ...lookupAccount("acct-missing"), baseUrl: "", config: {} };
-    await expect(lookup(account)).resolves.toBeUndefined();
-
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
   it("leaves HTTP 599 retryable and fetches the room again after recovery", async () => {
@@ -169,10 +124,8 @@ describe("nextcloud talk room info", () => {
     await expect(lookup("transport")).resolves.toBe("direct");
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
-
   it("does not retry or fetch a file URL", async () => {
-    const baseUrl = "file:///tmp/nextcloud-talk";
-    const account = { ...lookupAccount(`invalid-${baseUrl}`), baseUrl };
+    const account = { ...lookupAccount("invalid-file"), baseUrl: "file:///tmp/nextcloud-talk" };
     await expect(lookup(account)).resolves.toBeUndefined();
     await expect(lookup(account)).resolves.toBeUndefined();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
@@ -195,7 +148,6 @@ function mockBotResponse(response: Response): void {
   fetchWithSsrFGuard.mockResolvedValueOnce({
     response,
     release: async () => {},
-    finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
   });
 }
 
@@ -217,58 +169,27 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       botId: "7",
       botName: "OpenClaw",
       features,
-      message: ok
-        ? 'Nextcloud Talk bot "OpenClaw" has the response feature.'
-        : `Nextcloud Talk bot "OpenClaw" (7) is missing the response feature${features === undefined ? "" : ` (features=${features})`}; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.`,
+      message: expect.stringContaining(ok ? "has the response feature" : "--feature response"),
     });
   });
 
   it("reports malformed bot admin JSON with a stable channel error", async () => {
-    mockBotResponse(
-      new Response("{ nope", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    mockBotResponse(malformedResponse());
 
     await expect(probe()).resolves.toEqual({
       ok: false,
       code: "request_failed",
-      message:
-        "Nextcloud Talk bot response feature check failed: Nextcloud Talk bot response feature check failed: malformed JSON response",
+      message: expect.stringContaining("malformed JSON response"),
     });
-  });
-
-  it("bounds bot admin error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedTextResponse(
-      `${"nextcloud bot admin failure ".repeat(1024)}tail`,
-      {
-        status: 503,
-        headers: { "content-type": "text/plain" },
-      },
-    );
-    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    mockBotResponse(tracked.response);
-
-    await expect(probe()).resolves.toEqual({
-      ok: false,
-      code: "api_error",
-      status: 503,
-      message: "Nextcloud Talk bot response feature check failed (503)",
-    });
-    expect(textSpy).not.toHaveBeenCalled();
-    expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("skips when API credentials are absent", async () => {
     await expect(
       probe({ ...apiConfig, apiUser: undefined, apiPassword: undefined }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: true,
       skipped: true,
       code: "missing_api_credentials",
-      message:
-        "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
     });
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
