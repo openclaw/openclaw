@@ -8,16 +8,18 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAuthorizedWhatsAppOutboundTarget } from "./action-runtime-target-auth.js";
 import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
-import { sendReactionWhatsApp } from "./send.js";
+import { editMessageWhatsApp, sendReactionWhatsApp } from "./send.js";
 
 export const whatsAppActionRuntime = {
   resolveAuthorizedWhatsAppOutboundTarget,
+  editMessageWhatsApp,
   sendReactionWhatsApp,
 };
 
 export async function handleWhatsAppAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
+  options?: { assertDirectAdapterHandoff?: () => void },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const whatsAppConfig = cfg.channels?.whatsapp;
@@ -67,6 +69,32 @@ export async function handleWhatsAppAction(
       return jsonResult({ ok: true, added: emoji });
     }
     return jsonResult({ ok: true, removed: true });
+  }
+
+  if (action === "edit") {
+    if (!whatsAppConfig || !isActionEnabled("editMessage")) {
+      throw new Error("WhatsApp message editing is disabled.");
+    }
+    const chatJid = readStringParam(params, "chatJid", { required: true });
+    const messageId = readStringParam(params, "messageId", { required: true });
+    const text = readStringParam(params, "message", {
+      required: true,
+      trim: false,
+      allowEmpty: true,
+    });
+    const resolved = whatsAppActionRuntime.resolveAuthorizedWhatsAppOutboundTarget({
+      cfg,
+      chatJid,
+      accountId: readStringParam(params, "accountId"),
+      actionLabel: "edit",
+    });
+    await whatsAppActionRuntime.editMessageWhatsApp(resolved.to, messageId, text, {
+      accountId: resolved.accountId,
+      cfg,
+      assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
+    });
+    // Baileys resolves on the socket write; WhatsApp may still refuse the edit afterwards.
+    return jsonResult({ ok: true, submitted: true, confirmed: false, messageId });
   }
 
   throw new Error(`Unsupported WhatsApp action: ${action}`);

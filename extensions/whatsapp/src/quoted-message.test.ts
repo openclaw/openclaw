@@ -241,6 +241,24 @@ describe("quoted message metadata cache", () => {
     expect(quoteOptions?.quoted?.message).toEqual({ conversation: "<media:sticker>" });
   });
 
+  it("never stores or finds an id holding the key separator", () => {
+    const groupJid = "120363400000000001@g.us";
+    const directJid = "15555550100@s.whatsapp.net";
+    cacheInboundMessageMeta("account-s", groupJid, "spanned", {
+      fromMe: true,
+      participant: directJid,
+    });
+    cacheInboundMessageMeta("account-s", directJid, "with:colon", { fromMe: true });
+
+    expect(
+      lookupInboundMessageMetaForTarget("account-s", directJid, `${groupJid}:spanned`),
+    ).toBeUndefined();
+    expect(lookupInboundMessageMeta("account-s", directJid, "with:colon")).toBeUndefined();
+    expect(lookupInboundMessageMeta("account-s", groupJid, "spanned")).toMatchObject({
+      fromMe: true,
+    });
+  });
+
   it("does not recover metadata from another chat when the target conversation differs", () => {
     cacheInboundMessageMeta("account-d", "120363400000000000@g.us", "msg-3", {
       participant: "111@s.whatsapp.net",
