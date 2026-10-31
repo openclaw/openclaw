@@ -1,16 +1,29 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { constants, cpSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "apple-release-source-check.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const repositorySeeds = useAutoCleanupTempDirTracker(afterAll);
+let seed: ReturnType<typeof buildRepository> | undefined;
 
 function makeRepository(): { root: string; commit: string } {
+  // Cases mutate private Git copies; the suite owns the pristine seed until all finish.
+  seed ??= buildRepository(repositorySeeds.make("openclaw-apple-release-source-seed-"));
   const root = tempDirs.make("openclaw-apple-release-source-");
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  cpSync(seed.root, root, { recursive: true, mode: constants.COPYFILE_FICLONE });
+  return { ...seed, root };
+}
+
+function buildRepository(root: string): { root: string; commit: string } {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "maintenance.auto=false", "-c", "gc.auto=0", ...args], {
+      cwd: root,
+      encoding: "utf8",
+    });
   git("init", "--quiet");
   writeFileSync(path.join(root, "tracked.txt"), "clean\n", "utf8");
   git("add", "tracked.txt");
