@@ -415,11 +415,6 @@ openclaw-session-discussion {
 
 .sidebar-file-view__editor-panel {
   min-width: 132px;
-  padding: 5px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-file-view__editor-item {

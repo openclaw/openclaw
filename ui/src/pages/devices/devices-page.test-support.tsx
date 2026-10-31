@@ -105,7 +105,7 @@ export function gatewayFixture(initial: ApplicationGatewaySnapshot) {
 export function mountPage(
   fixture: ReturnType<typeof gatewayFixture>,
   initial: Partial<DevicesPageDataState> = {},
-  routeOverride?: Partial<DevicesRouteData>,
+  routeOverride?: Partial<DevicesRouteData> | null,
   runtimeConfig?: ApplicationContext["runtimeConfig"],
 ) {
   const snapshot = fixture.source.snapshot;
@@ -122,7 +122,11 @@ export function mountPage(
     ...routeOverride,
   };
   const [currentGateway, setGateway] = createSignal(fixture.source);
-  const [presentation, setPresentation] = createSignal({ routeData });
+  const [presentation, setPresentation] = createSignal<{ routeData: DevicesRouteData | undefined }>(
+    {
+      routeData: routeOverride === null ? undefined : routeData,
+    },
+  );
   const configListeners = new Set<() => void>();
   const reloadConfig = vi.fn(async () => undefined);
   const router = createRouter({

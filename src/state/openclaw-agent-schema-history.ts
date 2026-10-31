@@ -1,7 +1,9 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { withoutAgentColdArchiveChunks } from "./openclaw-agent-cold-archive-chunks-schema.js";
+import { withoutAgentColdNavigation } from "./openclaw-agent-cold-navigation-schema.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
@@ -305,12 +307,24 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
+// Same-version schema-39 additions must not rewrite earlier admission contracts.
+const AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES = OPENCLAW_AGENT_SCHEMA_SQL.replace(
+  /\nCREATE INDEX IF NOT EXISTS idx_agent_(?:session_input_completions_session_key|conversation_deliveries_source_session)\b[^;]*;\n/gu,
+  "",
+);
+
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const schemaSql =
+    targetVersion < 39 ? AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES : OPENCLAW_AGENT_SCHEMA_SQL;
+  const navigationSchemaSql =
+    targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
+      ? withoutAgentColdNavigation(schemaSql)
+      : schemaSql;
   const coldArchiveSchemaSql =
     targetVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
-      ? withoutAgentColdArchiveChunks(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withoutAgentColdArchiveChunks(navigationSchemaSql)
+      : navigationSchemaSql;
   const revisionSchemaSql =
     targetVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION
       ? withLegacyAgentMemoryRevisionTriggers(coldArchiveSchemaSql)
@@ -366,7 +380,9 @@ export const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = extractSqliteTableSchema(
 export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
 const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = withLegacyAgentIndexes(
   withoutTrajectoryPayloadColumns(
-    withLegacyAgentMemoryRevisionTriggers(withoutAgentColdArchiveChunks(OPENCLAW_AGENT_SCHEMA_SQL)),
+    withLegacyAgentMemoryRevisionTriggers(
+      withoutAgentColdArchiveChunks(AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES),
+    ),
   ),
 ).replace(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "");
 

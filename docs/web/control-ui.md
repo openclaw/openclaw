@@ -440,10 +440,25 @@ brings the selected agent into view.
 
 ## Download files
 
+Files search is case-insensitive, including the Greek sigma forms `Σ`, `σ`, and
+`ς`. Search comparison leaves saved filenames and file contents unchanged;
+punctuation and spaces inside the query still match literally.
+
+When a reply file in the current session is too large to attach, its card offers **Find in Files**.
+This searches the current session's Files using the filename as a hint. Choose
+the intended file by its folder, then use **Download file**. The search does not
+select a same-named file automatically or grant access to a moved, deleted, or
+restricted file. Existing attachment limits stay in effect.
+
 Chat filename links first try the named path. If a bare filename is missing there,
 the preview opens a nested file only when a complete workspace search finds exactly
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
+
+Viewing a shared conversation does not grant access to its host workspace files.
+If your role requires a sandbox, those file links show a read-specific restriction.
+Ask the owner to download and share the file, then attach it to your own session.
+Creating a new session alone does not transfer the file or change access.
 
 Links to managed attachments already delivered in the current chat open the saved
 artifact in the file reader. Click the link or focus it and press **Enter** or

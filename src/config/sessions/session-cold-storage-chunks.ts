@@ -82,39 +82,18 @@ export function readSessionColdChunks(
   return chunks;
 }
 
-/** Verify the parent manifest and each compressed payload before restoration admission. */
-export function* readVerifiedSessionColdChunks(
+/** The caller verifies the parent manifest once, then reads only selected immutable chunks. */
+export function readVerifiedSessionColdChunk(
   database: EngineConnection,
   storePath: string,
   archive: Omit<SessionColdArchive, "archive_blob">,
-  newestFirst = false,
+  chunk?: SessionColdChunkMetadata,
 ) {
   const db = getNodeSqliteKysely<DB>(database);
-  const chunks = readSessionColdChunks(database, archive);
-  if (chunks.length === 0) {
-    const embedded =
-      archive.storage === "sqlite"
-        ? executeSqliteQueryTakeFirstSync(
-            database,
-            db
-              .selectFrom("session_transcript_cold_archives")
-              .select("archive_blob")
-              .where("session_id", "=", archive.session_id),
-          )?.archive_blob
-        : null;
-    yield {
-      bytes: readVerifiedSessionColdArchiveSync({
-        storePath,
-        archive: { ...archive, archive_blob: embedded ?? null },
-      }),
-      archive,
-    };
-    return;
-  }
-  for (let offset = 0; offset < chunks.length; offset++) {
-    const chunk = chunks[newestFirst ? chunks.length - 1 - offset : offset]!;
-    const embedded =
-      archive.storage === "sqlite"
+  const embedded =
+    archive.storage !== "sqlite"
+      ? null
+      : chunk
         ? executeSqliteQueryTakeFirstSync(
             database,
             db
@@ -123,14 +102,41 @@ export function* readVerifiedSessionColdChunks(
               .where("session_id", "=", archive.session_id)
               .where("chunk_index", "=", chunk.chunk_index),
           )?.archive_blob
-        : null;
-    yield {
-      bytes: readVerifiedSessionColdArchiveSync({
-        storePath,
-        archive: { ...chunk, storage: archive.storage, archive_blob: embedded ?? null },
-      }),
-      archive: { ...chunk, generation: archive.generation },
-    };
+        : executeSqliteQueryTakeFirstSync(
+            database,
+            db
+              .selectFrom("session_transcript_cold_archives")
+              .select("archive_blob")
+              .where("session_id", "=", archive.session_id),
+          )?.archive_blob;
+  return {
+    bytes: readVerifiedSessionColdArchiveSync({
+      storePath,
+      archive: { ...(chunk ?? archive), storage: archive.storage, archive_blob: embedded ?? null },
+    }),
+    archive: chunk ? { ...chunk, generation: archive.generation } : archive,
+  };
+}
+
+/** Verify the parent manifest and each compressed payload before restoration admission. */
+export function* readVerifiedSessionColdChunks(
+  database: EngineConnection,
+  storePath: string,
+  archive: Omit<SessionColdArchive, "archive_blob">,
+  newestFirst = false,
+) {
+  const chunks = readSessionColdChunks(database, archive);
+  if (chunks.length === 0) {
+    yield readVerifiedSessionColdChunk(database, storePath, archive);
+    return;
+  }
+  for (let offset = 0; offset < chunks.length; offset++) {
+    yield readVerifiedSessionColdChunk(
+      database,
+      storePath,
+      archive,
+      chunks[newestFirst ? chunks.length - 1 - offset : offset]!,
+    );
   }
 }
 

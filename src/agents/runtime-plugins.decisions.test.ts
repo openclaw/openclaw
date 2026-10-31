@@ -6,7 +6,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { inspectDecisionProviders } from "../decisions/runtime.js";
 import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest, writePlugin } from "../plugins/loader.test-fixtures.js";
@@ -124,7 +123,7 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     expect(
       await getPluginInstance(record)!.runInRegistry(scoped, () => tool.execute("probe", {})),
     ).toMatchObject({ details: { status: "ok" } });
-    expect(inspectDecisionProviders(runtime, root)[0]).toMatchObject({
+    expect(root.decisionProviders[0]!.host.inspect(runtime)).toMatchObject({
       successCount: 1,
       activeRequests: 0,
     });

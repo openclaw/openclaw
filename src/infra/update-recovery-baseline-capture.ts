@@ -12,6 +12,7 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
 import {
   withArtifactPreservingStateReads,
@@ -119,6 +120,8 @@ export function captureUpdateRecoveryBaseline(params: {
   timeoutMs?: number;
   acquisition?: UpdateRecoveryCaptureAcquisition;
   fullIntegrityCheck?: boolean;
+  /** Standalone Doctor retains live custody separately from its capture deadline. */
+  discardIncompleteOnFailure?: { assertCurrent: () => void };
 }) {
   // Sealed helpers consume retained evidence; the installed CLI owns fresh capture.
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
@@ -561,7 +564,26 @@ export function captureUpdateRecoveryBaseline(params: {
         diagnostics: { databaseWarnings: [...capacityWarnings, ...databases.warnings] },
       };
     } catch (cause) {
-      throw new Error(`Original update capture failed; evidence retained at ${directory}`, {
+      let outcome = `evidence retained at ${directory}`;
+      const discard = params.discardIncompleteOnFailure;
+      if (discard && !hasCommandProcessCleanupError(cause)) {
+        try {
+          // A final name can mean publication completed before its acknowledgement failed.
+          if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
+            await pin.assertCurrent();
+            discard.assertCurrent();
+            await fs.rm(directory, { recursive: true });
+            outcome = `incomplete copy removed from ${directory}`;
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [cause, cleanupError],
+            `Original update capture failed; incomplete copy cleanup failed; ${outcome}`,
+            { cause: cleanupError },
+          );
+        }
+      }
+      throw new Error(`Original update capture failed; ${outcome}`, {
         cause,
       });
     } finally {

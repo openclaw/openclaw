@@ -5,9 +5,11 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
+import { bindGitInvocation } from "../../../scripts/pr-lib/git-invocation.mjs";
 import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
 
@@ -32,7 +34,14 @@ async function fixture(fail = false, networkUrl?: string) {
   const repository = path.join(root, "source");
   const bin = path.join(root, "bin");
   await Promise.all([home, repository, bin].map((dir) => fs.mkdir(dir)));
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const selectedGit = resolveExecutablePath("git", { cwd: process.cwd(), useCache: false });
+  assert(selectedGit, "Project seed fixture requires git");
+  // Keep a policy launcher's backend discovery outside the fixture shim's PATH;
+  // otherwise its bare Git delegation can recursively select that same shim.
+  const realGit = bindGitInvocation(
+    tempDirs.make("project-seed-host-git-"),
+    selectedGit,
+  ).executable;
   const git = (cwd: string, args: string[]) =>
     execFileSync(realGit, ["-C", cwd, ...args], {
       encoding: "utf8",

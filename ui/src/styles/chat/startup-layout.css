@@ -603,39 +603,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     }
 
     > .oc-menu {
-      --menu-padding: 8px;
-      --menu-radius: 12px;
-      --menu-item-radius: 5px;
-
       min-width: 180px;
-      padding: var(--menu-padding);
-      font-size: calc(12px * var(--control-ui-text-scale));
-      line-height: calc(18px * var(--control-ui-text-scale));
-    }
-
-    .oc-menu-item {
-      min-height: 32px;
-      padding: 4px 8px;
-      line-height: inherit;
-    }
-
-    .oc-menu-item__icon {
-      margin-inline-end: 10px;
-    }
-
-    .session-menu__separator {
-      margin: 6px 0;
-      border-color: color-mix(in srgb, var(--border-strong) 70%, var(--border));
-    }
-
-    .session-menu__icon,
-    .session-menu__icon svg {
-      width: 16px;
-      height: 16px;
-    }
-
-    .session-menu__icon svg {
-      stroke-width: 1.5;
     }
   }
 

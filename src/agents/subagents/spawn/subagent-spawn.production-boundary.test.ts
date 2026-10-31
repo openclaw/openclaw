@@ -34,6 +34,11 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
+import { GatewayScheduler } from "../../../infra/gateway-scheduler.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../../plugins/legacy-sdk-resource-host.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
@@ -135,6 +140,7 @@ let stateDir = "";
 let runtimeConfig: OpenClawConfig;
 let settleRootWork: ReturnType<typeof observeRootWork>;
 let releaseProfileCatalog: (() => void) | undefined;
+const gatewayResources: LegacyPluginSdkResourceHost[] = [];
 
 async function writeTestConfig(maxChildrenPerAgent?: number) {
   const config = createSpawnBoundaryConfig(stateDir, maxChildrenPerAgent);
@@ -199,6 +205,10 @@ afterEach(async ({ task }) => {
   const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
   await closeSkillsWatchers(true);
   await resetSubagentRegistryForTests({ persist: false });
+  for (const sdkHost of gatewayResources.splice(0)) {
+    await sdkHost.scheduler.stop();
+    await sdkHost.close();
+  }
   vi.mocked(runSubagentAnnounceFlow).mockReset();
   vi.mocked(callGateway).mockReset();
   clearRuntimeConfigSnapshot();
@@ -240,6 +250,10 @@ async function createBoundParent(
 }
 
 async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundParent>>) {
+  const sdkHost = new LegacyPluginSdkResourceHost();
+  sdkHost.bindScheduler(new GatewayScheduler());
+  bindLegacyPluginSdkResourceHost(bound.resolveGatewayContext, sdkHost);
+  gatewayResources.push(sdkHost);
   await refreshPreparedModelRuntimeSnapshots(bound.cfg, {
     gatewayLifecycle: true,
     catalogMode: "static",

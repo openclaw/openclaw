@@ -669,6 +669,27 @@ registerHooks({resolve(specifier, context, nextResolve) {
       env: { OPENCLAW_TEST_PROJECTS_SERIAL: "1", OPENCLAW_VITEST_MAX_WORKERS: "8x" },
       expected: { RAYON_NUM_THREADS: "1", TOKIO_WORKER_THREADS: "1" },
     },
+    { env: {}, expected: {} },
+    {
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "8" },
+      expected: { RAYON_NUM_THREADS: "4", TOKIO_WORKER_THREADS: "4" },
+    },
+    {
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2", RAYON_NUM_THREADS: " 6 " },
+      expected: { RAYON_NUM_THREADS: "6", TOKIO_WORKER_THREADS: "2" },
+    },
+    {
+      env: { OPENCLAW_TEST_WORKERS: "3", TOKIO_WORKER_THREADS: "5" },
+      expected: { RAYON_NUM_THREADS: "3" },
+    },
+    {
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_WORKERS: "7" },
+      expected: { RAYON_NUM_THREADS: "2", TOKIO_WORKER_THREADS: "2" },
+    },
+    {
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "", OPENCLAW_TEST_WORKERS: "3" },
+      expected: {},
+    },
   ])("applies child scheduling policy to $env", ({ env, expected }) => {
     expect(resolveVitestSpawnParams({ ...baseEnv, ...env }, "darwin").env).toEqual({
       ...baseEnv,

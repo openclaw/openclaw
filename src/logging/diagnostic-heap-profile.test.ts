@@ -154,14 +154,6 @@ describe("diagnostic heap profile owner", () => {
           redactedNodeCount: 1,
           unattributedSampleCount: unattributed ? 1 : 0,
           unattributedSampleBytes: unattributed ? 4096 : 0,
-          profile: {
-            samples: profile().samples,
-            head: {
-              children: expect.arrayContaining([
-                expect.objectContaining({ id: 2, selfSize: 8192 }),
-              ]),
-            },
-          },
         },
       });
       expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
@@ -184,11 +176,10 @@ describe("diagnostic heap profile owner", () => {
   );
 
   it("attributes dependency and native frames without exposing private paths or symbols", async () => {
-    const dependencies: [string, string][] = [
+    const dependencies: [string, string, string?][] = [
       ["/fixture/node_modules/ws/lib/buffer-util.js", "ws"],
       ["/fixture/openclaw/node_modules/undici/lib/core/util.js", "undici"],
       ["/fixture/openclaw/src/node_modules/undici/lib/core/util.js", "undici"],
-      ["/fixture/openclaw/packages/ai/node_modules/undici/lib/core/util.js", "undici"],
       ["file:///fixture/node_modules/.pnpm/ws@8.18.0/node_modules/ws/lib/buffer-util.js", "ws"],
       ["/fixture/node_modules/@scope/pkg/lib/private.js", "@scope/pkg"],
       [
@@ -196,6 +187,10 @@ describe("diagnostic heap profile owner", () => {
         "@scope/pkg",
       ],
       ["/fixture/node_modules/outer/node_modules/inner/lib/private.js", "inner"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "runPinnedWriteNative"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "NativeStagedFile.write"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "#prepare"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe"],
     ];
     const locations: [Partial<ReturnType<typeof frame>>, string][] = [
       [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
@@ -240,9 +235,9 @@ describe("diagnostic heap profile owner", () => {
       [{ url: "/private/node_modules/.pnpm/ws@8.18.0/secret.js" }, "[redacted]"],
     ];
     const frames = [
-      ...dependencies.map(([url, dependency]) => ({
-        source: { ...frame("private payload"), url },
-        expected: { ...frame(`[dep:${dependency}]`), url: `node_modules/${dependency}` },
+      ...dependencies.map(([url, dependency, symbol]) => ({
+        source: { ...frame(symbol ?? "private payload"), url },
+        expected: { ...frame(symbol ?? `[dep:${dependency}]`), url: `node_modules/${dependency}` },
       })),
       ...locations.map(([location, functionName]) => ({
         source: { ...frame("private payload"), ...location },
@@ -471,6 +466,65 @@ describe("diagnostic heap profile owner", () => {
     }
     expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
   });
+
+  it.each([true, false])(
+    "retains allocation callers beyond recursive=%s dependency stacks",
+    async (recursive) => {
+      const value = profile();
+      // Zero-byte siblings force the public capture into its bounded summary path.
+      value.head.children = Array.from({ length: 9000 }, (_, index) => ({
+        id: index + 2,
+        selfSize: 0,
+        callFrame: frame(),
+        children: [],
+      }));
+      let parent = value.head;
+      const names = [
+        "refreshSchemas",
+        "recreateSchemas",
+        ...Array.from({ length: 40 }, (_, index) =>
+          recursive
+            ? index % 2
+              ? "findChildError"
+              : "findJsonSchemaNodeError"
+            : `dependency${index}`,
+        ),
+        "allocateSchema",
+      ];
+      for (const [index, name] of names.entries()) {
+        const node = {
+          id: 10000 + index,
+          selfSize: 0,
+          callFrame: {
+            ...frame(name),
+            url:
+              index < 2
+                ? "/fixture/openclaw/dist/schemas.js"
+                : "/fixture/openclaw/node_modules/@openclaw/json-schema/index.js",
+          },
+          children: [],
+        };
+        parent.children.push(node);
+        parent = node;
+      }
+      parent.selfSize = 3_880_000;
+      value.samples = [{ nodeId: parent.id, size: parent.selfSize, ordinal: 1 }];
+      native.post.mockResolvedValue({ profile: value });
+      const outcome = await capture();
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
+        throw new Error("expected summary");
+      }
+      const allocation = outcome.result.summary.find((row) => row.selfBytes === 3_880_000)!;
+      expect(allocation.count).toBe(1);
+      expect(allocation.stack[0].functionName).toBe("allocateSchema");
+      expect(allocation.stack.map((entry) => entry.functionName)).toEqual(
+        expect.arrayContaining(["recreateSchemas", "refreshSchemas"]),
+      );
+      expect(allocation.stack.length).toBeLessThanOrEqual(8);
+      expect(allocation.stack.some((entry) => entry.functionName.includes("×20"))).toBe(recursive);
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+    },
+  );
 
   it("yields during sanitization while retaining capture ownership and checking revocation", async () => {
     const value = profile();

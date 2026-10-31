@@ -99,11 +99,7 @@
 .session-menu__snooze-picker {
   width: 300px;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   color: var(--text);
-  box-shadow: var(--shadow-lg);
 }
 
 .session-menu__snooze-picker .field {
@@ -578,21 +574,16 @@
 .oc-menu.sidebar-customize-menu {
   position: fixed;
   z-index: 120;
-  min-width: 224px;
+  min-width: 220px;
   max-width: 264px;
   max-height: 420px;
   overflow-y: auto;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-customize-menu__title {
   padding: 6px 8px 8px;
   font-size: var(--control-ui-text-xs);
-  font-weight: 650;
+  font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
@@ -634,16 +625,11 @@
   text-overflow: ellipsis;
 }
 
-.sidebar-customize-menu__separator {
-  margin: 6px 4px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
 .sidebar-session-sort-menu__title {
   padding: 4px 8px 2px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-  font-weight: 650;
+  font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -654,9 +640,11 @@
   font-size: var(--control-ui-text-xs);
 }
 
+/* Also used by compact sheets and plain panels outside the shared menu surface. */
 .session-menu__separator {
+  height: 1px;
   margin: 4px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: var(--border);
 }
 
 .session-menu__appearance {
@@ -1154,12 +1142,7 @@
 }
 
 .oc-menu.sidebar-identity-menu {
-  min-width: max(224px, var(--sidebar-identity-menu-min-width, 224px));
-  border-color: transparent;
-  border-radius: var(--radius-md);
-  box-shadow:
-    0 0 0 1px var(--overlay-border),
-    var(--overlay-shadow);
+  min-width: max(220px, var(--sidebar-identity-menu-min-width, 220px));
 }
 
 .sidebar-identity-menu__avatar {
@@ -1201,18 +1184,10 @@
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
-.sidebar-identity-menu .sidebar-customize-menu__item {
-  padding-inline: 4px;
-}
-
-.sidebar-identity-menu .sidebar-customize-menu__separator {
-  margin-block: 4px;
-}
-
 .sidebar-identity-menu .nav-item__icon,
 .sidebar-identity-menu .sidebar-gateway-health-slot {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
 .sidebar-gateway-health-slot {
@@ -1222,19 +1197,13 @@
   justify-content: center;
 }
 
-.sidebar-identity-menu__help .oc-menu-item__submenu-icon {
-  inset-inline-end: 4px;
-  width: 16px;
-  height: 16px;
-}
-
 .sidebar-identity-menu__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  padding: 2px 4px;
+  padding: 2px 8px;
 }
 
 .sidebar-identity-menu__update-badge {
@@ -1374,8 +1343,6 @@
   max-width: calc(100dvw - var(--space-6));
   max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
   line-height: 1.55;
 }
@@ -1525,47 +1492,15 @@
   box-shadow: none;
 }
 
-.sidebar-session-filter-panel
-  .picker-select
-  > :not([data-keyboard])
-  .picker-select__option[data-active] {
-  outline: none;
-}
-
 /* Choice lists read like the session menus: plain left-aligned rows, the
    neutral hover background, and a trailing accent check for the selection. */
-.sidebar-session-filter-panel .picker-select__menu {
-  padding: var(--menu-padding);
-}
-
 .sidebar-session-filter-panel .picker-select__option {
   min-height: var(--menu-item-height);
-  padding: 0 8px;
-  border-radius: var(--menu-item-radius);
-}
-
-.sidebar-session-filter-panel .picker-select__option[aria-selected="true"] {
-  background: transparent;
-  box-shadow: none;
-}
-
-.sidebar-session-filter-panel
-  :is(.picker-select__option:hover, [data-keyboard] .picker-select__option[data-active]) {
-  background: var(--bg-hover);
+  padding: 5px 8px;
 }
 
 .sidebar-session-filter-panel .picker-select__option .picker-select__copy {
   flex: 1 1 auto;
-}
-
-.sidebar-session-filter-panel .picker-select__option .picker-select__label {
-  font-weight: var(--control-ui-font-weight-normal);
-}
-
-.sidebar-session-filter-panel .picker-select__check {
-  flex-basis: 14px;
-  width: 14px;
-  color: var(--accent);
 }
 
 .sidebar-session-menu-switch > span:first-child {

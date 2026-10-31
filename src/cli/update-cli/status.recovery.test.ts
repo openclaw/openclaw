@@ -296,6 +296,43 @@ it("reuses native spelling but refuses a linked capture", async () => {
   expect(await text(path.join(moved, "manifest.json"))).toBe(c.raw);
 });
 
+it("reuses a capture recorded through an alternate state path identity", async () => {
+  const c = await capture();
+  const aliasRoot = `${root}-alias`;
+  await fs.symlink(root, aliasRoot, "dir");
+  const aliasStateDir = path.join(aliasRoot, path.basename(stateDir));
+  const aliasPath = (pathname: string) =>
+    path.join(aliasStateDir, path.relative(stateDir, pathname));
+  const manifest = {
+    ...c.manifest,
+    stateDir: aliasStateDir,
+    configPath: aliasPath(c.manifest.configPath),
+    configPaths: c.manifest.configPaths.map(aliasPath),
+    databases: c.manifest.databases.map((database) => ({
+      ...database,
+      path: aliasPath(database.path),
+    })),
+    roots: c.manifest.roots.map(aliasPath),
+    protectedPaths: c.manifest.protectedPaths.map(aliasPath),
+    entries: c.manifest.entries.map((entry) => ({
+      ...entry,
+      sourcePath: aliasPath(entry.sourcePath),
+    })),
+  };
+  const raw = JSON.stringify(manifest);
+  await fs.writeFile(c.manifestPath, raw);
+  const directory = `${aliasStateDir}.update-captures/${manifest.runId}`;
+  await expect(
+    readBaseline({
+      manifest,
+      directory,
+      manifestPath: path.join(directory, "manifest.json"),
+      raw,
+      manifestSha256: digest(raw),
+    }),
+  ).resolves.toMatchObject({ ref: { directory } });
+});
+
 it.each([
   "foreign-state",
   "wrong-run-directory",

@@ -883,12 +883,30 @@ const extensionLintMode =
       : "affected"
     : undefined;
 const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
+let preserveFullChecks = !narrowCheckScope;
 let typeGraphBoundaryOwner = "";
 if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
   const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
+  if (preserveFullChecks && extensionLintMode && !releaseFastLane && compilerPaths) {
+    const { getChangedPathFacts } = await import(
+      fromTarget("./scripts/lib/changed-path-facts.mjs")
+    );
+    // Shared test sources retain every guard family. Compiler and lint owners
+    // still discover all consumers and retain their independent full fallbacks.
+    preserveFullChecks = !changedPaths.every((file) => {
+      const facts = getChangedPathFacts(file);
+      return (
+        path.posix.normalize(file) === file &&
+        !file.includes("\\") &&
+        ["source", "package", "ui", "extension"].includes(facts.surface) &&
+        facts.isTestOnly &&
+        facts.isChangedLaneTest
+      );
+    });
+  }
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
@@ -1690,7 +1708,7 @@ const manifest = {
         ...(extensionLintMode
           ? {
               extensionLintMode,
-              preserveFullChecks: !narrowCheckScope,
+              preserveFullChecks,
               ...(process.env.OPENCLAW_CI_CHANGED_BASE
                 ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
                 : {}),

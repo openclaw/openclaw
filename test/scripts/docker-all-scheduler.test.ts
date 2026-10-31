@@ -531,6 +531,17 @@ describe("scripts/test-docker-all scheduler", () => {
       planJson: false,
       preparePluginRegistry: true,
     });
+    expect(
+      parseDockerAllCliArgs(["--lanes=package-installed-recovery", "--plan-json"]),
+    ).toMatchObject({
+      lanes: "package-installed-recovery",
+      planJson: true,
+    });
+    for (const selector of ["", " ", ", ,"]) {
+      expect(() => parseDockerAllCliArgs([`--lanes=${selector}`])).toThrow(
+        "--lanes requires at least one lane name",
+      );
+    }
     expect(() =>
       parseDockerAllCliArgs(["--plan-json", "--prepare-only=/tmp/candidate.json"]),
     ).toThrow("conflicting plan/prep options");
@@ -538,6 +549,40 @@ describe("scripts/test-docker-all scheduler", () => {
       parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json", "--prepare-plugin-registry"]),
     ).toThrow("conflicting plan/prep options");
   });
+
+  it.for(["package-installed-recovery", "published-upgrade-survivor"])(
+    "selects the %s package family over inherited lane settings",
+    (family) => {
+      const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+      const [executable, ...args] = scripts[`test:docker:${family}`].split(" ");
+      expect(executable).toBe("node");
+      const env = {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_LANES: "gateway-network",
+        DOCKER_E2E_LANES: "gateway-concurrency",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.7.1-2",
+      };
+      const run = (argv: string[], selectedEnv = env) =>
+        spawnSync(process.execPath, [...argv, "--plan-json"], {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          timeout: 30_000,
+          env: selectedEnv,
+        });
+      const explicit = run(args);
+      const inherited = run(["scripts/test-docker-all.mjs"], {
+        ...env,
+        OPENCLAW_DOCKER_ALL_LANES: family,
+      });
+      expect(explicit.status, explicit.stderr).toBe(0);
+      expect(inherited.status, inherited.stderr).toBe(0);
+      const plan = JSON.parse(explicit.stdout);
+      expect(plan).toEqual(JSON.parse(inherited.stdout));
+      expect(plan.lanes).toHaveLength(family === "package-installed-recovery" ? 7 : 1);
+      expect(plan.lanes.every((lane: { name: string }) => lane.name.startsWith(family))).toBe(true);
+    },
+  );
 
   it("passes the exact planner-selected survivor packages to registry preparation", () => {
     const root = tempDirs.make("openclaw-standalone-survivor-registry-");

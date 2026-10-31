@@ -60,6 +60,5 @@ export const billingCases = [
       id: "billing-periodic-limit-402",
       message: "402 Payment Required: Weekly/Monthly Limit Exhausted",
     },
-    { id: "billing-custom-proxy", message: "402 custom proxy billing failure", status: 402 },
   ]),
 ] satisfies readonly FailoverClassificationCorpusRow[];

@@ -1112,6 +1112,110 @@ select.settings-select:not([multiple]) {
   }
 }
 
+/* Native selects join the Select family where the engine can style their popup. */
+@supports (appearance: base-select) {
+  @media not (forced-colors: active) {
+    .field select:not([multiple], [size]),
+    select.settings-select:not([multiple], [size]) {
+      appearance: base-select;
+      display: inline-flex;
+      align-items: center;
+      padding-right: 10px;
+      background-image: none;
+
+      &::picker-icon {
+        content: "";
+        width: 16px;
+        height: 16px;
+        margin-inline-start: auto;
+        background: var(--text-tertiary);
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+          center / contain no-repeat;
+        transition: none;
+      }
+
+      &::picker(select) {
+        appearance: base-select;
+        box-sizing: border-box;
+        min-width: anchor-size(width);
+        max-width: calc(100dvw - 16px);
+        max-height: min(400px, calc(100dvh - 16px));
+        margin-block: 4px;
+        padding: var(--menu-padding);
+        border: 0;
+        border-radius: var(--menu-radius);
+        background: var(--menu-surface);
+        box-shadow: var(--menu-shadow);
+        backdrop-filter: var(--menu-backdrop);
+        color: var(--text);
+        corner-shape: superellipse(1.5);
+        opacity: 0;
+        scale: 0.95;
+        transition:
+          opacity var(--select-exit-duration) var(--overlay-ease-exit),
+          scale var(--select-exit-duration) var(--overlay-ease-exit),
+          display var(--select-exit-duration) allow-discrete,
+          overlay var(--select-exit-duration) allow-discrete;
+      }
+
+      &:open::picker(select) {
+        opacity: 1;
+        scale: 1;
+        transition-duration: var(--select-enter-duration);
+        transition-timing-function: var(--overlay-ease-enter);
+      }
+
+      & option {
+        gap: 8px;
+        min-height: 32px;
+        padding: 6px 8px;
+        border-radius: var(--menu-item-radius);
+        font-size: calc(13px * var(--control-ui-text-scale));
+        line-height: calc(1.25 / 0.875);
+      }
+
+      & option:is(:hover, :focus-visible):not(:disabled) {
+        outline: 0;
+        background: var(--surface-hover);
+      }
+
+      & option:checked {
+        background: transparent;
+        font-weight: var(--control-ui-font-weight-semibold);
+      }
+
+      & option:checked:is(:hover, :focus-visible) {
+        background: var(--surface-hover);
+      }
+
+      & option::checkmark {
+        order: 1;
+        margin-inline-start: auto;
+        color: var(--accent);
+      }
+
+      & option:disabled {
+        opacity: 0.5;
+      }
+    }
+
+    @starting-style {
+      .field select:not([multiple], [size]):open::picker(select),
+      select.settings-select:not([multiple], [size]):open::picker(select) {
+        opacity: 0;
+        scale: 0.95;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .field select:not([multiple], [size])::picker(select),
+      select.settings-select:not([multiple], [size])::picker(select) {
+        transition: none;
+      }
+    }
+  }
+}
+
 .field textarea {
   font-family: var(--mono);
   min-height: 160px;
@@ -2069,7 +2173,7 @@ select.settings-select:not([multiple]) {
   background: var(--data-table-row-bg);
 }
 
-.data-table tbody tr:last-child td {
+.data-table tbody:last-child tr:last-child td {
   border-bottom: none;
 }
 
@@ -2308,7 +2412,7 @@ td.data-table-key-col {
   padding: 4px 8px 2px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -2316,8 +2420,6 @@ td.data-table-key-col {
 .agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
-  border: 1px solid var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
 }
 
 @starting-style {
@@ -2458,8 +2560,6 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
-  padding: 6px 8px;
-  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -2467,10 +2567,6 @@ td.data-table-key-col {
 
 .agent-select__option > .oc-menu-item__check {
   display: none;
-}
-
-.agent-select__option[data-selected] {
-  background: var(--menu-selected);
 }
 
 .agent-select__option-state {

@@ -194,6 +194,7 @@ export async function buildAnthropicRequest(
     isOAuthToken,
     cacheControl,
     claudeCodeVersion,
+    context.preparedSystemPrompt,
   );
   let toolProjection: AnthropicToolProjection | undefined;
   let eagerToolInputStreaming = false;

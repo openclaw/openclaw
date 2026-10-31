@@ -5,10 +5,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -535,7 +537,14 @@ async function originalCaptureFixture(externalAgents = false) {
     bytes,
     family,
     familyPaths,
-    captureOriginal: (runId: string, acquisition?: UpdateRecoveryCaptureAcquisition) =>
+    captureOriginal: (
+      runId: string,
+      acquisition?: UpdateRecoveryCaptureAcquisition,
+      options: Pick<
+        Parameters<typeof captureUpdateRecoveryBaseline>[0],
+        "discardIncompleteOnFailure" | "signal"
+      > = {},
+    ) =>
       captureUpdateRecoveryBaseline({
         runId,
         installRoot: f.root,
@@ -543,6 +552,7 @@ async function originalCaptureFixture(externalAgents = false) {
         drivers: [],
         assertCurrent: () => {},
         acquisition,
+        ...options,
       }),
   };
 }
@@ -579,6 +589,58 @@ it("refuses an original capture before writing when its payload will not fit", a
   );
   await expectMissing(store);
   expect((await fs.stat(f.applicationFile)).size).toBe(payloadBytes);
+});
+
+it("discards only settled unsealed Doctor attempts and preserves sealed recovery", async () => {
+  const f = await originalCaptureFixture();
+  const sealed = await f.captureOriginal("last-sealed");
+  const manifest = await readManifest(sealed.ref);
+  const owner = await import("./update-database-backup.js");
+  const backup = vi.spyOn(owner, "createUpdateDatabaseBackup");
+  for (const mode of ["update", "uncertain", "revoked", "published", "settled"] as const) {
+    const failure =
+      mode === "uncertain" ? new CommandProcessCleanupError() : new Error("capture interrupted");
+    const controller = new AbortController();
+    let current = true;
+    backup.mockImplementationOnce(async ({ backupRoot }) => {
+      const directory = path.dirname(backupRoot);
+      await fs.writeFile(path.join(directory, "payload", "unfinished"), "private original bytes");
+      await fs.writeFile(path.join(directory, "manifest.json.partial"), "unfinished manifest");
+      if (mode === "published") {
+        await fs.writeFile(path.join(directory, "manifest.json"), "possibly published manifest");
+      }
+      current = mode !== "revoked";
+      controller.abort(failure);
+      throw failure;
+    });
+    const runId = `failed-${mode}`;
+    const rejection = await f
+      .captureOriginal(runId, undefined, {
+        signal: controller.signal,
+        discardIncompleteOnFailure:
+          mode === "update"
+            ? undefined
+            : {
+                assertCurrent() {
+                  if (!current) {
+                    throw new Error("maintenance ownership revoked");
+                  }
+                },
+              },
+      })
+      .catch((error: unknown) => error);
+    expect(collectNestedErrorCandidates(rejection)).toContain(failure);
+    const directory = path.join(resolveUpdateCaptureRoot(f.stateDir), runId);
+    if (mode === "settled") {
+      await expectMissing(directory);
+    } else {
+      expect(await fs.readFile(path.join(directory, "payload", "unfinished"), "utf8")).toBe(
+        "private original bytes",
+      );
+    }
+  }
+  expect(await readManifest(sealed.ref)).toEqual(manifest);
+  await expectOriginalDatabase(sealed.ref, f.shared);
 });
 
 it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {

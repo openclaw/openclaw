@@ -86,6 +86,10 @@ delivery (`audioAsVoice` / message tool `asVoice`, including TTS voice-note
 replies). Ordinary MP3 attachments stay regular files. If `ffmpeg` is missing or
 conversion fails, OpenClaw falls back to a file attachment and logs the reason.
 
+Outgoing videos get a preview cover when `ffmpeg` can extract a frame and Feishu
+accepts the image upload. If cover preparation fails or times out, OpenClaw sends
+the video as a file attachment instead.
+
 ### Sticker replies
 
 Enable the sticker action to let the agent resend stickers:
