@@ -175,6 +175,11 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     throw new Error("Fixture state must be a new directory inside this worktree's .local/");
   }
   const now = Date.now();
+  const sidebarGroups = Array.from(
+    { length: 97 },
+    (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
+  );
+  let viewerId = "";
   const sessionKeys = [
     "agent:main:24800000-0000-4000-8000-000000000001",
     "agent:main:dashboard:24800001-0000-4000-8000-000000000001",
@@ -327,6 +332,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             env,
           })
         : gatewayOwner;
+      viewerId = viewer.id;
       if (options.admission) {
         await profileWrites.setCanonicalUserProfileDisplayName(
           viewer.id,
@@ -375,7 +381,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
-              archivedAt: undefined,
+              archivedAt: now - 1000,
               pinnedAt: now - index,
               updatedAt: now - index,
               lastActivityAt: now - index,
@@ -436,6 +442,22 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             if (index % 10 === 0 && !targetKeys.has(key)) {
               continue;
             }
+            const old = entries.readExactSessionEntryRow(owner, key);
+            if (!old) {
+              throw new Error("Missing synthetic sidebar session");
+            }
+            entries.writeSessionEntry(
+              owner,
+              key,
+              {
+                ...old.entry,
+                category: sidebarGroups[index % sidebarGroups.length],
+                ...(index === 2 || index === 3
+                  ? { pinnedAt: now - index, archivedAt: undefined }
+                  : {}),
+              },
+              { canonicalPreviousEntry: old.entry, canonicalPreviousRow: old.row },
+            );
             owners.replaceSessionOwnerInTransaction(owner, key, {
               actor: { type: "human", id: viewer.id },
               assignedBy: { type: "human", id: viewer.id },
@@ -469,6 +491,19 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       admission: options.admission ? "signed-in" : "token",
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
+      viewerId,
+      sidebarShape: {
+        owner: "involving-me",
+        grouping: "category",
+        sort: "created",
+        groups: sidebarGroups.length,
+        sectionOrder: sidebarGroups.length + 5,
+        collapsed: 5,
+        emptyGroups: "always",
+        preview: false,
+        archivedTargets: true,
+        nonArchivedPins: 2,
+      },
     };
     writeFileSync(
       path.join(stateDir, "warm-reload-fixture.json"),
@@ -491,6 +526,17 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       })!,
       fixtureSummary,
       async prepareGateway(request: RequestGateway) {
+        await request("sessions.groups.put", {
+          names: sidebarGroups,
+          sectionOrder: [
+            "work",
+            "groups",
+            "ungrouped",
+            "catalog:cron",
+            "catalog:terminal",
+            ...sidebarGroups.map((name) => `category:${name}`),
+          ],
+        });
         await request("board.widget.put", {
           sessionKey: targets[1]!.key,
           name: "warm-reload-verification",
