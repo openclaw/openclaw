@@ -262,6 +262,7 @@ export async function getApiKeyForModelCore(params: {
   workspaceDir?: string;
   lockedProfile?: boolean;
   forceRefresh?: boolean;
+  signal?: AbortSignal;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
   skipSetupProviderFallback?: boolean;

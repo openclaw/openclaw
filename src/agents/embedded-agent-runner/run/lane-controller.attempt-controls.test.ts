@@ -360,3 +360,17 @@ describe("attempt cancellation unwind", () => {
     await expect(observed).resolves.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
   });
 });
+
+test("auth observes active execution deadlines without teardown grace", async () => {
+  const { controller, createAttemptControls } = await createRunController();
+  expect(controller.getExecutionDeadline()).toBeUndefined();
+  const controls = createAttemptControls({ initialTimeoutMs: 100 });
+  expect(controller.getExecutionDeadline()).toEqual({
+    kind: "bounded",
+    deadlineAtMs: Date.now() + 100,
+  });
+  controls.onAttemptDeadlineChanged({ kind: "unlimited" });
+  expect(controller.getExecutionDeadline()).toEqual({ kind: "unlimited" });
+  controls.close();
+  expect(controller.getExecutionDeadline()).toBeUndefined();
+});

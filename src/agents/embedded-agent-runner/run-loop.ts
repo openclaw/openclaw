@@ -81,6 +81,8 @@ export async function runPreparedEmbeddedLoop(
       prepareEmbeddedRunRuntime({
         ...input,
         assertCurrent: input.laneController.throwIfAborted,
+        getAuthDeadline: input.laneController.getExecutionDeadline,
+        runParams: { ...input.runParams, abortSignal: input.laneController.abortSignal },
         hookContext: preReplyGeneration?.assertCurrent
           ? withClaimingHookAdmission(
               { ...hookCtx },

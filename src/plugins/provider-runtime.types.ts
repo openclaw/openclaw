@@ -100,6 +100,8 @@ export type ProviderPrepareRuntimeAuthContext = ProviderPreferRuntimeResolvedMod
   apiKey: string;
   authMode: string;
   profileId?: string;
+  /** Cancel caller-owned exchanges when the run stops or its auth budget expires. */
+  signal?: AbortSignal;
 };
 
 /**

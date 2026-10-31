@@ -67,6 +67,13 @@ as an optional second argument. Use that captured config for checks such as
 regional endpoint compatibility instead of reloading global runtime config.
 Existing one-argument hooks remain compatible, and direct callers can omit config.
 
+Runtime auth exchange contexts accept an optional `signal`. Pass it to token-exchange
+requests and release resources when it aborts. Embedded runs share their existing
+deadline across credential lookup and exchange, including background runtime auth
+refresh. A timeout names the provider and auth step and fails the caller without
+installing late credentials. Durable OAuth refresh settlement remains owned by
+the OAuth manager.
+
 ## Hook examples
 
 <Tabs>

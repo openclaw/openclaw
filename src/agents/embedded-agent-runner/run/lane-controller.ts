@@ -488,6 +488,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     laneTaskReleaseController,
     noteLaneTaskProgress,
     setLaneTaskDeadline,
+    // Active auth uses execution time, not the queue's teardown grace.
+    getExecutionDeadline: (): CommandQueueTaskDeadline | undefined =>
+      !activeAttemptOwner
+        ? undefined
+        : laneTaskDeadline?.kind === "bounded"
+          ? {
+              kind: "bounded",
+              deadlineAtMs: laneTaskDeadline.deadlineAtMs - EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+            }
+          : laneTaskDeadline,
     createAttemptControls,
     throwIfAborted,
     assertCurrent,
