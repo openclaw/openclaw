@@ -90,3 +90,47 @@ it("stages, promotes, and acknowledges an explicit import", async () => {
     ).rejects.toThrow();
   });
 });
+
+it("refuses a newly unreadable target after migration planning", async () => {
+  await withOpenClawTestState(
+    { prefix: "openclaw-noninteractive-read-failure-" },
+    async (state) => {
+      const { stateDir, configPath } = state;
+      const source = path.join(stateDir, "hermes-home");
+      const workspace = path.join(stateDir, "workspace");
+      await fs.mkdir(source, { recursive: true });
+      await fs.writeFile(path.join(source, "AGENTS.md"), "Imported agents.\n");
+      const unreadable = '{"$include":"missing.json"}';
+      provider.plan.mockImplementation(async (): Promise<MigrationPlan> => {
+        await fs.writeFile(configPath, unreadable);
+        return withSummary({
+          providerId: "hermes",
+          source,
+          target: workspace,
+          items: [
+            {
+              id: "workspace:AGENTS.md",
+              kind: "workspace",
+              action: "copy",
+              status: "planned",
+              source: path.join(source, "AGENTS.md"),
+              target: path.join(workspace, "AGENTS.md"),
+            },
+          ],
+        });
+      });
+      const result = runNonInteractiveSetup(
+        { nonInteractive: true, workspace, importFrom: "hermes", importSource: source },
+        createThrowingTestRuntime(),
+      );
+      await expect(result).rejects.toThrow("Failed to read include file: missing.json");
+      await expect(result).rejects.not.toThrow("doctor --fix");
+      expect(provider.apply).not.toHaveBeenCalled();
+      expect(provider.plan).toHaveBeenCalledOnce();
+      expect(await fs.readFile(configPath, "utf8")).toBe(unreadable);
+      await expect(fs.access(path.join(workspace, "AGENTS.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+});
