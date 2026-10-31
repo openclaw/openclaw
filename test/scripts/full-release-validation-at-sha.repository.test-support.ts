@@ -103,7 +103,7 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
   }
   const workflowSha = commit("test: trusted workflow contract");
   const trustedWorkflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-  runGit(checkout, ["remote", "add", "origin", origin]);
+  runGit(checkout, ["remote", "add", "origin", "../origin.git"]);
   runGit(checkout, ["push", "-u", "origin", "main"]);
   runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
   runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
@@ -170,10 +170,9 @@ export function prepareDispatchRepository(root: string, options: DispatchReposit
   }
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
-  // Each case can change refs, config and objects without touching the prepared history.
+  // The sibling-relative origin follows the copy; Git state is never shared.
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
   cpSync(template.origin, origin, copyOptions);
   cpSync(template.checkout, checkout, copyOptions);
-  runGit(checkout, ["remote", "set-url", "origin", origin]);
   return { ...template, origin, checkout };
 }
