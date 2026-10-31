@@ -18,6 +18,7 @@ import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
 } from "../state/user-profile-list.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import {
@@ -384,7 +385,17 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   source: unknown;
   context: GatewayRequestContext;
   assertCurrent: () => void;
-}): Promise<Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release">> {
+}): Promise<
+  Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release"> & {
+    /** Absent when the occurrence cannot be re-checked, so it keeps its original admission. */
+    requester?: {
+      channel: string;
+      accountId?: string;
+      senderId?: string;
+      commandSenderId?: string;
+    };
+  }
+> {
   params.assertCurrent();
   const source = decodeQueuedOperatorRecoverySource(params.source);
   if (source.kind === "unavailable") {
@@ -402,7 +413,18 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     if (!restored) {
       throw new Error("Queued operator recovery source is unavailable.");
     }
-    return restored;
+    // Other gateway senders cannot be re-derived from the recovery, so they keep their admission.
+    return {
+      ...restored,
+      ...(source.snapshot.commandSenderProfileIdOnly
+        ? {
+            requester: {
+              channel: INTERNAL_MESSAGE_CHANNEL,
+              commandSenderId: source.snapshot.profileId,
+            },
+          }
+        : {}),
+    };
   }
   const snapshot = source.snapshot;
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
@@ -468,7 +490,20 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
       },
     });
     authority.assertCurrent();
-    return { authority, controlUiAdmin: false, release };
+    // Fail closed: a channel occurrence must never run without a re-checkable requester.
+    if (!prepared.requesterIdentity) {
+      throw new Error("Queued channel operator authority changed; submit a new request.");
+    }
+    return {
+      authority,
+      controlUiAdmin: false,
+      release,
+      requester: {
+        channel: prepared.requesterIdentity.channelId,
+        accountId: prepared.requesterIdentity.accountId,
+        senderId: prepared.requesterIdentity.senderId,
+      },
+    };
   } catch (error) {
     release();
     throw error;

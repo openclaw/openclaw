@@ -232,11 +232,23 @@ when its verified sender has a
 person whose current role grants `operator.admin`. That sender must also pass the
 channel's command authorization. Unlinked, unverified, or demoted senders see
 `undefined`, even when the channel lets them run the command, and every native
-call rechecks the link and role. Demoting that person, removing their role, or
-unlinking the identity revokes the requester's retained work as it does for a
-Gateway operator: a child still waiting for a Swarm slot fails at once with a
-visible error, and work that missed the change refuses at its next admission
-check. The host records the channel command text once,
+call rechecks the link, role, and command authorization. A requester removed
+from `commands.allowFrom` after a schedule is accepted refuses at the next
+occurrence, the same as a live command from that sender. The same
+`commands.allowFrom` recheck applies to a Gateway operator-UI requester (Control
+UI, browser copilot, or TUI) signed in as a person: like its live commands, the
+occurrence is checked against the `""` list, else the `*` list, with the
+person's profile id. A Gateway requester without a per-person sender (a
+shared-token owner), one matched by a client-supplied sender id, one whose
+command was routed with an external origin, or a schedule accepted before this
+recheck existed keeps its original admission. Demoting that person,
+removing their role, or unlinking the identity revokes the requester's retained
+work as it does for a Gateway operator: a child still waiting for a Swarm slot
+fails at once with a visible error, and work that missed the change refuses at
+its next admission check. A channel's reachability controls (a DM `allowFrom`
+list or `dmPolicy`) gate inbound messages, not this authority: to stop retained
+scheduled work, demote, unlink or remove the requester's role, or disable the
+schedule. The host records the channel command text once,
 as that message's input: a reply adds only the response, and a continuing agent
 turn reuses the same input. A native slash surface targeting a different
 `CommandTargetSessionKey` than the current dispatch session gets no capability.

@@ -11,6 +11,7 @@ import {
   readOperatorModelPolicyMembership,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
+import { getCommandSenderAuthority } from "../auto-reply/command-sender-authority.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
@@ -47,6 +48,7 @@ import {
   normalizeGatewayOperatorRecoverySnapshot,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
+import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
 type OperatorSource = {
@@ -627,6 +629,11 @@ export async function captureGatewayOperatorRunAuthority(input: {
   }
 }
 
+function isLiveCommandSenderProfileIdOnly(client: GatewayClient, profileId: string): boolean {
+  const live = resolveChatSendCallerContext(client);
+  return live.SenderId === undefined && getCommandSenderAuthority(live)?.() === profileId;
+}
+
 /** Capture only handshake-attested input; internal callers cannot manufacture a durable source. */
 function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
@@ -686,6 +693,10 @@ function captureGatewayOperatorRecoverySnapshot(params: {
     controlUiAdmin: client.internal.controlUiAdmin === true,
     localOperator: client.internal.isLocalClient === true,
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",
+    // Only true is written, so other snapshots keep the shape older readers accept.
+    ...(isLiveCommandSenderProfileIdOnly(client, authority.profileId)
+      ? { commandSenderProfileIdOnly: true }
+      : {}),
   };
   return normalizeGatewayOperatorRecoverySnapshot(source);
 }

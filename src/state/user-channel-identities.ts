@@ -227,6 +227,11 @@ function readIdentity(subject: string): UserChannelIdentity | undefined {
   return Check(UserChannelIdentitySchema, identity) ? identity : undefined;
 }
 
+/** Decode a stored channel-identity subject back into its channel identity. */
+export function parseUserChannelIdentitySubject(subject: string): UserChannelIdentity | undefined {
+  return readIdentity(subject);
+}
+
 function selectLink(db: EngineConnection, subject: string) {
   return executeSqliteQueryTakeFirstSync(
     db,

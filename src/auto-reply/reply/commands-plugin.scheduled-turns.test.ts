@@ -609,7 +609,7 @@ describe("native scheduled command execution", () => {
       });
     },
   );
-  it.each(["reset", "revoked operator"] as const)(
+  it.each(["reset", "revoked operator", "removed identity"] as const)(
     "refuses a %s before command or input acceptance",
     async (change) => {
       await withCommandPlugin(async (fixture) => {
@@ -617,8 +617,11 @@ describe("native scheduled command execution", () => {
         const before = await fixture.userInputs();
         if (change === "reset") {
           await fixture.resetParent();
-        } else {
+        } else if (change === "revoked operator") {
           fixture.revokeOwner();
+        } else {
+          // Unlinked after scheduling: refused at restore, before the allowFrom recheck.
+          fixture.removeOwner();
         }
         fixture.handler.mockClear();
         await fixture.cron.run(id, "force");
@@ -631,4 +634,48 @@ describe("native scheduled command execution", () => {
       });
     },
   );
+  it.each(["narrowed", "emptied"] as const)(
+    "refuses an occurrence after the requester loses commands.allowFrom authorization (%s)",
+    async (change) => {
+      await withCommandPlugin(async (fixture) => {
+        // The requester is command-authorized by commands.allowFrom when the schedule is accepted.
+        fixture.setCommandsAllowFrom([fixture.requesterSenderId]);
+        const id = await createContinuation(fixture);
+        const before = await fixture.userInputs();
+        // After scheduling, an operator removes the requester from commands.allowFrom.
+        fixture.setCommandsAllowFrom(change === "narrowed" ? ["99999999"] : []);
+        // Without the recheck the occurrence would dispatch this and return ok.
+        fixture.handler.mockImplementation(() => ({ text: "occurrence ran" }));
+        // Measure only the occurrence dispatch, as in the reset / revoked-operator case.
+        fixture.handler.mockClear();
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults).toHaveLength(1);
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          executionStarted: false,
+        });
+        expect(fixture.scheduledResults[0]?.error).toMatch(/no longer command-authorized/i);
+        // The plugin command never ran and no input was committed to the parent.
+        expect(fixture.handler).not.toHaveBeenCalled();
+        expect(await fixture.userInputs()).toEqual(before);
+        // Authorization can return, so the schedule is refused per occurrence, not retired.
+        const [job] = await fixture.readJobs();
+        expect(job).toMatchObject({ enabled: true });
+      });
+    },
+  );
+  it("keeps running an occurrence while the requester stays in commands.allowFrom", async () => {
+    await withCommandPlugin(async (fixture) => {
+      fixture.setCommandsAllowFrom([fixture.requesterSenderId]);
+      const id = await createContinuation(fixture);
+      fixture.handler.mockImplementation(() => ({ text: "still authorized" }));
+      await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "ok",
+        executionStarted: true,
+        outputText: "still authorized",
+      });
+      expect(fixture.handler).toHaveBeenCalled();
+    });
+  });
 });

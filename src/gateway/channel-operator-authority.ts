@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { parseUserChannelAuthorizationReference } from "../state/user-channel-authorization-reference.js";
 import {
+  parseUserChannelIdentitySubject,
   resolveUserChannelAuthorizationPolicy,
   resolveUserChannelIdentity,
 } from "../state/user-channel-identities.js";
@@ -235,6 +236,13 @@ export async function prepareChannelOperatorAdmin(
     return undefined;
   }
   const original = prepared.linked.authorization;
+  // Scheduled occurrences re-check commands.allowFrom against this restored identity.
+  const requesterIdentity =
+    "version" in identity
+      ? original?.subject
+        ? parseUserChannelIdentitySubject(original.subject)
+        : undefined
+      : identity;
   const assertCurrent = () => {
     if (!captured.authority.isCurrent(cfg)) {
       throw new GatewayOperatorAccessDeniedError();
@@ -258,6 +266,7 @@ export async function prepareChannelOperatorAdmin(
   return {
     ...captured.authority,
     recoveryReference,
+    requesterIdentity,
     operatorProfile: {
       profileId: prepared.linked.profileId,
       assignedRole: prepared.linked.role,

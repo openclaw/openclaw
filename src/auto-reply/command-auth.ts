@@ -9,6 +9,7 @@ import {
   getLoadedChannelPluginForRead,
   listLoadedChannelPlugins,
 } from "../channels/plugins/registry-loaded.js";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,6 +25,7 @@ import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
 import { prepareConfiguredCommandOwnerAuthority } from "../state/user-channel-identity-operations.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
@@ -360,16 +362,7 @@ function resolveCommandAuthorizationState(
   );
 
   const providerContext = { plugin, cfg, accountId: ctx.AccountId, providerId };
-  const commandsAllowFrom = cfg.commands?.allowFrom;
-  let commandsAllowFromList: string[] | null = null;
-  if (commandsAllowFrom && typeof commandsAllowFrom === "object") {
-    const providerList = commandsAllowFrom[providerId ?? ""];
-    const globalList = commandsAllowFrom["*"];
-    const rawList = Array.isArray(providerList) ? providerList : globalList;
-    if (Array.isArray(rawList)) {
-      commandsAllowFromList = formatAllowFromList({ ...providerContext, allowFrom: rawList });
-    }
-  }
+  const commandsAllowFromList = resolveCommandsAllowFromList(providerContext);
   const resolvedAllowFrom =
     prepared?.allowFrom ??
     resolveProviderAllowFrom({
@@ -523,6 +516,54 @@ export function resolveConfiguredCommandOwners(
   return resolveExplicitOwnerList({ cfg, plugin, providerId, accountId: requester.accountId });
 }
 
+/** Shared by live authorization and the scheduled recheck so both select the same list. */
+function resolveCommandsAllowFromList(
+  providerContext: Omit<Parameters<typeof formatAllowFromList>[0], "allowFrom"> & {
+    providerId: ChannelId | undefined;
+  },
+): string[] | null {
+  const commandsAllowFrom = providerContext.cfg.commands?.allowFrom;
+  if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
+    return null;
+  }
+  const providerList = commandsAllowFrom[providerContext.providerId ?? ""];
+  const globalList = commandsAllowFrom["*"];
+  const rawList = Array.isArray(providerList) ? providerList : globalList;
+  return Array.isArray(rawList)
+    ? formatAllowFromList({ ...providerContext, allowFrom: rawList })
+    : null;
+}
+
+/** Bundled plugin fallback: prefixed entries must normalize when the transport is not loaded. */
+export function isCommandsAllowFromAuthorized(
+  cfg: OpenClawConfig,
+  requester: {
+    channel: string;
+    accountId?: string;
+    senderId?: string;
+    senderE164?: string;
+    commandSenderId?: string;
+  },
+): boolean {
+  const providerId = resolveExplicitProviderFromContext({
+    Provider: requester.channel,
+    Surface: requester.channel,
+  })?.providerId;
+  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
+  const providerContext = { plugin, cfg, accountId: requester.accountId, providerId };
+  const list = resolveCommandsAllowFromList(providerContext);
+  if (list === null) {
+    return true;
+  }
+  const senderCandidates = resolveSenderCandidates({
+    ...providerContext,
+    senderId: requester.senderId,
+    senderE164: requester.senderE164,
+    commandSenderId: requester.commandSenderId,
+  });
+  return list.some((entry) => isWildcardAllowFromEntry(entry) || senderCandidates.includes(entry));
+}
+
 export function isConfiguredCommandOwner(
   cfg: OpenClawConfig,
   requester: { channel?: string; accountId?: string; senderId?: string; senderE164?: string },
@@ -611,6 +652,8 @@ export type PreparedCommandOwnerAuthority = Readonly<{
   operatorProfile?: NonNullable<
     Awaited<ReturnType<typeof prepareChannelOperatorAdmin>>
   >["operatorProfile"];
+  /** The restored channel requester identity, for re-evaluating current command authorization. */
+  requesterIdentity?: UserChannelIdentity;
   recoveryReference?: Exclude<CommandOwnerAssertion["recoveryReference"], null>;
   isCurrent: (currentCfg: OpenClawConfig) => boolean;
   /** The original additional person-policy grant, never a substitute for the current check. */
@@ -660,6 +703,7 @@ export async function prepareCommandOwnerAuthority(
   return Object.freeze({
     source: prepared ? `profile:${prepared.profileId}` : undefined,
     operatorProfile: prepared?.operatorProfile,
+    requesterIdentity: prepared?.requesterIdentity,
     recoveryReference: prepared?.recoveryReference,
     ...(prepared?.signal ? { signal: prepared.signal } : {}),
     isCurrent: (currentCfg: OpenClawConfig) =>
