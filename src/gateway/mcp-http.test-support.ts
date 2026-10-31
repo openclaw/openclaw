@@ -1,7 +1,13 @@
-import { afterAll, beforeAll, expect, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi, type Mock } from "vitest";
+import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { activateMcpLoopbackClientGrantCapture } from "./mcp-grant-store.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  mintAttachGrant,
+  type McpLoopbackRequestContext,
+} from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
@@ -219,4 +225,95 @@ export function createMcpToolCacheResolver({
         ...context,
       },
     });
+}
+
+export function registerMcpRequesterPolicyTests({
+  createCliGrant,
+  mockScopedTools,
+  runBeforeToolCallHookMock,
+  getBeforeToolCallHookInput,
+}: {
+  createCliGrant: (
+    runId: string,
+    options: { context: McpLoopbackRequestContext },
+  ) => Promise<{ scope: { token: string; headers: Record<string, string> } }>;
+  mockScopedTools: (tools: MockGatewayTool[]) => void;
+  runBeforeToolCallHookMock: Mock<typeof runBeforeToolCallHook>;
+  getBeforeToolCallHookInput: (index: number) => Parameters<typeof runBeforeToolCallHook>[0];
+}) {
+  it.each(["owner", "guest", "missing", "attach"] as const)(
+    "applies sender-aware tool policy using only captured CLI requester facts (%s)",
+    async (identity) => {
+      await startLoopbackServerForTest();
+      const execute = vi.fn(async () => ({ content: [{ type: "text", text: "sent" }] }));
+      mockScopedTools([makeMessageTool({ execute })]);
+      runBeforeToolCallHookMock.mockImplementation(async (args) => {
+        if (args.ctx?.requester?.senderIsOwner !== true) {
+          return {
+            blocked: true,
+            kind: "veto",
+            reason: "Requester is not a proven owner",
+            params: args.params,
+          };
+        }
+        return { blocked: false, params: args.params };
+      });
+      const context = buildCliMcpGrantContext({
+        run: {
+          sessionId: "requester-session",
+          sessionKey: "agent:main:requester",
+          sessionFile: "/tmp/requester-session",
+          workspaceDir: "/tmp/requester-workspace",
+          provider: "fixture-cli",
+          prompt: "Synthetic requester policy check",
+          timeoutMs: 1_000,
+          runId: "run-requester",
+          ...(identity === "owner" || identity === "guest"
+            ? {
+                messageProvider: "discord",
+                agentAccountId: "bound-account",
+                senderId: "bound-sender",
+                senderIsOwner: identity === "owner",
+              }
+            : {}),
+        },
+        config: {},
+        requireExplicitMessageTarget: false,
+        agentId: "main",
+        modelProvider: "fixture-provider",
+        modelId: "fixture-model",
+      });
+      const scope =
+        identity === "attach"
+          ? {
+              token: mintAttachGrant({ sessionKey: "agent:main:requester", agentId: "main" }).token,
+            }
+          : (await createCliGrant("run-requester", { context })).scope;
+      const result = await readOkMcpPayload(
+        await sendLoopbackToolCall({
+          ...scope,
+          name: "message",
+          headers: {
+            ...("headers" in scope ? scope.headers : {}),
+            "x-openclaw-message-channel": "telegram",
+            "x-openclaw-account-id": "forged-account",
+            "x-openclaw-sender-id": "forged-owner",
+            "x-openclaw-sender-is-owner": "true",
+          },
+        }),
+      );
+      expect(result.result?.isError === true).toBe(identity !== "owner");
+      expect(execute).toHaveBeenCalledTimes(identity === "owner" ? 1 : 0);
+      if (identity === "owner" || identity === "guest") {
+        expect(getBeforeToolCallHookInput(0).ctx?.requester).toEqual({
+          channel: "discord",
+          accountId: "bound-account",
+          senderId: "bound-sender",
+          senderIsOwner: identity === "owner",
+        });
+      } else {
+        expect(getBeforeToolCallHookInput(0).ctx?.requester).toBeUndefined();
+      }
+    },
+  );
 }
