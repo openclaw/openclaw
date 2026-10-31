@@ -26,26 +26,27 @@ keeps the current campaign state instead of repeating historical checkpoints.
 
 - [189460](https://github.com/openclaw/openclaw/pull/189460): Two unused core test publications, exact retirement-map rows and two generated cast allowances; native lifecycle/factory owners and all14 consumer files plus both live fixtures preserved. 195 tests/14 suites before/after/final head; all removal phases clean; CI gate green. −38 net production LOC; no declarations or assertions removed.
 
+- [189510](https://github.com/openclaw/openclaw/pull/189510): Obsolete ElevenLabs/Tlon mocks, unused xAI inspector and impossible Nextcloud fixture branch; all159 cases/eight suites remain. Baseline/candidate/final head pass, all removal phases clean, CI green. −30 net test/support LOC; no declarations removed.
+
 All landed batches completed focused checks, independent review and every removal
 scan phase. Existing Knip findings were attributed, never suppressed; unused-file
 and script-export scans were clean. PR189313 used the native inherited-failure
 route: tested main introduced three unawaited SDK-host closes; the PR's original
 file passes typed lint and the identical tested-main file reproduces all three.
-Its failed CI remains failed; no current-head CI success is claimed.
+Its failed CI remains failed; no current-head CI success is claimed. PR189510 retains an inherited local Tlon max-lines failure (1,028→1,024 effective lines); no allowance added, CI passed.
 
 ## Current qualification
 
-Pinned main `d7e9ba75438b`: remove obsolete plugin test fixture controls.
-Remove ElevenLabs existence spies, the unused xAI authorization label, an
-impossible Nextcloud upload-table branch and Tlon reply-config mocks superseded
-by the native pipeline. All declarations and behavioral keepers remain; only
-the obsolete existence-spy self-check is removed. Independent preservation
-review found no assertion transfer. Untouched baseline and candidate each pass
-159 tests/eight suites; five other consumer files are byte-identical. Scoped
-TypeScript and source checks pass. Typed lint reports only Tlon's existing
-1,000-line limit: untouched1,028 versus candidate1,024 effective lines. Both
-failures remain recorded; no allowance added. Baseline removal phases are clean;
-candidate scans, final published-head review and PR CI remain pending.
+Pinned main `ec004ac80b18`: simplify private plugin fixtures and implied assertions.
+Remove 18 unused Memory Wiki inventory payload cells; preserve every method name,
+order and all nine live dispatch rows. Remove only four provider assertion
+statements: Cloudflare active-wrapper identity, Volcengine identity/frozen-value
+self-checks and Google config separation identity. Keep actual payload/warning,
+frozen-input/exact-patch, helper-identity and distinct-token config assertions.
+All declarations remain. Root and independent preservation reviews found no
+assertion transfer; affected owners and guides are unchanged. Untouched baseline,
+candidate, keeper fault controls, all removal phases, typed checks, final review
+and PR CI are pending.
 
 ## Completed source review
 
@@ -62,10 +63,10 @@ permission to delete without root qualification.
 - Core content/runtime: Templates31/230; logging64/465; meeting bot30/183 direct+inherited; hooks41; TTS23; media-understanding43/241; context/chat/Canvas19/139; generation19/103; web/fetch8/69; status/storage25/207; realtime1/13.
 - Core setup/tools: Bootstrap/provider/interactive/plugin state21/179; daemon127/920; Talk39/250 plus inherited table; wizard30/239; security46/181; model commands35/215; catalog/memory SDK7/71; Doctor118/673.
 - Core entrypoints: Root src25; root docs/scripts21/63; direct channels103; CLI Gateway31/246; admin/share/Bonjour8/41. Deeper nested channel owners remain open.
-- Agent internals: 708 unique suites/4,876 physical sites/218,563 test/registrar LOC: R4858/F15/C1/D2. All83 registry suites are source-closed; lifecycle, cleanup, requester and worker boundaries retain their contracts; separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
+- Agent internals: 745 unique suites/5,186 physical sites/229,941 test/registrar LOC: R5167/F16/C1/D2. All83 registry suites are source-closed; sandbox mount, bridge, container and persistent-execution boundaries retain their contracts; separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 519 unique suites/3,202 physical sites: R2839/F363. Latest sessions, workboard and profile owners retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: 554 unique suites/3,406 physical sites: R3019/F387. Latest skills, Templates, meetings and logs owners retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -75,7 +76,7 @@ permission to delete without root qualification.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf1,487 suites/127 closed owners plus Crabbox14/53 partial; combined1,561 suites/160 closed directory owners plus the closed three-suite root boundary and that partial. Remaining2,746 directory suites/18 owners. Signal44 and memory-wiki50 are source-closed; keep their identity, cache, compiler and mutation contracts. Root media/CLI suites retain provider and import-policy proof. Source-only; no runtime verdict.
+- Plugin lane progress: Leaf1,526 suites/128 closed owners; combined1,600 suites/161 closed directory owners plus the closed three-suite root boundary. Remaining2,707 directory suites/17 owners. Signal44, memory-wiki50 and Crabbox53 are source-closed; keep their identity, cache, compiler and mutation contracts. Root media/CLI suites retain provider and import-policy proof. Source-only; no runtime verdict.
 
 ## Pending qualification and proof repairs
 
