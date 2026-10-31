@@ -15,6 +15,7 @@ import {
   readErrorCauses,
 } from "../infra/errors.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
 // dependency selection may own them; incidental plugin walks must leave them alone.
@@ -118,6 +119,7 @@ export function copyPluginSourceFile(
     (fd) => {
       const admitted = fs.fstatSync(fd, { bigint: true });
       try {
+        const metrics = getPluginGenerationMetrics();
         const mode = options.preserveSourceMode
           ? Number(admitted.mode & 0o777n)
           : 0o600 | Number(admitted.mode & 0o100n);
@@ -139,6 +141,9 @@ export function copyPluginSourceFile(
           });
           if (bytes !== Number(admitted.size)) {
             throw new FsSafeError("path-mismatch", "Plugin source changed while copying");
+          }
+          if (metrics) {
+            metrics.copiedBytes += bytes;
           }
           fs.fchmodSync(copied.fd, mode);
           const named = fs.lstatSync(target, { bigint: true });
@@ -175,6 +180,9 @@ export function copyPluginSourceFile(
           mode,
           sourceHardlinks: "allow",
         });
+        if (metrics) {
+          metrics.copiedBytes += copied.bytes;
+        }
         // The initial hash belongs to the copied descriptor; receipts still recheck its path.
         return options.hashCopiedContent
           ? {
@@ -258,6 +266,10 @@ function hashPluginSourceDescriptor(
     const chunk = scratch.subarray(0, length);
     content?.update(chunk);
     receipt?.update(chunk);
+  }
+  const metrics = getPluginGenerationMetrics();
+  if (metrics) {
+    metrics.hashReadBytes += position;
   }
   if (position !== sizeBytes) {
     throw new Error(

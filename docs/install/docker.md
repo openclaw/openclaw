@@ -624,3 +624,80 @@ docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health -
 - [Cloudflare Containers](/install/cloudflare) — experimental Worker plus container deployment with Litestream backups to R2
 - [Updating](/install/updating) — keeping OpenClaw up to date
 - [Configuration](/gateway/configuration) — Gateway configuration after install
+
+## Build from an offline installed runtime
+
+Release tooling can combine a portable OpenClaw package with an inventoried
+Linux/x64 dependency tree without rebuilding the package. Keep the package,
+dependency input, and source checkout immutable during composition. The source
+checkout must match the dependency input's package and lockfile hashes and the
+package's build identity; the tooling checkout has its own identity.
+
+From the tooling checkout:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/compose-installed-runtime.mts \
+--package /path/to/openclaw.tgz \
+--package-receipt /path/to/package-receipt.json \
+--dependency-root /path/to/linux-dependencies \
+--dependency-manifest /path/to/linux-dependencies.jsonl \
+--dependency-manifest-sha256 "$DEPENDENCY_MANIFEST_SHA256" \
+--source-root /path/to/runtime-source \
+--platform linux --arch x64 \
+--output-dir /path/to/new-composition
+
+```
+
+The output directory must not exist or overlap an input. The package receipt
+supplies `sha256`, `bytes`, and `buildInfo: { version, commit, buildId }`.
+The dependency root supplies `runtime-input.json` with `platform`, `arch`,
+`packageJsonSha256`, and `lockfileSha256`. Its newline-delimited JSON inventory
+uses paths prefixed with `node-runtime-dependencies/linux-x64` and records each
+entry's `kind` and octal `mode`, plus `size`/`sha256` for files or `target` for
+links. These input artifacts and their trusted digests come from the release
+owner; this command does not install dependencies or authorize their source.
+
+Composition preserves packaged bundled dependencies, materializes the remaining
+importer-relative dependency closure, and stages the maintained Linux lifecycle
+helpers. It writes `app/`, `installed-runtime.tgz`, a complete output inventory,
+and `receipt.json`. Symlink permission bits can differ across input filesystems;
+that count is recorded, while file/directory modes, content, targets and
+containment remain strict. No input is modified.
+
+Before passing the composition to Docker, verify it and obtain the maintained
+image recipe:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/compose-installed-runtime.mts \
+--operation image-recipe \
+--composition-root /path/to/composition \
+--receipt-sha256 "$RECEIPT_SHA256" \
+--portable-package-sha256 "$PACKAGE_SHA256" \
+--runtime-version "$RUNTIME_VERSION" \
+--runtime-commit "$RUNTIME_COMMIT" \
+--runtime-build-id "$RUNTIME_BUILD_ID"
+
+```
+
+All six location/identity flags are required. `--operation verify` uses the same
+flags. Both operations verify the complete installed inventory; there is no
+receipt-only shortcut. They also check the tooling lockfile against the runtime
+source lock, the Docker entrypoint against the original runtime commit's Git
+blob, and the maintained final-stage COPY inputs. The runtime commit must be
+available in the tooling checkout's Git object database.
+
+The JSON recipe names the maintained Dockerfile, `openclaw-runtime` target,
+`OPENCLAW_RUNTIME_ASSETS=installed-runtime-assets` build argument, and
+`openclaw_installed_runtime` named context pointing at the composition root.
+Pass these to Buildx from the pinned tooling checkout. Keep the context unchanged
+through consumption, then verify it again. The default source-build route is
+unchanged. The installed-assets stage runs finalization with networking disabled;
+it checks the native prebuild before lifecycle and never repairs missing app
+dependencies with npm. Later shared image stages still install OS utilities and
+operator tools and can require network access.
+
+Composition and recipe verification are **not Linux runtime qualification**.
+Receipts retain `compositionOnly: true`, ABI/libc `requires-target-acceptance`,
+and lifecycle `target-required`. Native loading, lifecycle completion,
+entrypoint, provider identity, and runtime export checks still require actual
+Linux target acceptance.

@@ -510,8 +510,6 @@ describeLive("gateway live trajectory export", () => {
         token,
         workspace: workspaceDir,
       });
-      const runtimeConfig = useLiveTestRuntimeConfig(config);
-      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
       logLiveStep("config-written", { configPath, modelKey, port, workspaceDir });
 
       const server = await startGatewayServer(port, {
@@ -520,6 +518,10 @@ describeLive("gateway live trajectory export", () => {
         controlUiEnabled: false,
       });
       logLiveStep("gateway-started", { port });
+      // Gateway startup prepares its own snapshot. Retain this fixture's exact
+      // config only after startup so later tool reads cannot observe it cleared.
+      const runtimeConfig = useLiveTestRuntimeConfig(config);
+      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
       cleanup.push(async () => {
         await server.close();
       });
