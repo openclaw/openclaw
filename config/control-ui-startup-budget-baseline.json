@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88758,
-  "reason": "Current-main Board containment build measures 88,758 B gzip, 7 B above its matched base, with three startup JavaScript requests and one CSS request; paired CPU qualification demonstrates the rendering win.",
-  "updatedAt": "2026-10-30"
+  "startupJsGzipBytes": 88753,
+  "reason": "Final long-tail build measures 88,753 B startup gzip with unchanged 277,716 B raw JS, three JS requests and one CSS request. Record the measured final value after the Apps-only stylesheet change; twenty paired mobile 4x samples reduced Secrets task median by 9.7% and p95 by 15.0% with an A/A control.",
+  "updatedAt": "2026-10-31"
 }
