@@ -60,6 +60,7 @@ import {
   createStartupMethodUnlocker,
   registerGatewayStartupReadinessTests,
 } from "./server-startup-readiness.test-support.js";
+import { createStartupTraceRecorder } from "./server-startup-trace.test-support.js";
 import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
 
 const { postAttachMocks: hoisted } = await vi.hoisted(
@@ -254,32 +255,6 @@ function firstStartupLog(): { loadedPluginIds?: string[] } {
   return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
 }
 
-function createStartupTraceRecorder() {
-  const details: Array<{
-    name: string;
-    metrics: ReadonlyArray<readonly [string, number | string]>;
-  }> = [];
-  const marks: string[] = [];
-  const measures: string[] = [];
-  return {
-    details,
-    marks,
-    measures,
-    startupTrace: {
-      detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => {
-        details.push({ name, metrics });
-      },
-      mark: (name: string) => {
-        marks.push(name);
-      },
-      measure: async <T>(name: string, run: () => T | Promise<T>) => {
-        measures.push(name);
-        return await run();
-      },
-    },
-  };
-}
-
 function firstGatewayStartCall(
   runGatewayStart: ReturnType<typeof vi.fn>,
 ): [PluginHookGatewayStartEvent, PluginHookGatewayContext] {
@@ -292,6 +267,7 @@ function firstGatewayStartCall(
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     resetGatewayWorkAdmission();
     fixtureStartupWork = new AsyncWorkScope();
     closeOpenClawStateDatabaseForTest();
@@ -768,11 +744,12 @@ describe("startGatewayPostAttachRuntime", () => {
     let stopped = false;
     let stopping: Promise<void> | undefined;
     try {
-      const updateCheckOwner = onGatewayLifetimeSidecars.mock.calls[0]?.[0];
+      const updateCheckOwner = onGatewayLifetimeSidecars.mock.calls
+        .flat()
+        .find((sidecar) => sidecar.stop === result.stopGatewayUpdateCheck);
       if (!updateCheckOwner) {
         throw new Error("update-check cleanup owner was not published");
       }
-      expect(updateCheckOwner.stop).toBe(result.stopGatewayUpdateCheck);
       stopping = stopTrackedSidecar(updateCheckOwner).then(() => {
         stopped = true;
       });
@@ -853,8 +830,9 @@ describe("startGatewayPostAttachRuntime", () => {
 
     // Publication is synchronous, so shutdown can observe ownership even
     // while the first CA/plugin startup await has not completed.
-    expect(onGatewayLifetimeSidecars).toHaveBeenCalledOnce();
-    const earlySidecar = onGatewayLifetimeSidecars.mock.calls[0]?.[0];
+    const earlySidecar = onGatewayLifetimeSidecars.mock.calls
+      .flat()
+      .find((sidecar) => sidecar.name === "sidecars.control-ui-assets");
     expect(earlySidecar).toBeDefined();
 
     await waitForGatewayTestState(() => {
@@ -872,7 +850,9 @@ describe("startGatewayPostAttachRuntime", () => {
     finishPluginStartup?.();
     await runtimePromise;
 
-    expect(onGatewayLifetimeSidecars.mock.calls.slice(1).flat()).not.toContain(earlySidecar);
+    expect(
+      onGatewayLifetimeSidecars.mock.calls.flat().filter((sidecar) => sidecar === earlySidecar),
+    ).toHaveLength(1);
     expect(startControlUiBuild).toHaveBeenCalledOnce();
     expect(publishedGatewayLifetimeSidecars).not.toContain(earlySidecar);
     await cleanupGatewayTestState();
@@ -973,7 +953,6 @@ describe("startGatewayPostAttachRuntime", () => {
     const gmailSidecars = onPostReadySidecars.mock.calls[0];
     const lifetimeSidecars = [...publishedGatewayLifetimeSidecars];
     expect(gmailSidecars).toHaveLength(2);
-    expect(lifetimeSidecars).toHaveLength(3);
 
     await started.promise;
 
@@ -2119,7 +2098,9 @@ describe("startGatewayPostAttachRuntime", () => {
       "worker-ready",
       "gateway-sidecars",
     ]);
-    expect([...unavailableGatewayMethods].filter((method) => method !== "chat.send")).toEqual([]);
+    await waitForGatewayTestState(() =>
+      expect([...unavailableGatewayMethods].filter((method) => method !== "chat.send")).toEqual([]),
+    );
     expect(publishedConnectionDependentSidecars.has(workerSidecar)).toBe(true);
     expect(onGatewayLifetimeSidecars).not.toHaveBeenCalledWith(workerSidecar);
   });

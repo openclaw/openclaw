@@ -22,6 +22,7 @@ import {
   NpmChannelResolutionError,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import {
   copyPluginInstallTransactionRequest,
   withPluginInstallTransactions,
@@ -39,7 +40,10 @@ import {
   resolveTrustedSourceLinkedOfficialNpmInstall as resolveOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
-import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
+import {
+  auditDeclaredOpenClawHostDependency,
+  repairInstalledOpenClawHostLinks,
+} from "./plugin-peer-link.js";
 import {
   buildClawHubTrustSkippedOutcome,
   buildDryRunPluginUpdateOutcome,
@@ -58,7 +62,6 @@ import { preparePluginUpdateCapabilityConsent } from "./update-capability-consen
 import {
   hasRunnableInstalledNpmPayload,
   migratePluginConfigId,
-  repairRegisteredOpenClawHostLink,
   resolveRecordedExtensionsDir,
 } from "./update-config.js";
 import {
@@ -345,14 +348,15 @@ async function runInstalledPluginUpdate(
       continue;
     }
     if (!params.dryRun && record.source === "npm" && currentVersion) {
-      changed =
-        (await repairRegisteredOpenClawHostLink({
-          pluginId,
-          record,
-          logger,
-          beforePersistentApply: assertCurrent,
-          beforePersistentEffect: params.beforePersistentEffect,
-        })) || changed;
+      const repaired = await repairInstalledOpenClawHostLinks({
+        managedNpmRoots: [],
+        installRecords: { [pluginId]: record },
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
+        logger,
+        beforePersistentApply: assertCurrent,
+        beforePersistentEffect: params.beforePersistentEffect,
+      });
+      changed = repaired.registeredRepaired > 0 || changed;
     }
     const recordSourceFailure = async (
       message: string,

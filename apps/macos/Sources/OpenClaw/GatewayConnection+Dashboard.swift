@@ -1,9 +1,27 @@
 import Foundation
+import OpenClawProtocol
 
 extension GatewayConnection {
     /// The authenticated hello owns browser sign-in discovery; no admin-only
     /// config read or endpoint guess may substitute for that server's identity.
     func controlUiBrowserIdentityURL(config: Config) async throws -> URL? {
+        guard let advertised = try await self.currentDashboardHello(config: config)?.snapshot.controluiidentityurl
+        else { return nil }
+        guard let components = URLComponents(string: advertised),
+              components.scheme?.lowercased() == "https",
+              components.host?.isEmpty == false,
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              let url = components.url
+        else { throw URLError(.badURL) }
+        return url
+    }
+
+    func controlUiBasePath(config: Config) async throws -> String? {
+        try await self.currentDashboardHello(config: config)?.controluibasepath
+    }
+
+    private func currentDashboardHello(config: Config) async throws -> HelloOk? {
         var capturedLease = await self.captureServerLease()
         if capturedLease == nil {
             let route = try await self.captureRequiredRoute()
@@ -25,14 +43,6 @@ extension GatewayConnection {
               lease.route.matches(config: config),
               await self.isCurrentServerLease(lease)
         else { throw CancellationError() }
-        guard let advertised = self.lastSnapshot?.snapshot.controluiidentityurl else { return nil }
-        guard let components = URLComponents(string: advertised),
-              components.scheme?.lowercased() == "https",
-              components.host?.isEmpty == false,
-              components.user == nil, components.password == nil,
-              components.query == nil, components.fragment == nil,
-              let url = components.url
-        else { throw URLError(.badURL) }
-        return url
+        return self.lastSnapshot
     }
 }

@@ -1,16 +1,11 @@
 import { validateCronListParams } from "../../../packages/gateway-protocol/src/index.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
-import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.js";
+import { resolveCronJobSessionBindings } from "../../cron/job-session-bindings.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import {
-  cronJobMatchesCallerScope,
-  readCronCallerScope,
-  resolveCronJobOwnerAgentId,
-} from "./cron-caller-scope.js";
+import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
 import { assertCronReadCurrent, respondInvalidCronParams } from "./cron-job-access.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { projectCronListJobs } from "./cron-list-projection.js";
@@ -71,23 +66,28 @@ export const cronListHandler = createPreparedReadHandler((options) => {
           const scope = readCronCallerScope(client);
           const currentScope = scope?.manageAll ? undefined : scope;
           const currentDefault = context.cron.getDefaultAgentId();
-          return (
-            cronJobMatchesCallerScope({
+          if (
+            !cronJobMatchesCallerScope({
               job,
               callerScope: currentScope,
               defaultAgentId: currentDefault,
               allowCurrentJob: true,
-            }) &&
-            (!p.sessionKey ||
-              (resolveCronJobBoundSessionKeys(job, {
-                cfg: context.getRuntimeConfig(),
-                defaultAgentId: currentDefault,
-              }).has(p.sessionKey) &&
-                (parseAgentSessionKey(p.sessionKey) !== null ||
-                  !p.sessionAgentId ||
-                  (resolveCronJobOwnerAgentId(job) ??
-                    tryResolveCronJobEffectiveAgentId(job, currentDefault)) ===
-                    normalizeAgentId(p.sessionAgentId))))
+            })
+          ) {
+            return false;
+          }
+          if (!p.sessionKey) {
+            return true;
+          }
+          const bindingAgentId = resolveCronJobSessionBindings(job, {
+            cfg: context.getRuntimeConfig(),
+            defaultAgentId: currentDefault,
+          }).get(p.sessionKey);
+          return (
+            bindingAgentId !== undefined &&
+            (parseAgentSessionKey(p.sessionKey) !== null ||
+              !p.sessionAgentId ||
+              bindingAgentId === normalizeAgentId(p.sessionAgentId))
           );
         };
         await visibilityRead.prepare();

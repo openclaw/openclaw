@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -12,6 +13,15 @@ import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+
+const writeText = (root: string, relative: string, data: string) =>
+  fs.writeFile(path.join(root, relative), data);
+const expectText = async (root: string, relative: string, expected: string) => {
+  expect(await fs.readFile(path.join(root, relative), "utf8")).toBe(expected);
+};
+const expectMissing = async (root: string, relative: string) => {
+  await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
+};
 
 export async function proveOversizedWorkspaceRecovery({
   owner,
@@ -279,14 +289,6 @@ export async function proveAcceptedInventoryRecovery(
     withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
   const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
   const git = (root: string, ...args: string[]) => requireGit(root, args);
-  const writeText = (root: string, relative: string, data: string) =>
-    fs.writeFile(path.join(root, relative), data);
-  const expectText = async (root: string, relative: string, expected: string) => {
-    expect(await fs.readFile(path.join(root, relative), "utf8")).toBe(expected);
-  };
-  const expectMissing = async (root: string, relative: string) => {
-    await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
-  };
   const projection = await prepare();
   const attachmentDirectory = stagedInputDirectory(randomUUID());
   const acceptedFiles = new Map([
@@ -372,4 +374,114 @@ export async function proveAcceptedInventoryRecovery(
     expect((await fs.stat(path.join(canonical, "skills/accepted-empty"))).isDirectory()).toBe(true);
   }
   await expectMissing(projection, ".env.local");
+}
+
+export async function proveUnsafePathWorkspaceRecovery(
+  owner: LocalWorkspaceOwner,
+  setRevoked: (value: boolean) => void,
+) {
+  const canonical = owner.worktree.path;
+  const prepare = () => withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const synchronize = () =>
+    withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+  const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
+  const projection = await prepare();
+  const rejected = path.join(projection, "legacy\\notes.txt");
+  const corrected = path.join(projection, "legacy-notes.txt");
+  const accepted = (await readProjection())!;
+  await fs.writeFile(rejected, "retained sample\n", { mode: 0o644 });
+  await writeText(projection, "report.md", "retained report\n");
+  try {
+    await expect(synchronize()).rejects.toThrow("manifest contains an unsafe path");
+    const pending = (await readProjection())!;
+    expect(pending.pending_target).toBe("canonical");
+    expect(pending.pending_ref).toBeTruthy();
+    const { workerWorkspaceResultStaging: staging } = await import("./workspace-result-staging.js");
+    const stage = staging.stageWorkerWorkspaceResult;
+    // Keep the real worker rejection, then revoke its caller before delivery.
+    const revokedStage = vi
+      .spyOn(staging, "stageWorkerWorkspaceResult")
+      .mockImplementationOnce(async (params) => {
+        try {
+          return await stage(params);
+        } catch (failure) {
+          expect(failure).toHaveProperty("code", "WORKSPACE_STAGE_CURRENT_PATH_UNSAFE");
+          setRevoked(true);
+          throw failure;
+        }
+      });
+    try {
+      await expect(prepare()).rejects.toThrow("revoked");
+    } finally {
+      setRevoked(false);
+      revokedStage.mockRestore();
+    }
+    await writeText(canonical, "source.txt", "accepted human edit\n");
+
+    expect(await prepare()).toBe(projection);
+    expect(await readProjection()).toMatchObject({
+      baseline_ref: accepted.baseline_ref,
+      pending_ref: pending.pending_ref,
+      pending_target: "canonical",
+      journal_json: null,
+    });
+    await expectText(projection, "source.txt", "original\n");
+    await expectText(canonical, "source.txt", "accepted human edit\n");
+    await expect(synchronize()).rejects.toThrow("manifest contains an unsafe path");
+    await expectMissing(canonical, "report.md");
+    await expect(
+      withLocalWorkspaceProjection({ ...owner, sessionId: randomUUID() }, (state) =>
+        state.prepare(),
+      ),
+    ).rejects.toThrow("different session incarnation");
+    setRevoked(true);
+    await expect(prepare()).rejects.toThrow("revoked");
+    setRevoked(false);
+
+    await fs.rename(rejected, corrected);
+    await synchronize();
+    await expectText(canonical, "legacy-notes.txt", "retained sample\n");
+    await expectText(canonical, "report.md", "retained report\n");
+    await expectText(canonical, "source.txt", "accepted human edit\n");
+    expect((await fs.stat(corrected)).mode & 0o777).toBe(0o644);
+    expect((await readProjection())!.pending_ref).toBeNull();
+    await prepare();
+    await expectText(projection, "source.txt", "accepted human edit\n");
+    await expectText(canonical, "source.txt", "accepted human edit\n");
+  } finally {
+    setRevoked(false);
+    if (existsSync(rejected)) {
+      await fs.rename(rejected, corrected);
+    }
+    await synchronize();
+  }
+}
+
+export async function proveUnsafePathWorkspaceCollision(owner: LocalWorkspaceOwner) {
+  const canonical = owner.worktree.path;
+  const prepare = () => withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const synchronize = () =>
+    withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+  const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
+  const projection = await prepare();
+  const rejected = path.join(projection, "legacy\\notes.txt");
+  const corrected = path.join(projection, "notes.txt");
+  await fs.writeFile(rejected, "guest sample\n");
+  try {
+    await expect(synchronize()).rejects.toThrow("manifest contains an unsafe path");
+    await writeText(canonical, "notes.txt", "human sample\n");
+    expect(await prepare()).toBe(projection);
+    await fs.rename(rejected, corrected);
+    await expect(synchronize()).rejects.toThrow("conflict");
+    await expect(prepare()).rejects.toThrow("conflict");
+    await expectText(canonical, "notes.txt", "human sample\n");
+    await expectText(projection, "notes.txt", "guest sample\n");
+    expect((await readProjection())!.pending_ref).toBeTruthy();
+  } finally {
+    if (existsSync(rejected)) {
+      await fs.rename(rejected, corrected);
+    }
+    await fs.rm(path.join(canonical, "notes.txt"), { force: true });
+    await synchronize();
+  }
 }

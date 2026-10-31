@@ -167,7 +167,9 @@ Options:
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
-  --full-release-run <id>             Reuse successful Full Release Validation run.
+  --full-release-validation-run-id <id>
+                                      Reuse successful Full Release Validation run.
+  --full-release-run <id>             Deprecated alias for --full-release-validation-run-id.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
@@ -194,6 +196,16 @@ export function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const terminatorIndex = args.indexOf("--");
   const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
+  const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
+  const parsedArgs = helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex);
+  if (
+    parsedArgs.includes("--full-release-validation-run-id") &&
+    parsedArgs.includes("--full-release-run")
+  ) {
+    throw new Error(
+      "Use --full-release-validation-run-id; do not combine it with the deprecated --full-release-run alias.",
+    );
+  }
   const options = {
     repo: DEFAULT_REPO,
     provider: DEFAULT_PROVIDER,
@@ -227,9 +239,8 @@ export function parseArgs(argv: string[]) {
     windowsNodeInstallerDigests: "",
     outputDir: "",
   };
-  const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
   parseFlagArgs(
-    helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex),
+    parsedArgs,
     options,
     [
       ...(
@@ -241,6 +252,7 @@ export function parseArgs(argv: string[]) {
           ["--publish-workflow-ref", "publishWorkflowRef"],
           ["--publication-route", "publicationRoute"],
           ["--repo", "repo"],
+          ["--full-release-validation-run-id", "fullReleaseRunId"],
           ["--full-release-run", "fullReleaseRunId"],
           ["--npm-preflight-run", "npmPreflightRunId"],
           ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
@@ -350,7 +362,7 @@ export function parseArgs(argv: string[]) {
       : "operator skipped --skip-parallels"
     : "";
   if (options.skipDispatch && !options.fullReleaseRunId) {
-    throw new Error("--skip-dispatch requires --full-release-run");
+    throw new Error("--skip-dispatch requires --full-release-validation-run-id");
   }
   if (options.pluginPublishScope === "selected" && !options.plugins.trim()) {
     throw new Error("--plugin-publish-scope selected requires --plugins");

@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cliArgv = resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli));
 
 async function snapshotTree(root: string): Promise<string[]> {
   const snapshot: string[] = [];
@@ -43,33 +46,29 @@ async function writeProject(root: string): Promise<void> {
 }
 
 function runTemplates(root: string, args: string[]) {
-  return spawnSync(
-    process.execPath,
-    ["--import", "tsx", path.resolve("src", "entry.ts"), "templates", ...args],
-    {
-      cwd: path.resolve("."),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: root,
-        USERPROFILE: root,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        NODE_ENV: undefined,
-        NODE_OPTIONS: undefined,
-        NO_COLOR: "1",
-        OPENCLAW_CONFIG_PATH: path.join(root, "config", "openclaw.json"),
-        OPENCLAW_HIDE_BANNER: "1",
-        OPENCLAW_HOME: root,
-        OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
-      },
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: 60_000,
+  return spawnSync(process.execPath, [...cliArgv, "templates", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NODE_ENV: undefined,
+      NODE_OPTIONS: undefined,
+      NO_COLOR: "1",
+      OPENCLAW_CONFIG_PATH: path.join(root, "config", "openclaw.json"),
+      OPENCLAW_HIDE_BANNER: "1",
+      OPENCLAW_HOME: root,
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      VITEST: undefined,
+      VITEST_POOL_ID: undefined,
+      VITEST_WORKER_ID: undefined,
     },
-  );
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 60_000,
+  });
 }
 
 describe("Template authoring process state", () => {

@@ -9,15 +9,19 @@ import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import {
   createErrorToolResult,
+  immediateToolArgumentValidationError,
+  immediateToolPreparationError,
   TOOL_LOOP_BLOCKED_MESSAGE,
   createToolExecutionErrorResult,
   type FinalizedToolCallOutcome,
+  type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
 import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
 import type { AgentTool, AgentToolCall, AgentToolResult, ToolLoopIntervention } from "./types.js";
+import { validateToolArguments } from "./validation.js";
 
 export type PreparedToolCall = {
   kind: "prepared";
@@ -25,6 +29,36 @@ export type PreparedToolCall = {
   tool: AgentTool;
   args: unknown;
 };
+
+export function prepareResolvedToolCall(
+  tool: AgentTool,
+  toolCall: AgentToolCall,
+): PreparedToolCall | ImmediateToolCallOutcome {
+  let preparedToolCall: AgentToolCall;
+  try {
+    const preparedArguments = tool.prepareArguments
+      ? tool.prepareArguments(toolCall.arguments)
+      : toolCall.arguments;
+    preparedToolCall =
+      preparedArguments === toolCall.arguments
+        ? toolCall
+        : {
+            ...toolCall,
+            // SAFETY: The validator below checks this value before returning execution arguments.
+            arguments: preparedArguments as Record<string, unknown>,
+          };
+  } catch (error) {
+    return immediateToolPreparationError(error);
+  }
+
+  let validatedArgs: unknown;
+  try {
+    validatedArgs = validateToolArguments(tool, preparedToolCall);
+  } catch (error) {
+    return immediateToolArgumentValidationError(error);
+  }
+  return { kind: "prepared", toolCall, tool, args: validatedArgs };
+}
 
 export type ExecutedToolCallOutcome = {
   result: AgentToolResult<unknown>;

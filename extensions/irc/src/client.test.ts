@@ -390,7 +390,7 @@ describe("irc client inbound line bound", () => {
 
 describe("irc client liveness", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date", "performance"] });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -433,33 +433,32 @@ describe("irc client liveness", () => {
     };
   }
 
-  it("drops a connection whose server goes silent and reports one disconnect", async ({
-    signal,
-  }) => {
-    const peer = await connectToQuietServer(false);
-    await vi.advanceTimersByTimeAsync(120_000);
-    await withinTest(peer.pingReceived, signal);
-    expect(peer.client.isReady()).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(120_000);
-    await withinTest(peer.disconnected, signal);
-    expect(peer.onError).toHaveBeenCalledExactlyOnceWith(
-      new Error("IRC server sent nothing for 240s; reconnecting"),
+  describe.each([0, 600_000, -3_600_000])("wall-clock step %dms", (step) => {
+    it.for([false, true])(
+      "checks silence and PONG recovery (answers PING: %s)",
+      async (answerPing, { signal }) => {
+        const peer = await connectToQuietServer(answerPing);
+        vi.setSystemTime(Date.now() + step);
+        await vi.advanceTimersByTimeAsync(120_000);
+        await withTimeout(answerPing ? peer.pongReceived : peer.pingReceived, 1000, "PING");
+        expect(peer.client.isReady()).toBe(true);
+        await vi.advanceTimersByTimeAsync(120_000);
+        if (answerPing) {
+          expect(peer.onDisconnect).not.toHaveBeenCalled();
+          expect(peer.onError).not.toHaveBeenCalled();
+          expect(peer.client.isReady()).toBe(true);
+        } else {
+          await withinTest(peer.disconnected, signal);
+          expect(peer.onError).toHaveBeenCalledExactlyOnceWith(
+            new Error("IRC server sent nothing for 240s; reconnecting"),
+          );
+          expect(peer.client.isReady()).toBe(false);
+          expect(vi.getTimerCount()).toBe(0);
+          await vi.advanceTimersByTimeAsync(240_000);
+          expect(peer.onDisconnect).toHaveBeenCalledTimes(1);
+        }
+      },
     );
-    expect(peer.client.isReady()).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-    await vi.advanceTimersByTimeAsync(240_000);
-    expect(peer.onDisconnect).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a quiet connection whose server answers PING", async ({ signal }) => {
-    const peer = await connectToQuietServer(true);
-    await vi.advanceTimersByTimeAsync(120_000);
-    await withinTest(peer.pongReceived, signal);
-    await vi.advanceTimersByTimeAsync(150_000);
-    expect(peer.onDisconnect).not.toHaveBeenCalled();
-    expect(peer.onError).not.toHaveBeenCalled();
-    expect(peer.client.isReady()).toBe(true);
   });
 
   it.for(["quit", "close", "abort"] as const)(

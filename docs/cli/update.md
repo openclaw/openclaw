@@ -75,6 +75,11 @@ still follow their own checks. Explicit package artifacts and installation
 rebinding can still require replacement even when version strings match.
 These admission checks require an updated installed updater.
 
+Already-current updates also preview supported legacy config repairs through
+Doctor, even without `--channel`. After admission, the normal config writer saves
+the repair with a backup before plugin maintenance. Unknown fields and repairs
+that cannot produce a valid config still refuse with Doctor guidance.
+
 For a global npm installation, OpenClaw prints a short manual alternative
 (`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
 `openclaw doctor --fix`, then `openclaw gateway restart`); it does not run it
@@ -91,8 +96,18 @@ update continues with a warning; only a confirmed ownership match skips replacem
 A missing package-manager executable is reported as unavailable, without database
 recovery instructions. For pacman (including Arch-based distributions), update
 with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
-use the owning pkg or Ports deployment. Then run `openclaw doctor --fix` and restart
-the Gateway through its service owner; see
+use the owning pkg or Ports deployment. Then restart the Gateway through its
+service owner. For other service managers, run `openclaw doctor --fix` first.
+On Linux, an OpenClaw-managed systemd Gateway backs up and migrates
+supported older databases during activation, including after an OS image update
+or an `ExecStart` drop-in selects a new source build. Healthy restarts skip this
+repair. The running service keeps its existing account, environment, and state
+selection; Doctor does not stop or restart the unit from inside it.
+
+Newer, unreadable, or foreign-owned databases remain protected. If activation
+refuses state, stop the service and run `openclaw doctor --fix` to inspect the
+reported problem before starting it again. Ordinary foreground Gateway commands
+continue to require explicit Doctor repair. See
 [System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).
 Older updaters must receive this fix through that system package manager first;
 a candidate cannot repair an updater that fails before staging it.

@@ -1,4 +1,4 @@
-import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { toImageDataUrl } from "../image-generation/image-assets.js";
@@ -618,17 +618,10 @@ export async function downloadDashscopeGeneratedVideos(params: {
     let buffer: Buffer;
     let mimeType: string;
     try {
-      try {
-        const contentType = normalizeMimeType(result.response.headers.get("content-type"));
-        if (
-          contentType &&
-          contentType !== "application/octet-stream" &&
-          kindFromMime(contentType) !== "video"
-        ) {
-          throw new Error(`${downloadLabel}: malformed video response`);
-        }
-      } catch (error) {
-        // A capture tee can retain cancellation until the guarded transport is released.
+      const contentType = normalizeMimeType(result.response.headers.get("content-type"));
+      if (contentType === "binary/octet-stream") {
+        // Keep DashScope's stricter binary alias policy without waiting on a capture tee.
+        const error = new Error(`${downloadLabel}: malformed video response`);
         void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }

@@ -211,7 +211,7 @@ describe("agents skills panel (browser)", () => {
     expect(view.filter()).toBe(filter);
   });
 
-  it("shows pending reads, keeps the cached report after failure, and retries through Refresh", async () => {
+  it("keeps unavailable inventories distinct from empty results and retries through Refresh", async () => {
     const initial = deferred<SkillStatusReport>();
     const refreshed = deferred<SkillStatusReport>();
     const retried = deferred<SkillStatusReport>();
@@ -221,38 +221,38 @@ describe("agents skills panel (browser)", () => {
       agentSkillsRead: { agentId: "main", result: initial.promise },
     });
     const { params } = view;
-    await view.text(["Loading"]);
-    const report: SkillStatusReport = {
+    await view.text(["Loading"], ["No skills found.", "0 shown"]);
+    initial.reject(new Error("Initial skills failure"));
+    const onRefresh = vi.fn(() =>
+      view.update({
+        ...params,
+        agentSkillsRead: { agentId: "main", result: retried.promise },
+        onRefresh,
+      }),
+    );
+    view.update({ ...params, onRefresh });
+    await view.text(["Initial skills failure"], ["No skills found.", "0 shown"]);
+    view.button("Refresh").click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+    await view.text(["Loading"], ["Initial skills failure", "No skills found.", "0 shown"]);
+    const report = {
       workspaceDir: "/workspace/synthetic",
       managedSkillsDir: "/skills/synthetic",
       skills: [createSkill({ name: "Synthetic cached skill" })],
     };
-    initial.resolve(report);
-    await view.text(["Synthetic cached skill"]);
-
-    const loaded = {
+    retried.resolve(report);
+    await view.text(["Synthetic cached skill"], ["Initial skills failure", "No skills found."]);
+    view.update({
       ...params,
       agentSkillsReport: report,
       agentSkillsAgentId: "main",
       agentSkillsRead: { agentId: "main", result: refreshed.promise },
-    };
-    view.update(loaded);
+    });
     await view.text(["Synthetic cached skill", "Loading"]);
     refreshed.reject(new Error("Synthetic skills failure"));
-    const onRefresh = vi.fn(() => {
-      view.update({
-        ...loaded,
-        agentSkillsRead: { agentId: "main", result: retried.promise },
-        onRefresh,
-      });
-    });
-    view.update({ ...loaded, onRefresh });
     await view.text(["Synthetic skills failure", "Synthetic cached skill"]);
-    view.button("Refresh").click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    await view.text(["Loading", "Synthetic cached skill"], ["Synthetic skills failure"]);
-    retried.resolve({ ...report, skills: [createSkill({ name: "Synthetic fresh skill" })] });
-    await view.text(["Synthetic fresh skill"], ["Synthetic skills failure"]);
+    const empty = mountSkills([]);
+    await empty.text(["0 shown", "No skills found."]);
   });
 
   it.each(["agent", "connection"])(
@@ -327,9 +327,9 @@ describe("agents skills panel (browser)", () => {
     },
   );
 
-  it("retains matching controls while filtering and restores removed skills after clearing", async () => {
+  it("retains Unicode matching controls and restores raw skills after clearing", async () => {
     const view = mountSkills([
-      createSkill({ name: "Unique Built In Match", source: "openclaw-bundled", bundled: true }),
+      createSkill({ name: "Cafe\u0301 match", source: "openclaw-bundled", bundled: true }),
       createSkill({ name: "Installed Distractor", source: "openclaw-managed" }),
     ]);
     const { container, params } = view;
@@ -340,7 +340,7 @@ describe("agents skills panel (browser)", () => {
     const matchedControl = matchedRow.querySelector("input");
     const filter = view.filter();
 
-    view.update({ ...params, filter: "Unique" });
+    view.update({ ...params, filter: "CAFÉ" });
     await waitForSolid(() => expect(view.rows()).toHaveLength(1));
     const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
     expect(filteredGroup?.open).toBe(true);
@@ -348,7 +348,7 @@ describe("agents skills panel (browser)", () => {
     expect(matchedRow.querySelector("input")).toBe(matchedControl);
     expect(container.textContent).not.toContain("Installed Distractor");
 
-    view.update({ ...params, filter: "Unique Built In Match" });
+    view.update({ ...params, filter: "Cafe\u0301 match" });
     await waitForSolid(() => expect(container.textContent).toContain("1 shown"));
     expect(view.rows()[0]).toBe(matchedRow);
     expect(view.filter()).toBe(filter);
@@ -361,7 +361,7 @@ describe("agents skills panel (browser)", () => {
 
     view.update({ ...params, filter: "" });
     await waitForSolid(() => expect(view.rows()).toHaveLength(2));
-    expect(container.textContent).toContain("Unique Built In Match");
+    expect(container.textContent).toContain("Cafe\u0301 match");
     expect(container.textContent).toContain("Installed Distractor");
     expect(view.checked()).toEqual([true, true]);
     expect(view.filter()).toBe(filter);
@@ -372,10 +372,10 @@ describe("agents skills panel (browser)", () => {
     async (scope) => {
       const view = mountSkills(
         [
-          createSkill({ name: "Matching skill", source: "openclaw-managed" }),
+          createSkill({ name: "Café skill", source: "openclaw-managed" }),
           createSkill({ name: "Unrelated skill", source: "openclaw-managed" }),
         ],
-        { filter: scope === "initial" ? "Matching" : "" },
+        { filter: scope === "initial" ? "Cafe\u0301" : "" },
       );
       const { container, params } = view;
       await waitForSolid(() => expect(view.rows()).toHaveLength(scope === "initial" ? 1 : 2));
@@ -385,7 +385,7 @@ describe("agents skills panel (browser)", () => {
         ...params,
         agentId,
         agentSkillsAgentId: agentId,
-        filter: "Matching",
+        filter: "Cafe\u0301",
         ...(scope === "connection"
           ? { readData: () => ({ ...params.readData(), requestGeneration: 1 }) }
           : {}),

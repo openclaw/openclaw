@@ -29,6 +29,7 @@ import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-cha
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
 import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-questions.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
@@ -69,6 +70,7 @@ import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provi
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
+import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
 import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
@@ -105,6 +107,7 @@ const sourceFiles = [
   "en-chat-permissions.ts",
   "en-chat-composer-menu.ts",
   "en-chat-session-optional.ts",
+  "en-chat-session-sharing.ts",
   "en-session-progress.ts",
   "en-board-document.ts",
   "en-assistant-context.ts",
@@ -133,6 +136,7 @@ const sourceFiles = [
   "en-chat-camera.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
+  "en-chat-commands.ts",
   "en-chat-composer.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
@@ -143,6 +147,7 @@ const sourceFiles = [
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
+  "en-chat-welcome.ts",
   "en-templates.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
@@ -163,12 +168,14 @@ const sourceFiles = [
   "en-mcp-app.ts",
   "en-meetings.ts",
   "en-memory-import.ts",
+  "en-model-account-list.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
   "en-provider-usage.ts",
   "en-session-machine.ts",
+  "en-session-menu.ts",
   "en-session-navigation.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
@@ -181,6 +188,7 @@ const sourceFiles = [
   "en-portals.ts",
   "en-profile.ts",
   "en-settings.ts",
+  "en-settings-sidebar.ts",
   "en-sidebar-attention.ts",
   "en-skill-library.ts",
   "en-session-skill-library.ts",
@@ -222,9 +230,41 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     }
   }
   const sessionsView: TranslationMap = {};
-  for (const [key, value] of Object.entries(
-    registerSessionOrganizationEnglish.catalog.sessionsView,
-  )) {
+  const menuCopy = registerSessionMenuEnglish.catalog.sessionsView;
+  // Menu leaves retain their original positions in the canonical translation memory.
+  const menuBefore = new Map<string, keyof typeof menuCopy>([
+    ["personalGroupReferenceAdded", "personalGroupAdd"],
+    ["personalGroupEdit", "personalGroupNew"],
+    ["subagentPrefix", "communication"],
+    ["actionRequiresScope", "actionUnavailable"],
+    ["withParticipant", "ownerYou"],
+    ["filterControls", "assignTo"],
+    ["snoozeWakes", "snoozed"],
+    ["deleteAllArchived", "archiving"],
+    ["agent", "session"],
+    ["statusLive", "status"],
+    ["pinned", "archived"],
+    ["sessionColor", "setIconColorMenu"],
+    ["removeIcon", "customIconHintNoShortcut"],
+    ["pinRootSessionsOnly", "pinSession"],
+    ["forkedSession", "forkFromLastCompleted"],
+    ["copySessionLink", "copySessionId"],
+    ["copyTranscriptChanged", "resetAppearance"],
+    ["groupDefaultsTitle", "archiveSession"],
+    ["archiveTreeRootRequired", "moveToTopLevel"],
+    ["moveSessionTitle", "moveSession"],
+    ["deleteSessionStale", "deleteSessionCount"],
+    ["hideEmptyGroupsSelected", "hideEmptyGroups"],
+    ["groupByChannel", "showSystemSessions"],
+    ["newGroupPrompt", "newGroup"],
+    ["groupOptions", "groupMenu"],
+    ["groupDefaultsFailed", "groupDefaultsMenu"],
+    ["renameGroupTitle", "renameGroupMenu"],
+    ["deleteGroupTitle", "deleteGroupMenu"],
+  ]);
+  const menuEntries = Object.entries(menuCopy);
+  let menuIndex = 0;
+  const appendSessionCopy = (key: string, value: TranslationMap[string]) => {
     sessionsView[key] = value;
     if (key === "searchPlaceholder") {
       Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
@@ -232,6 +272,21 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     if (key === "assignToMe") {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
+  };
+  for (const [key, value] of Object.entries(
+    registerSessionOrganizationEnglish.catalog.sessionsView,
+  )) {
+    const lastMenuKey = menuBefore.get(key);
+    if (lastMenuKey) {
+      while (menuIndex < menuEntries.length) {
+        const [menuKey, menuValue] = menuEntries[menuIndex++]!;
+        appendSessionCopy(menuKey, menuValue);
+        if (menuKey === lastMenuKey) {
+          break;
+        }
+      }
+    }
+    appendSessionCopy(key, value);
   }
   const sessionDetails: TranslationMap = {};
   for (const [key, value] of Object.entries(
@@ -261,14 +316,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
             : name === "contextSystem"
               ? ["contextFree"]
               : name === "contextOffline"
-                ? [
-                    "contextUnavailable",
-                    "contextReserve",
-                    "contextCompactDescription",
-                    "contextCompact",
-                    "contextCompacting",
-                    "contextCompactShort",
-                  ]
+                ? ["contextUnavailable", "contextReserve"]
                 : name === "contextExactCount"
                   ? [
                       "contextFreeShort",
@@ -305,7 +353,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   Object.assign(workspaceConflict, registerChatSessionEnglish.catalog.chat.workspaceConflict);
   // Rejoin cold leaves at their original positions for translation-memory source order.
   const sessionSharing: TranslationMap = {};
-  const sharingCopy = registerChatSessionOptionalEnglish.catalog.chat.sessionSharing;
+  const sharingCopy = registerChatSessionSharingEnglish.catalog.chat.sessionSharing;
   for (const [key, value] of Object.entries(
     registerChatSessionEnglish.catalog.chat.sessionSharing,
   )) {

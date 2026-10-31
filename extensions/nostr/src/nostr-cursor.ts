@@ -1,5 +1,5 @@
 import type { Event } from "nostr-tools";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isStateDatabaseAdmissionClosedError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 const CURSOR_WRITE_RETRY_MS = [0, 100, 300] as const;
@@ -144,6 +144,9 @@ export function createNostrCursorStateWriter(options: {
             await flush();
             return;
           } catch (error) {
+            if (isStateDatabaseAdmissionClosedError(error)) {
+              throw error;
+            }
             options.onBackgroundError?.(error as Error);
             await sleepWithAbort(CURSOR_RECOVERY_RETRY_MS);
           }

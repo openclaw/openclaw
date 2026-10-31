@@ -3,11 +3,10 @@ import { isPathInside } from "../../infra/path-guards.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 export async function createRunWorkspaceMock() {
-  const { resolveCanonicalRunRuntimeWorkspace, resolveRootedRunRuntimeWorkspace } =
+  const workspace =
     await vi.importActual<typeof import("../workspace-run.js")>("../workspace-run.js");
   return {
-    resolveCanonicalRunRuntimeWorkspace,
-    resolveRootedRunRuntimeWorkspace,
+    ...workspace,
     resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string; agentId?: string }) => ({
       workspaceDir: params.workspaceDir,
       usedFallback: false,

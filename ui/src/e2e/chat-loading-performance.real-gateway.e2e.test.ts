@@ -598,6 +598,10 @@ suite.define(() => {
           sessionKey: selectedKey,
           sidebarView: "sessions",
         };
+        // Sidebar persistence has its own writer; transcript settlement does not flush it.
+        await page
+          .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+          .waitFor();
         const warmState = await page.evaluate(persistColdLoadWarmState, warmInput);
         const storedSnapshot: unknown = warmState.storage.records.snapshots.find((record) =>
           record.sessionKey.endsWith(`\u0000${selectedKey}`),

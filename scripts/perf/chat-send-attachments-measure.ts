@@ -7,13 +7,16 @@
  * Repeat with --allocations for a separate main-thread sampled-allocation pass.
  * --owner-dir selects captured copies of chat-send-attachments.ts and
  * stage-sandbox-media.ts under their original src/ paths; imports keep their URL.
- * --workload image|pdf|many|mixed selects a 1200x1200 PNG, 1 MiB PDF, twelve 4 KiB
- * text files, or their round-robin mix. Every operation verifies byte preservation.
+ * --workload image|pdf|zip|many|mixed selects a 1200x1200 PNG, 1 MiB PDF, a ZIP
+ * containing twelve 4 KiB text files, twelve separate files, or their round-robin mix.
+ * Every operation verifies byte preservation, including deferred managed originals.
  * --workload inline selects three 700x700 PNGs below the image offload threshold
  * and includes real transcript persistence in the measured preparation interval.
  * Run inline against actual base/candidate source: --owner-dir hooks do not reach
  * attachment-processor worker isolates and cannot compare their decode behavior.
  * Fresh synthetic state only; preparation is real, admission is a fixed test fixture.
+ * Cold preparation is the first call in fresh state; warm samples follow two calls
+ * per workload. Sandbox layout counts use the owner's existing diagnostic spans.
  * Latency/CPU cover preparation; allocation/GC cover the entire loop including
  * verification and deletion. Setup, warm-up and state teardown are excluded.
  * Acceptance: identical attachment bytes and fewer workspace preparations, lower
@@ -47,7 +50,10 @@ const { values } = parseArgs({
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "--iterations must be positive");
-assert(["image", "inline", "pdf", "many", "mixed"].includes(values.workload), "invalid --workload");
+assert(
+  ["image", "inline", "pdf", "zip", "many", "mixed"].includes(values.workload),
+  "invalid --workload",
+);
 assert(
   values.workload !== "inline" || !values["owner-dir"],
   "inline requires actual base/candidate source; --owner-dir does not override attachment workers",
@@ -120,6 +126,8 @@ const { discardPreparedInboundMedia, persistInboundImagesForTranscript } =
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const { createSubsystemLogger } = await import("../../src/logging/subsystem.js");
 const { encodePngRgb } = await import("../../src/media/png-encode.js");
+const { withDiagnosticsTimelineObserver } = await import("../../src/infra/diagnostics-timeline.js");
+const { default: JSZip } = await import("jszip");
 type Preparation = Parameters<typeof prepareChatSendAttachments>[0];
 type Attachment = Preparation["request"]["normalizedAttachments"][number];
 
@@ -156,6 +164,13 @@ const attachment = (fileName: string, mimeType: string, bytes: Buffer) =>
     mimeType,
     content: bytes.toString("base64"),
   }) satisfies Attachment;
+const archive = new JSZip();
+for (let index = 0; index < 12; index++) {
+  archive.file(`synthetic-${index}.txt`, Buffer.alloc(4096, `file ${index}\n`), {
+    date: new Date("2020-01-01T00:00:00Z"),
+  });
+}
+const zip = await archive.generateAsync({ type: "nodebuffer", compression: "STORE" });
 const workloads = [
   { name: "image", files: [attachment("synthetic.png", "image/png", png)] },
   {
@@ -165,6 +180,7 @@ const workloads = [
     ),
   },
   { name: "pdf", files: [attachment("synthetic.pdf", "application/pdf", Buffer.from(pdf))] },
+  { name: "zip", files: [attachment("synthetic.zip", "application/zip", zip)] },
   {
     name: "many",
     files: Array.from({ length: 12 }, (_, index) =>
@@ -216,6 +232,7 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
   setRuntimeConfigSnapshot(cfg);
   await loadOrCreateProcessDeviceIdentityAsync();
   const timings = new Map(workloads.map(({ name }) => [name, [] as number[]]));
+  const sandboxLayouts: number[] = [];
   let threadCpuUs = 0;
   let processCpuUs = 0;
   const run = async (index: number, measured: boolean) => {
@@ -259,7 +276,16 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
     const threadBefore = process.threadCpuUsage();
     const cpuBefore = process.cpuUsage();
     const started = performance.now();
-    const result = await prepareChatSendAttachments(params);
+    let sandboxLayoutCount = 0;
+    const result = await withDiagnosticsTimelineObserver(
+      (name) => {
+        if (name === "attempt.setup.sandbox.layout.workspace") {
+          sandboxLayoutCount++;
+        }
+        return undefined;
+      },
+      () => prepareChatSendAttachments(params),
+    );
     assert(result.ok, "attachment preparation failed");
     const persisted =
       workload.name === "inline"
@@ -278,6 +304,7 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
       timings.get(workload.name)!.push(elapsed);
       threadCpuUs += threadCpu.user + threadCpu.system;
       processCpuUs += cpu.user + cpu.system;
+      sandboxLayouts.push(sandboxLayoutCount);
     }
     assert.equal(
       result.value.offloadedRefs.length,
@@ -307,11 +334,21 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
       assert.equal(digest(await fs.readFile(ref.path)), expected.get(ref.label));
     }
     for (const fact of result.value.mediaPathOffloads) {
-      assert(fact.path && fact.workspaceDir);
-      const staged = path.resolve(fact.workspaceDir, fact.path);
-      assert.equal(digest(await fs.readFile(staged)), expected.get(fact.fileName!));
-      assert(path.basename(path.dirname(staged)).startsWith("openclaw-staged-"));
-      stagedDirectories.add(path.dirname(staged));
+      assert(fact.path);
+      const resolved = fact.workspaceDir ? path.resolve(fact.workspaceDir, fact.path) : fact.path;
+      assert.equal(digest(await fs.readFile(resolved)), expected.get(fact.fileName!));
+      if (fact.workspaceDir) {
+        assert(path.basename(path.dirname(resolved)).startsWith("openclaw-staged-"));
+        stagedDirectories.add(path.dirname(resolved));
+      } else {
+        assert(
+          result.value.offloadedRefs.some(
+            (ref) => ref.path === resolved && ref.mediaRef === fact.url,
+          ),
+          "deferred attachment must retain its managed original and reference",
+        );
+        assert.notEqual(fact.staged, true);
+      }
     }
     await discardPreparedInboundMedia(result.value.offloadedRefs);
     if (persisted) {
@@ -320,8 +357,15 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
     for (const directory of stagedDirectories) {
       await fs.rm(directory, { recursive: true });
     }
+    return {
+      latencyMs: elapsed,
+      mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
+      processCpuMs: (cpu.user + cpu.system) / 1000,
+      sandboxLayouts: sandboxLayoutCount,
+    };
   };
-  for (let index = 0; index < workloads.length * 2; index++) {
+  const coldPreparation = await run(0, false);
+  for (let index = 1; index < workloads.length * 2; index++) {
     await run(index, false);
   }
   const collections: number[] = [];
@@ -391,6 +435,8 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
       bytes: files.reduce((sum, file) => sum + Buffer.byteLength(file.content, "base64"), 0),
     })),
     elapsedMs,
+    coldPreparation,
+    sandboxLayoutsPerOperation: summarize(sandboxLayouts),
     mainThreadCpuMsPerOperation: threadCpuUs / 1000 / iterations,
     processCpuMsPerOperation: processCpuUs / 1000 / iterations,
     preparationLatencyMs: Object.fromEntries(

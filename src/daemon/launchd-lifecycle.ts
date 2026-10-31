@@ -3,6 +3,7 @@ import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { parseLaunchctlJob } from "./launchctl-job.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -15,7 +16,6 @@ import {
   bootstrapLaunchAgentOrThrow,
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
-  parseLaunchctlJob,
   probeLaunchAgentState,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,

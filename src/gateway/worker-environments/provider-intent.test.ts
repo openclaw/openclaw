@@ -58,7 +58,12 @@ describe("prepared worker intent admission", () => {
   it("admits exact local source and OS without allocating, and retains reusable facts after caller abort", async () => {
     const f = await fixture();
     const controller = new AbortController();
-    const options = { machineClass: "large", os: "linux", signal: controller.signal };
+    const options = {
+      machineClass: "large",
+      os: "linux",
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    };
     const intent = await f.prepare(options);
     expect(intent.profileSnapshot.project?.preparation?.target).toMatchObject({
       machineClass: "large",

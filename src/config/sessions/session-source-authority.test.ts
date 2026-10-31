@@ -2,6 +2,8 @@ import { expect, it, vi } from "vitest";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+  prepareSessionSourceEffect,
   prepareSessionSourceAuthority,
   runWithSessionSourceScope,
   type SessionSourceAssertion,
@@ -144,5 +146,60 @@ it("releases earlier source holds when a later acquisition fails", () => {
     }),
   ]);
   expect(() => assertion.retain!()).toThrow("source released");
+  expect(release).toHaveBeenCalledOnce();
+});
+
+it("binds prepared effect facts through indirect reads and keeps legacy guards live", async () => {
+  const raw = vi.fn(() => {
+    throw new Error("synchronous storage read");
+  });
+  const live = revocable("prepared source retired");
+  const release = vi.fn();
+  const source = composeSessionSourceAssertion(
+    [sourceWith({ prepareSessionSourceEffect: async () => ({ ...live, release }) })],
+    () => raw(),
+  );
+  // The owned producer supplies the memory-only assertion for its effect scope.
+  source.prepareSessionSourceEffect = async () => ({ ...live, release });
+  const legacy = revocable("legacy callback retired");
+  const composed = composeSessionSourceAssertion(
+    [source, legacy.assertCurrent],
+    (assertSources) => {
+      assertSources();
+      source();
+    },
+  );
+  const effect = await prepareSessionSourceEffect(composed);
+  effect.assertCurrent();
+  expect(raw).not.toHaveBeenCalled();
+  legacy.revoke();
+  expect(effect.assertCurrent).toThrow("legacy callback retired");
+  await effect.release?.();
+  expect(release).toHaveBeenCalledOnce();
+  expect(effect.assertCurrent).toThrow("released");
+  expect(source).toThrow("synchronous storage read");
+});
+
+it("refuses a selected source replaced during effect preparation", async () => {
+  const ready = Promise.withResolvers<void>();
+  const release = vi.fn();
+  let selected = sourceWith({
+    prepareSessionSourceEffect: async () => {
+      await ready.promise;
+      return { assertCurrent() {}, release };
+    },
+  });
+  const source = createDynamicSessionSourceAssertion(
+    () => selected,
+    () => {
+      throw new Error("source replaced");
+    },
+  );
+  const pending = prepareSessionSourceEffect(source);
+  selected = sourceWith({});
+  ready.resolve();
+  const effect = await pending;
+  expect(effect.assertCurrent).toThrow("source replaced");
+  await effect.release?.();
   expect(release).toHaveBeenCalledOnce();
 });

@@ -114,6 +114,8 @@ export const HelloOkSchema = closedObject({
   snapshot: SnapshotSchema,
   // Public Control UI origin and mount path, independent of local SSH tunnels.
   controlUiUrl: Type.Optional(NonEmptyString),
+  // Additive: Control UI mount path on this listener, for clients that reach it by host and port.
+  controlUiBasePath: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
   controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
   // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.

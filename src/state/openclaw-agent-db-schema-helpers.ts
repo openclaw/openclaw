@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { hasLegacyMemoryRecallMetadataColumns } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import {
+  ensureMemoryChunkProvenance,
+  ensureMemoryRecallMetadataSchema,
+  hasLegacyMemoryRecallMetadataColumns,
+} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
@@ -83,9 +87,13 @@ export function assertOpenClawAgentSchemaContains(
   participantSchema: "current" | "legacy" = "current",
   allowStartupIndexRepair = false,
   readTable?: SqliteTableContractReader,
+  requireCanonicalIndexes = false,
 ): boolean {
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
+    allowedMissingIndexes: requireCanonicalIndexes
+      ? []
+      : AGENT_SCHEMA_COMPATIBILITY.allowedMissingIndexes,
     allowedMissingTables: [
       ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
       // Legacy migration preflight precedes creation of the required v20 table.
@@ -117,7 +125,7 @@ export function assertOpenClawAgentSchemaContains(
 
 export function assertOpenClawAgentCurrentRuntimeSchema(
   database: DatabaseSync,
-  options: { agentId: string; pathname: string },
+  options: { agentId: string; pathname: string; requireCanonicalIndexes?: boolean },
   readTable?: SqliteTableContractReader,
 ): void {
   const agentId = normalizeAgentId(options.agentId);
@@ -135,6 +143,7 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
     "current",
     false,
     readTable,
+    options.requireCanonicalIndexes,
   );
 }
 
@@ -322,6 +331,11 @@ function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {
 
 export function hasPendingMemoryChunkMetadataMigration(db: DatabaseSync): boolean {
   return hasLegacyMemoryRecallMetadataColumns(db) || hasLegacyMemoryChunkProvenanceTrigger(db);
+}
+
+export function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
+  ensureMemoryRecallMetadataSchema(db);
+  ensureMemoryChunkProvenance(db);
 }
 
 function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean {

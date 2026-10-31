@@ -757,7 +757,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 0 0 auto;
 }
 
-.settings-row__chevron svg {
+.settings-row__chevron svg,
+.settings-row__chevron .session-css-icon {
   width: 14px;
   height: 14px;
   /* Icons rely on currentColor; without this the SVG falls back to black fill

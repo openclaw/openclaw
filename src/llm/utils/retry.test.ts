@@ -70,6 +70,7 @@ describe("isRetryableAssistantError", () => {
   it.each([
     PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
     PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+    "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
     "openclaw_repeated_tool_error",
     "openclaw_repetitive_output",
   ])("does not retry terminal outcome %s", (errorCode) => {

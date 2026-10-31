@@ -227,12 +227,12 @@ suite.define(() => {
           ui.bounds(row.locator(".sidebar-session-indicator .session-glyph__badge--unread")),
         ]);
 
-        expect(badgeBounds).toMatchObject({ width: 7, height: 7 });
-        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 2, 1);
+        expect(badgeBounds).toMatchObject({ width: 8, height: 8 });
+        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 1, 1);
         return ui.right(glyphBounds) - ui.right(badgeBounds);
       };
       // Trailing metadata cannot move unread off the row's own glyph corner.
-      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-2, 1);
+      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-1, 1);
       expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(
         await badgeInsetFromGlyphRight(plainRow),
         1,
@@ -332,7 +332,7 @@ suite.define(() => {
           const { width, height } = icon.getBoundingClientRect();
           return { width, height };
         }),
-      ).toEqual({ width: 12, height: 12 });
+      ).toEqual({ width: 14, height: 14 });
       const stateLayout = await row.evaluate((element) => {
         const layoutLeft = (node: HTMLElement) => {
           let left = 0;

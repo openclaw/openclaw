@@ -85,6 +85,7 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   sendPolicy?: "allow" | "deny";
   goal?: SessionGoal;
   hasActiveRun?: boolean;
+  backgroundProcessCount?: number;
   activeRunIds?: string[];
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;

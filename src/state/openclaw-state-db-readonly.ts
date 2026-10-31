@@ -10,6 +10,7 @@ import {
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
 import { isUpdateRehearsalPrivateDatabase } from "../infra/update-rehearsal-paths.js";
+import { runPluginSharedStateWork } from "../plugins/plugin-shared-state-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -42,8 +43,10 @@ import { existingPathOrUndefined, resolveDatabasePath } from "./openclaw-state-d
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import {
+  isStateReadReply,
   startOpenClawStateReadOperation,
   type OpenClawStateReadCompletion,
+  type StateReadReply,
 } from "./openclaw-state-read-operation.js";
 import {
   assertRetainedReadScopeAdmission,
@@ -61,7 +64,6 @@ import type {
   OpenClawStateReadReceipt,
   OpenClawStateReadOptions,
   OpenClawStateReadCommand,
-  OpenClawStateReadReply,
   OpenClawStateReadOnlyDatabase,
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
@@ -475,18 +477,6 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
     : withFreshOpenClawStateDatabaseReadOnly(operation, options, existingPath);
 }
 
-type StateReadReply<Type extends OpenClawStateReadCommand["type"]> = Extract<
-  OpenClawStateReadReply,
-  { ok: true }
-> & { type: Type };
-
-function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
-  reply: OpenClawStateReadReply,
-  type: Type,
-): reply is StateReadReply<Type> {
-  return reply.ok && reply.type === type;
-}
-
 /** Fixed reads observe committed state unless their owner explicitly selected a snapshot. */
 export function executeExistingOpenClawStateRead<Command extends OpenClawStateReadCommand>(
   options: OpenClawStateDatabaseOptions,
@@ -507,9 +497,9 @@ export function executeExistingOpenClawStateRead<Command extends OpenClawStateRe
       : current
         ? () => exitStateReadSnapshot(execute)
         : execute;
-    completion = context?.runInCapturedSchemaScope
-      ? context.runInCapturedSchemaScope(read)
-      : read();
+    completion = runPluginSharedStateWork(() =>
+      context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read(),
+    );
   } catch (error) {
     throw mapError ? mapError(error, receipt.phase) : error;
   }

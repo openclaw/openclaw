@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectFamilyEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -257,7 +258,7 @@ it.each([false, true])(
       expect.objectContaining({ foundVersion: supportedVersions.state - 1 }),
     ]);
     expect(olderTarget.indeterminate).toEqual(indeterminate);
-    expect(snapshotSourceFamily(statePath)).toEqual(before);
+    expectFamilyEqual(snapshotSourceFamily(statePath), before);
     if (damaged) {
       await expect(fixture.ready(undefined, "gateway-restart")).rejects.toThrow(
         /Gateway refused restart.*column definitions differ for worktrees/su,
@@ -321,7 +322,7 @@ it("holds an unregistered store without deletion history or creating shared stat
       }),
     }),
   );
-  expect(snapshotSourceFamily(agent.path)).toEqual(before);
+  expectFamilyEqual(snapshotSourceFamily(agent.path), before);
   expect(fs.existsSync(statePath)).toBe(false);
 });
 
@@ -405,14 +406,14 @@ it("admits a dangling Workshop index only for Doctor without mutating the source
     fs
       .readdirSync(sourceDir)
       .toSorted()
-      .map((name) => [name, fs.readFileSync(path.join(sourceDir, name))]);
+      .map((name) => ({ name, bytes: fs.readFileSync(path.join(sourceDir, name)) }));
   const before = snapshot();
 
   const runtime = await fixture.inspect({ scope: "state" });
   expect(runtime.indeterminate).toEqual([
     expect.objectContaining({ reason: expect.stringMatching(/openclaw doctor --fix/) }),
   ]);
-  expect(snapshot()).toEqual(before);
+  expectFilesEqual(snapshot(), before);
 
   await expect(
     fixture.inspect({
@@ -421,7 +422,7 @@ it("admits a dangling Workshop index only for Doctor without mutating the source
       supportedVersions,
     }),
   ).resolves.toEqual(compatible);
-  expect(snapshot()).toEqual(before);
+  expectFilesEqual(snapshot(), before);
 });
 
 it.each([

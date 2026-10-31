@@ -53,6 +53,16 @@ export const cliMessageExitEntrypoints = {
   oneShotExit: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "one-shot-exit" }),
 } as const;
 
+export const oneShotExitProbeEntrypoints = {
+  argv: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "argv-invocation" }),
+  proxy: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "proxy-cli" }),
+} as const;
+
+export const logsConsoleEntrypoints = {
+  logs: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "logs-cli" }),
+  preaction: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "program/preaction" }),
+} as const;
+
 export const doctorOutputEntrypoints = {
   maintenance: legacy({
     currentModuleUrl: import.meta.url,
@@ -140,6 +150,10 @@ export const updateFinalizationOutputEntrypoint = legacy({
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
+  brokerCleanupFixture: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "gateway-cli/run-loop.broker-cleanup.test-support",
+  }),
   forcedCronFixture: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "gateway-cli/run-loop.forced-cron.test-support",

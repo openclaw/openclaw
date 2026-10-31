@@ -37,6 +37,22 @@ function delegate(f: ReturnType<typeof preExistingCandidate>) {
   return state;
 }
 
+function manualGateCandidate() {
+  const f = preExistingCandidate();
+  const state = f.state();
+  state.priorCi.event = "workflow_dispatch";
+  state.priorCi.runConclusion = "failure";
+  state.priorCi.jobs = state.priorCi.jobs!.filter((job) => ![603, 604].includes(job.id));
+  state.priorCi.currentGateChecks = [
+    { id: 1, suiteId: 10, event: "workflow_dispatch", conclusion: "failure" },
+    { id: 3, suiteId: 20, event: "pull_request", conclusion: "success" },
+  ];
+  f.save(state);
+  const { cancellation: _cancellation, ...evidence } = f.evidence;
+  writeFileSync(f.path, JSON.stringify(evidence));
+  return f;
+}
+
 const matrixWorkflow = [
   "jobs:",
   "  checks-node-core-test-nondist-shard:",
@@ -91,6 +107,78 @@ function mixedMatrixCandidate(workflow = matrixWorkflow) {
 }
 
 describePosix("explicit prior-CI admin landing", () => {
+  it.each(["success", "failure", "cancelled", "skipped", null])(
+    "keeps the other PR-event gate enforced when its conclusion is %s",
+    (conclusion) => {
+      const f = manualGateCandidate();
+      const state = f.state();
+      state.priorCi.currentGateChecks[1]!.conclusion = conclusion;
+      state.priorCi.currentGateChecks[1]!.status =
+        conclusion === null ? "in_progress" : "completed";
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+      const admitted = conclusion === "success";
+      expectResult(f, result, admitted ? undefined : "other required checks", admitted ? 1 : 0);
+      if (admitted) {
+        expect(f.record().priorCiAdmin.gateCheckRunId).toBe(1);
+        expect(f.record().priorCiAdmin.securityReview).toMatchObject({
+          combinedStatusId: 801,
+          runId: 901,
+        });
+      } else {
+        expectNoIntent(f);
+      }
+    },
+  );
+
+  it.each([
+    ["missing suite", "required-check workflow identities"],
+    ["wrong suite", "effective CI gate"],
+    ["wrong check-run URL", "effective CI gate"],
+    ["foreign repository URL", "effective CI gate"],
+    ["wrong publisher", "effective CI gate"],
+    ["wrong name", "effective CI gate"],
+    ["invalid check-run ID", "check identities"],
+    ["ambiguous suite", "required-check workflow or start time"],
+    ["newer same-event gate", "effective CI gate"],
+  ])("refuses a selected gate with %s", (fault, message) => {
+    const f = manualGateCandidate();
+    const state = f.state();
+    const selected = state.priorCi.currentGateChecks[0]!;
+    if (fault === "missing suite") {
+      delete selected.suiteId;
+    } else if (fault === "wrong suite") {
+      selected.suiteId = 40;
+    } else if (fault === "wrong check-run URL") {
+      state.priorCi.jobs![1]!.check_run_url =
+        "https://api.github.com/repos/fixture/repo/check-runs/4";
+    } else if (fault === "foreign repository URL") {
+      state.priorCi.jobs![1]!.check_run_url =
+        "https://api.github.com/repos/another/repo/check-runs/1";
+    } else if (fault === "wrong publisher") {
+      selected.publisherId = 999;
+    } else if (fault === "wrong name") {
+      selected.name = "another-gate";
+    } else if (fault === "invalid check-run ID") {
+      selected.id = 0;
+    } else if (fault === "ambiguous suite") {
+      state.priorCi.currentGateChecks.push({ ...selected, id: 4 });
+    } else {
+      state.priorCi.currentGateChecks.push({
+        ...selected,
+        id: 4,
+        suiteId: 40,
+        conclusion: "success",
+        startedAt: "2026-09-20T00:01:00Z",
+      });
+    }
+    f.save(state);
+    const result = f.adminPriorCi(f.path);
+    expectResult(f, result, message);
+    expectNoIntent(f);
+  });
+
   it.each([false, true])(
     "revalidates delegated CI bypass before dispatch (revoked=%s)",
     (revoked) => {

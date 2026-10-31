@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as harnessRegistry from "../agents/harness/registry.js";
@@ -24,73 +24,10 @@ import { agentCommandMock } from "./test-helpers.runtime-state.js";
 let ws: WebSocket;
 let port: number;
 
-const connectWork: Promise<unknown>[] = [];
-let joinedConnectWork = 0;
-let restoreConnectWork: (() => void) | undefined;
-
-const waitForConnectWork = async () => {
-  while (joinedConnectWork < connectWork.length) {
-    // A producer can register catalog tails before releasing its own root.
-    const pending = connectWork.slice(joinedConnectWork);
-    joinedConnectWork = connectWork.length;
-    await Promise.allSettled(pending);
-  }
-};
-
-// Install before this suite opens either socket; delegate all admission to its real owner.
-beforeAll(async () => {
-  const admission = await import("../process/gateway-work-admission.js");
-  const beginRoot = admission.tryBeginGatewayRootWorkAdmission;
-  const runIndependent = admission.runWithGatewayIndependentRootWorkAdmission;
-  const producers = vi
-    .spyOn(admission, "tryBeginGatewayRootWorkAdmission")
-    .mockImplementation((origin) => {
-      const lease = beginRoot(origin);
-      // Handler completion can precede release of retained request work.
-      return lease && (origin === "ws:connect" || origin === "ws:chat.send")
-        ? {
-            ...lease,
-            run: (run) =>
-              lease.run(() => {
-                const released = createDeferred<"settled" | "reset">();
-                const observeRelease = admission.captureGatewayRootWorkReleaseObserver();
-                if (!observeRelease) {
-                  throw new Error("connect producer must retain its admitted root");
-                }
-                observeRelease(released.resolve);
-                connectWork.push(released.promise);
-                return run();
-              }),
-          }
-        : lease;
-    });
-  const tails = vi
-    .spyOn(admission, "runWithGatewayIndependentRootWorkAdmission")
-    .mockImplementation((run, origin, signal) => {
-      const pending = runIndependent(run, origin, signal);
-      if (origin === "ws:preauth") {
-        connectWork.push(pending);
-      }
-      return pending;
-    });
-  restoreConnectWork = () => {
-    tails.mockRestore();
-    producers.mockRestore();
-  };
-});
-beforeEach(waitForConnectWork);
-afterAll(async () => {
-  try {
-    await waitForConnectWork();
-  } finally {
-    restoreConnectWork?.();
-  }
-});
-
 const gatewaySuite = installGatewayServerChatTestSuite((started) => {
   ws = started.ws;
   port = started.port;
-}, waitForConnectWork);
+});
 const {
   abortChatRun,
   expectAgentWaitTimeout,
@@ -98,6 +35,7 @@ const {
   sendChatAndExpectStarted,
   settleGatewayFixture,
   waitForAgentRunDrained,
+  waitForConnectWork,
   withMainSessionStore,
 } = gatewaySuite;
 
@@ -171,37 +109,48 @@ async function startAgent(runId: string, sessionKey = "main") {
   ).toMatchObject({ ok: true, payload: { status: "accepted" } });
 }
 
-test("fixture cleanup joins the exact retained chat.send root", async () => {
-  const admission = await import("../process/gateway-work-admission.js");
-  const lease = admission.tryBeginGatewayRootWorkAdmission("ws:chat.send");
-  if (!lease) {
-    throw new Error("Expected admitted request fixture");
-  }
-  const release = createDeferred();
-  let retained: Promise<unknown> | undefined;
-  let joined: Promise<void> | undefined;
-  let settled = false;
-  try {
-    await lease.run(async () => {
-      retained = admission.runWithRetainedGatewayRootWork(() => release.promise);
-    });
-    lease.release();
-    joined = waitForConnectWork();
-    void joined.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    release.resolve();
-    await joined;
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  } finally {
-    release.resolve();
-    lease.release();
-    await retained;
-    await joined;
-  }
-});
+test.each(["ws:chat.send", "ws:preauth"] as const)(
+  "fixture cleanup joins the exact %s work",
+  async (origin) => {
+    const admission = await import("../process/gateway-work-admission.js");
+    const lease =
+      origin === "ws:chat.send" ? admission.tryBeginGatewayRootWorkAdmission(origin) : undefined;
+    if (origin === "ws:chat.send" && !lease) {
+      throw new Error("Expected admitted request fixture");
+    }
+    const release = createDeferred();
+    let retained: Promise<unknown> | undefined;
+    let joined: Promise<void> | undefined;
+    let settled = false;
+    try {
+      if (lease) {
+        await lease.run(async () => {
+          retained = admission.runWithRetainedGatewayRootWork(() => release.promise);
+        });
+        lease.release();
+      } else {
+        retained = admission.runWithGatewayIndependentRootWorkAdmission(
+          () => release.promise,
+          origin,
+        );
+      }
+      joined = waitForConnectWork();
+      void joined.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      release.resolve();
+      await joined;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      release.resolve();
+      lease?.release();
+      await retained;
+      await joined;
+    }
+  },
+);
 
 test.for([
   { field: "verboseLevel", message: "/verbose full", thinking: undefined, scoped: true },

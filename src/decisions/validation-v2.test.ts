@@ -1,4 +1,7 @@
-import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
+import type {
+  DecisionAnswerCapabilities,
+  ModelDecisionCapabilities,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeCapabilities } from "./catalog.test-support.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
@@ -32,7 +35,7 @@ function result(answers: Record<string, unknown> = {}) {
     metadata: { route: "synthetic" },
   };
 }
-function resultChecker(input = batch, capabilities?: ModelDecisionCapabilities) {
+function resultChecker(input = batch, capabilities?: DecisionAnswerCapabilities) {
   return (value: unknown, valid = true) => {
     expect(validateDecisionResultV2(input, value, capabilities)).toBe(valid);
   };
@@ -87,7 +90,6 @@ describe("V2 decision admission", () => {
       answers: { target: { type: "box", box: value, confidence: 0.91 } },
     });
     const check = resultChecker(imageBatch);
-    expect(validateDecisionBatchV2(imageBatch)).toBe(true);
     check(answer(box));
     for (const invalid of [
       { ...box, left: -0.1 },
@@ -149,7 +151,7 @@ describe("V2 decision admission", () => {
   );
 
   it("distinguishes undeclared question support from an explicitly unsupported kind", () => {
-    const capabilities: ModelDecisionCapabilities = {
+    const capabilities: Parameters<typeof validateDecisionResultV2>[2] = {
       protocol: "fixture-native",
       input: ["text"],
     };
@@ -161,9 +163,7 @@ describe("V2 decision admission", () => {
   });
 
   it("rejects confidence reports when the route declares no confidence metric", () => {
-    const capabilities: ModelDecisionCapabilities = {
-      protocol: "fixture-native",
-      input: ["text"],
+    const capabilities: DecisionAnswerCapabilities = {
       confidence: "none",
     };
     const cases: { input: DecisionBatchV2; answers: Record<string, DecisionAnswerV2> }[] = [
@@ -273,7 +273,6 @@ describe("V2 decision admission", () => {
   it("preserves abstention, independent estimates, fractional scores and reported accounting without mutation", () => {
     const value = result();
     const before = structuredClone(value);
-    expect(validateDecisionBatchV2(batch)).toBe(true);
     expectResult(value);
     expect(value).toEqual(before);
     expect(value.answers.rank).not.toHaveProperty("probabilities");
@@ -327,7 +326,6 @@ describe("V2 decision admission", () => {
   it("validates native sort and tags identities without sorting or thresholding", () => {
     const value = listResult;
     const check = resultChecker(listBatch);
-    expect(validateDecisionBatchV2(listBatch)).toBe(true);
     expectState({ type: "list", items: [] }, true, {
       ...listBatch,
       questions: { sort: { type: "sort" } },
@@ -362,6 +360,7 @@ describe("V2 decision admission", () => {
       { ...batch, questions: { q: { type: "tags", criteria: {} } } },
     ]) {
       expect(() => validateDecisionBatchV2(invalid)).toThrow(DecisionContractError);
+      expect(Reflect.apply(validateDecisionResultV2, undefined, [invalid, result()])).toBe(false);
     }
     for (const value of [null, true, 1.5, "explicit json", [1, false], { value: 2 }]) {
       expectState({ type: "json", value });
@@ -393,9 +392,9 @@ describe("V2 decision admission", () => {
       { n: Number.NaN },
     ];
     for (const value of invalid) {
-      expect(() => validateDecisionBatchV2({ ...batch, state: { type: "json", value } })).toThrow(
-        DecisionContractError,
-      );
+      const input = { ...batch, state: { type: "json", value } };
+      expect(() => validateDecisionBatchV2(input)).toThrow(DecisionContractError);
+      expect(Reflect.apply(validateDecisionResultV2, undefined, [input, result()])).toBe(false);
       expectResult({ ...result(), metadata: value }, false);
     }
     expect(getter).not.toHaveBeenCalled();
@@ -461,6 +460,7 @@ describe("V2 decision admission", () => {
     expectState({ type: "image", dataUri, text: "x".repeat(1000) });
     const oversized = "data:image/png;base64," + Buffer.alloc(4 * 1_048_576 + 1).toString("base64");
     expectState({ type: "image", dataUri: oversized }, false);
+    resultChecker({ ...batch, state: { type: "image", dataUri: oversized } })(result(), false);
     expectState({ type: "image", dataUri, text: "x".repeat(1_048_576) }, false);
   });
 });

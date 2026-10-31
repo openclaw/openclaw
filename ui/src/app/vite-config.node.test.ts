@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { createServer, type Alias } from "vite";
-import { expect, it, vi } from "vitest";
+import { build, createServer, type Alias } from "vite";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   hashControlUiTranslationText,
   loadControlUiTranslationMemory,
@@ -72,6 +72,82 @@ const buildInfo = {
   release: false,
   buildId: "mock-artifact",
 };
+
+it("preloads CSS-gated route entries without promoting optional chunks", async () => {
+  const config = controlUiViteConfig({ buildInfo });
+  const preload = config.build?.modulePreload;
+  if (!preload || typeof preload !== "object" || !preload.resolveDependencies) {
+    throw new Error("Expected the Control UI module preload resolver");
+  }
+  const owner = config.plugins?.find(
+    (plugin) =>
+      plugin &&
+      typeof plugin === "object" &&
+      "name" in plugin &&
+      plugin.name === "control-ui-static-import-preloads",
+  );
+  if (!owner) {
+    throw new Error("Expected the Control UI preload metadata owner");
+  }
+  const styledEntry = path.join(repoRoot, "ui/src/pages/config/config-page.tsx");
+  const plainEntry = path.join(repoRoot, "ui/src/pages/usage/usage-page.tsx");
+  const sources = new Map([
+    [
+      "/preload-entry.js",
+      `globalThis.loadStyled = () => import(${JSON.stringify(styledEntry)}); globalThis.loadPlain = () => import(${JSON.stringify(plainEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
+    ],
+    [styledEntry, 'import "/nested.js"; export const ready = true;'],
+    ["/nested.js", 'import "/style.css"; globalThis.styled = true;'],
+    [plainEntry, "export const ready = true;"],
+    ["/optional.js", 'import "/style.css"; export const ready = true;'],
+    ["/style.css", ".fixture { color: red; }"],
+  ]);
+  const requests = new Map<string, string[]>();
+  const result = await build({
+    configFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "preload-fixture",
+        enforce: "pre",
+        resolveId: (id) => (sources.has(id) ? id : null),
+        load: (id) => sources.get(id),
+      },
+      owner,
+    ],
+    build: {
+      write: false,
+      minify: false,
+      rolldownOptions: { input: "/preload-entry.js" },
+      modulePreload: {
+        ...preload,
+        resolveDependencies: (filename, deps, context) => {
+          const resolved = preload.resolveDependencies!(filename, deps, context);
+          requests.set(filename, resolved);
+          return resolved;
+        },
+      },
+    },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one fixture build");
+  }
+  const chunks = result.output.filter((asset) => asset.type === "chunk");
+  const styled = chunks.find((chunk) => chunk.facadeModuleId === styledEntry)!;
+  const plain = chunks.find((chunk) => chunk.facadeModuleId === plainEntry)!;
+  const optional = chunks.find((chunk) => chunk.facadeModuleId === "/optional.js")!;
+  expect(requests.get(styled.fileName)).toContain(styled.fileName);
+  expect(requests.get(plain.fileName)).not.toContain(plain.fileName);
+  expect(requests.get(optional.fileName)).not.toContain(optional.fileName);
+  expect(
+    preload.resolveDependencies("assets/page.js", ["assets/shared.js"], {
+      hostType: "html",
+      hostId: "index.html",
+    }),
+  ).toEqual(["assets/shared.js"]);
+});
+
 type Catalog = TranslationMap & { common: TranslationMap };
 const labeledCatalog = (label: string): Catalog => ({
   common: { health: label },
@@ -294,31 +370,32 @@ it("uses the supplied artifact identity without reading Git metadata", () => {
   expect(childProcessMocks.execFileSync).not.toHaveBeenCalled();
 });
 
-it("selects a polling watcher when the existing environment opt-in is enabled", async ({
-  onTestFinished,
-}) => {
-  vi.stubEnv("CHOKIDAR_USEPOLLING", "1");
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
-  const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-watcher-"));
-  onTestFinished(() => rm(root, { recursive: true, force: true }));
-  const config = controlUiViteConfig({ command: "serve", buildInfo: resolveBuildInfo() });
-  const server = await createServer({
-    configFile: false,
-    root,
-    logLevel: "silent",
-    optimizeDeps: { noDiscovery: true },
-    server: { ...config.server, middlewareMode: true, hmr: false },
-  });
-  try {
-    // Chokidar can report polling enabled while still choosing FSEvents on macOS.
-    expect(server.watcher.options.usePolling).toBe(true);
-    expect(server.watcher.options.useFsEvents).toBe(false);
-  } finally {
-    await server.close();
-  }
-});
+it.each(["", "1"])(
+  "selects the development watcher with CHOKIDAR_USEPOLLING=%j",
+  async (polling) => {
+    vi.stubEnv("CHOKIDAR_USEPOLLING", polling);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-watcher-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const config = controlUiViteConfig({ command: "serve", buildInfo: resolveBuildInfo() });
+    const server = await createServer({
+      configFile: false,
+      root,
+      logLevel: "silent",
+      optimizeDeps: { noDiscovery: true },
+      server: { ...config.server, middlewareMode: true, hmr: false },
+    });
+    try {
+      // Chokidar can report polling enabled while still choosing FSEvents on macOS.
+      expect(server.watcher.options.usePolling).toBe(polling === "1");
+      expect(server.watcher.options.useFsEvents).toBe(false);
+    } finally {
+      await server.close();
+    }
+  },
+);
 
 it("embeds one canonical artifact identity from explicit build inputs", () => {
   expect(
@@ -436,18 +513,21 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it.each(["agent-id", "error-coercion"])("resolves internal source aliases for %s", (subpath) => {
-  const aliases = resolveSourcePackageAliasesForVite();
-  const moduleId = `@openclaw/normalization-core/${subpath}`;
-  expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
-    path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
-  );
-  expectBefore(
-    aliases.map((alias) => alias.find),
-    moduleId,
-    "@openclaw/normalization-core",
-  );
-});
+it.each(["agent-id", "error-coercion", "expect"])(
+  "resolves internal source aliases for %s",
+  (subpath) => {
+    const aliases = resolveSourcePackageAliasesForVite();
+    const moduleId = `@openclaw/normalization-core/${subpath}`;
+    expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
+      path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
+    );
+    expectBefore(
+      aliases.map((alias) => alias.find),
+      moduleId,
+      "@openclaw/normalization-core",
+    );
+  },
+);
 
 it("uses Node package resolution for external packages inherited by worktrees", () => {
   const resolvePackage = vi.fn((specifier: string) => path.join("/parent/node_modules", specifier));

@@ -166,6 +166,8 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  /** Required patch response facts survive optional full-snapshot receipt bounding. */
+  patchDiffBaselines?: ReadonlyMap<string, NonNullable<SessionEntry["sessionDiffBaseline"]>>;
   conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
   /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
   transcriptInventoryUnchanged?: true;

@@ -14,6 +14,7 @@ const runtimeMocks = vi.hoisted(() => {
   const requestLease = {
     ...stores,
     snapshot: { createStores: () => stores },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
   return {

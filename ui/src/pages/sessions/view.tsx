@@ -1,18 +1,6 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import {
-  createDeferred,
-  createMemo,
-  Errored,
-  For,
-  isPending,
-  Loading,
-  Repeat,
-  Show,
-} from "solid-js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -21,20 +9,19 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
+import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  groupSessionRows,
-  type SessionRowGroup,
-  UNGROUPED_ID,
-} from "../../lib/sessions/grouping.ts";
-import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
-import { categoryDropHandlers, SessionsAdvancedFilters } from "./sessions-filters.tsx";
+import { groupSessionRows } from "../../lib/sessions/grouping.ts";
+import { sessionsTableColumnCount } from "./session-row.tsx";
+import { SessionWindow, type SessionEntry } from "./session-window.tsx";
+import { SessionsAdvancedFilters } from "./sessions-filters.tsx";
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
+
+registerSessionMenuEnglish();
 
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
@@ -65,64 +52,6 @@ function SkeletonRows(props: { columnCount: number }) {
         </tr>
       )}
     </Repeat>
-  );
-}
-
-function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string {
-  const { id } = group;
-  if (props.groupBy === "date") {
-    const labels: Record<string, string> = {
-      today: "sessionsView.dateToday",
-      yesterday: "sessionsView.dateYesterday",
-      week: "sessionsView.dateThisWeek",
-      older: "sessionsView.dateOlder",
-    };
-    return t(labels[id] ?? "sessionsView.dateNoActivity");
-  }
-  if (id === UNGROUPED_ID) {
-    return t("sessionsView.ungrouped");
-  }
-  if (props.groupBy === "agent") {
-    const identity = getAgentIdentity(props.agentIdentityById, id);
-    const name = normalizeOptionalString(identity?.name);
-    if (name) {
-      const emoji = normalizeOptionalString(identity?.emoji);
-      return emoji ? `${emoji} ${name}` : name;
-    }
-  }
-  if (props.groupBy === "person") {
-    const actor = group.rows[0]?.owner?.actor;
-    return actor?.identity?.type === "profile"
-      ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || undefined })
-      : actor?.label?.trim() || id;
-  }
-  return id;
-}
-
-function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
-  const label = sessionGroupLabel(group, props);
-  const count = t(
-    group.rows.length === 1 ? "sessionsView.groupRowCountOne" : "sessionsView.groupRowCount",
-    { count: String(group.rows.length) },
-  );
-  const drop = categoryDropHandlers(props, group.id === UNGROUPED_ID ? null : group.id);
-  return (
-    <tr
-      class="session-group-row"
-      onDragOver={drop.dragover}
-      onDragLeave={drop.dragleave}
-      onDrop={drop.drop}
-    >
-      <td colspan={sessionsTableColumnCount(props)}>
-        <div class="session-group-row__header">
-          <span class="session-group-row__icon" aria-hidden="true">
-            <Icon name="folder" />
-          </span>
-          <span class="session-group-row__label">{label}</span>
-          <span class="session-group-row__count">{count}</span>
-        </div>
-      </td>
-    </tr>
   );
 }
 
@@ -269,10 +198,14 @@ function SortHeader(
 
 function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome }) {
   const rawRows = createMemo(() => props.result?.sessions ?? []);
+  const pageSize = createMemo(() => props.pageSize);
+  const groupBy = createMemo(() => props.groupBy);
+  const knownCategories = createMemo(() => props.knownCategories);
   const pageSizeValue = createMemo(() => String(props.pageSize));
+  const sortColumn = createMemo(() => props.sortColumn);
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));
   const sorted = createMemo(() => {
-    const column = props.sortColumn;
+    const column = sortColumn();
     const sortDirection = direction();
     return rawRows().toSorted((a, b) => {
       const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
@@ -287,18 +220,15 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
   const totalRows = () => sorted().length;
   const totalPages = createMemo(() => Math.max(1, Math.ceil(totalRows() / props.pageSize)));
   const page = createMemo(() => Math.min(props.page, totalPages() - 1));
-  const groups = createMemo(() =>
-    props.groupBy !== "none"
-      ? groupSessionRows({
-          rows: sorted(),
-          mode: props.groupBy,
-          knownCategories: props.knownCategories,
-        })
-      : null,
-  );
+  const groups = createMemo(() => {
+    const mode = groupBy();
+    return mode !== "none"
+      ? groupSessionRows({ rows: sorted(), mode, knownCategories: knownCategories() })
+      : null;
+  });
   const displayRows = createMemo(() => groups()?.flatMap((group) => group.rows) ?? sorted());
   const paginated = createMemo(() =>
-    displayRows().slice(page() * props.pageSize, (page() + 1) * props.pageSize),
+    displayRows().slice(page() * pageSize(), (page() + 1) * pageSize()),
   );
   const selectedOnPage = createMemo(
     () => paginated().filter((row) => props.selectedKeys.has(row.key)).length,
@@ -320,9 +250,24 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
             : "sessionsView.noSessions",
     );
 
-  const paginatedKeys = createMemo(() =>
-    groups() ? new Set(paginated().map((row) => row.key)) : null,
-  );
+  const entries = createMemo<SessionEntry[]>(() => {
+    const grouped = groups();
+    if (!grouped) {
+      return paginated().map((row) => ({ key: row.key, row }));
+    }
+    const keys = new Set(paginated().map((row) => row.key));
+    return grouped.flatMap((group) => {
+      const rows = group.rows.filter((row) => keys.has(row.key));
+      if (!rows.length && group.rows.length) {
+        return [];
+      }
+      const groupEntries: SessionEntry[] = [{ key: `group:${group.id}`, group }];
+      for (const row of rows) {
+        groupEntries.push({ key: row.key, row });
+      }
+      return groupEntries;
+    });
+  });
   function StatusRows() {
     return (
       <>
@@ -374,7 +319,14 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
       ) : undefined}
 
       <div class="data-table-container">
-        <table class="data-table sessions-table">
+        <table
+          class="data-table sessions-table"
+          aria-rowcount={
+            entries().length +
+            1 +
+            Number(paginated().some((row) => row.key === props.expandedSessionKey))
+          }
+        >
           <thead>
             <tr>
               <th class="data-table-checkbox-col">
@@ -417,18 +369,8 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
             >
               <StatusRows />
             </Loading>
-            {groups() ? (
-              <For each={groups()} keyed={(group) => group.id}>
-                {(group) => (
-                  <SessionGroup {...props} group={group()} paginatedKeys={paginatedKeys()} />
-                )}
-              </For>
-            ) : (
-              <For each={paginated()} keyed={(row) => row.key}>
-                {(row) => <SessionRows {...props} row={row()} />}
-              </For>
-            )}
           </tbody>
+          <SessionWindow {...props} entries={entries()} />
         </table>
       </div>
 
@@ -468,26 +410,6 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
             </button>
           </div>
         </div>
-      ) : undefined}
-    </>
-  );
-}
-
-function SessionGroup(
-  props: SessionsProps & { group: SessionRowGroup; paginatedKeys: Set<string> | null },
-) {
-  const visibleRows = createMemo(() =>
-    props.group.rows.filter((row) => props.paginatedKeys?.has(row.key)),
-  );
-  return (
-    <>
-      {visibleRows().length > 0 || props.group.rows.length === 0 ? (
-        <>
-          {renderGroupHeaderRow(props.group, props)}
-          <For each={visibleRows()} keyed={(row) => row.key}>
-            {(row) => <SessionRows {...props} row={row()} />}
-          </For>
-        </>
       ) : undefined}
     </>
   );

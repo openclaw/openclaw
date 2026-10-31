@@ -207,6 +207,11 @@ unreadable role or recovery records also prevent retirement. Take a verified bac
 when you need a long-term copy. Review and retire superseded captures with
 [`openclaw update cleanup`](#update-cleanup).
 
+If a fresh standalone capture fails before publishing its final manifest, Doctor
+removes that attempt's incomplete copy after owned work settles, while it retains
+live maintenance custody. Existing sealed copies and attempts with uncertain work,
+publication, or ownership remain protected.
+
 On Linux filesystems that reject native no-replace rename, fs-safe uses exclusive
 hard-link publication followed by source removal in native `auto` mode. Existing
 captures are never overwritten; native `require` mode still refuses unsupported
@@ -221,8 +226,9 @@ invalidate those chosen bytes or authorize restoring them over current data.
 The backup's existing database warnings remain available when a stable source
 generation could not be recorded. Unsafe source acquisition or file changes during
 copying can still leave a capture incomplete. Capture is best effort: when it fails,
-the update warns that it continues without the original-state capture, names the
-step and source paths that failed, and proceeds.
+the update reports **NO ORIGINAL-STATE SNAPSHOT** in its warning, retains the
+warning in JSON and the update run record, names the step and source paths that
+failed, and proceeds.
 If measured free space is insufficient, the warning explicitly says **this update
 has no original-state snapshot to restore from**, with needed and available bytes.
 The same warning is retained in JSON and the update run record. The update does
@@ -294,6 +300,26 @@ per database. It streams all retained rows and may take time on large captures.
 It creates no new backup or witness store and does not authorize migration,
 rollback, startup, or activation. Updates retain their existing safety gates;
 automatic migration acceptance is a separate integration.
+
+### Interrupted state restore
+
+Update commands, including `update repair`, refuse with
+`Interrupted shared-database publication left <path>` when a
+`.openclaw-restore-<id>-<n>` directory sits beside the shared state database. A
+state restore moved the original database into that directory and stopped before
+publishing its replacement, so the directory may hold the only copy of your
+original state. OpenClaw does not resume or finish this restore automatically,
+and every update command stays read-only so nothing replaces or retires that copy.
+
+Do not delete, rename, or move the directory. To continue:
+
+1. Stop the Gateway through its service owner and copy the whole state directory,
+   including the `.openclaw-restore-*` directory, to a safe location.
+2. If you have a verified backup, restore it into a fresh directory with
+   `openclaw backup restore <archive.tar.gz> --target <fresh-directory>` and
+   activate it as described in [Restore a full archive](/install/backups#restore-a-full-archive).
+3. Without a verified backup, keep the copy and [get support](/help/support).
+   Include the refusal text and a listing of the directory, not database contents.
 
 ### Retained updater runtime
 
@@ -555,6 +581,8 @@ retained paths, or a candidate root still block regardless of start time.
 Repair then replaces the custody with
 its own claim in one transaction, records the settled keys in the
 `finalize:handoff-settlement` step, and releases its claim after finalization.
+Package publication recovery left by the cancelled updater settles under that
+claim, so it does not need fresh update admission.
 A failed or deferred repair keeps the original custody record in its claim and
 reports it as retained custody. A later repair resumes that claim once the
 interrupted repair process has exited; the grace still counts from the cancelled

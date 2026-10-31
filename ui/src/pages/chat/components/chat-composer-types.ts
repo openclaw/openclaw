@@ -35,7 +35,7 @@ import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { FallbackStatus } from "../tool-stream-contract.ts";
+import type { CompactionStatus, FallbackStatus } from "../tool-stream-contract.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
@@ -177,6 +177,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   providerUsage?: ProviderUsageDisplayProps;
   contextGateway?: ApplicationGateway;
   onOpenContext?: () => void;
+  /** Present only when this viewer may compact the session; the context popover offers it. */
+  onCompact?: () => void | Promise<unknown>;
+  compactionStatus?: CompactionStatus | null;
+  runActive?: boolean;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;

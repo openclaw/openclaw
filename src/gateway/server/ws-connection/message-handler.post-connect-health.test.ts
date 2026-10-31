@@ -150,10 +150,10 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
   resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
-// mock-isolation: Ordinary connection tests do not use Enterprise identity or remote enrichment.
-vi.mock("../../github-user-identity.js", () => ({
+// mock-isolation: Keep remote enrichment synthetic while native connection admission stays real.
+vi.mock("../../github-user-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../github-user-identity.js")>()),
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
-  resolveTrustedEnterpriseGitHubAccountId: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
@@ -1824,6 +1824,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   it.each([
     ["openclaw-control-ui", "operator.admin", true],
     ["openclaw-control-ui", "operator.read", false],
+    ["openclaw-control-ui", "operator.write", false],
+    ["openclaw-control-ui", "operator.cron", false],
     ["openclaw-tui", "operator.admin", false],
   ] as const)(
     "records authenticated remote management authority for %s with %s: %s",
@@ -1844,15 +1846,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             hasRestoredCronContinuation: false,
             isOneShotModelRun: false,
           });
-          const expected = allowed
-            ? {
-                runId: "control-ui-admin-run",
-                callerOrigin: { kind: "unknown" },
-                callerScopedCreation: true,
-                managementEntitlement: { source: "control-ui-admin" },
-              }
-            : undefined;
-          expect(admission).toEqual(expected);
+          const expected = {
+            runId: "control-ui-admin-run",
+            callerOrigin: { kind: "unknown" },
+            callerScopedCreation: true,
+            ...(allowed ? { managementEntitlement: { source: "control-ui-admin" } } : {}),
+          };
+          expect(admission).toEqual(scope === "operator.read" ? undefined : expected);
         },
       );
     },

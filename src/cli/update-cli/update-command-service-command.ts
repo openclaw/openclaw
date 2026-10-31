@@ -15,6 +15,8 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
+import type { DaemonActionResponse } from "../daemon-cli/response.js";
+import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.types.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
   requiresRetainedUpdateCommandOwner,
@@ -70,6 +72,36 @@ async function runSettledGatewayCommand(argv: string[], options: CommandOptions)
   return result;
 }
 
+/** Failure reports carry closed status and field names, never the child's output. */
+function describeUnsupportedExecutorCheck(
+  check: Awaited<ReturnType<typeof runSettledGatewayCommand>>,
+  capability: Record<string, unknown> | undefined,
+  requiredBindings: readonly string[],
+): string | undefined {
+  if (check.code !== 0 || check.termination !== "exit" || check.signal !== null || check.killed) {
+    return `code=${check.code}, termination=${check.termination}${check.signal ? `, signal=${check.signal}` : ""}${check.killed ? ", killed=true" : ""}`;
+  }
+  // The child wrapper has joined the complete process tree before returning.
+  // Graceful descendant settlement is not an unsupported target capability.
+  if (check.cleanup !== "normal" && check.cleanup !== "cooperative") {
+    return `cleanup=${check.cleanup ?? "unreported"}`;
+  }
+  if (check.stdoutTruncatedBytes || check.outputLimitExceeded) {
+    return "output limit exceeded";
+  }
+  if (check.outputErrorStream) {
+    return `${check.outputErrorStream} stream error`;
+  }
+  if (!capability) {
+    return "output is not a JSON object";
+  }
+  if (capability.updateExecutor !== GATEWAY_UPDATE_EXECUTOR_CONTRACT) {
+    return "unsupported updateExecutor";
+  }
+  const missing = requiredBindings.find((binding) => capability[binding] !== true);
+  return missing ? `missing ${missing}` : undefined;
+}
+
 /** Probe the staged target before activation, retaining the original child owner. */
 export async function isUpdatedInstallGatewayExecutorSupported(params: {
   root: string;
@@ -79,6 +111,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   nodeRunner?: string;
   signal?: AbortSignal;
   onDefinitionBackupCapability?: (supported: boolean) => void;
+  onUnsupported?: (condition: string) => void;
   requireOriginalDefinitionBinding?: boolean;
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
@@ -87,6 +120,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   const entrypoint = await resolveGatewayInstallEntrypoint(params.root);
   params.executor.assertCurrent();
   if (!entrypoint) {
+    params.onUnsupported?.("missing Gateway entrypoint");
     return false;
   }
   const invocation = resolveOpenClawCliInvocation({
@@ -113,25 +147,18 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
   const capability = safeParseJsonRecord(check.stdout);
-  const supported =
-    check.code === 0 &&
-    check.termination === "exit" &&
-    check.signal === null &&
-    !check.killed &&
-    // The child wrapper has joined the complete process tree before returning.
-    // Graceful descendant settlement is not an unsupported target capability.
-    (check.cleanup === "normal" || check.cleanup === "cooperative") &&
-    !check.stdoutTruncatedBytes &&
-    !check.outputLimitExceeded &&
-    !check.outputErrorStream &&
-    capability?.updateExecutor === GATEWAY_UPDATE_EXECUTOR_CONTRACT &&
-    capability.targetRootBinding === true &&
-    (!params.requireOriginalDefinitionBinding ||
-      (capability.originalDefinitionBinding === true &&
-        capability.originalRuntimePinBinding === true)) &&
-    (!requiresRetainedOwner || capability.retainedOwnerBinding === true);
-  params.onDefinitionBackupCapability?.(supported && capability?.definitionBackup === true);
-  return supported;
+  const unsupported = describeUnsupportedExecutorCheck(check, capability, [
+    "targetRootBinding",
+    ...(params.requireOriginalDefinitionBinding
+      ? ["originalDefinitionBinding", "originalRuntimePinBinding"]
+      : []),
+    ...(requiresRetainedOwner ? ["retainedOwnerBinding"] : []),
+  ]);
+  if (unsupported) {
+    params.onUnsupported?.(unsupported);
+  }
+  params.onDefinitionBackupCapability?.(!unsupported && capability?.definitionBackup === true);
+  return !unsupported;
 }
 
 // Loaded before package replacement: activation dependencies must stay eager.
@@ -154,6 +181,7 @@ export async function runUpdatedInstallGatewayCommand(
     /** Receives each completed probe or child phase with its measured wall time. */
     onTimedStep?: (step: UpdateStepResult) => void;
     onGatewayStartAttempted?: (action?: "install" | "restart") => void;
+    onReadiness?: (health: GatewayRestartSnapshot | undefined) => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -209,6 +237,7 @@ export async function runUpdatedInstallGatewayCommand(
   }
   if (executor) {
     let definitionBackupSupported = false;
+    let unsupported = "missing install root";
     const checkStartedAtMs = Date.now();
     if (
       !params.result.root ||
@@ -222,17 +251,20 @@ export async function runUpdatedInstallGatewayCommand(
         onDefinitionBackupCapability: (supported) => {
           definitionBackupSupported = supported;
         },
+        onUnsupported: (condition) => {
+          unsupported = condition;
+        },
         requireOriginalDefinitionBinding:
           installing && Boolean(params.originalManagedServiceRuntime),
       }))
     ) {
       if (installing && params.originalManagedServiceRuntime) {
         throw new Error(
-          "Target cannot attest the original definition rewrite; original service compensation is required.",
+          `Target cannot attest the original definition rewrite (executor check: ${unsupported}); original service compensation is required.`,
         );
       }
       throw new UpdateCommandRecoveryPendingError(
-        "Target runtime cannot fence update-owned native commands.",
+        `Target runtime cannot fence update-owned native commands (executor check: ${unsupported}).`,
       );
     }
     assertCurrent();
@@ -308,7 +340,10 @@ export async function runUpdatedInstallGatewayCommand(
       exitCode: 0,
     });
   }
-  const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
+  // SAFETY: The admitted target owns this private response; result/identity gates below admit its facts.
+  const response = (complete ? safeParseJsonRecord(res.stdout) : undefined) as
+    | (Omit<DaemonActionResponse, "ok"> & { ok: unknown; rebind?: unknown })
+    | undefined;
   if (installing && response) {
     const warnings = filterStringEntries(response.warnings);
     if (warnings.length) {
@@ -362,12 +397,18 @@ export async function runUpdatedInstallGatewayCommand(
     }
   }
   if (exited && res.code === 0) {
-    return response?.action === action &&
+    if (
+      response?.action === action &&
       response.ok === true &&
       action === "restart" &&
       (response.result === "restarted" || response.result === "scheduled")
-      ? "accepted"
-      : "unverified";
+    ) {
+      if (response.result === "restarted") {
+        params.onReadiness?.(response.readiness);
+      }
+      return "accepted";
+    }
+    return "unverified";
   }
   const operation = installing ? "refresh" : action;
   const message = `updated install ${operation} failed: ${formatCommandFailure(res.stdout, res.stderr)} (${entrypoint})`;

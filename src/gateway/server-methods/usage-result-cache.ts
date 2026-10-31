@@ -134,6 +134,8 @@ export async function loadCostUsageSummaryCached(params: {
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
           }),
+    // The refresh owner can settle without another usage revision.
+    isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
   });
 }
 

@@ -23,6 +23,7 @@ export async function settleMutableUpdateResult(
     databaseCaptureStep?: UpdateStepResult;
     activationSteps: UpdateStepResult[];
     doctorEntered: boolean;
+    doctorDelegated: boolean;
     packageTransaction?: PackageUpdateTransaction;
     originalRun: MutableUpdateExecutionParams["opts"]["run"];
     env?: NodeJS.ProcessEnv;
@@ -59,8 +60,12 @@ export async function settleMutableUpdateResult(
     ];
   }
   const doctorSettled =
-    settlement.doctorEntered && !hasCommandProcessCleanupError(settlement.failure?.cause);
+    settlement.doctorEntered &&
+    settlement.doctorDelegated &&
+    !hasCommandProcessCleanupError(settlement.failure?.cause);
   if (databaseBackup && originalRun && result.status === "error" && doctorSettled) {
+    // A legacy Doctor has no attributable migration receipt. Leave compatible
+    // databases in place; the rollback owner checks schemas before restoring.
     // Execution has not entered finalization or admitted any candidate Gateway.
     // Restore before schema inspection can hand an incompatible ledger to the candidate.
     await restoreFailedUpdateDatabases({

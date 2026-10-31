@@ -6,7 +6,7 @@ import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 
 function formFixture(
-  aliases: Record<string, unknown>,
+  aliases: Record<string, unknown> | undefined,
   schema: Parameters<typeof analyzeConfigSchema>[0],
   original = false,
 ) {
@@ -14,9 +14,7 @@ function formFixture(
   const state = createInitialConfigState();
   state.configSchema = analysis.schema;
   state.configForm = structuredClone({ aliases });
-  if (original) {
-    state.configFormOriginal = { aliases };
-  }
+  state.configFormOriginal = original ? { aliases } : null;
   const onPatch = (path: Array<string | number>, value: unknown) =>
     updateConfigFormValue(state, path, value);
   const container = document.body.appendChild(document.createElement("div"));
@@ -122,11 +120,11 @@ describe("config form map key ownership", () => {
 
   it.each(
     ["constructor", "prototype", "__proto__"].flatMap((name) =>
-      ["add", "rename"].map((action) => ({ name, action })),
+      ["add", "rename", "unset"].map((action) => ({ name, action })),
     ),
   )("edits own $name entries after $action without changing prototypes", ({ name, action }) => {
     const { state, container, renderValue, input, add } = formFixture(
-      { primary: "before" },
+      action === "unset" ? undefined : { primary: "before" },
       mapSchema({
         additionalProperties: {
           type: "string",
@@ -144,7 +142,13 @@ describe("config form map key ownership", () => {
       flush();
       edit(input("[data-collection-draft-key]", host), name, "input");
       edit(input("[data-collection-draft-value]", host), "before", "input");
+      if (action === "add") {
+        edit(input('[aria-label="Entry value"]'), "edited", "input");
+      }
+      renderValue();
       flush();
+      expect(input("[data-collection-draft-key]", host)?.value).toBe(name);
+      expect(input("[data-collection-draft-value]", host)?.value).toBe("before");
       add(host);
     }
     renderValue();
@@ -153,7 +157,7 @@ describe("config form map key ownership", () => {
       .item(action === "add" ? 1 : 0);
     edit(value, "edited", "input");
     expect(JSON.parse(serializeFormForSubmit(state))).toEqual({
-      aliases: { ...(action === "add" ? { primary: "before" } : {}), [name]: "edited" },
+      aliases: { ...(action === "add" ? { primary: "edited" } : {}), [name]: "edited" },
     });
     expect(Object.getPrototypeOf(state.configForm)).toBe(Object.prototype);
     expect(Object.getPrototypeOf(state.configForm!.aliases)).toBe(Object.prototype);

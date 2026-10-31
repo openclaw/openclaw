@@ -483,6 +483,7 @@ it("uses the committed runtime generation for native PDF model selection", async
       config: pdfConfig("google/gemini-2.5-pro"),
       createStores: () => ({ authStorage: { setRuntimeApiKey: vi.fn() }, modelRegistry }),
     }),
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
   } as never);
   const analyze = vi

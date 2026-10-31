@@ -13,9 +13,9 @@
 
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
-| state    | table         |   135 |        135 |        0 |
-| state    | column        |  1413 |       1411 |        2 |
-| state    | index         |   290 |        290 |        0 |
+| state    | table         |   136 |        136 |        0 |
+| state    | column        |  1415 |       1413 |        2 |
+| state    | index         |   291 |        291 |        0 |
 | state    | foreignKey    |    33 |         33 |        0 |
 | state    | check         |   299 |        299 |        0 |
 | state    | trigger       |     0 |          0 |        0 |
@@ -23,7 +23,7 @@
 | state    | internalTable |     1 |          0 |        1 |
 | agent    | table         |    46 |         46 |        0 |
 | agent    | column        |   430 |        394 |       36 |
-| agent    | index         |   103 |         99 |        4 |
+| agent    | index         |   105 |         99 |        6 |
 | agent    | foreignKey    |    29 |         29 |        0 |
 | agent    | check         |    73 |         73 |        0 |
 | agent    | trigger       |     8 |          4 |        4 |
@@ -65,6 +65,8 @@
 - session_windows.acp_owned: 0/1 boolean candidate retained as bigint.
 - standing_intents.intent_key: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - Voice indexes: the sole writer (src/talk/client-voice-session-store.ts) uses JSON.stringify; agentId/sessionKey are strings, origin is client/relay, status is open/closed. src/talk/client-voice-session-lookup.worker.ts compares strings only. Non-string members cannot match; no boolean/numeric coercion is needed. Duplicate-key JSON is unreachable from writers: SQLite resolves first-wins, PostgreSQL last-wins. P3-6 preflight must refuse duplicate-key voice rows before copying, with row evidence. Canonical JSON remains text.
+- index `conversation_deliveries.idx_agent_conversation_deliveries_source_session`: Lead-approved 2026-10-31 SQLite additive index; PostgreSQL adoption waits for the next agent migration so existing v39 catalog seals remain compatible.; same-version SQLite index. Source: `CREATE INDEX idx_agent_conversation_deliveries_source_session   ON conversation_deliveries(source_session_key, operation_id)`
+- index `session_input_completions.idx_agent_session_input_completions_session_key`: Lead-approved 2026-10-31 SQLite additive index; PostgreSQL adoption waits for the next agent migration so existing v39 catalog seals remain compatible.; same-version SQLite index. Source: `CREATE INDEX idx_agent_session_input_completions_session_key   ON session_input_completions(session_key)`
 - virtualTable `session_transcript_fts.session_transcript_fts`: FTS5 is not translated; pendingCapability: search; FTS sync; tsvector + GIN; preserve tokenizer/ranking semantics separately. Source: `CREATE VIRTUAL TABLE session_transcript_fts USING fts5(   text,   session_id UNINDEXED,   message_id UNINDEXED,   role UNINDEXED,   timestamp UNINDEXED,   tokenize = 'unicode61 remove_diacritics 2' )`
 - column `session_transcript_fts.text`: Parent table omitted; pendingCapability: search. Source: ``
 - column `session_transcript_fts.session_id`: Parent table omitted; pendingCapability: search. Source: ``

@@ -232,10 +232,12 @@ export async function resolveMatrixInboundContext(config: {
       nativeChannelId: roomId,
       threadId: threadTarget,
     },
+    // Preserve model ancestry without requesting a room-transcript fork.
     route: {
       ..._route,
       routeSessionKey: _route.sessionKey,
-      parentSessionKey:
+      parentSessionKey: undefined,
+      modelParentSessionKey:
         threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,
     },
     reply: {

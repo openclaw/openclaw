@@ -1,9 +1,9 @@
-import { MANAGED_HANDOFF_PG_RESULT_SOURCE } from "./update-managed-service-handoff-pg-result-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
+import { MANAGED_HANDOFF_SENTINEL_SOURCE } from "./update-managed-service-handoff-sentinel-source.js";
 
 // Terminal recording runs inside the sealed helper with its captured lifecycle owners.
 export const MANAGED_HANDOFF_RESULT_SOURCE =
-  MANAGED_HANDOFF_PG_RESULT_SOURCE +
+  MANAGED_HANDOFF_SENTINEL_SOURCE +
   String.raw`
 let triageFailure;
 let runLedger;
@@ -117,141 +117,69 @@ function isFailedUpdateOutcome(status, reason) {
     !params.nonFailureSkippedReasons.includes(reason));
 }
 
-function captureFailedUpdateResult() {
-  // Enrich an already recorded failure; diagnostic artifacts never decide the
-  // update outcome or permission to restart the service.
+async function captureManagedUpdateResult() {
   if (fs.existsSync(params.triageContextPath)) {
     triageFailure = { ...triageFailure, reason: closedUpdateResult?.reason ?? "managed-service-handoff-failed" };
     return true;
   }
-  const db = openStateDatabase();
-  if (!db) return false;
   try {
-    const current = readRestartSentinelRowSync(db);
-    const payload = current.kind === "valid" ? current.sentinel.payload : undefined;
-    if (payload?.kind !== "update" || payload.stats?.handoffId !== params.handoffId ||
-      !isFailedUpdateOutcome(payload.status, payload.stats?.reason)) return false;
-    triageFailure = { ...triageFailure, payload, reason: payload.stats.reason || "managed-service-handoff-failed" };
+    const result = await runSentinelOperation({ kind: "inspect", input: sentinelIdentity() });
+    if (!result.sentinel) return false;
+    const payload = result.sentinel.payload;
+    triageFailure = { ...triageFailure, payload, reason: payload.stats?.reason || "managed-service-handoff-failed" };
     return true;
-  } finally {
-    db.close();
+  } catch (error) {
+    // SQLite read failures end diagnostics at their cleanup boundary. Remote
+    // transport failure keeps the direct child's bounded diagnostic context.
+    if (params.stateEngine !== "postgres") throw error;
+    appendLog("Update notice could not be inspected; service recovery retains its local lease.");
+    return false;
   }
 }
 
-function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedRevision) {
+async function recordManagedUpdateOutcome(reason, restored, completedStatus, expectedRevision) {
   if (!ownsManagedUpdateLease()) return false;
   handoffFailure = reason;
   reason = closedUpdateResult?.reason ?? reason;
   let metaFile;
-  try {
-    metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
-  } catch {}
-  const run = runLedger?.getUpdateRun(params.runId);
-  // Cancellation must preserve a refusal already recorded by the Gateway.
+  try { metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf8")); } catch {}
+  let run;
+  try { run = runLedger?.getUpdateRun(params.runId); } catch {}
   if (reason === "managed-service-handoff-cancelled" && run?.reason &&
       run.steps.some((step) => step.step === "requested" && step.status === "failed")) reason = run.reason;
-  const meta = resolveUpdateRestartNoticeMeta(run, metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {});
-  const status = (reason === "managed-service-handoff-cancelled" || completedStatus === "skipped") && restored !== false
-    ? "skipped" : "error";
+  const meta = resolveUpdateRestartNoticeMeta(run, metaFile?.version === 1 ? metaFile.meta : {});
+  const status = (reason === "managed-service-handoff-cancelled" || completedStatus === "skipped") && restored !== false ? "skipped" : "error";
   runOutcome = { status: status === "error" ? "failed" : "skipped", reason };
   const fallbackPayload = {
-    kind: "update",
-    status,
-    ts: Date.now(),
-    message: typeof meta.note === "string" ? meta.note : null,
-    stats: {
-      mode: "unknown",
-      ...(typeof meta.runId === "string" && meta.runId.trim() ? { runId: meta.runId } : {}),
-      ...(typeof meta.root === "string" && meta.root.trim() ? { root: meta.root } : {}),
-      ...(meta.completionOwner !== "gateway-restart" && typeof meta.handoffId === "string" && meta.handoffId.trim()
-        ? { handoffId: meta.handoffId }
-        : {}),
-      reason,
-      steps: [],
-      durationMs: 0,
-    },
+    kind: "update", status, ts: Date.now(), message: meta.note,
+    stats: { mode: "unknown", root: params.updateLeaseKey, handoffId: params.handoffId,
+      ...(params.runId ? { runId: params.runId } : {}), reason, steps: [], durationMs: 0 },
+    ...(meta.sessionKey ? { sessionKey: meta.sessionKey } : {}),
+    ...(meta.threadId ? { threadId: meta.threadId } : {}),
+    ...(meta.deliveryContext ? { deliveryContext: meta.deliveryContext } : {}),
   };
-  for (const key of ["sessionKey", "threadId"]) {
-    if (typeof meta[key] === "string" && meta[key].trim()) fallbackPayload[key] = meta[key];
-  }
-  if (meta.deliveryContext && typeof meta.deliveryContext === "object") {
-    fallbackPayload.deliveryContext = meta.deliveryContext;
-  }
   if (status === "error") triageFailure ??= { payload: fallbackPayload, reason };
   if (triageFailure && typeof restored === "boolean") triageFailure.restored = restored;
-  // The direct child verdict, native lease and original run still own settlement.
-  // Do not synthesize a notice that an older restored runtime would turn into work.
   if (!shouldPublishUpdateRestartNotice(run, meta)) return true;
-  const db = openStateDatabase();
-  if (!db) return null;
-  let recorded = null;
   try {
-    leaseStore.transact(db, () => {
-      assertStateDatabaseWriteAllowed(db);
-      const row = readRestartSentinelRowSync(db);
-      if (row.kind === "invalid") return;
-      const current = row.kind === "valid" ? row.sentinel : null;
-      if (expectedRevision !== undefined && (!current || current.revision !== expectedRevision)) {
-        recorded = true;
-        return;
-      }
-      let payload = current && current.payload;
-      // A completed child attempts publication before recovery. A missing row
-      // may already be consumed; do not retry its best-effort notification here.
-      if (completedStatus && !payload) { recorded = true; return; }
-      const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
-      if (
-        (payload && (payload.kind !== "update" || (!isFailedUpdateOutcome(payload.status, payload.stats?.reason) &&
-          (payload.status !== "skipped" || (completedStatus !== "skipped" &&
-            !["managed-service-handoff-started", "restart-health-pending", "managed-service-handoff-cancelled"].includes(payload.stats?.reason)))))) ||
-        (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId)) ||
-        (payload?.stats?.root && payload.stats.root !== params.updateLeaseKey)
-      ) {
-        return;
-      }
-      if (payload) {
-        const failed = isFailedUpdateOutcome(payload.status, payload.stats?.reason);
-        const preserveChildStatus = completedStatus === payload.status && restored !== false;
-        // A failed attempt keeps its reason when recovery turns a skipped status into an error.
-        payload = {
-          ...payload,
-          status: payload.status === "error" || preserveChildStatus ? payload.status : status,
-          stats: { ...(payload.stats || {}), reason: failed || preserveChildStatus ? payload.stats?.reason ?? reason : reason },
-        };
-        delete payload.continuation;
-      } else {
-        payload = fallbackPayload;
-      }
-      if (isFailedUpdateOutcome(payload.status, payload.stats?.reason)) {
-        payload.doctorHint = params.triageHint;
-        triageFailure ??= { reason };
-        triageFailure.payload = payload;
-      }
-      if (params.foregroundOrigin) delete payload.stats.handoffId;
-      if (typeof restored === "boolean") {
-        payload.stats.steps = [
-          ...(payload.stats.steps || []),
-          { name: "service-restore", command: params.serviceRecovery.kind,
-            log: { exitCode: restored ? 0 : 1, ...(completedStatus && !restored ? { stderrTail: handoffFailure } : {}) } },
-        ];
-      }
-      recorded = writeRestartSentinelRowIfRevisionSync(db, payload, current ? current.revision : null)?.revision ?? null;
-      if (recorded === null) {
-        throw new Error("restart sentinel changed before guarded failure write");
-      }
-      if (triageFailure) triageFailure.payload = payload;
-    });
-  } catch (err) {
-    recorded = null;
-    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
-  } finally {
-    try {
-      db.close();
-    } catch {}
+    const result = await runSentinelOperation({ kind: "record", input: {
+      ...sentinelIdentity(), reason, restored, completedStatus,
+      expectedRevision: typeof expectedRevision === "number" ? expectedRevision : undefined,
+      foreground: Boolean(params.foregroundOrigin), fallbackPayload, triageHint: params.triageHint,
+      serviceKind: params.serviceRecovery?.kind ?? "foreground", handoffFailure,
+    } });
+    if (result.kind === "refused") {
+      appendLog("Update notice changed or belongs to another handoff; it was not replaced.");
+      return false;
+    }
+    if (result.sentinel && triageFailure) triageFailure.payload = result.sentinel.payload;
+    return result.sentinel?.revision ?? true;
+  } catch (error) {
+    // Remote transport errors can contain connection details; keep those private.
+    appendLog(params.stateEngine === "postgres"
+      ? "Update notice could not be recorded; service recovery retains its local lease. Inspect PostgreSQL and Gateway availability."
+      : "failed to write update sentinel failure: " + (error && error.stack ? error.stack : String(error)));
+    return null;
   }
-  return recorded;
 }
-
-
-
 `;

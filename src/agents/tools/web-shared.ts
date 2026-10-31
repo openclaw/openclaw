@@ -118,7 +118,7 @@ function shouldSniffDocumentCharset(contentType: string | null): boolean {
   );
 }
 
-function sniffCharset(contentType: string | null, bytes: Uint8Array): string | undefined {
+export function sniffCharset(contentType: string | null, bytes: Uint8Array): string | undefined {
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
     return "utf-8";
   }
@@ -167,7 +167,7 @@ function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
   return undefined;
 }
 
-function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
+export function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const charset = sniffCharset(res.headers.get("content-type"), bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });

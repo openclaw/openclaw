@@ -154,6 +154,14 @@ export interface ProcessSession {
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
+  /** Systemd hosts the tree; the registry still owns observation and retention. */
+  durable?: {
+    observe: () => Promise<void>;
+    cancel: (assertCurrent?: () => void) => void;
+    remove: () => void;
+    finalize: () => Promise<void>;
+    drain: () => Promise<void>;
+  };
   /** Run whose exec call started this process; completion provenance only, never authority. */
   originRunId?: string;
   /** Start-time routing policy for detached exec system events. */
@@ -233,6 +241,7 @@ export function createProcessSession(
   };
 }
 
+const pollWaiters = new WeakMap<ProcessSession, Set<() => void>>();
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, ProcessSession & { endedAt: number; expiresAt: number }>();
 // Display uses start chronology; retained records are evicted in completion order.
@@ -247,6 +256,13 @@ const activeExecSessions = new Map<
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
+let observeDurableProcesses: (() => Promise<void>) | undefined;
+
+/** Reuse the retention timer for bounded durable-unit observation. */
+export function setDurableProcessObserver(observer: (() => Promise<void>) | undefined) {
+  observeDurableProcesses = observer;
+  scheduleSweeper();
+}
 type ProcessChange = { sessionKey: string; agentId?: string };
 const changeListeners = new Set<(target: ProcessChange) => void>();
 const pendingChanges = new Map<string, ProcessChange>();
@@ -301,6 +317,9 @@ export function addSession(session: ProcessSession) {
   if (session.backgrounded) {
     queueProcessChange(session);
   }
+  if (session.durable) {
+    scheduleSweeper();
+  }
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -340,6 +359,7 @@ function deleteFinishedSession(id: string): boolean {
   }
   finishedSessions.delete(id);
   finishedSessionOutputChars -= session.output.length;
+  session.durable?.remove();
   queueProcessChange(session);
   return true;
 }
@@ -409,6 +429,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   const previousLength = session.output.length;
   session.output.append(ownedChunk, session.maxOutputChars, chunk.length);
   session.truncated ||= session.output.length < previousLength + chunk.length;
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
   }
@@ -467,9 +488,47 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   };
 }
 
-/** Returns whether a prior poll has output ready for immediate replay. */
-export function hasPendingPollDelivery(session: ProcessSession): boolean {
-  return session.pendingPollDelivery !== undefined;
+function wakeSessionPolls(session: ProcessSession) {
+  const waiters = pollWaiters.get(session);
+  if (waiters) {
+    for (const wake of waiters) {
+      wake();
+    }
+  }
+}
+
+/** Waits for this exact process's output, exit, timeout, or caller cancellation. */
+export function waitForSessionPoll(
+  session: ProcessSession,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (
+    session.exited ||
+    session.pendingPollDelivery ||
+    session.pendingStdoutChars + session.pendingStderrChars > 0 ||
+    session.pendingOutputDropped ||
+    signal?.aborted
+  ) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const waiters = pollWaiters.get(session) ?? new Set<() => void>();
+    const wake = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", wake);
+      waiters.delete(wake);
+      if (waiters.size === 0) {
+        pollWaiters.delete(session);
+      }
+      resolve();
+    };
+    // Retain one timer so a one-shot caller stays alive until the result arrives.
+    const timer = setTimeout(wake, timeoutMs);
+    waiters.add(wake);
+    pollWaiters.set(session, waiters);
+    signal?.addEventListener("abort", wake, { once: true });
+  });
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -497,6 +556,7 @@ export function markExited(
   session.pendingOutputDropped = pending.outputDropped;
   session.output.freeze();
   moveToFinished(session);
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
   }
@@ -572,8 +632,8 @@ export function removeNotifyOnExit(record: { notifyOnExitRemoval?: NotifyOnExitR
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
   let count = 0;
-  for (const { promoted } of activeExecSessions.values()) {
-    if (promoted) {
+  for (const { promoted, session } of activeExecSessions.values()) {
+    if (promoted && !session.durable) {
       count += 1;
     }
   }
@@ -632,7 +692,7 @@ function moveToFinished(session: ProcessSession) {
   // Keep full completed logs; evict older records rather than silently
   // truncating the process poll/log contract or dropping the newest result.
   deleteFinishedSession(session.id);
-  const endedAt = Date.now();
+  const endedAt = session.endedAt ?? Date.now();
   finishedSessions.set(
     session.id,
     Object.assign(session, { endedAt, expiresAt: endedAt + session.cleanupMs }),
@@ -683,6 +743,7 @@ function resetProcessRegistryForTests() {
     active.settled?.resolve();
   }
   activeExecSessions.clear();
+  observeDurableProcesses = undefined;
   stopSweeper();
 }
 
@@ -702,10 +763,25 @@ function scheduleSweeper() {
       nextExpiration = Math.min(nextExpiration, session.expiresAt);
     }
   }
+  if (
+    observeDurableProcesses &&
+    [...activeExecSessions.values()].some(({ session }) => session.durable)
+  ) {
+    nextExpiration = Math.min(nextExpiration, now + 5_000);
+  }
   if (!Number.isFinite(nextExpiration)) {
     return;
   }
-  sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
+  sweeper = runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      const observation = observeDurableProcesses?.();
+      if (observation) {
+        void observation.then(scheduleSweeper, scheduleSweeper);
+      } else {
+        scheduleSweeper();
+      }
+    }, nextExpiration - now),
+  );
   sweeper.unref();
 }
 

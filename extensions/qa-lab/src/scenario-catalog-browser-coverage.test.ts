@@ -4,7 +4,7 @@ import { readQaScenarioById } from "./scenario-catalog.js";
 describe("QA Control UI browser scenario catalog", () => {
   const coverageId = "control-ui.gateway-hosted-ui-control";
 
-  it("loads the screenshot and unread-body cancellation as a native Playwright scenario", () => {
+  it("loads the screenshot failure scenario as native Playwright coverage", () => {
     const scenario = readQaScenarioById("control-ui-browser-screenshot-body-cancel");
 
     expect(scenario.execution.kind).toBe("playwright");
@@ -13,7 +13,7 @@ describe("QA Control UI browser scenario catalog", () => {
     }
     expect(scenario.execution.path).toBe("ui/src/e2e/browser-screenshot-body-cancel.e2e.test.ts");
     expect(scenario.execution.testNamePattern).toBe(
-      "keeps the status error visible and cancels the unread media body",
+      "authenticates screenshot media and presents its HTTP failure",
     );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).not.toContain(coverageId);

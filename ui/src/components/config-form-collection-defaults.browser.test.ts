@@ -1,14 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  expectElement,
   renderNodeFixture,
   renderArrayFixture,
   renderObjectFixture,
+  expandConfigObjects,
 } from "../test-helpers/config-form-fixtures.tsx";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element, label).toBeInstanceOf(Element);
-  return element!;
-}
 
 type Options = Parameters<typeof renderNodeFixture>[1];
 function fixture(
@@ -104,7 +101,7 @@ describe("config form collection defaults", () => {
     expect(onPatch).toHaveBeenCalledWith(["settings"], ["a", "custom"]);
   });
 
-  it("authors a nested inherited array item without dropping sibling defaults", () => {
+  it("authors a nested inherited array item without dropping sibling defaults", async () => {
     const untouched = entry("beta", "two", "keep-two");
     const itemSchema = object({
       name: string,
@@ -114,6 +111,7 @@ describe("config form collection defaults", () => {
       array(itemSchema, [entry("alpha", "one", "keep-one"), untouched]),
       undefined,
     );
+    await expandConfigObjects(container);
 
     const labels = Array.from(
       container.querySelectorAll<HTMLInputElement>("input[aria-label='Label']"),

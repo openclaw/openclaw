@@ -322,10 +322,8 @@ src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/watch-node-http.ts
 src/infra/backup-create.test.ts
-src/infra/command-explainer/extract.ts
 src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
-src/infra/exec-authorization-plan.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
@@ -366,7 +364,6 @@ src/plugins/loader.test-harness.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/marketplace.ts
 src/plugins/provider-runtime.test.ts
-src/plugins/provider-runtime.ts
 src/plugins/sdk-alias.test.ts
 src/plugins/sdk-alias.ts
 src/plugins/tools.optional.test.ts

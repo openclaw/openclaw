@@ -299,6 +299,13 @@ internal fun OpenClawWearApp(
     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
+  // Screen-off stops the activity, and ON_STOP suspends Talk; hold the screen while the mic is live.
+  val realtimeLive = state.realtimeTalk.active || state.realtimeCapturing
+  DisposableEffect(view, realtimeLive) {
+    view.keepScreenOn = realtimeLive
+    onDispose { view.keepScreenOn = false }
+  }
+
   fun toggleRealtimeTalk() {
     if (state.talkBusy || state.controlBusy) return
     if (state.realtimeTalk.active || state.realtimeCapturing) {
