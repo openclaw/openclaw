@@ -1,9 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo } from "solid-js";
+import { Errored, Loading, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
-import { Icon, sessionIconMask } from "../../components/solid/icon.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -13,7 +13,6 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
@@ -32,7 +31,6 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
-import { renderPluginStateStatus } from "./plugin-card.tsx";
 import {
   pluginRowKey,
   renderPluginRowMessage,
@@ -47,6 +45,7 @@ import {
   type PluginSettingsEditorProps,
   type PluginSettingsField,
 } from "./settings-editor.tsx";
+import { InstalledInventory, PluginRetryError } from "./settings-inventory.tsx";
 import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
@@ -74,7 +73,7 @@ type SharedProps = Omit<
   onConfigReload: () => void;
   onRefresh: () => void;
 };
-type InventoryProps = SharedProps & {
+export type InventoryProps = SharedProps & {
   tab: PluginSettingsTab;
   query: string;
   advancedSchema: JsonSchema | null;
@@ -110,20 +109,6 @@ export type DetailProps = SharedProps &
     onRetryInspection: () => void;
     onTabChange: (tab: InstalledPluginDetailTab) => void;
   };
-export function PluginRetryError(props: { error: string; onRetry: () => void }): JSX.Element {
-  return (
-    <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
-      <span>{props.error}</span>
-      <button
-        type="button"
-        class="btn btn--sm oc-action oc-action-secondary"
-        onClick={() => props.onRetry()}
-      >
-        {t("pluginsPage.tryAgain")}
-      </button>
-    </div>
-  );
-}
 const CONNECTION_VERBS = { Account: ["connect", "signOut"], Credential: ["configure", "edit"] };
 function PluginConnectionAction(props: {
   kind: "Account" | "Credential";
@@ -152,98 +137,6 @@ function PluginConnectionAction(props: {
           )}
         </span>
       ) : null}
-    </>
-  );
-}
-function InstalledInventory(props: InventoryProps): JSX.Element {
-  const query = createMemo(() => props.query.trim().toLocaleLowerCase());
-  const plugins = createMemo(() =>
-    (props.result?.plugins ?? [])
-      .filter(
-        (plugin) =>
-          plugin.installed &&
-          (!query() ||
-            [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
-              value?.toLocaleLowerCase().includes(query()),
-            )),
-      )
-      .toSorted((left, right) => left.name.localeCompare(right.name)),
-  );
-  return (
-    <>
-      {!props.connected && !props.result ? (
-        <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
-      ) : props.loading && !props.result ? (
-        <SettingsLoadingSkeleton rows={4} carapace />
-      ) : props.error && !props.result ? (
-        <PluginRetryError error={props.error} onRetry={props.onRefresh} />
-      ) : (
-        <>
-          {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
-          {!plugins().length ? (
-            <SettingsEmpty
-              message={
-                props.query ? t("pluginsPage.noSettingsMatches") : t("pluginsPage.noInstalled")
-              }
-              carapace
-            />
-          ) : (
-            <For each={plugins()} keyed={(plugin) => plugin.id}>
-              {(plugin) => (
-                <article
-                  class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
-                  data-plugin-id={plugin().id}
-                  onClick={(event: Event) => {
-                    const target = event.target;
-                    if (!(target instanceof Element) || !target.closest("button, a")) {
-                      props.onOpenPlugin(plugin().id);
-                    }
-                  }}
-                >
-                  <PluginArtTile
-                    registerIcon={props.registerIcon}
-                    slug={plugin().id}
-                    name={plugin().name}
-                    iconUrl={props.iconUrls[plugin().id]}
-                    onIconError={() => props.onIconError(plugin().id)}
-                    loading={props.iconLoading?.(plugin().id)}
-                  />
-                  <div class="settings-row__text oc-settings-row-content">
-                    <a
-                      class="settings-row__text plugins-settings-row__link"
-                      href={props.pluginHref(plugin().id)}
-                      onClick={(event: MouseEvent) =>
-                        handleNavigationClick(event, () => props.onOpenPlugin(plugin().id))
-                      }
-                    >
-                      <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
-                      <span class="settings-row__desc oc-settings-row-description">
-                        {plugin().description || t("pluginsPage.optionalCapability")}
-                      </span>
-                    </a>
-                    {renderPluginCompatibilityNotices(plugin().compatibilityNotices)}
-                  </div>
-                  <div class="settings-row__control oc-settings-row-control">
-                    {(() => {
-                      const state = plugin().state;
-                      return state === "not-installed"
-                        ? null
-                        : renderPluginStateStatus(state, "plugins-settings-row__status");
-                    })()}
-                    <span class="settings-row__chevron" aria-hidden="true">
-                      <i
-                        class="session-css-icon"
-                        style={{ "mask-image": sessionIconMask("chevronRight") }}
-                      />
-                    </span>
-                  </div>
-                  {renderPluginRowMessage(props.messages[pluginRowKey(plugin().id)])}
-                </article>
-              )}
-            </For>
-          )}
-        </>
-      )}
     </>
   );
 }
@@ -316,9 +209,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
               onInput={(event) => props.onQueryChange(event.currentTarget.value)}
             />
           </label>
-          <div class="settings-group oc-settings-group">
-            <InstalledInventory {...props} />
-          </div>
+          <InstalledInventory {...props} />
         </>
       ) : (
         <div id="plugin-settings-advanced" class="settings-stack">

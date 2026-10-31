@@ -30,13 +30,13 @@ import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
+import { PluginRetryError } from "./settings-inventory.tsx";
 import {
   pluginAdvancedSchema,
   pluginConfigSchema,
   pluginHostControlsSchema,
 } from "./settings-model.ts";
 import {
-  PluginRetryError,
   renderPluginSettingsDetail as PluginSettingsDetail,
   renderPluginSettingsInventory as PluginSettingsInventory,
   type PluginSettingsTab,
@@ -105,7 +105,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   });
   const configState = () => page().context.runtimeConfig.state;
   const rawConfigSchema = createMemo(() => configState().configSchema);
-  const configAnalysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()));
+  const configAnalysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()), { lazy: true });
   const detailPluginId = () => page().state.detail?.pluginId;
   const catalogId = () => page().state.catalogDetail?.id ?? "";
   const catalogInstallable = createMemo(() => {
@@ -149,7 +149,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     configValue: configState().configForm,
     configHints: configState().configUiHints,
     configSchemaLoading: configState().configSchemaLoading,
-    configUnsupportedPaths: configAnalysis().unsupportedPaths,
     onIconError: (pluginId: string) => page().icons.installed.handleError(pluginId),
     onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) =>
       void page().consent.mutateInstalledPlugin(pluginId, enabled ? "enable" : "disable", rowKey),
@@ -182,7 +181,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         loading={inventoryProps.loading}
         tab={page().settingsTab()}
         query={query()}
-        advancedSchema={pluginAdvancedSchema(configAnalysis().schema)}
+        advancedSchema={
+          page().settingsTab() === "advanced" ? pluginAdvancedSchema(configAnalysis().schema) : null
+        }
+        configUnsupportedPaths={
+          page().settingsTab() === "advanced" ? configAnalysis().unsupportedPaths : []
+        }
         onTabChange={actions.selectSettingsTab}
         onQueryChange={setQuery}
         pluginHref={(pluginId) => pathForPluginSettings(pluginId, page().context.basePath)}
@@ -202,6 +206,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return (
       <PluginSettingsDetail
         {...shared()}
+        configUnsupportedPaths={configAnalysis().unsupportedPaths}
         pluginId={detailProps.pluginId}
         installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
         inspection={page().state.detail?.inspection ?? null}
