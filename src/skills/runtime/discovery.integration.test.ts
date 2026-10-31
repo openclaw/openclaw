@@ -276,6 +276,28 @@ it.each([false, true])(
   },
 );
 
+it("republishes a read whose registration a config refresh retired mid-scan", async () => {
+  await write("Current instructions");
+  const scanning = createDeferred();
+  const release = createDeferred();
+  const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+  run.mockImplementationOnce(async function (
+    this: WorkerTaskPool<unknown, unknown>,
+    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
+  ) {
+    scanning.resolve();
+    await release.promise;
+    run.mockRestore();
+    return this.run(...args);
+  });
+  const read = descriptions();
+  await scanning.promise;
+  const reset = refreshSkillsDiscovery({ reason: "config-change" });
+  release.resolve();
+  await reset;
+  expect(await read).toEqual(["Current instructions"]);
+});
+
 it("keeps each source environment while refreshing a reused worker's plans and prompt paths", async () => {
   const firstHome = temporary.make("skills-first-home-");
   const secondHome = temporary.make("skills-second-home-");
