@@ -3544,9 +3544,13 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
       transform: translate(-50%, -50%);
     }
 
+    /* The double bolt is centered geometrically, but its bright front bolt sits
+       low-right and its tip hangs below the open dial. Nudge it up-left so its
+       visual weight lands on the dial center and its tip meets the arc ends. */
     & .chat-controls__effort-fast-badge.chat-controls__effort-zap--ultrafast {
       width: 12px;
       height: 14px;
+      margin: -0.75px 0 0 -0.25px;
     }
 
     & .agent-chat__composer-footer .chat-controls__effort-fast-badge svg {
