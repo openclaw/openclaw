@@ -346,7 +346,18 @@ with fixture['boundaries'](fake, [*guest_args, '--', 'exec', 'Synthetic VM', 'sy
                 )
                 self.assertEqual(result.returncode, expected_exit)
                 self.assertEqual(result.stdout, payload)
-                self.assertEqual(result.stderr, b"guest-stderr\n")
+                expected_stderr = b"guest-stderr\n"
+                if guest == "windows":
+                    expected_stderr += b"[parallels-exec] Windows guest exit code 0x00000100\n"
+                self.assertEqual(result.stderr, expected_stderr)
+
+    def test_preserves_windows_startup_status_without_sdk_replay(self):
+        fake = FakeSdk(exit_code=0xc0000142, exit_code_parameter=0x13d)
+        code, error = self.invoke(fake, ["--windows", "--", "exec", "VM", "powershell.exe", "-EncodedCommand", "fixture"], digest=VERIFIED_2710_HASH)
+        self.assertEqual(code, 255)
+        self.assertEqual(error, "[parallels-exec] Windows guest exit code 0xc0000142\n")
+        self.assertEqual(len(fake.calls("PrlVmGuest_RunProgram")), 1)
+        fake.assert_released(self)
 
     def test_windows_preserves_program_and_raw_arguments(self):
         args = ["cmd.exe", "/d", "/s", "/c", '"C:\\Program Files\\Synthetic\\tool.cmd" "two words"']

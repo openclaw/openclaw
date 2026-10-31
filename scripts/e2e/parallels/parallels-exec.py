@@ -231,6 +231,8 @@ class GuestSdk:
         exit_code = U()
         checked(self.api.PrlEvtPrm_ToUint32(parameter, C.byref(exit_code)), "exit code")
         self.exit_code = exit_code.value
+        if windows and self.exit_code > 255:
+            print(f"[parallels-exec] Windows guest exit code 0x{self.exit_code:08x}", file=sys.stderr)
         # Match prlctl: Windows codes must not wrap to POSIX success (e.g. 256).
         return min(self.exit_code, 255) if windows else self.exit_code
 
