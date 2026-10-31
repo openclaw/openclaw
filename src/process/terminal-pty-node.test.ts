@@ -6,7 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForDead } from "../../test/helpers/process-wait.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { nextEventLoopTurn, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -60,6 +60,62 @@ afterEach(() => {
 const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
+  it.skipIf(!supportsSpawnBrokerCommandTransport()).for(["startup", "running"] as const)(
+    "settles terminal %s after losing the real spawn broker",
+    async (phase, { signal }) => {
+      const broker = (await createBroker())!;
+      const brokerPid = broker.pid!;
+      const closed = createDeferredCore();
+      const spawnBrokerChild = broker.spawn.bind(broker);
+      vi.spyOn(broker, "spawn").mockImplementation((...args) => {
+        const child = spawnBrokerChild(...args);
+        child.once("close", () => closed.resolve());
+        return child;
+      });
+      const killed = createDeferredCore();
+      const killBroker = () => {
+        process.kill(brokerPid, "SIGKILL");
+        killed.resolve();
+      };
+      let outcome: unknown;
+      let ptyPid: number | undefined;
+      const starting = runWithSpawnBroker(broker, () =>
+        spawnNodeTerminalPty(
+          { ...defaults, args: ["-c", "IFS= read -r input"] },
+          phase === "startup" ? killBroker : undefined,
+        ),
+      );
+      void starting.then(
+        (handle) => {
+          handles.push(handle);
+          ptyPid = handle.pid;
+          handle.onExit((event) => {
+            outcome = event;
+          });
+          if (phase === "running") {
+            killBroker();
+          }
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      await withinTest(killed.promise, signal);
+      await withinTest(closed.promise, signal);
+      await broker.close();
+      await nextEventLoopTurn();
+      if (phase === "startup") {
+        expect(outcome).toBeInstanceOf(Error);
+      } else {
+        expect(outcome).toMatchObject({ exitCode: 1 });
+      }
+      if (ptyPid !== undefined) {
+        await waitForDead(ptyPid, signal);
+        expect(isPidAlive(ptyPid)).toBe(false);
+      }
+    },
+  );
+
   it.each(["before", "prepared", "after"] as const)(
     "checks launch policy at the %s PTY boundary",
     async (timing) => {

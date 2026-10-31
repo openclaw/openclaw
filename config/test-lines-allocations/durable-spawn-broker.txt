@@ -1,2 +1,2 @@
-61
-# Retained broker ownership across durable adoption, cron detachment, and PTY IPC launch authority.
+117
+# Retained broker ownership across durable adoption, cron detachment, PTY IPC launch authority, and broker-loss settlement during PTY startup and execution.

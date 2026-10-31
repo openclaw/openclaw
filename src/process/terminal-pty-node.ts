@@ -7,6 +7,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
 import { BrokerChild } from "./spawn-broker/child.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
 import { spawnProcess } from "./spawn-utils.js";
 import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
@@ -26,6 +27,7 @@ export async function spawnNodeTerminalPty(
     throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
+  const broker = getSpawnBroker();
   const child = runWithMainThreadTask(
     "process:spawn",
     () =>
@@ -113,7 +115,7 @@ export async function spawnNodeTerminalPty(
           launch,
           ready.promise.then(
             () => {},
-            () => {},
+            () => broker?.waitForCleanup(),
           ),
         )
       : launch();
@@ -159,6 +161,25 @@ export async function spawnNodeTerminalPty(
     ipcClosed = true;
     finish();
   });
+  if (brokerChild && broker) {
+    brokerChild.once("close", () => {
+      if (helperExit) {
+        return;
+      }
+      // Broker loss closes the transport without an exit receipt; its owner retains the tree cleanup.
+      void broker
+        .waitForCleanup()
+        .catch((error: unknown) => {
+          startupError = toErrorObject(error, "Terminal Node worker cleanup failed");
+        })
+        .then(() => {
+          clearTimeout(timeout);
+          clearTimeout(cleanupTimer);
+          helperExit = { exitCode: 1 };
+          finish();
+        });
+    });
+  }
   // The version-matched PTY helper is the sole writer on this private IPC channel.
   child.on("message", (message: TerminalPtyEvent) => {
     if (message.type === "boot" || message.type === "prepared") {
