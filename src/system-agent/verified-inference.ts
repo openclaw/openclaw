@@ -398,12 +398,23 @@ async function resolveExecutionAuthFingerprint(
     if (kind !== "aws-sdk") {
       return undefined;
     }
+    // SDK selection is transport-sensitive, just like credential selection:
+    // re-resolve with the successful run's model facts so this check cannot
+    // pick a different owner (for example API-key auth) than execution did.
+    const { modelId: sdkModelId, modelApi: sdkModelApi } = authBinding;
+    if (!sdkModelId || !sdkModelApi) {
+      return undefined;
+    }
     const auth = await resolveApiKeyForProviderCore({
       provider: route.provider,
       cfg: route.runConfig,
       agentDir: route.agentDir,
       workspaceDir: resolveAgentWorkspaceDir(route.runConfig, route.agentId, process.env),
-      ...(authProfileId ? { profileId: authProfileId, lockedProfile: true as const } : {}),
+      ...(authProfileId
+        ? { profileId: authProfileId, lockedProfile: true as const }
+        : { allowAuthProfileFallback: false }),
+      modelId: sdkModelId,
+      modelApi: sdkModelApi,
       secretSentinels: true,
     });
     if (authProfileId && auth.profileId !== authProfileId) {
