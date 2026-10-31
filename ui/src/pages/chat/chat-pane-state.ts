@@ -8,11 +8,16 @@ import {
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
-import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
+import {
+  resolveUiSelectedSessionAgentId,
+  uiConversationMatches,
+} from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
@@ -136,6 +141,20 @@ export function readChatSessionAccess(
         target.agentId,
       ),
   )?.access;
+}
+
+export function canStartChatRealtime(
+  state: ChatPageHost,
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello" | "sessionAccess">,
+): boolean {
+  const access = readChatSessionAccess(snapshot, {
+    sessionKey: state.sessionKey,
+    agentId: resolveUiSelectedSessionAgentId(state),
+    sessionId: state.currentSessionId || selectedChatSessionRow(state)?.sessionId,
+  });
+  return (
+    !chatProviderReviewRow(state)?.providerReview && access !== "revoked" && access !== "read-only"
+  );
 }
 
 const MAX_TRACKED_SESSION_ROWS = 256;

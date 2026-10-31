@@ -18,10 +18,7 @@ import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
-import {
-  canonicalUiSessionKeyForPersistence,
-  resolveUiSelectedSessionAgentId,
-} from "../../lib/sessions/session-key.ts";
+import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
@@ -37,8 +34,7 @@ import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
-import { readChatSessionAccess } from "./chat-pane-state.ts";
-import { chatProviderReviewRow } from "./chat-provider-review.ts";
+import { canStartChatRealtime } from "./chat-pane-state.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
@@ -315,18 +311,7 @@ export function createPageState(
   };
   attachChatRealtimeActions(
     state,
-    () => {
-      const access = readChatSessionAccess(context.gateway.snapshot, {
-        sessionKey: state.sessionKey,
-        agentId: resolveUiSelectedSessionAgentId(state),
-        sessionId: state.currentSessionId || selectedChatSessionRow(state)?.sessionId,
-      });
-      return (
-        !chatProviderReviewRow(state)?.providerReview &&
-        access !== "revoked" &&
-        access !== "read-only"
-      );
-    },
+    () => canStartChatRealtime(state, context.gateway.snapshot),
     (message, runId) =>
       requestChatSend(state, {
         message,
