@@ -36,7 +36,6 @@ import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
 import { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
 import { renderSidebarPluginNavigationMenuForMenus } from "./app-sidebar-plugin-navigation-menu.tsx";
-import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import {
   renderSidebarCatalogViewMenuForMenus,
@@ -434,7 +433,6 @@ function renderSidebarMenus(
             involvingMeContext={view.sessionInvolvingMeFilterActive}
             selectionCount={rows().length}
             compact={isMobileNavLayout()}
-            lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
             anchor={menu}
             trigger={projected.triggers.get("session") ?? null}
             disabled={false}
