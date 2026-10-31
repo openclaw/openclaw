@@ -278,6 +278,8 @@ it.each([
   "requested topic",
   "unbound incognito",
   "worker commits",
+  "disk export",
+  "disk changed",
 ] as const)("retains only committed materialization: %s", async (outcome) => {
   // Local recovery fixtures exercise retained state; identity admission is covered above.
   vi.spyOn(repositoryGitHubIdentity, "prepareRepositoryGitHubIdentity").mockImplementation(
@@ -315,7 +317,8 @@ it.each([
     const remote = state.path("remote");
     await exec("git", ["clone", "--", source, remote]);
     let workerHistory: { gitHistory: WorkerWorkspaceGitHistory; gitPackPath: string } | undefined;
-    if (outcome === "worker commits") {
+    const diskExport = outcome === "disk export" || outcome === "disk changed";
+    if (outcome === "worker commits" || diskExport) {
       await fsp.writeFile(path.join(remote, "committed.txt"), "worker commit\n");
       await git(remote, ["add", "committed.txt"]);
       await git(remote, [
@@ -380,6 +383,23 @@ it.each([
       base.manifestRef,
       outcome === "requested topic" ? "topic" : undefined,
     );
+    if (diskExport) {
+      const old = await stageSessionRepositoryCheckpoint({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        stagingRoot: source,
+        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        currentManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        baseManifestRef: base.manifestRef,
+        currentManifestRef: base.manifestRef,
+        assertCurrent: () => {},
+      });
+      repository = await old.publish();
+      repository = await bindRepositoryDiskForTest(
+        repository,
+        "repository-materialization-session",
+      );
+    }
     const checkpoint = await stageSessionRepositoryCheckpoint({
       workspaceId: repository.workspaceId,
       expectedRevision: repository.revision,
@@ -392,7 +412,11 @@ it.each([
       currentManifestRef: current.manifestRef,
       assertCurrent: () => {},
     });
-    repository = await checkpoint.publish();
+    if (diskExport) {
+      await checkpoint.publishArtifacts();
+    } else {
+      repository = await checkpoint.publish();
+    }
     const sessionId = "repository-materialization-session";
     const owner =
       outcome === "unbound incognito"
@@ -445,14 +469,32 @@ it.each([
           },
         );
       }
+      const verifyDisk = vi.fn(async () => {
+        if (outcome === "disk changed") {
+          throw new Error("source disk changed before handoff");
+        }
+      });
       const operation = materializeSessionRepositoryWorkspaceOnGateway({
         ...scope,
         cfg,
         sessionId,
         assertCurrent,
+        exportDisk: diskExport
+          ? async (_repository, assertExportCurrent, use) => {
+              assertExportCurrent();
+              await use(
+                { checkpointRef: checkpoint.checkpointRef, manifestHash: current.manifestRef },
+                verifyDisk,
+              );
+            }
+          : undefined,
       });
-      if (outcome === "revoked") {
-        await expect(operation).rejects.toThrow("move authority revoked");
+      if (outcome === "revoked" || outcome === "disk changed") {
+        await expect(operation).rejects.toThrow(
+          outcome === "disk changed"
+            ? "source disk changed before handoff"
+            : "move authority revoked",
+        );
         expect(readEntry()?.repositoryWorkspaceId).toBe(repository.workspaceId);
         expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
       } else {
@@ -506,6 +548,12 @@ it.each([
         expect((await managedWorktrees.findLiveByOwner("session", scope.sessionKey))?.id).toBe(
           worktree.id,
         );
+      }
+      if (diskExport) {
+        expect(verifyDisk).toHaveBeenCalledOnce();
+        expect(await readFile(remote, "edited.txt")).toBe("accepted\n");
+        expect(await git(remote, ["rev-parse", "HEAD"])).toBe(workerHistory!.gitHistory.headCommit);
+        await checkpoint.discard();
       }
       // Retained publication may still need the original immutable source after the move.
       expect(await repositories.get(repository.workspaceId)).toEqual(repository);

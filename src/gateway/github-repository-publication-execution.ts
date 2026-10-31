@@ -32,10 +32,12 @@ import {
   assertReceiptOwner,
   captureCheckpoint,
   prepareReceiptOwner,
+  type RepositoryDiskPublicationSource,
 } from "./github-repository-publication-workspace.js";
 
 export function createRepositoryGitHubPublicationExecution(params: {
   instanceId: string;
+  disk?: RepositoryDiskPublicationSource;
   active: Map<string, string>;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
@@ -53,6 +55,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
       action?: PersonalGitHubSessionActionV2;
       requester?: GitHubPublicationRequesterPolicyV2;
       recoveryResult?: SessionGitHubPublicationResult;
+      captureRequestIds?: readonly string[];
     },
   ) => {
     let row = initial;
@@ -162,6 +165,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
       if (
         !row.checkpoint_ref &&
         row.owner_profile_id === null &&
+        !assertReceiptOwner(row, preparedOwner).workspace.diskAuthority &&
         !assertReceiptOwner(row, preparedOwner).workspace.checkpointRef
       ) {
         return projectGitHubPublicationResult(row);
@@ -216,6 +220,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
           });
         },
         authority,
+        params.disk && { ...params.disk, captureRequestIds: context.captureRequestIds },
       );
     } catch (error) {
       if (

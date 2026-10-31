@@ -18,6 +18,7 @@ import {
 } from "../projects/project-clone-runtime.js";
 import { materializeProjectClone } from "../projects/project-clone.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import {
   assertSafeGitPublicationWorkspace,
@@ -42,6 +43,14 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   agentId: string;
   assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
+  exportDisk?: (
+    repository: SessionRepositoryWorkspaceRecord,
+    assertCurrent: () => void,
+    use: (
+      snapshot: { checkpointRef: string; manifestHash: string },
+      verifyCurrent: () => Promise<void>,
+    ) => Promise<void>,
+  ) => Promise<void>;
 }): Promise<void> {
   const initial = await retainGatewaySessionEntryReadOnly(
     params.sessionKey,
@@ -64,6 +73,10 @@ async function materializeCapturedRepositoryWorkspace(
   params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
   initial: GatewaySessionEntryRead,
   assertEntryCurrent: () => void,
+  diskExport?: {
+    snapshot: { checkpointRef: string; manifestHash: string };
+    verifyCurrent: () => Promise<void>;
+  },
 ): Promise<void> {
   if (initial.entry?.sessionId !== params.sessionId) {
     throw new Error("Session changed before repository materialization");
@@ -83,7 +96,8 @@ async function materializeCapturedRepositoryWorkspace(
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
   }
-  if (repository.diskAuthority) {
+  const exportDisk = params.exportDisk;
+  if (repository.diskAuthority && !diskExport && !exportDisk) {
     throw new Error(
       "Moving this repository to the Gateway requires a fresh disk export; preserve the original runner and retry after export support is available.",
     );
@@ -143,6 +157,22 @@ async function materializeCapturedRepositoryWorkspace(
       assertOtherOwners();
     },
   );
+  assertCurrent();
+  if (repository.diskAuthority && !diskExport && exportDisk) {
+    return await exportDisk(
+      repository,
+      assertCurrent,
+      async (snapshot, verifyCurrent) =>
+        await materializeCapturedRepositoryWorkspace(params, initial, assertEntryCurrent, {
+          snapshot,
+          verifyCurrent,
+        }),
+    );
+  }
+  const snapshot = diskExport?.snapshot ?? {
+    checkpointRef: repository.checkpointRef,
+    manifestHash: repository.manifestHash,
+  };
   assertCurrent();
   const github = await prepareRepositoryGitHubIdentity(params.agentId, assertCurrent);
   assertCurrent();
@@ -268,56 +298,68 @@ async function materializeCapturedRepositoryWorkspace(
         "Gateway worktree changed before repository restoration; review its local commits before retrying move",
       );
     }
-    if (repository.checkpointRef) {
-      await withSessionRepositoryCheckpoint({ workspaceId }, async (snapshot) => {
-        assertCurrent();
-        const applied = await applyStagedWorkerWorkspace({
-          ...snapshot,
-          acceptance: { kind: "reconcile" },
-          root,
-          // The checkout is unbound until verification. Failed preparation rolls it
-          // back; a crash leaves the immutable checkpoint available for a fresh retry.
-          journal: {
-            load: async () => undefined,
-            begin: async () => assertCurrent(),
-            commit: async () => assertCurrent(),
-            abort: async () => {},
-          },
-        });
-        if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
-          throw new Error("Repository changes could not be fully restored; retry the Gateway move");
-        }
-        await applied.verifyLocalStable();
-        await alignPublication();
-        const historyNote = await restoreWorkerWorkspaceHistory({
-          ...snapshot,
-          root,
-          assertCurrent,
-        });
-        if (historyNote) {
-          createSubsystemLogger("gateway/worker-workspace").info(historyNote);
-        }
-        for (const restore of await prepareRepositoryPublicationRestore({
-          ...snapshot,
-          indexBase: { root, commit: await git(["rev-parse", "HEAD"]), assertCurrent },
-        })) {
-          await command(
-            [
-              process.execPath,
-              ...resolveRuntimeWorkerArgv(
-                resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
-              ),
-              restore.action,
-            ],
-            { cwd: root, input: restore.input },
-          );
-        }
-        await applied.verifyLocalStable();
-        assertCurrent();
-      });
+    if (snapshot.checkpointRef) {
+      await withSessionRepositoryCheckpoint(
+        { workspaceId, checkpointRef: snapshot.checkpointRef },
+        async (payload) => {
+          assertCurrent();
+          const applied = await applyStagedWorkerWorkspace({
+            ...payload,
+            acceptance: { kind: "reconcile" },
+            root,
+            // The checkout is unbound until verification. Failed preparation rolls it
+            // back; a crash leaves the immutable checkpoint available for a fresh retry.
+            journal: {
+              load: async () => undefined,
+              begin: async () => assertCurrent(),
+              commit: async () => assertCurrent(),
+              abort: async () => {},
+            },
+          });
+          if (applied.conflictPaths.length || applied.manifestRef !== snapshot.manifestHash) {
+            throw new Error(
+              "Repository changes could not be fully restored; retry the Gateway move",
+            );
+          }
+          await applied.verifyLocalStable();
+          await alignPublication();
+          const historyNote = await restoreWorkerWorkspaceHistory({
+            ...payload,
+            root,
+            assertCurrent,
+          });
+          if (historyNote && repository.diskAuthority) {
+            throw new Error(
+              "Repository disk history could not be restored exactly; the original disk is preserved",
+            );
+          }
+          if (historyNote) {
+            createSubsystemLogger("gateway/worker-workspace").info(historyNote);
+          }
+          for (const restore of await prepareRepositoryPublicationRestore({
+            ...payload,
+            indexBase: { root, commit: await git(["rev-parse", "HEAD"]), assertCurrent },
+          })) {
+            await command(
+              [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+                ),
+                restore.action,
+              ],
+              { cwd: root, input: restore.input },
+            );
+          }
+          await applied.verifyLocalStable();
+          assertCurrent();
+        },
+      );
     } else {
       await alignPublication();
     }
+    await diskExport?.verifyCurrent();
+    assertCurrent();
     const bind = async (assertSourceCurrent: SessionSourceAssertion, sourceSignal?: AbortSignal) =>
       await patchSessionEntryCore(
         { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },

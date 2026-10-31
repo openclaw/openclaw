@@ -531,40 +531,47 @@ export async function stageSessionRepositoryCheckpoint(
       assertRevision();
     };
     await verify();
+    const publishArtifacts = async (additionalRefs: readonly string[] = []) => {
+      await withWorkspaceResultRefMutation(root, async (baseEnv) => {
+        const updates: string[] = [];
+        const targets = [...new Set([ref, ...additionalRefs])].flatMap(
+          (target) =>
+            [
+              [checkpointRef(workspace, target), objectId],
+              [publicationRef(target), companionId],
+            ] as const,
+        );
+        const existingObjects = await refObjects(
+          root,
+          targets.map(([target]) => target),
+          baseEnv,
+        );
+        for (const [target, expected] of targets) {
+          const existing = existingObjects.get(target);
+          if (existing !== undefined && existing !== expected) {
+            throw new Error("Repository checkpoint identity already contains a different result");
+          }
+          if (expected !== undefined && existing === undefined) {
+            updates.push(`create ${target}\0${expected}\0`);
+          }
+        }
+        assertRevision();
+        if (updates.length) {
+          await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
+            input: Buffer.from(updates.join("")),
+            baseEnv,
+            beforeInput: assertRevision,
+          });
+        }
+      });
+    };
     return {
       checkpointRef: ref,
       verify,
       discard,
+      publishArtifacts,
       publish: async () => {
-        await withWorkspaceResultRefMutation(root, async (baseEnv) => {
-          const updates: string[] = [];
-          const targets = [
-            [ref, objectId],
-            [publicationRef(ref), companionId],
-          ] as const;
-          const existingObjects = await refObjects(
-            root,
-            targets.map(([target]) => target),
-            baseEnv,
-          );
-          for (const [target, expected] of targets) {
-            const existing = existingObjects.get(target);
-            if (existing !== undefined && existing !== expected) {
-              throw new Error("Repository checkpoint identity already contains a different result");
-            }
-            if (expected !== undefined && existing === undefined) {
-              updates.push(`create ${target}\0${expected}\0`);
-            }
-          }
-          assertRevision();
-          if (updates.length) {
-            await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
-              input: Buffer.from(updates.join("")),
-              baseEnv,
-              beforeInput: assertRevision,
-            });
-          }
-        });
+        await publishArtifacts();
         // Publish immutable artifacts before the SQLite pointer: if the commit
         // fence fails or the Gateway exits, the pending turn can recover this ref.
         const accepted = await recoverSessionRepositoryCheckpoint({

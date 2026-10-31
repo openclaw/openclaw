@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import type { SessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
@@ -60,11 +61,13 @@ import type {
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
+import { captureRepositoryDiskCheckpoint } from "./worker-environments/repository-workspace-snapshot.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 import type { WorkerTurnPartialIdentity } from "./worker-environments/worker-turn-failure.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
+import { workerWorkspaceResultRef } from "./worker-environments/workspace-result-staging.js";
 
 const loadRequiredWorkerPreparation = createLazyRuntimeModule(
   () => import("./server-worker-required-profile.js"),
@@ -93,6 +96,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
 
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
@@ -258,6 +262,22 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
             await materializeSessionRepositoryWorkspaceOnGateway({
               cfg: getRuntimeConfig(),
               ...identity,
+              exportDisk: identity.quiescence
+                ? (repository, assertCurrent, use) =>
+                    captureRepositoryDiskCheckpoint(
+                      {
+                        identity,
+                        repository,
+                        checkpointRef: workerWorkspaceResultRef(`gateway-export-${randomUUID()}`),
+                        purpose: "gateway-move",
+                        placements: params.placements,
+                        environments: params.environments,
+                        quiescence: identity.quiescence,
+                        assertCurrent,
+                      },
+                      use,
+                    )
+                : undefined,
               assertCurrent: () => {
                 assertOwned();
                 identity.assertCurrent();
