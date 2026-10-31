@@ -639,6 +639,12 @@ Doctor from continuing. A loaded supervised service between crashed processes
 still goes through native service-ownership inspection, even without a live lease.
 This is candidate-side behavior; it does not change an already-running older updater.
 
+When standalone Doctor stops its managed Gateway, it reserves Gateway restoration
+before releasing database maintenance. CLI schema preparation waits while Doctor
+restores and verifies the Gateway; Gateway bootstrap keeps its normal ownership
+checks. Doctor and competing CLI processes must contain this repair. Already-running
+older processes cannot observe the reservation.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema
