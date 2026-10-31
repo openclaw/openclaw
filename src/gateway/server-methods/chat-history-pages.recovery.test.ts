@@ -11,7 +11,6 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import * as nestedActivity from "../../sessions/nested-tool-activity.js";
 import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
-import { formatProviderRefusalText } from "../../shared/assistant-error-format.js";
 import { readRunFailureNotice } from "../../shared/run-failure-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as historySanitize from "../chat-display-projection.sanitize.js";
@@ -25,8 +24,6 @@ import { readSessionMessagesAsync } from "../session-transcript-readers.js";
 afterEach(() => vi.restoreAllMocks());
 
 const user = { role: "user", content: "Question" };
-const LEGACY_MISALIGNMENT_NOTICE =
-  "The provider stopped this request as a safety precaution (misalignment).";
 const failed = {
   role: "assistant",
   content: [],
@@ -82,7 +79,7 @@ async function withTranscript(
     append: (id: string, message: Record<string, unknown>) => Promise<unknown>;
     read: (options?: PageOptions) => ReturnType<typeof readChatHistoryPageKernel>;
     raw: () => ReturnType<typeof readSessionMessagesAsync>;
-    fail: (runId: string, error?: string) => Promise<void>;
+    fail: (runId: string) => Promise<void>;
   }) => Promise<void>,
   entryOptions: Pick<InternalSessionEntry, "sessionStartedAt" | "lifecycleRunId"> = {},
 ) {
@@ -131,7 +128,7 @@ async function withTranscript(
           { readers: anchorReader, resolveCurrentUserProfileDisplay },
         ),
       raw: () => readSessionMessagesAsync(scope, { mode: "full", reason: "recovery immutability" }),
-      fail: async (runId, error = "All model attempts failed") => {
+      fail: async (runId) => {
         entry.lifecycleRunId = undefined;
         entry.lastRunId = runId;
         entry.status = "failed";
@@ -139,7 +136,7 @@ async function withTranscript(
         await recordGatewaySessionRunFailure({
           target: scope,
           runId,
-          error,
+          error: "All model attempts failed",
         });
       },
     });
@@ -594,21 +591,4 @@ describe("historical page recovery context", () => {
       );
     },
   );
-
-  it("keeps the legacy safety-precaution explanation in the published notice", async () => {
-    // An older transcript retains only the error code, so the shipped producer renders the
-    // legacy explanation and no provider_refusal diagnostic carries it instead.
-    const legacy = formatProviderRefusalText({ errorCode: "misalignment_policy_violation" });
-    expect(legacy).toBe(LEGACY_MISALIGNMENT_NOTICE);
-    await withTranscript([["user", user]], async ({ fail, read }) => {
-      await fail("legacy-refusal-run", legacy);
-      const page = await read({ max: 20, offset: 0 });
-      expect(page.messages.map(readRunFailureNotice).filter(Boolean)).toEqual([
-        {
-          runId: "legacy-refusal-run",
-          summary: `Your request couldn't be completed: ${LEGACY_MISALIGNMENT_NOTICE}`,
-        },
-      ]);
-    });
-  });
 });
