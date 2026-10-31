@@ -50,16 +50,18 @@ async function withGatewayChatHarness(
 ) {
   const ws = await harness.openWs();
   try {
-    await withClaudeProjectsDir(({ filePath, sessionId: cliSessionId }) =>
-      run({
-        ws,
-        createSessionDir: async (options) => sessionStoreFixture.open(options).sessionDir,
-        filePath,
-        cliSessionId,
-      }).finally(async () => {
+    await withClaudeProjectsDir(async ({ filePath, sessionId: cliSessionId }) => {
+      try {
+        await run({
+          ws,
+          createSessionDir: async (options) => sessionStoreFixture.open(options).sessionDir,
+          filePath,
+          cliSessionId,
+        });
+      } finally {
         await disposeSessionReadContexts();
-      }),
-    );
+      }
+    });
   } finally {
     await sessionStoreFixture.reset();
     directories.cleanup();
