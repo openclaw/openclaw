@@ -212,6 +212,14 @@ describe("gateway register option collisions", () => {
       opts: { localPortOverride: 19095 },
       params: { limit: 25 },
     },
+    {
+      name: "projects gateway lanes --port onto diagnostics.lanes",
+      argv: ["--port", "19096", "lanes", "--port", "19097", "--json"],
+      method: "diagnostics.lanes",
+      opts: { localPortOverride: 19097 },
+      params: {},
+      json: expect.objectContaining({ ok: true }),
+    },
   ])("$name", async ({ argv, method, opts, params, json }) => {
     await parse(...argv);
     expect(defaultRuntime.error).not.toHaveBeenCalled();

@@ -34,7 +34,7 @@ job. Open the page that matches your task.
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | [Run the Gateway](/cli/gateway/running)                         | You are starting the Gateway, tuning its run options, or reading its shared token. |
 | [Restart and supervision](/cli/gateway/restart-and-supervision) | You are restarting the Gateway, or an external supervisor owns its lifecycle.      |
-| [Query a running Gateway](/cli/gateway/query)                   | You want health, status, stability, diagnostics, or a direct RPC call.             |
+| [Query a running Gateway](/cli/gateway/query)                   | You want health, status, stability, lanes, diagnostics, or a direct RPC call.      |
 | [Manage the Gateway service](/cli/gateway/service)              | You are installing, starting, stopping, or repairing the native service.           |
 | [Discover gateways (Bonjour)](/cli/gateway/discovery)           | You are looking for gateways over mDNS or wide-area DNS-SD.                        |
 
@@ -57,6 +57,7 @@ Each entry points at the page that now holds the content.
 - <a id="gateway-health" />[`gateway health`](/cli/gateway/query#gateway-health)
 - <a id="gateway-usage-cost" />[`gateway usage-cost`](/cli/gateway/query#gateway-usage-cost)
 - <a id="gateway-stability" />[`gateway stability`](/cli/gateway/query#gateway-stability)
+- <a id="gateway-lanes" />[`gateway lanes`](/cli/gateway/query#gateway-lanes)
 - <a id="gateway-diagnostics-export" />[`gateway diagnostics export`](/cli/gateway/query#gateway-diagnostics-export)
 - <a id="gateway-status" />[`gateway status`](/cli/gateway/query#gateway-status)
 - <a id="gateway-probe" />[`gateway probe`](/cli/gateway/query#gateway-probe)
