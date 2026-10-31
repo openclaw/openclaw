@@ -427,7 +427,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
               agentDir,
               provider: agentMeta?.provider ?? provider,
               model: agentMeta?.model ?? model,
-              cliBackendId: result.meta.executionTrace?.winnerProvider,
+              // Failed CLI turns clear the winner; the last CLI attempt still names
+              // the backend that owns native compaction.
+              cliBackendId:
+                result.meta.executionTrace?.winnerProvider ??
+                (transcriptPersistenceRunner === "cli"
+                  ? result.meta.executionTrace?.attempts?.at(-1)?.provider
+                  : undefined),
               skillsSnapshot,
               messageChannel,
               agentAccountId: runContext.accountId,
