@@ -2540,6 +2540,53 @@ jobs:
           path: ${{ runner.temp }}/linux-dispatch.json
           if-no-files-found: warn
 
+  request_windows_gateway_store:
+    name: Request Gateway Microsoft Store publication
+    needs: [resolve_release_target, finalize_github_release]
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag == 'latest' && !contains(inputs.tag, '-beta.') }}
+    # The detached request owns MSIX/Store work, not npm or GitHub activation.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted Gateway Store request tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Create Gateway Store request token
+        id: store_request_token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-actions: write
+          permission-contents: read
+      - name: Dispatch detached Gateway Store request
+        env:
+          GH_TOKEN: ${{ steps.store_request_token.outputs.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          WINDOWS_GATEWAY_STORE_EVIDENCE: ${{ runner.temp }}/windows-gateway-store.json
+        run: node scripts/windows-gateway-store-release.mjs request
+      - name: Retain Gateway Store dispatch evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-gateway-store-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-gateway-store.json
+          if-no-files-found: warn
+
   publish_windows:
     name: Dispatch Windows assets after publication
     needs: [resolve_release_target, finalize_github_release]

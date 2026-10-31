@@ -156,6 +156,36 @@ other writers, revalidate release/source/inventory and immutable bytes, and
 read back both endpoints. Version/hash inputs or current Gateway `latest` alone
 cannot establish forward order. Stop on ambiguous history.
 
+## Windows Gateway Microsoft Store
+
+Regular stable publication to npm `latest` requests `Windows Gateway Store Request`
+after GitHub activation, through both `OpenClaw Release Publish` and `OpenClaw
+Release Button`. The detached request builds the exact signed Gateway source in
+`openclaw/openclaw-windows-packaging`, checks both the payload and the independently
+selected MSIX release identity, then requests `windows-store-publish.yml` on
+`openclaw/releases` `main` with `product=gateway` and that build's `run_id`.
+Beta and extended-stable do not request Store publication. No sideload signing or
+packaging GitHub release is requested.
+
+The release GitHub App must be installed on core, packaging, and releases with
+Actions write and Contents read. The central publisher owns source run/attempt,
+artifact, and bundle-hash validation, Store credentials, and the
+`microsoft-store-gateway` environment requiring release-manager approval. Its
+workflow and publisher code require release-manager review. This handoff depends
+on that publisher and the coordinated retirement of packaging's direct and
+automatic Store publishers; it does not retain a second publishing path or
+`MSSTORE_ENABLED` policy. Before enabling the handoff, configure central protection
+and Store federation and revoke the old repository's Store federation.
+
+A successful request means the central publisher was dispatched; release-manager
+approval and Microsoft acceptance remain pending. Follow the linked releases run
+for approval and its Store commit receipt; certification and public availability
+need separate verification. Core/npm publication does not wait for MSIX builds,
+approval, or Store acceptance. Repeated publication reuses the original request,
+including failed requests. Recover its retained packaging build and central Store
+run IDs rather than rerunning the entire request or starting a duplicate after an
+ambiguous dispatch. Evidence is retained for 90 days.
+
 ## Windows Hub
 
 The optional parent inputs `windows_node_tag` and
