@@ -1,6 +1,7 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { containsComposed, registryFor } from "../../../components/overlay-registry.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -9,6 +10,7 @@ export function createComposerMobileInteraction(
   props: ChatComposerProps,
   state: ChatComposerState,
   shell: () => HTMLDivElement | undefined,
+  placeholder: () => HTMLSpanElement | undefined,
 ) {
   const [keyboardNavigation, setKeyboardNavigation] = createSignal(false);
   const editingScope = createMemo(() => context().draftKey);
@@ -38,26 +40,89 @@ export function createComposerMobileInteraction(
       : false;
   };
 
+  let previousInputHeight: number | undefined;
+  let inputReveals: Animation[] = [];
+  const changeEditing = (next: boolean, previous = editing()) => {
+    if (next !== previous) {
+      previousInputHeight = state.composerInput?.getBoundingClientRect().height;
+      inputReveals.forEach((animation) => animation.cancel());
+      inputReveals = [];
+    }
+    setEditing(next);
+  };
   const mobileEditing = createMemo(() => mobileComposer() && editing());
   const editingTransition = createMemo(
     () => ({
       editing: mobileEditing(),
+      mobile: mobileComposer(),
+      keyboardVisible: props.mobileKeyboardVisible,
+      keyboardNavigation: keyboardNavigation(),
       onChange: props.onComposerEditingChange,
     }),
     // Prepare current facts without republishing editing on unrelated prop updates.
     { equals: (previous, next) => previous.editing === next.editing },
   );
-  const keyboardTransition = createMemo(() => ({ visible: props.mobileKeyboardVisible }), {
-    equals: (previous, next) => previous.visible === next.visible,
-  });
+  const keyboardTransition = createMemo(
+    () => ({ visible: props.mobileKeyboardVisible, editing: editing() }),
+    { equals: (previous, next) => previous.visible === next.visible },
+  );
+  let previousEditing: ReturnType<typeof editingTransition> | undefined;
   let previousKeyboard: ReturnType<typeof keyboardTransition> | undefined;
-  // Only these nonvisual lifetimes change; the composer DOM stays mounted.
+  // Only these nonvisual lifetimes change; the composer DOM and animation owner stay mounted.
   const lifecycle = (
     <>
       <Show when={editingTransition()} keyed>
         {(next) => {
           onSettled(() => {
+            const previous = previousEditing;
+            previousEditing = next;
             next.onChange?.(next.editing);
+            const textarea = state.composerTextarea;
+            if (textarea && (next.mobile || previous?.editing === true)) {
+              adjustTextareaHeight(textarea);
+            }
+            const from = previousInputHeight;
+            previousInputHeight = undefined;
+            if (
+              from !== undefined &&
+              next.mobile &&
+              !next.keyboardVisible &&
+              !next.keyboardNavigation
+            ) {
+              queueMicrotask(() => {
+                const input = state.composerInput;
+                if (
+                  !input?.isConnected ||
+                  input.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)")
+                    .matches
+                ) {
+                  return;
+                }
+                const to = input.getBoundingClientRect().height;
+                inputReveals = [
+                  input.animate(
+                    [
+                      { height: `${from}px`, minHeight: "0px", overflow: "clip" },
+                      { height: `${to}px`, minHeight: "0px", overflow: "clip" },
+                    ],
+                    { duration: 180, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+                  ),
+                ];
+                // The compact hint and editor have different text origins. Reveal the
+                // hint after the surface settles instead of carrying it through that jump.
+                const hint = placeholder();
+                if (hint) {
+                  inputReveals.push(
+                    hint.animate([{ opacity: 0 }, { opacity: 1 }], {
+                      delay: 180,
+                      duration: 80,
+                      fill: "backwards",
+                      easing: "ease-out",
+                    }),
+                  );
+                }
+              });
+            }
           });
           return undefined;
         }}
@@ -68,7 +133,7 @@ export function createComposerMobileInteraction(
             const previous = previousKeyboard;
             previousKeyboard = next;
             if (previous?.visible === true && next.visible === false && !ownedOverlay(null)) {
-              setEditing(false);
+              changeEditing(false, next.editing);
             }
           });
           return undefined;
@@ -106,7 +171,7 @@ export function createComposerMobileInteraction(
           }
           pointerOrigin = event.composedPath()[0];
           setKeyboardNavigation(false);
-          // Focus during the tap.
+          // Focus during the tap, before expansion moves the native hit target.
           // iOS needs this user gesture to open the software keyboard.
           if (
             event.button === 0 &&
@@ -115,10 +180,10 @@ export function createComposerMobileInteraction(
             editable(pointerOrigin)
           ) {
             pointerOrigin.focus({ preventScroll: true });
-            setEditing(true);
+            changeEditing(true);
           }
           if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {
-            setEditing(false);
+            changeEditing(false);
           }
         },
         true,
@@ -127,7 +192,8 @@ export function createComposerMobileInteraction(
         doc,
         "click",
         (event) => {
-          // An editor-started pointer gesture belongs to the editor through commit.
+          // Expansion can move the toolbar under the first textarea tap. That tap
+          // belongs to the editor, never to the action now occupying its position.
           if (
             props.mobileComposer &&
             pointerOrigin === state.composerTextarea &&
@@ -163,13 +229,13 @@ export function createComposerMobileInteraction(
           setKeyboardNavigation(pointerOrigin === undefined);
           if (insideEditor(target)) {
             if (editable(target)) {
-              setEditing(true);
+              changeEditing(true);
             }
           } else if (
             !insideComposer(target) &&
             !(pointerOrigin instanceof Node && insideComposer(pointerOrigin))
           ) {
-            setEditing(false);
+            changeEditing(false);
           }
         },
         true,
@@ -196,7 +262,7 @@ export function createComposerMobileInteraction(
               !ownedOverlay(null) &&
               !(pointerOrigin instanceof Node && insideComposer(pointerOrigin))
             ) {
-              setEditing(false);
+              changeEditing(false);
             }
           });
         },
@@ -204,10 +270,14 @@ export function createComposerMobileInteraction(
       ),
     ];
     if (props.mobileComposer && insideEditor(doc.activeElement) && editable(doc.activeElement)) {
-      setEditing(true);
+      changeEditing(true);
+      // A composer that mounts focused (a handed-off boot draft) never showed
+      // its compact form; opening it must not animate from that height.
+      previousInputHeight = undefined;
     }
     return () => {
       disposed = true;
+      inputReveals.forEach((animation) => animation.cancel());
       stops.forEach((stop) => stop());
       props.onComposerEditingChange?.(false);
     };
