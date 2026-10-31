@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => ({
   running: true,
   loaded: true,
   systemScope: false,
+  systemOwnership: vi.fn(async () => {}),
   recoveryScope: vi.fn(async () => fixtureSystemdTarget()),
   managerUid: 2001 as number | undefined,
   listenerPids: vi.fn(() => [4242]),
@@ -160,6 +161,11 @@ vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
   findSystemdGatewayInstallation: async () => ({ kind: "user", user: fixtureSystemdTarget() }),
   findInstalledSystemdGatewayScope: mocks.recoveryScope,
   isSystemdServiceAbsent: async () => false,
+}));
+// Native system-manager ownership is fixture I/O; never inspect the host manager.
+vi.mock("../../daemon/systemd-system.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-system.js")>()),
+  assertNoSystemSystemdOwnership: mocks.systemOwnership,
 }));
 vi.mock("../../daemon/systemd-user-transport.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-user-transport.js")>()),
@@ -344,6 +350,7 @@ beforeEach(async () => {
   mocks.running = true;
   mocks.loaded = true;
   mocks.systemScope = false;
+  mocks.systemOwnership.mockReset().mockResolvedValue(undefined);
   mocks.recoveryScope.mockReset().mockImplementation(async () => fixtureSystemdTarget());
   mocks.managerUid = 2001;
   mocks.launchctl.mockImplementation(async () => {
@@ -389,6 +396,7 @@ describe("preserved update activation with real version guards", () => {
       "reused pid",
       "newer config",
       "system scope",
+      "system owner",
       "revoked authority",
     ] as const)("recovers the installed unit with %s state ownership", async (ownership) => {
     const nativeRestart = mocks.restart.getMockImplementation()!;
@@ -413,6 +421,10 @@ describe("preserved update activation with real version guards", () => {
       if (ownership === "system scope") {
         mocks.systemScope = true;
         vi.spyOn(systemdExec, "isRunningAsRoot").mockReturnValue(false);
+      }
+      if (ownership === "system owner") {
+        mocks.systemOwnership.mockRejectedValue(new Error("System unit owns this installation"));
+        vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue(undefined);
       }
       const owner = {
         pid: orphanPid,
@@ -440,6 +452,10 @@ describe("preserved update activation with real version guards", () => {
         });
       }
       mocks.restart.mockImplementation(async () => {
+        if (ownership === "system owner") {
+          const { restartSystemdService } = await import("../../daemon/systemd-lifecycle.js");
+          await restartSystemdService({ env: process.env, stdout: process.stdout });
+        }
         expect(processIdentity.isPidAlive(orphanPid)).toBe(false);
         return await nativeRestart();
       });

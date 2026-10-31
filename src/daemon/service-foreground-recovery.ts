@@ -8,7 +8,11 @@ import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type { GatewayService, GatewayServiceControlArgs } from "./service-types.js";
 import { assertSystemdServiceActionAllowed } from "./systemd-lifecycle.js";
-import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
+import {
+  assertNoSystemGatewayOwnershipForActivation,
+  findInstalledSystemdGatewayScope,
+} from "./systemd-scope.js";
+import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 /** Recovery hands this installation's foreground state owner back to systemd. */
 export async function recoverForegroundGatewayForService(
@@ -46,6 +50,13 @@ export async function recoverForegroundGatewayForService(
     assertCurrent();
     // Preserve a serving foreground owner when this caller cannot start its replacement.
     assertSystemdServiceActionAllowed(target, "restart");
+    if (target?.scope !== "system") {
+      await assertNoSystemGatewayOwnershipForActivation({
+        ...env,
+        OPENCLAW_SYSTEMD_UNIT: target?.unitName ?? `${resolveSystemdServiceName(env)}.service`,
+      });
+      assertCurrent();
+    }
     // A current lease identifies our state owner; a fresh start time excludes PID reuse.
     if (
       owner.startedAt === null ||
