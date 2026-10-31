@@ -1352,7 +1352,9 @@ async function runWorker() {
                               (typeof details?.outageMs === "number" ? details.outageMs : 0),
                         )
                         .map((event) => ({
-                          ...event,
+                          event: event.event,
+                          requestId: event.requestId,
+                          status: event.status,
                           atMs: event.atMs - startedAtMs,
                           browserAtMs:
                             event.browserAtMs === undefined

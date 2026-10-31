@@ -683,7 +683,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       const pendingAbort = state.pendingAbort;
       if (
         pendingAbort &&
-        observation?.hasObserved === false &&
+        !observation.hasObserved &&
         uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId)
       ) {
         // A parked pane skips resource discovery, but its queued Stop needs current ownership.
