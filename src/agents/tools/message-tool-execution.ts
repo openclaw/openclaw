@@ -33,6 +33,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
+import { resolveMessageToolSourceReplyFinal } from "../embedded-agent-message-tool-source-reply.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
@@ -309,6 +310,10 @@ function* createMessageToolSteps(
       // not be dispatched to a provider or participate in idempotency.
       const requestedSourceReplyFinal =
         typeof params.final === "boolean" ? params.final : undefined;
+      const sourceReplyFinal =
+        action === "send"
+          ? resolveMessageToolSourceReplyFinal(params, options?.messageToolFinalByDefault)
+          : requestedSourceReplyFinal;
       delete params.final;
 
       const suppressedVisiblePayloadReason = sanitizeMessageToolVisiblePayload(
@@ -555,7 +560,6 @@ function* createMessageToolSteps(
         : params;
       const hasExactSourceTurn =
         action === "send" &&
-        sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
       return await withChannelReadAuthority(
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
@@ -600,11 +604,11 @@ function* createMessageToolSteps(
                   sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
                   sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
                   // Only an admitted channel source can arm terminal restart reconciliation.
-                  // Preserve explicit progress even without a source turn: recovery must not
+                  // Preserve progress even without a source turn: recovery must not
                   // mistake its persisted mirror for a completed assistant reply.
                   sourceReplyFinal: hasExactSourceTurn
-                    ? (requestedSourceReplyFinal ?? true)
-                    : action === "send" && requestedSourceReplyFinal === false
+                    ? sourceReplyFinal
+                    : action === "send" && sourceReplyFinal === false
                       ? false
                       : undefined,
                   sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
@@ -671,7 +675,7 @@ function* createMessageToolSteps(
             sessionKey: options?.agentSessionKey,
             toolContext,
             deliveredPayload: result.payload,
-            sourceReplyFinal: requestedSourceReplyFinal,
+            sourceReplyFinal,
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =
@@ -698,11 +702,11 @@ function* createMessageToolSteps(
             result,
             currentSourceReply,
           );
-          groupThread.record(result, sourceReply, currentSourceReply, requestedSourceReplyFinal);
+          groupThread.record(result, sourceReply, currentSourceReply, sourceReplyFinal);
           if (
             messageDelivery?.status === "settled" &&
             !messageDelivery.partialDelivery &&
-            requestedSourceReplyFinal !== false &&
+            sourceReplyFinal !== false &&
             !result.dryRun &&
             currentSourceReply
           ) {

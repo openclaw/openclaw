@@ -28,6 +28,7 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { resolveLocalMediaPath } from "../../media/local-media-path.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
@@ -42,6 +43,7 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import { formatErrorMessage } from "../errors.js";
 import { isPathInside } from "../path-guards.js";
 import { throwIfAborted } from "./abort.js";
 import {
@@ -74,6 +76,9 @@ import {
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { mirrorDeliveredSourceReplyToTranscript } from "./source-reply-mirror.js";
+
+const log = createSubsystemLogger("outbound/message-action");
 
 // Keep the TTS runtime lazy so ordinary sends do not pay the provider import cost.
 const loadMessageActionTtsRuntime = createLazyRuntimeModule(
@@ -703,6 +708,41 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendResult: send.sendResult,
     dryRun,
   };
+  const delivery = projectPluginMessageDeliveryFact(send.payload);
+  // Both local plugin actions and prepared core sends reach this settlement.
+  // Gateway-owned calls already mirror at their RPC boundary. Use the delivered
+  // payload, not tool arguments that may predate adapter preparation or hooks.
+  if (
+    !dryRun &&
+    !input.gatewayOwnedDelivery &&
+    send.deliveredPayloads?.length &&
+    delivery?.status === "settled" &&
+    !delivery.partialDelivery
+  ) {
+    try {
+      await mirrorDeliveredSourceReplyToTranscript({
+        action,
+        channel,
+        actionParams: params,
+        cfg,
+        accountId,
+        agentId,
+        currentAccountId: input.messageActionAuthorization?.requesterAccountId,
+        sessionKey: input.sourceReplySessionKey ?? input.sessionKey,
+        sessionId: input.sessionId,
+        toolContext: input.messageActionAuthorization?.toolContext,
+        idempotencyKey: ctx.idempotencyKey,
+        sourceReplyFinal: input.sourceReplyFinal,
+        toolCallId: input.sourceReplyToolCallId,
+        deliveredPayload: send.payload,
+        deliveredPayloads: send.deliveredPayloads,
+        replyToIsExplicit: reply?.source === "explicit",
+      });
+    } catch (error) {
+      // Delivery is already committed; a transcript failure must not resend it.
+      log.warn(`Source reply transcript commit failed: ${formatErrorMessage(error)}`);
+    }
+  }
   return await annotateSourceDelivery(
     withSendNormalization(result, sendPayload.normalization),
     ctx,

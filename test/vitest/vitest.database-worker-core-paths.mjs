@@ -17,6 +17,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/sessions/background-session-result.test.ts",
   "src/sessions/confirmed-visible-message.integration.test.ts",
   "src/agents/tools/message-tool.scheduled-lifetime.test.ts",
+  "src/agents/tools/message-tool.local-source-reply.integration.test.ts",
   "test/telegram-lifecycle-notice-send.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
