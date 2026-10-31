@@ -600,6 +600,16 @@ describe("getMemoryWikiPage", () => {
     });
   });
 
+  it.each([
+    [3, true],
+    [4, false],
+  ])("reads %i of 4 page lines with truncated=%s", async (lineCount, truncated) => {
+    const { config, writeNote } = await createQueryVault();
+    await writeNote("sources/alpha.md", "Alpha", "alpha body");
+    const result = await readWiki(config, "sources/alpha.md", { lineCount });
+    expect(result).toMatchObject({ totalLines: 4, truncated });
+  });
+
   it.each(["not_found", "ok"] as const)(
     "distinguishes %s from empty memory files",
     async (status) => {
