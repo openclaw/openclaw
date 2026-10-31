@@ -2,7 +2,12 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
-import { readWorkflow, testNodeExecPath, TSX_IMPORT } from "./ci-workflow.test-support.js";
+import {
+  acceptsWorkflowPaths,
+  readWorkflow,
+  testNodeExecPath,
+  TSX_IMPORT,
+} from "./ci-workflow.test-support.js";
 
 const components = [
   "scripts/pr",
@@ -30,9 +35,9 @@ it.each([
 );
 
 // Native preparation compiles the full worker inventory, including string-named
-// entries. Guard only the excluded CI namespace; the wrapper inventory owns its
-// broader closure independently.
-it("retains Darwin inputs inside the excluded CI namespace", () => {
+// entries. Guard excluded CI planners and standalone PR tests; the wrapper
+// inventory owns its broader closure independently.
+it("retains Darwin inputs inside excluded namespaces", () => {
   const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
   const paths = workflow.on.pull_request.paths as string[];
   const dependencyInputs = JSON.parse(
@@ -88,13 +93,9 @@ it("retains Darwin inputs inside the excluded CI namespace", () => {
   const excludedInputs = [...inputs].filter(
     (file) =>
       /^scripts\/lib\/ci-.*\.(?:mts|mjs)$/u.test(file) ||
-      file.startsWith("test/scripts/pr-ci-sweeper"),
-  );
-  const retainedPaths = new Set(
-    paths.slice(
-      Math.max(paths.indexOf("!scripts/lib/ci-*.mts"), paths.indexOf("!scripts/lib/ci-*.mjs")) + 1,
-    ),
+      file.startsWith("test/scripts/pr-ci-sweeper") ||
+      /^test\/scripts\/pr-.*\.test\.ts$/u.test(file),
   );
   expect(excludedInputs.length).toBeGreaterThan(0);
-  expect(excludedInputs.filter((file) => !retainedPaths.has(file))).toEqual([]);
+  expect(excludedInputs.filter((file) => !acceptsWorkflowPaths(paths, [file]))).toEqual([]);
 });

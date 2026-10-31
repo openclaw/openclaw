@@ -18,7 +18,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -240,10 +240,18 @@ export async function sendMSTeamsMessages(
           if (!isPersonal && !isImage) {
             // Non-images in group chats/channels require SharePoint because an
             // application token has no signed-in `/me/drive` to fall back to.
-            const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
             if (!tokenProvider) {
               throw new Error("MS Teams Graph token provider unavailable for SharePoint file send");
             }
+            const siteId = await resolveMSTeamsSharePointSiteId({
+              ...options,
+              siteId: sharePointSiteId,
+              accountId: params.accountId,
+              app: params.app,
+              conversationRef,
+              tokenProvider,
+              serviceUrlBoundary: params.serviceUrlBoundary,
+            });
             const chatId = conversationRef.conversation?.id;
 
             const uploaded = await uploadAndShareSharePoint({

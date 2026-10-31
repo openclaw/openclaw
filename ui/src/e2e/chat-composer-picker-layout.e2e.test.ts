@@ -139,7 +139,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               composer.locator(".agent-chat__composer-footer").evaluate((footer) => {
-                const bounds = footer.getBoundingClientRect();
+                const bounds = footer.closest(".agent-chat__input")!.getBoundingClientRect();
                 const controls = [
                   ...footer.querySelectorAll<HTMLElement>(
                     ".agent-chat__input-btn--attach, [data-chat-permission-select], .context-ring, " +

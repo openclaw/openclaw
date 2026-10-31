@@ -48,6 +48,19 @@ describe("DevicesPage gateway lifecycle", () => {
     ).toBe("Devices");
   });
 
+  it("waits for the first inventory before painting policy sections below it", async () => {
+    const page = mountPage(
+      gatewayFixture(gatewaySnapshot(clientFor().client, true, [], ["operator.admin"])),
+      { nodes: [{ nodeId: "office", displayName: "Office Mac" }] },
+      null,
+    );
+    expect(page.container.querySelectorAll(".settings-loading-skeleton")).toHaveLength(1);
+    expect(page.container.textContent).not.toContain(t("devices.binding.execNodeBinding"));
+    page.refreshPresentation();
+    await waitForSolid(() => expect(page.container.textContent).toContain("Office Mac"));
+    expect(page.container.textContent).toContain(t("devices.binding.execNodeBinding"));
+  });
+
   it("keeps inventory usable and retires a held approval read on Gateway replacement", async () => {
     const policyMethod = "exec.approvals.get";
     const pending = createDeferred<unknown>();

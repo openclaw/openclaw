@@ -1,5 +1,4 @@
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,7 +44,6 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
     : undefined;
   operatorAuthority?.assertCurrent();
   const cfg = getSessionEventRuntimeConfig();
-  const configPublication = getRuntimeConfigSnapshotMetadata();
   const agentId = normalizeAgentId(options.agentId);
   resolveConfiguredAgentId(cfg, agentId);
   const sessionKey = resolveSessionEventKey(agentId, options.sessionKey);
@@ -68,7 +66,7 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
       "Session event destination was reset or replaced while its producer was running",
     );
   }
-  return { cfg, configPublication, agentId, sessionKey, env, storePath, operatorAuthority };
+  return { cfg, agentId, sessionKey, env, storePath, operatorAuthority };
 }
 
 /** Validate and claim producer input; execution consumes this occurrence custody. */

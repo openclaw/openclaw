@@ -30,6 +30,7 @@ import {
 import { withLegacyPostgresIndexOrdering } from "../src/infra/database-engine/postgres-index-ordering.ts";
 import { extractSqliteTableSchema } from "../src/infra/sqlite-schema-sql.ts";
 import { AGENT_TRANSCRIPT_SEARCH_POSTGRES_SQL } from "../src/state/openclaw-agent-search-schema.ts";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../src/state/openclaw-schema-versions.ts";
 import { DOCTOR_OWNED_STATE_TABLES } from "../src/state/openclaw-state-db-contract.ts";
 import {
   TASK_RUN_INDEX_RETIREMENT_V24_SQL,
@@ -265,6 +266,25 @@ export async function generatePostgresSchemas(
     }
     const data = catalogs[name]!;
     if (name === "agent") {
+      // SQLite permits extra indexes on downgrade; PostgreSQL v39 seals exact catalogs.
+      // Adopt these indexes with the next natural agent migration, preserving v39 DDL.
+      if (OPENCLAW_AGENT_SCHEMA_VERSION === 39) {
+        for (const item of data.objects) {
+          if (
+            item.kind === "index" &&
+            [
+              "idx_agent_session_input_completions_session_key",
+              "idx_agent_conversation_deliveries_source_session",
+            ].includes(item.name)
+          ) {
+            item.sql = null;
+            item.category = "same-version SQLite index";
+            item.reason =
+              "Lead-approved 2026-10-31 SQLite additive index; PostgreSQL adoption waits for the next agent migration so existing v39 catalog seals remain compatible.";
+            data.tables.find((table) => table.name === item.table)!.indexes--;
+          }
+        }
+      }
       translatePostgresTriggers(data);
       const sources = data.tables.find((table) => table.name === "memory_index_sources");
       if (sources) {
@@ -293,6 +313,7 @@ export async function generatePostgresSchemas(
         } else if (
           item.table !== "sqlite_sequence" &&
           !item.pendingCapability &&
+          item.category !== "same-version SQLite index" &&
           [
             "table",
             "column",

@@ -25,7 +25,6 @@ import {
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure as ReportedUpdateCommandFailure } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
-import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
@@ -508,6 +507,8 @@ it("settles a headless package rollback without waiting for a Gateway", async ()
     worker,
     `import ${JSON.stringify(resolveRuntimeWorkerUrl(declaration).href)};\n`,
   );
+  const env = { ...process.env };
+  const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   const schemaVersions = await readUpdateStateSchemaVersions({
     stateDir: process.env.OPENCLAW_STATE_DIR!,
     config: {},
@@ -522,9 +523,9 @@ it("settles a headless package rollback without waiting for a Gateway", async ()
   await useRealVerification();
   failedPlugins();
   const failure = await finishSuccessfulPackageSwitch(
-    { packageRoot, json: true },
+    { packageRoot, json: true, run },
     {
-      opts: { json: true, restart: false },
+      opts: { json: true, restart: false, run },
       shouldRestart: false,
       packageTransaction: transaction,
       rollbackBlockedReason: undefined,
@@ -594,49 +595,46 @@ it.each([
     const waitForStartup = vi.spyOn(restartHealth, "waitForGatewayHealthyRestart");
     mocks.activePort.mockResolvedValueOnce(19431);
     await useRealVerification();
-    const failure = await withUpdateCommandTerminalResult(async (registerRun) => {
-      registerRun(run);
-      await finishSuccessfulPackageSwitch(
-        { packageRoot: root, run, json },
-        {
-          mutationStarted: activated,
-          shouldRestart: !activated,
-          opts: { json, restart: !activated, run },
-          preManagedServiceStop: {
-            stopped: false,
-            inspected: true,
-            runtimeInspected: true,
-            running: false,
-            serviceEnv: env,
-          },
-          result: resultWith({
-            root,
-            reason: "doctor-failed",
-            recovery: { serviceRestartSafe: true, version: "2026.9.5" },
-            steps: [
-              ...(deferred
-                ? [
-                    stepWith("post-install-verify", {
-                      command: "verify installed package",
-                      durationMs: 0,
-                      exitCode: null,
-                      advisory: {
-                        kind: "recoverable-maintenance" as const,
-                        message: "State verification deferred to the operator restart.",
-                      },
-                    }),
-                  ]
-                : []),
-              stepWith("candidate-doctor-lint", {
-                command: "doctor",
-                exitCode: 2,
-              }),
-            ],
-            durationMs: 1,
-          }),
+    const failure = await finishSuccessfulPackageSwitch(
+      { packageRoot: root, run, json },
+      {
+        mutationStarted: activated,
+        shouldRestart: !activated,
+        opts: { json, restart: !activated, run },
+        preManagedServiceStop: {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: false,
+          serviceEnv: env,
         },
-      );
-    }).catch((error: unknown) => error);
+        result: resultWith({
+          root,
+          reason: "doctor-failed",
+          recovery: { serviceRestartSafe: true, version: "2026.9.5" },
+          steps: [
+            ...(deferred
+              ? [
+                  stepWith("post-install-verify", {
+                    command: "verify installed package",
+                    durationMs: 0,
+                    exitCode: null,
+                    advisory: {
+                      kind: "recoverable-maintenance" as const,
+                      message: "State verification deferred to the operator restart.",
+                    },
+                  }),
+                ]
+              : []),
+            stepWith("candidate-doctor-lint", {
+              command: "doctor",
+              exitCode: 2,
+            }),
+          ],
+          durationMs: 1,
+        }),
+      },
+    ).catch((error: unknown) => error);
     expect(failure).toMatchObject({
       name: "UpdateCommandFailure",
       exitCode: 1,
@@ -853,14 +851,11 @@ it.each(["ownership", "native status"] as const)(
     }
     failedPlugins();
     await expect(
-      withUpdateCommandTerminalResult(async (registerRun) => {
-        registerRun(run);
-        await finishSuccessfulPackageSwitch({
-          packageRoot: root,
-          json: true,
-          run,
-          ...(kind === "native status" ? { restartEnvironment: env, stoppedForUpdate: true } : {}),
-        });
+      finishSuccessfulPackageSwitch({
+        packageRoot: root,
+        json: true,
+        run,
+        ...(kind === "native status" ? { restartEnvironment: env, stoppedForUpdate: true } : {}),
       }),
     ).rejects.toSatisfy((error: unknown) => {
       expect(error).toBeInstanceOf(CommandProcessCleanupError);

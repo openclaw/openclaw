@@ -48,7 +48,7 @@ function createStore(input: DatabaseStoreInspection, version: number) {
 async function inspectUnchanged(input: DatabaseStoreInspection) {
   const before = fs.readFileSync(input.path!);
   const result = await inspectDatabaseStore(input);
-  expect(fs.readFileSync(input.path!)).toEqual(before);
+  expect(fs.readFileSync(input.path!).equals(before), input.path!).toBe(true);
   return result;
 }
 async function stateStore(version: number) {

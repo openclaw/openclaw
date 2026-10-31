@@ -154,7 +154,9 @@ function assertManifestSelectedScope(
   manifest: UpdateRecoveryBackupManifest,
   scopes: Map<string, Set<string>>,
 ) {
-  if (!scopes.get(manifest.stateDir)?.has(manifest.configPath)) {
+  const stateDir = canonicalEntryPath(manifest.stateDir);
+  const configPath = canonicalEntryPath(manifest.configPath);
+  if (!scopes.get(stateDir)?.has(configPath)) {
     throw new Error("Update recovery backup belongs to another selected state or configuration.");
   }
 }

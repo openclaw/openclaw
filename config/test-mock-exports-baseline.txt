@@ -5506,7 +5506,6 @@
 ["src/infra/update-install-status.test.ts","./openclaw-root.js","cf4eec60118b2b40b34951f15c600ec79cdadd59780d38765f027e087864b9cf",1]
 ["src/infra/update-install-status.test.ts","./restart-sentinel.js","a1c89ea1907290730ee145f0695acbee8b174c6cfd5465287165f9d41f3a7106",1]
 ["src/infra/update-managed-service-handoff-cleanup-repair.test.ts","./update-run-reader.js","0e3ba6d1db43d8493159610b0d3307d62dcaab45b2c1da70df01732f33f36fdb",1]
-["src/infra/update-managed-service-handoff-cleanup-repair.test.ts","./update-run-recovery-admission.js","9bc1787441380bfc559eb468d55544a90b134cd717ea52fd2a3cbd635370b3f6",1]
 ["src/infra/update-managed-service-handoff-retired-records.test.ts","./tmp-openclaw-dir.js","0948479f2b2456f39442ba13186c9abdf07f5ad0e1184c6d73454b10c2211f4f",1]
 ["src/infra/update-managed-service-handoff-store-recovery.test.ts","./tmp-openclaw-dir.js","0948479f2b2456f39442ba13186c9abdf07f5ad0e1184c6d73454b10c2211f4f",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","../cli/daemon-cli.js","40346d51ecfc77b286b9c9d8be2e10cf45e3639ff0b4ce159988ee5ff6cec0ae",1]

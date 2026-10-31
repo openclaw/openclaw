@@ -7,6 +7,7 @@
 .agent-chat__composer-shell[data-mobile-composer="true"] {
   --chat-composer-bottom-gap: 10px;
   --chat-composer-top-margin: 0px;
+  --chat-composer-toolbar-reserve: 48px;
 
   gap: 6px;
   /* The app already consumes safe area, including keyboard dismissal. */
@@ -87,10 +88,9 @@
   overscroll-behavior: contain;
 }
 
-/* Only the unfocused one-line presentation overrides the native surface.
-   Editing inherits composer-surface.css, including its textarea autogrow. */
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__input {
+/* Keep the writing row in one layout. Secondary controls use the reserved
+   band above it; focusing never moves the text or its existing action targets. */
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input {
   --chat-composer-radius: calc(22px * var(--openclaw-corner-radius-scale));
   --chat-composer-min-height: 52px;
   --chat-composer-editor-line: 24px;
@@ -99,9 +99,11 @@
   --chat-composer-chip-height: 32px;
   --chat-composer-send-size: 36px;
 
+  /* The queue and transcript keep their position when the toolbar appears. */
+  margin-block-start: var(--chat-composer-toolbar-reserve);
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
-  grid-template-rows: max-content 36px;
+  grid-template-rows: max-content minmax(36px, max-content);
   align-content: start;
   align-items: center;
   gap: 0 2px;
@@ -110,35 +112,34 @@
 }
 
 /* A stacked composer keeps its normal corners; only the bare row is a capsule. */
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+.agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__input:has(.composer-context-strip, .chat-attachments-preview) {
   border-radius: var(--chat-composer-radius);
 }
 
 /* Replies, attachments, pending reads, Goal mode and Talk keep their real height. */
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__composer-lede {
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-lede {
   grid-column: 1 / -1;
   grid-row: 1;
   align-self: stretch;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+.agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-lede
   > .composer-context-strip {
   margin-inline: -8px;
   margin-block-end: 6px;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+.agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-lede
   > .composer-context-strip:first-child {
   margin-block-start: -7px;
 }
 
 /* The rail already carries the editor inset and remove-target slop; cancel
-   the one-line row padding so the chips sit where editing places them. */
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+   the writing row padding so the chips align with the surface. */
+.agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-lede
   > .chat-attachments-preview {
   width: calc(100% + 16px);
@@ -146,63 +147,92 @@
   margin: calc(-7px - var(--chat-attachment-hit-slop)) -8px 0;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__composer-input-row {
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-input-row {
   grid-column: 2;
   grid-row: 2;
   align-self: center;
+  flex-shrink: 0;
   padding: 0;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+.agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-combobox
   > :is(textarea, .agent-chat__composer-placeholder, .agent-chat__composer-prediction) {
   box-sizing: border-box;
-  height: 24px;
   min-height: 24px;
-  max-height: 24px;
   padding: 0;
   font-family: var(--font-body);
   line-height: var(--chat-composer-editor-line);
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__composer-combobox
-  > textarea {
-  overflow: hidden;
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-combobox > textarea {
   scrollbar-gutter: auto;
-  white-space: nowrap;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+.agent-chat__composer-shell[data-mobile-composer="true"]
   :is(.agent-chat__composer-footer, .agent-chat__composer-lead, .agent-chat__composer-trail) {
   display: contents;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__composer-lead
-  > :first-child {
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-lead > :first-child {
   grid-column: 1;
   grid-row: var(--chat-composer-action-row, 2);
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__composer-actions {
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-actions {
   grid-column: 3;
   grid-row: var(--chat-composer-action-row, 2);
   justify-self: end;
 }
 
+/* These controls sit above the surface without sizing the writing row. */
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  :is(
+    .agent-chat__composer-lead > :not(:first-child),
+    .agent-chat__composer-context,
+    .agent-chat__composer-controls
+  ) {
+  position: absolute;
+  inset-block-start: calc(-1 * var(--chat-composer-toolbar-reserve));
+  height: 44px;
+  margin: 0;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  .agent-chat__composer-lead
+  > :not(:first-child) {
+  inset-inline-start: 8px;
+  width: 32px;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-context {
+  inset-inline-start: 42px;
+  width: 32px;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-controls {
+  inset-inline: 76px 8px;
+  justify-content: flex-start;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  .agent-chat__composer-controls
+  .chat-composer-model-control {
+  margin-inline-start: 0;
+}
+
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__composer-context,
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  :is(.agent-chat__composer-lead > :not(:first-child), .agent-chat__composer-controls) {
-  display: none;
+  :is(
+    .agent-chat__composer-lead > :not(:first-child),
+    .agent-chat__composer-context,
+    .agent-chat__composer-controls
+  ) {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* The compact prediction row already supplies its text inset. */
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__composer-prediction-actions {
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-prediction-actions {
   padding-inline: 0;
 }
 
@@ -213,14 +243,8 @@
   font-family: var(--font-body);
 }
 
-/* The editable row uses its final geometry during the surface reveal. */
-.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-input-row {
-  flex-shrink: 0;
-}
-
-/* Prediction actions are native main content in addition to the compact text.
-   Reserve their intrinsic height here; editing uses the native content flow. */
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+/* Prediction actions keep their intrinsic height in the writing row. */
+.agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction]) {
   /* Keep :has() on the subject; a descendant selector invalidates unrelated subtrees. */
   --chat-composer-action-row: 3;
@@ -228,7 +252,7 @@
   grid-template-rows: max-content max-content 36px;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+.agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__input
   .agent-chat__composer-input-row:has(.agent-chat__composer-combobox[data-prediction]) {
   grid-column: 1 / -1;
@@ -255,8 +279,7 @@
   overscroll-behavior: contain;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__input-btn--attach {
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input-btn--attach {
   width: 32px;
   min-width: 32px;
   height: 36px;
@@ -265,9 +288,29 @@
   box-shadow: none;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__input-btn--attach
-  svg {
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input-btn--attach svg {
   width: var(--chat-composer-plus-icon-size);
   height: var(--chat-composer-plus-icon-size);
+}
+
+/* The toolbar sits outside the writing surface. In landscape, scroll only
+   its content stack so the surface cannot clip the controls above it. */
+@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input {
+    overflow: visible;
+  }
+
+  .agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-lede {
+    /* Leave the existing 56px textarea cap plus the surface's 16px insets. */
+    max-height: max(0px, calc(min(36vh, 164px) - 72px));
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  .agent-chat__composer-shell[data-mobile-composer="true"]
+    .agent-chat__composer-lede
+    > .chat-attachments-preview {
+    width: 100%;
+    margin: 0;
+  }
 }

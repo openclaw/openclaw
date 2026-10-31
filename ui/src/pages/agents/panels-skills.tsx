@@ -150,10 +150,10 @@ function AgentSkillsContent(
       skill,
       text: normalizeLowercaseStringOrEmpty(
         [skill.name, skill.description, skill.source].join(" "),
-      ),
+      ).normalize("NFC"),
     })),
   );
-  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
+  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC"));
   const filtered = createMemo(
     () =>
       filter()

@@ -412,6 +412,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
     waitForReplacement?: boolean;
     preserveReplacementWait?: boolean;
     agentIds?: ReadonlySet<string>;
+    preservePluginGenerations?: boolean;
   } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
   captureModelRuntimeLifetime();
@@ -442,7 +443,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
   const staleError = new Error(reason);
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retireStandalone: true,
-    resetPluginGeneration: true,
+    resetPluginGeneration: !options.preservePluginGenerations,
   });
   // Fence epochs and admission before cancellation can reenter a plugin callback.
   previousCancellation.abort(new PreparedModelRuntimePublicationSupersededError(reason));
@@ -512,6 +513,7 @@ export function refreshPreparedModelRuntimeSnapshots(
   markPreparedModelRuntimeSnapshotsStale(undefined, {
     waitForReplacement: true,
     agentIds: initialAgentIds,
+    preservePluginGenerations: options.preservePluginGenerations,
   });
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const requestEpoch = refreshRequestEpoch;
@@ -549,7 +551,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       // A lost external claim can leave partially built owners; fence them even without a successor.
       updateOwnersForScopedRefresh(owners, publicationAgentIds, error, {
         clearPending: true,
-        resetPluginGeneration: true,
+        resetPluginGeneration: !options.preservePluginGenerations,
       });
     }
     rejectPendingPreparedModelRuntimeReplacement(replacement?.gateId, error);
