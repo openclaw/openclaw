@@ -18,6 +18,10 @@
   --bg-muted: #1f2330;
 
   /* Interaction layers follow the host surface and the theme's own ink. */
+  --list-row-min-height: 48px;
+  --list-row-padding: var(--space-3) var(--space-4);
+  --list-row-icon-size: 15px;
+  --list-row-title-weight: 500;
   --surface-hover-amount: 6%;
   --surface-selected-amount: 8%;
   --surface-selected-hover-amount: 11%;
