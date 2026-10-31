@@ -15,6 +15,7 @@ import {
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
 } from "../../src/shared/control-ui-storage.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
@@ -37,6 +38,8 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "3000" },
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
+    "transcript-late-paint": { type: "boolean", default: false },
+    "reload-after-navigation": { type: "boolean", default: false },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -48,6 +51,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
+  --transcript-late-paint --reload-after-navigation
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -386,6 +390,7 @@ async function captureReload(
     for (const key of [
       "firstAppDomMs",
       "firstMainDomMs",
+      "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
       "firstPaintedRowsMs",
       "finalRowsDomMs",
@@ -405,6 +410,12 @@ async function captureReload(
       ...probe.animationSamples,
     ]) {
       entry.atMs += documentOffsetMs;
+    }
+    for (const entry of probe.indexedDb) {
+      entry.atMs += documentOffsetMs;
+      if (entry.completedAtMs !== null) {
+        entry.completedAtMs += documentOffsetMs;
+      }
     }
     probe.capturedUntilMs += documentOffsetMs;
     probe.timeOrigin = navigationOrigin;
@@ -621,6 +632,7 @@ try {
     port,
     uiRoot: servedUiRoot,
     sessions,
+    transcriptLatePaint: values["transcript-late-paint"],
     ...(admission
       ? {
           admission: {
@@ -759,7 +771,7 @@ try {
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)});`,
+            content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
@@ -788,6 +800,12 @@ try {
             await page.goto(handoffUrl.href);
           }
           await waitForControlUiGatewayReady(page, 60000);
+          const operator = values["transcript-late-paint"]
+            ? await evaluateControlUiContext(page, (context) => ({
+                gatewayUrl: context.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
+                userId: context.gateway.snapshot.selfUser?.id,
+              }))
+            : null;
           await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
             timeout: 60000,
           });
@@ -818,6 +836,31 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
+          if (operator && fixture.fixtureSummary.transcriptLatePaint) {
+            if (!operator.userId) {
+              throw new Error("Transcript late-paint fixture requires an identified operator");
+            }
+            await page.evaluate(
+              ({ gatewayUrl, userId, settings }) => {
+                localStorage.setItem("openclaw:sidebar:sessions:grouping", settings.grouping);
+                localStorage.setItem("openclaw:sidebar:sessions:sort-mode", settings.sort);
+                localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+                localStorage.setItem(
+                  "openclaw:sidebar:sessions:collapsed-sections",
+                  JSON.stringify(settings.collapsedSections),
+                );
+                localStorage.setItem(
+                  `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(userId!)}`,
+                  settings.ownerFilter,
+                );
+                localStorage.setItem(
+                  `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(userId!)}`,
+                  settings.emptyGroups,
+                );
+              },
+              { ...operator, settings: fixture.fixtureSummary.transcriptLatePaint },
+            );
+          }
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,
@@ -898,6 +941,25 @@ try {
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "active" });
           }
+          if (values["reload-after-navigation"]) {
+            await evaluateControlUiContext(item.page, (context) =>
+              context.navigateAndWait("new-session"),
+            );
+            const visitedAtMs = await evaluateControlUiContext(
+              item.page,
+              async (context, target) => {
+                const started = performance.now();
+                await context.navigateAndWait(target.route, { pathname: target.pathname });
+                return started;
+              },
+              { route, pathname: routePath },
+            );
+            // Four seconds is the short-visit workload, not a cache-readiness wait.
+            await item.page.waitForFunction(
+              (start) => performance.now() >= start + 4000,
+              visitedAtMs,
+            );
+          }
           item.result.runs.push(
             await captureReload(
               item.page,
@@ -927,6 +989,9 @@ try {
     rttMs,
     captureMs,
     reloads,
+    reloadSequence: values["reload-after-navigation"]
+      ? "Internal /new → target navigation, four-second visit, reload (after the initial cold capture)"
+      : "Repeated reload after the initial cold capture",
     admission: admission
       ? {
           mode: "signed-in",
