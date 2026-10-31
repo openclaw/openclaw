@@ -57,9 +57,9 @@ export function resolveLaunchAgentPlistPathForLabel(
 
 /**
  * Removes a plist whose service is already booted out, keeping a copy in Trash when allowed.
- * macOS privacy protection denies ~/.Trash to app-launched helpers without Full Disk Access,
- * while the user's LaunchAgents directory stays writable; stopping halfway would leave the
- * Gateway unloaded with its definition still in place.
+ * macOS privacy protection can deny ~/.Trash to an app-launched helper while the user's
+ * LaunchAgents directory stays writable; stopping halfway would leave the Gateway unloaded
+ * with its definition still in place.
  */
 export async function removeBootedOutLaunchAgentPlist(
   plistPath: string,

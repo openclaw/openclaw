@@ -1,0 +1,2 @@
+# #188563: denied-Trash LaunchAgent removal; launchd uninstall + doctor legacy cleanup regressions
+22
