@@ -132,7 +132,7 @@ defineSolidBridge<AgentSelectProps>(
         </button>
       );
     }
-    const items = createProjection<readonly MenuItem[]>(
+    const items = createMemo<readonly MenuItem[]>(
       () =>
         optionRows.map((option) => ({
           id: `option:${option.value}`,
@@ -142,8 +142,7 @@ defineSolidBridge<AgentSelectProps>(
           disabled: props.disabled || option.disabled,
           render: (bindings: MenuItemBindings) => <OptionRow option={option} bindings={bindings} />,
         })),
-      [],
-      { key: "id" },
+      { lazy: true },
     );
     return (
       <Menu
@@ -166,7 +165,7 @@ defineSolidBridge<AgentSelectProps>(
             : accessibleLabel()
         }
         disabled={props.disabled || props.options.length === 0}
-        items={items}
+        items={items()}
         placement="bottom-start"
         onAfterShow={() => {
           const surface = menu?.overlay.surface;
