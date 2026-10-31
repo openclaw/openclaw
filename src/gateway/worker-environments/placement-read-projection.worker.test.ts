@@ -39,7 +39,7 @@ import {
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
-import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { prepareSessionWorkerPlacementMutationCheckAsync } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";

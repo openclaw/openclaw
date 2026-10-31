@@ -7,7 +7,7 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
-import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result-owner.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,

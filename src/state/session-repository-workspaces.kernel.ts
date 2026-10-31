@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Selectable, Updateable } from "kysely";
 import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "../config/repository-branch-prefix.js";
+import { readWorkerPlacementMovesReadOnly } from "../gateway/worker-environments/placement-move-row-codec.js";
+import { getRequired } from "../gateway/worker-environments/placement-row-codec.js";
+import {
+  matchesWorkspaceResultClaim,
+  pendingResultFromRow,
+} from "../gateway/worker-environments/placement-workspace-result-owner.js";
 import { findWorkerEnvironment } from "../gateway/worker-environments/store-row-codec.js";
 import {
   createSqliteQueryCache,
@@ -22,6 +28,7 @@ import type {
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
   RepositoryWorkspaceDiskBinding,
+  RepositoryWorkspaceDiskRetirement,
   RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
@@ -318,6 +325,71 @@ export function bindSessionRepositoryWorkspaceDiskInDatabase(
       throw new Error("Finish the active workspace turn before binding disk authority");
     }
     return { disk_authority_json: JSON.stringify(authority) };
+  });
+}
+
+/** Local session binding is verified by the materializer's retained source at both grants. */
+export function retireSessionRepositoryWorkspaceDiskInDatabase(
+  db: EngineConnection,
+  input: RepositoryWorkspaceDiskRetirement,
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  if (!resultRefPattern.test(input.checkpointRef) || !manifestPattern.test(input.manifestHash)) {
+    throw new Error("Repository disk export is invalid");
+  }
+  return mutate(db, input, nowMs, (repository) => {
+    const { claim } = input;
+    const placement = getRequired(db, claim.sessionId);
+    const pending = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .selectFrom("worker_workspace_pending_results")
+        .selectAll()
+        .where("session_id", "=", claim.sessionId),
+    );
+    const move = readWorkerPlacementMovesReadOnly(db, [claim.sessionId]).get(claim.sessionId);
+    if (
+      !repository.diskAuthority ||
+      placement.state !== "draining" ||
+      !pending ||
+      !matchesWorkspaceResultClaim(placement, pendingResultFromRow(pending), claim) ||
+      placement.agentId !== repository.agentId ||
+      placement.sessionKey !== repository.sessionKey ||
+      move?.target.kind !== "gateway" ||
+      move.abandonSource ||
+      move.source.environmentId !== placement.environmentId ||
+      move.source.ownerEpoch !== placement.activeOwnerEpoch ||
+      move.source.generation + 1 !== placement.generation ||
+      claim.claimId !== claim.runId ||
+      !claim.claimId.startsWith("reclaim-") ||
+      pending.repository_workspace_id !== repository.workspaceId ||
+      pending.staged_result_ref !== input.checkpointRef ||
+      pending.repository_disk_authority_json === null
+    ) {
+      throw new Error("Repository disk retirement lost its exact Gateway move result");
+    }
+    const environment = findWorkerEnvironment(db, placement.environmentId);
+    assertRepositoryWorkspaceDiskIdentity(repository.diskAuthority, environment);
+    assertRepositoryWorkspaceDiskIdentity(
+      requireRepositoryWorkspaceDiskAuthority(JSON.parse(pending.repository_disk_authority_json)),
+      environment,
+    );
+    if (
+      environment?.state !== "attached" ||
+      environment.ownerEpoch !== placement.activeOwnerEpoch ||
+      environment.destroyRequestedAtMs !== null ||
+      environment.attachedSessionIds.length !== 1 ||
+      environment.attachedSessionIds[0] !== placement.sessionId
+    ) {
+      throw new Error("Repository disk retirement lost its original attachment");
+    }
+    // The local worktree is already bound. This export is a retained handoff receipt,
+    // not a new mirror source; pending-result custody still owns physical retirement.
+    return {
+      disk_authority_json: null,
+      checkpoint_ref: input.checkpointRef,
+      manifest_hash: input.manifestHash,
+    };
   });
 }
 

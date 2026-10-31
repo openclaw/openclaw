@@ -3519,6 +3519,7 @@ const workerModules = new Set([
   "src/config/sessions/session-accessor.sqlite-worktree-owner.ts", // Only session-entry-read.worker.ts reads the worktree projection after owner-protection's worker cutover.
   "src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts", // Anchor-read kernel worker roots; the sqlite-read wrapper's sole value caller is correction.ts runNative under !isMainThread.
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
+  "src/gateway/worker-environments/placement-move-row-codec.ts", // SQL read callers are placement lifecycle/transitions/turn-claim workers, recordStagedWorkerWorkspaceResult in the turn-claim worker, and retireSessionRepositoryWorkspaceDiskInDatabase in session-repository-workspaces.worker.ts; other imports use pure codecs.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/gateway/worker-environments/local-workspace-manifest-scan.ts", // State-read workers capture rows; Git workspace workers compute manifests from detached snapshots. Host imports are types.

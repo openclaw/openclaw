@@ -98,6 +98,7 @@ export function useRepositoryWorkspaceResultFixture() {
     executionMode: "worker-turn" | "remote-exec",
     runSetupScript = false,
     incognito = false,
+    repositoryUrl?: string,
   ) {
     if (incognito) {
       setWorkerTurnSessionTarget({
@@ -120,7 +121,7 @@ export function useRepositoryWorkspaceResultFixture() {
     const repository = await store.create({
       agentId: sessionTarget.agentId,
       sessionKey: sessionTarget.sessionKey,
-      url: pathToFileURL(origin).href,
+      url: repositoryUrl ?? pathToFileURL(origin).href,
       runSetupScript,
       assertCurrent: () => {},
     });
@@ -174,7 +175,7 @@ export function useRepositoryWorkspaceResultFixture() {
     };
     const synced = await syncSessionRepositoryWorkspace({
       ...sessionTarget,
-      repository,
+      repository: { ...repository, url: pathToFileURL(origin).href },
       tunnel,
       generation: 1,
       runSetupScript,
@@ -325,6 +326,7 @@ export function useRepositoryWorkspaceResultFixture() {
     });
     return {
       ...operations,
+      origin,
       remote,
       store,
       repository,

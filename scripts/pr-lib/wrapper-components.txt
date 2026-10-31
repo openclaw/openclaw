@@ -888,6 +888,7 @@ src/gateway/worker-environments/environment-recipe.ts
 src/gateway/worker-environments/local-workspace-fingerprints.ts
 src/gateway/worker-environments/placement-authority-owner.ts
 src/gateway/worker-environments/placement-inventory-changed-error.ts
+src/gateway/worker-environments/placement-move-row-codec.ts
 src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts

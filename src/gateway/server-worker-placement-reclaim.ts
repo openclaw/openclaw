@@ -380,10 +380,32 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           };
           const placement = await begin(assertDrainCurrent);
           assertDrainCurrent();
+          const assertReclaimCurrent = () => {
+            if (
+              resolved.workspace.kind !== "repository" ||
+              !resolved.workspace.repository.diskAuthority
+            ) {
+              assertDrainCurrent();
+              return;
+            }
+            // This held lifecycle may replace its own repository binding with a managed
+            // worktree. Keep caller/session generation here; prepared recovery retains
+            // the writer independently, rather than retaining the pre-handoff cwd.
+            authorize?.();
+            const entry = context.readCurrentTarget().entry;
+            if (
+              entry?.sessionId !== sessionId ||
+              entry.lifecycleRevision !== resolved.entry.lifecycleRevision
+            ) {
+              throw new WorkerDispatchTargetChangedError(
+                "Repository disk move session owner changed",
+              );
+            }
+          };
           const reclaimedPlacement = await reclaim(
             resolved.workspace,
             placement,
-            assertDrainCurrent,
+            assertReclaimCurrent,
           );
           params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
           return reclaimedPlacement;

@@ -1,9 +1,7 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import {
-  createPlacementMoveOps,
-  readWorkerPlacementMovesReadOnly,
-} from "./placement-move-intent.js";
+import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import {
   isCurrentPlacementTurnClaim,
   nextGeneration,

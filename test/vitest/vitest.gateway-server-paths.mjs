@@ -390,6 +390,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts",
   "src/gateway/worker-environments/placement-abandon-lifecycle.test.ts",
   "src/gateway/worker-environments/placement-change-snapshot.test.ts",
+  "src/gateway/worker-environments/placement-disk-gateway-move.test.ts",
   "src/gateway/worker-environments/placement-dispatch-authority.test.ts",
   "src/gateway/worker-environments/placement-dispatch-cleanup.test.ts",
   "src/gateway/worker-environments/placement-dispatch-conflict-lookup.test.ts",

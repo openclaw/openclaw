@@ -10,10 +10,8 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
-import {
-  findPendingWorkerWorkspaceResult,
-  isCurrentWorkerWorkspacePendingResultOwner,
-} from "./placement-workspace-result.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result-owner.js";
+import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 type WorkerPlacementBinding = Readonly<{

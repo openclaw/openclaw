@@ -1,3 +1,4 @@
+import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerResourceReceipt } from "../plugins/capability-provider.types.js";
 
 /** The retained resource, not a Gateway checkpoint, owns this repository. */
@@ -43,6 +44,11 @@ export type RepositoryWorkspaceBase = RepositoryWorkspaceMutation & {
 export type RepositoryWorkspaceCheckpoint = RepositoryWorkspaceMutation & {
   checkpointRef: string;
   manifestHash: string;
+};
+
+/** The pending result retains the original receipt until exact source cleanup settles. */
+export type RepositoryWorkspaceDiskRetirement = RepositoryWorkspaceCheckpoint & {
+  claim: WorkerSessionTurnClaim;
 };
 
 export type RepositoryWorkspaceMutationResult = {

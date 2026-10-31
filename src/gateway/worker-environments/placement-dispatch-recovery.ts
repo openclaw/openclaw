@@ -258,7 +258,16 @@ export function createPlacementRecoveryActions(
     const diskAuthority = placementOwner
       ? (await getSessionRepositoryWorkspaceStore().find(placementOwner))?.diskAuthority
       : undefined;
-    if (diskAuthority && (placementOwner?.state !== "active" || facts.moves.size > 0)) {
+    const diskMove = facts.moves.get(sessionId);
+    const gatewayDiskMove =
+      placementOwner?.state === "draining" &&
+      diskMove?.target.kind === "gateway" &&
+      !diskMove.abandonSource;
+    if (
+      diskAuthority &&
+      !gatewayDiskMove &&
+      (placementOwner?.state !== "active" || facts.moves.size > 0)
+    ) {
       // Transfer/export and destructive lifecycle support must precede activation.
       // Recovery never replaces a disk binding with an old mirror or fresh source clone.
       log.warn("Disk-authoritative workspace transfer or teardown is held for explicit recovery");

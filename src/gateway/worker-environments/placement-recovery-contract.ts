@@ -44,6 +44,7 @@ export type PlacementRecoveryDeps = {
     params: WorkerSessionPlacementIdentity & {
       assertCurrent: () => void;
       quiescence?: WorkerWorkspaceQuiescence;
+      diskResult?: WorkerSessionTurnClaim;
     },
   ) => Promise<void>;
 };

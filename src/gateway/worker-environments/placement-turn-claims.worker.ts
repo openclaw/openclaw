@@ -8,7 +8,7 @@ import type {
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import {
   advanceCursor,
