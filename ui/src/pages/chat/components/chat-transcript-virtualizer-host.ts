@@ -447,8 +447,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (
       this.prependAnchor.hasPrepend &&
       (this.offsetState.touchActive || this.virtualizer.isScrolling) &&
-      !this.offsetState.scrollCommand &&
-      !this.offsetState.pendingScrollOffset &&
+      !this.offsetState.hasPendingCommand &&
       this.renderPreviousRows
     ) {
       return this.renderPreviousRows();
@@ -504,8 +503,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           this.prependAnchor.capture(
             this.scrollElement,
             Boolean(
-              this.offsetState.pendingScrollOffset ||
-              this.offsetState.scrollCommand ||
+              this.offsetState.hasPendingCommand ||
               this.offsetState.pendingInteractionAnchor ||
               this.callbacks.hasPendingScrollCommand?.(),
             ),
@@ -615,7 +613,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   cancelScroll(): void {
     this.endAnchor.clear();
     this.prependAnchor.clear();
-    if (this.offsetState.scrollCommand === null && !this.offsetState.pendingScrollOffset) {
+    if (!this.offsetState.hasPendingCommand) {
       return;
     }
     const measureSkippedRows = this.offsetState.scrollCommand?.behavior === "smooth";
