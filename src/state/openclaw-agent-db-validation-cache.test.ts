@@ -4,11 +4,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assert, describe, expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { isReplayableWorkerTranscriptCommitError } from "../gateway/worker-environments/transcript-commit-failure.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { cleanupSessionStateForTest as cleanupState } from "../test-utils/session-state-cleanup.js";
-import { isReplayableWorkerTranscriptCommitError } from "../gateway/worker-environments/transcript-commit-failure.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError as AdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError as AdmissionInvalidError,

@@ -1,4 +1,3 @@
-import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
@@ -11,6 +10,7 @@ import {
   adoptSqliteSchemaFacts,
   getAdmittedSqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { adoptCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import {
   agentDatabaseValidationKey,
