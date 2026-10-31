@@ -77,13 +77,17 @@ Do not write a separate permission store or infer consent from successful login.
   - Set `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` and check that the
     `[model-fetch] start provider=<id> … url=` line names your vendor's
     endpoint.
-- **Stay inside your provider.** Core also runs `normalizeTransport`,
-  `augmentModelCatalog` and `resolveExternalAuthProfiles` for other providers.
-  Return nothing unless the context names your provider or already targets your
-  endpoint. Core refuses a transport change from another plugin that moves a
-  provider to a different origin, and
-  `src/plugins/contracts/provider-transport-scope.contract.test.ts` fails any
-  bundled hook that rewrites a foreign transport.
+- **Stay inside your provider.** Core also runs some hooks for providers you do
+  not own:
+  - `normalizeTransport` receives other providers' transports. Return nothing
+    unless the context names your provider or already targets your endpoint.
+    Core ignores another plugin's change that moves a provider to a different
+    origin, and
+    `src/plugins/contracts/provider-transport-scope.contract.test.ts` fails any
+    bundled hook that rewrites a foreign transport.
+  - `augmentModelCatalog` and `resolveExternalAuthProfiles` run as global
+    discovery. Return only catalog rows and auth profiles for providers your
+    plugin owns.
 - **New model for an existing provider.** Add catalog data, not code. Search
   every provider for the predecessor model ID before adding an exact-ID rule.
 
