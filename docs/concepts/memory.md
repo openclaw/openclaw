@@ -16,7 +16,8 @@ missing, OpenClaw uses its workspace provenance records. Files recorded as
 untrusted and remote files without a valid read-source identity remain excluded.
 The Gateway logs one warning per excluded file and process (`excluding MEMORY.md
 from automatic memory context: memory provenance is untrusted`), and
-`openclaw doctor` lists each excluded root `MEMORY.md` or `USER.md` with the time
+`openclaw doctor` lists each excluded `MEMORY.md`, `USER.md`, or personal
+`users/<profile-id>/USER.md` with the time
 and session of its last recorded tracked write. That record keeps only the
 latest tracked write, so it can name a later session than the write that
 quarantined the file. See

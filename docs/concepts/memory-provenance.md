@@ -290,7 +290,7 @@ detect this:
 - The Gateway log contains `excluding MEMORY.md from automatic memory context:
   memory provenance is untrusted` (or `USER.md`), once per file and process.
 - `openclaw doctor` reports the check `core/doctor/memory-provenance` with the
-  file, the origin class, and the time and session of the last recorded
+  file (including personal `users/<profile-id>/USER.md` files), the origin class, and the time and session of the last recorded
   tracked write. The record names only the latest tracked write, not
   necessarily the write that quarantined the file.
 
