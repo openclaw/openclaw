@@ -137,11 +137,13 @@ public enum OpenClawChatHistoryPresentation {
     private nonisolated static func decodeMessage(_ raw: OpenClawKit.AnyCodable) -> MessageEntry? {
         guard let message = try? GatewayPayloadDecoding.decode(raw, as: OpenClawChatMessage.self)
         else { return nil }
+        let text = ChatMessageVisibleText.visibleText(in: message)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fields = raw.dictionaryValue
         return MessageEntry(
             message: message,
-            text: ChatMessageVisibleText.visibleText(in: message)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            isMessageToolMirror: raw.dictionaryValue?["openclawMessageToolMirror"]?.dictionaryValue != nil)
+            text: text,
+            isMessageToolMirror: fields?["openclawMessageToolMirror"]?.dictionaryValue != nil)
     }
 
     private nonisolated static func fallbackKey(_ entry: MessageEntry) -> String {
