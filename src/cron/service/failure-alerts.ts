@@ -392,6 +392,8 @@ function maybeEmitFailureAlert(
     consecutiveCount: number;
     terminalOneShot?: boolean;
     terminalRecurring?: boolean;
+    /** Prior settled failure-alert delivery outcome, captured before this cycle reset it. */
+    priorAlertDelivery?: CronFailureNotificationDelivery;
     deferredNotifications: DeferredCronNotifications;
   },
 ): "unavailable" | "suppressed" | "queued" {
@@ -495,6 +497,9 @@ function maybeEmitFailureAlert(
         error: params.error,
         errorReason: params.errorReason,
         terminal: terminalOneShot,
+        // Carries why the previous failure alert did not arrive, captured by
+        // the run finalizer before its delivery-state reset (#186990).
+        alertDelivery: params.priorAlertDelivery,
       }),
     });
     return "queued";
@@ -536,6 +541,8 @@ export function finalizeCronFailureNotifications(
     terminalOneShot?: boolean;
     /** A quick re-run for a provider outage is scheduled; alert/repair wait for its outcome. */
     pendingTransientRetry?: boolean;
+    /** Prior settled failure-alert delivery outcome, captured before this cycle reset it. */
+    priorAlertDelivery?: CronFailureNotificationDelivery;
     replay?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
@@ -570,6 +577,7 @@ export function finalizeCronFailureNotifications(
           : params.job.state.consecutiveErrors) ?? 0,
       terminalOneShot: params.terminalOneShot,
       terminalRecurring: params.terminalRecurring,
+      priorAlertDelivery: params.priorAlertDelivery,
       deferredNotifications: params.deferredNotifications,
     });
   } else if (

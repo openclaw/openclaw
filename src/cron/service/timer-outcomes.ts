@@ -14,6 +14,7 @@ import {
   queueCronAutoDisableNotification,
 } from "./auto-disable.js";
 import {
+  failureNotificationDeliveryFromJobState,
   finalizeCronFailureNotifications,
   resolveFailureIncident,
   resolveFailureAlert,
@@ -160,6 +161,10 @@ export function applyJobResult(
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.deliverySuppressionReason = deliveryState.deliverySuppressionReason;
   job.state.lastDeliveryError = deliveryState.error;
+  // The repair brief carries why the previous failure alert did not arrive, so
+  // capture the prior settled outcome before resetting it for this cycle
+  // (#186990).
+  const priorAlertDelivery = failureNotificationDeliveryFromJobState(job);
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
@@ -266,6 +271,7 @@ export function applyJobResult(
           terminalRecurring,
           terminalOneShot,
           pendingTransientRetry,
+          priorAlertDelivery,
           replay: opts.replay,
           deferredNotifications: opts.deferredNotifications,
         });

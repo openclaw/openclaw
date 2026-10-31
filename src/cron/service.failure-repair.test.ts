@@ -525,6 +525,70 @@ describe("CronService failure repair", () => {
       ]);
     });
 
+    it("carries the prior settled failure-alert delivery outcome into the repair brief", () => {
+      // A channel-less gateway records the prior cycle's delivery failure in job
+      // state (#186990); a new cycle must not erase it before the brief reads it.
+      const { deferredNotifications } = applyError(
+        {
+          state: {
+            consecutiveErrors: 1,
+            lastFailureNotificationDelivered: false,
+            lastFailureNotificationDeliveryStatus: "not-delivered",
+            lastFailureNotificationDeliveryError:
+              "Channel is required (no configured channels detected).",
+          },
+        },
+        { error: "provider unavailable" },
+      );
+      const repair = deferredNotifications.find(
+        (notification): notification is Extract<typeof notification, { kind: "failure-repair" }> =>
+          notification.kind === "failure-repair",
+      );
+      expect(repair?.text).toContain(
+        "No failure alert was sent (last failure-alert delivery attempt: not-delivered).",
+      );
+      expect(repair?.text).toContain("Channel is required (no configured channels detected).");
+    });
+
+    it("never re-briefs inside a streak whose later alert delivery settles as failed", () => {
+      // Canonical channel-less sequence (#186990): failure 1 requests repair
+      // before any alert is attempted, so the brief cannot name a delivery
+      // error yet. After the repair deadline passes unanswered, the streak's
+      // alert fires and its delivery settles as failed; the streak is never
+      // repaired twice, so no later failure in this streak emits another brief
+      // carrying the settled error. The error stays in job state for the next
+      // incident's brief (or the follow-up diagnostic surface).
+      const first = applyError({}, { error: "provider unavailable" });
+      expect(first.deferredNotifications.map((notification) => notification.kind)).toEqual([
+        "failure-repair",
+      ]);
+
+      // The repair turn never answers; the deadline expires before failure 2.
+      const repair = first.job.state.failureAlertIncident?.repair;
+      expect(repair?.deadlineAtMs).toBeDefined();
+      if (repair) {
+        repair.deadlineAtMs = runningAtMs - 1;
+      }
+
+      const second = applyError({ state: first.job.state }, { error: "provider unavailable" });
+      expect(second.deferredNotifications.map((notification) => notification.kind)).toEqual([
+        "failure-alert",
+      ]);
+
+      // The dispatcher settles that alert's delivery as failed (channel-less).
+      second.job.state.lastFailureNotificationDelivered = false;
+      second.job.state.lastFailureNotificationDeliveryStatus = "not-delivered";
+      second.job.state.lastFailureNotificationDeliveryError =
+        "Channel is required (no configured channels detected).";
+
+      const third = applyError({ state: second.job.state }, { error: "provider unavailable" });
+      // Same incident signature: suppressed entirely, and never a second brief.
+      expect(third.deferredNotifications).toEqual([]);
+      // The finalizer captures the settled outcome (priorAlertDelivery) but
+      // drops it: no brief is emitted, and the cycle resets the delivery state.
+      expect(third.job.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+    });
+
     it.each<[string, Partial<CronJob>, string[]]>([
       ["disabled within retry budget", { enabled: false }, ["failure-alert"]],
       [
