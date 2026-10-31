@@ -457,4 +457,3 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
 });
 
 // Claimed for #188469 by scripts/claim-window.sh; replaced by the real regression.
-it.todo('Control UI model picker shows "All models (1)" instead of the single remaining model');
