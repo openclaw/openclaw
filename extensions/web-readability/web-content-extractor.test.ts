@@ -1,8 +1,9 @@
+import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { createReadabilityWebContentExtractor } from "./web-content-extractor.js";
 
 const SAMPLE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Example Article</title></head><body><nav><ul><li><a href="/home">Home</a></li><li><a href="/about">About</a></li></ul></nav><main><article>
-<h1>Example Article</h1><p>Main content starts here with enough words to satisfy readability.</p><p>Second paragraph for a bit more signal.</p><p><a href="../next">Continue reading</a></p></article></main><footer>Footer text</footer></body></html>`;
+<h1>Example Article</h1><p>Main content starts here with enough words to satisfy readability.</p><p>Second paragraph for a bit more signal.</p><p><a href="../next">Continue reading</a> <a href="#top">Top</a></p></article></main><footer>Footer text</footer></body></html>`;
 
 const MINIFIED_BLOCKS_HTML =
   "<!doctype html><html><head><title>Results</title></head><body><article>" +
@@ -19,9 +20,7 @@ async function extractArticle(html: string, extractMode: "text" | "markdown" = "
     url: "https://example.com/article",
     extractMode,
   });
-  if (!result) {
-    throw new Error("expected readability extraction result");
-  }
+  assert(result, "expected readability extraction result");
   return result;
 }
 
@@ -31,10 +30,7 @@ describe("web readability extractor", () => {
     ['<base target="_blank" />', "https://example.com/next"],
     ['<base href="/docs/guide/" />', "https://example.com/docs/next"],
   ])("extracts readable markdown with absolute links (head %j)", async (base, link) => {
-    const html = SAMPLE_HTML.replace("</head>", `${base}</head>`).replace(
-      "Continue reading</a>",
-      'Continue reading</a> <a href="#top">Top</a>',
-    );
+    const html = SAMPLE_HTML.replace("</head>", `${base}</head>`);
     const extracted = await extractArticle(html, "markdown");
     expect(extracted.text).toContain("Main content starts here");
     expect(extracted.text).toContain(`[Continue reading](${link})`);
@@ -42,19 +38,14 @@ describe("web readability extractor", () => {
     expect(extracted.title).toBe("Example Article");
   });
 
-  it("keeps block boundaries in text mode for minified HTML", async () => {
-    const extracted = await extractArticle(MINIFIED_BLOCKS_HTML, "text");
-    expect(extracted.text).toContain("Heading\nPara 0.");
-    expect(extracted.text).toContain("\nPara 1.");
-    expect(extracted.text).toContain("\nalpha\nbeta\n");
-    expect(extracted.title).toBe("Results");
-  });
-
-  it("keeps minified block structure in markdown mode", async () => {
-    const extracted = await extractArticle(MINIFIED_BLOCKS_HTML, "markdown");
-    expect(extracted.text).toContain("# Heading");
-    expect(extracted.text).toContain("Para 0.");
-    expect(extracted.text).toContain("- alpha\n- beta");
+  it.each([
+    ["text", ["Heading\nPara 0.", "\nPara 1.", "\nalpha\nbeta\n"]],
+    ["markdown", ["# Heading", "Para 0.", "- alpha\n- beta"]],
+  ] as const)("keeps minified block structure in %s mode", async (mode, fragments) => {
+    const extracted = await extractArticle(MINIFIED_BLOCKS_HTML, mode);
+    for (const fragment of fragments) {
+      expect(extracted.text).toContain(fragment);
+    }
     expect(extracted.title).toBe("Results");
   });
 
