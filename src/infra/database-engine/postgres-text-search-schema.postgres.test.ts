@@ -1,4 +1,5 @@
 import { getEnvironmentData } from "node:worker_threads";
+import { sql } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AGENT_TEXT_SEARCH_POSTGRES_SQL } from "../../state/openclaw-agent-text-search-migration.js";
@@ -88,6 +89,39 @@ describe.skipIf(!connection)("PostgreSQL full-text token split migration", () =>
       const reopened = open(destination);
       expect(version(reopened)).toBe(38);
       expect(match(reopened, "server")).toEqual([{ id: "deploy" }]);
+    });
+  });
+
+  it("splits and headlines each snippet row once", () => {
+    using fixture = createPostgresEngineTestFixture({
+      directory: dirs.make("pg-text-search-"),
+      connection: connection!,
+      schemaPrefix: "text_split_test",
+      schema: destination,
+    });
+    withEngineStoreAdmission(() => {
+      const db = fixture.open(destination);
+      const search = admitStoreSearch(db, memory, { extension: "memory" });
+      db.runTransaction(() => {
+        db.prepare("INSERT INTO notes VALUES (?, ?, ?)").run("deploy", 1, note);
+      });
+      const query = { kind: "term", text: "server.py" } as const;
+      const k = getNodeSqliteKysely<{ notes: { id: string; text: string } }>(db);
+      const snippets = k
+        .selectFrom("notes")
+        .select(search.fullText!.snippet(search.text.body!, "text", 6, query).as("snippet"))
+        .where(search.fullText!.match(search.text.body!, query));
+      expect(executeSqliteQuerySync(db, snippets).rows).toEqual([
+        { snippet: "server.py landed; the API serves" },
+      ]);
+      const compiled = /* kysely-allow-raw: EXPLAIN prefixes the real query under test. */ sql<{
+        "QUERY PLAN": string;
+      }>`EXPLAIN (VERBOSE, COSTS OFF) ${snippets}`.compile(k);
+      const plan = executeSqliteQuerySync(db, { compile: () => compiled })
+        .rows.map((row) => row["QUERY PLAN"])
+        .join("\n");
+      expect(plan.match(/ts_headline\(/g)).toHaveLength(1);
+      expect(plan.match(/'\[\[:punct:\]\]'/g)).toHaveLength(1);
     });
   });
 });
