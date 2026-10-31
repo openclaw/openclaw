@@ -81,13 +81,14 @@ work. The delivery path depends on that shape.
     settings.
 
     While a delegated task or caller owns completion, OpenClaw skips the
-    A2A follow-up to avoid returning the same result twice. After a completed
+    A2A follow-up to avoid returning the same result twice. Persistent ACP
+    children retain their delegated completion path. After a completed run-mode
     ACP child receives a new follow-up from its parent, a one-way completion
     returns the result to the parent without a parent/child echo loop.
     Accepted `sessions_send` results report target admission separately
     from announcement delivery: `targetDisposition` is `queued` or `steered`,
     while `delivery.status` is `pending` or `skipped`. A follow-up to a completed
-    child reports `delivery.status="pending"` until its reply is returned;
+    run-mode child reports `delivery.status="pending"` until its reply is returned;
     `skipped` applies when another completion owner is already responsible.
 
   </Accordion>

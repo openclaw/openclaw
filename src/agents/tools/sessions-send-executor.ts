@@ -649,6 +649,8 @@ export async function executeSessionsSend(
           ownedTask: communication.ownedTask,
           isIsolatedCronRequester,
           targetIsSubagent,
+          targetAcpMode: targetAcpMeta?.mode,
+          requesterSessionKey: requesterSession.canonicalKey,
           targetSession: targetSessionEntry,
           context: {
             callGateway: gatewayCall,

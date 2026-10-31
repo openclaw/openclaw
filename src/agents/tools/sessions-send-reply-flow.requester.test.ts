@@ -31,12 +31,10 @@ import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import {
-  finishSessionsSendReply,
   prepareSessionsSendReplyContext,
   startSessionsSendReplyFlow,
 } from "./sessions-send-reply-flow.js";
 import { createSessionsSendSessionReaders } from "./sessions-send-session-source.js";
-import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -79,8 +77,8 @@ async function requesterAuthority(
   return { client, device, source, origin, release };
 }
 
-it.each(["allowed", "revoked", "session changed", "selected Bob", "completed ACP"] as const)(
-  "returns delayed results after invocation closure: %s",
+it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
+  "preserves requester selection and separate-turn return after invocation closure: %s",
   async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg: OpenClawConfig = {
@@ -96,7 +94,6 @@ it.each(["allowed", "revoked", "session changed", "selected Bob", "completed ACP
         updatedAt: 1,
       };
       const peerEntry = { sessionId: "peer-id", lifecycleRevision: "peer-v1", updatedAt: 1 };
-      const delegatedPeerEntry = { ...peerEntry, spawnedBy: sessionKey, acp: { mode: "oneshot" } };
       await replaceSessionEntry({ agentId: "main", sessionKey }, requesterEntry);
       await replaceSessionEntry({ agentId: "main", sessionKey: peerKey }, peerEntry);
       const context = createContext([], () => cfg);
@@ -252,28 +249,19 @@ it.each(["allowed", "revoked", "session changed", "selected Bob", "completed ACP
                         callGateway,
                       });
                       try {
-                        const start = await startSessionsSendAgentRun({
-                          cfg,
-                          admissionConfig: cfg,
-                          callGateway: accepted.callGateway,
-                          runId: "synthetic-peer-run",
-                          sessionKey: peerKey,
-                          sessionStoreTarget: {
-                            agentId: "main",
-                            canonicalKey: peerKey,
-                            storePath: peer.storePath,
-                          },
-                          sendParams: {
+                        await accepted.callGateway({
+                          method: "agent",
+                          params: {
                             agentId: "main",
                             sessionKey: peerKey,
                             message: "Synthetic request",
                             inputProvenance,
                             idempotencyKey: "synthetic-peer-run",
-                            sourceReplyDeliveryMode: "message_tool_only",
                           },
                         });
-                        const readers = createSessionsSendSessionReaders(cfg);
-                        const requesterTarget = await readers.readRequester(sessionKey, "main");
+                        const requesterTarget = await createSessionsSendSessionReaders(
+                          cfg,
+                        ).readRequester(sessionKey, "main");
                         if (!requesterTarget) {
                           throw new Error("Canonical requester target unavailable");
                         }
@@ -282,9 +270,9 @@ it.each(["allowed", "revoked", "session changed", "selected Bob", "completed ACP
                           requesterIsSubagent: false,
                           ownedTask: false,
                           isIsolatedCronRequester: false,
-                          targetIsSubagent: boundary === "completed ACP",
-                          targetSession:
-                            boundary === "completed ACP" ? delegatedPeerEntry : peerEntry,
+                          targetIsSubagent: false,
+                          requesterSessionKey: sessionKey,
+                          targetSession: peerEntry,
                           requesterTarget,
                           context: {
                             callGateway,
@@ -297,33 +285,11 @@ it.each(["allowed", "revoked", "session changed", "selected Bob", "completed ACP
                             requesterAgentId: "main",
                           },
                         });
-                        if (boundary === "completed ACP") {
-                          const targetSession = await readers.readTarget(peerKey, "main");
-                          const result = await finishSessionsSendReply({
-                            start,
-                            registryCompletion: false,
-                            watchField: {},
-                            replyContext,
-                            targetSession,
-                            cfg,
-                            requesterAgentId: "main",
-                            promptedAt: 1,
-                            timeoutSeconds: 0,
-                            timeoutMs: 0,
-                            targetIsSubagent: true,
-                            isIsolatedCronRequester: false,
-                          });
-                          expect(result.details).toMatchObject({
-                            status: "accepted",
-                            delivery: { status: "pending" },
-                          });
-                        } else {
-                          await startSessionsSendReplyFlow({
-                            ...replyContext,
-                            skip: false,
-                            runId: "synthetic-peer-run",
-                          });
-                        }
+                        await startSessionsSendReplyFlow({
+                          ...replyContext,
+                          skip: false,
+                          runId: "synthetic-peer-run",
+                        });
                         await peerWaiting.promise;
                       } finally {
                         accepted.close();
@@ -356,38 +322,29 @@ it.each(["allowed", "revoked", "session changed", "selected Bob", "completed ACP
         expect(effects[0]?.request.params).toMatchObject({
           message: expect.stringContaining(fullReply),
         });
-        if (boundary !== "completed ACP") {
-          expect(effects[0]).toMatchObject({
-            origin: expectedOrigin,
-            profileId:
-              boundary === "selected Bob"
-                ? bobSource.authority.profileId
-                : source.authority.profileId,
-            scopes: ["operator.read", "operator.write"],
-            delivery: {
-              source: { sessionKey: peerKey, sessionId: peerEntry.sessionId },
-              target: { sessionKey, sessionId: requesterEntry.sessionId },
-              returnedResult: { extraSystemPrompt: expect.stringContaining("delivered once") },
-            },
-            request: {
-              agentToolCaller: { agentId: "main", sessionKey, requesterOrigin: expectedOrigin },
-            },
-          });
-        }
         expect(effects[0]).toMatchObject({
+          origin: expectedOrigin,
+          profileId:
+            boundary === "selected Bob"
+              ? bobSource.authority.profileId
+              : source.authority.profileId,
+          scopes: ["operator.read", "operator.write"],
           receipt: undefined,
           invocation: undefined,
           fullPermission: undefined,
+          delivery: {
+            source: { sessionKey: peerKey, sessionId: peerEntry.sessionId },
+            target: { sessionKey, sessionId: requesterEntry.sessionId },
+            returnedResult: { extraSystemPrompt: expect.stringContaining("delivered once") },
+          },
           request: {
             replyExpectation: "optional",
+            agentToolCaller: { agentId: "main", sessionKey, requesterOrigin: expectedOrigin },
             params: {
               sessionKey,
               expectedExistingSessionId: requesterEntry.sessionId,
               expectedExistingSessionLifecycleRevision: requesterEntry.lifecycleRevision,
-              inputProvenance: {
-                sourceSessionKey: peerKey,
-                sourceTool: boundary === "completed ACP" ? "subagent_announce" : "sessions_send",
-              },
+              inputProvenance: { sourceSessionKey: peerKey, sourceTool: "sessions_send" },
             },
           },
         });
