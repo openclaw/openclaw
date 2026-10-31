@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { dailyEntry } from "./usage-chart.test-support.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -18,22 +19,30 @@ import {
 afterEach(cleanupUsagePageTest);
 
 describe("Usage query failure ownership", () => {
-  it("keeps model options mounted while a text query is pending", async () => {
+  it("retains hidden analytics and model options while a text query settles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
     focusDocument();
     const snapshot = cacheSnapshot("fresh");
+    const date = "2026-08-07";
+    const daily = dailyEntry(date, 200, 2);
     const original = {
       ...snapshot.result,
+      totals: daily,
+      aggregates: { ...snapshot.result.aggregates, costDaily: [daily] },
       sessions: ["synthetic-alpha", "synthetic-beta"].map((model) => ({
         key: `agent:main:${model}`,
         agentId: "main",
         label: `${model} session`,
         model,
-        usage: snapshot.result.totals,
+        usage: {
+          ...snapshot.result.totals,
+          activityDates: [date],
+          dailyBreakdown: [{ ...snapshot.result.totals, date, tokens: 100, cost: 1 }],
+        },
       })),
     };
-    const reply = deferred<typeof original>();
+    let reply = deferred<typeof original>();
     let pending = false;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage") {
@@ -44,6 +53,37 @@ describe("Usage query failure ownership", () => {
     // SAFETY: The fixture exercises only the mocked request method.
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
+    page.read().callbacks.filters.onDatesChange({ startDate: "2026-01-01" });
+    await vi.advanceTimersByTimeAsync(400);
+    await page.updateComplete;
+    const trend = page.querySelector<HTMLElement>(".usage-trend-section")!;
+    const chart = trend.querySelector(".daily-chart-compact")!;
+    const bar = trend.querySelector(".daily-bar-wrapper")!;
+    const heatmap = page.querySelector<HTMLElement>(".usage-heatmap")!;
+    const heatmapHost = heatmap.closest(".settings-section")!.parentElement!;
+    const cells = [...heatmap.querySelectorAll(".usage-heatmap__cell")];
+    expect(cells.length).toBeGreaterThan(62);
+    expect(cells.at(-1)?.getAttribute("aria-label")).toContain("200");
+    const breakdown = page.querySelector(".cost-breakdown-compact")!;
+    expect(breakdown).not.toBeNull();
+    const overviewCard = page.querySelector(".usage-overview-card")!;
+    const overviewHost = overviewCard.closest(".settings-section")!.parentElement!;
+    const grid = page.querySelector(".usage-grid")!;
+    const gridHost = grid.parentElement!;
+    const alphaRow = page.querySelector(
+      '.session-bar-selection[aria-label="synthetic-alpha session"]',
+    )!;
+    const expectAnalyticsHidden = (hidden: boolean) => {
+      expect(page.querySelector(".cost-breakdown-compact")).toBe(breakdown);
+      expect(page.querySelector(".usage-overview-card")).toBe(overviewCard);
+      expect(page.querySelector(".usage-grid")).toBe(grid);
+      for (const host of [overviewHost, gridHost]) {
+        expect(host.isConnected).toBe(true);
+        expect(host.hidden).toBe(hidden);
+        expect(host.hasAttribute("inert")).toBe(hidden);
+        expect(host.style.display).toBe(hidden ? "none" : "contents");
+      }
+    };
     const trigger = page.querySelector<HTMLButtonElement>('[id="usage-filter-model:trigger"]')!;
     const menu = trigger.closest<HTMLElement>(".usage-filter-select")!;
     menu.addEventListener(
@@ -72,7 +112,18 @@ describe("Usage query failure ownership", () => {
     expect(page.usageLoading).toBe(true);
     expect(page.read().data.totals).toBeNull();
     expect(page.read().data.overview).toBeUndefined();
-    expect(page.textContent).not.toContain("synthetic-alpha session");
+    expect(trend.isConnected).toBe(true);
+    expect(trend.hidden).toBe(true);
+    expect(trend.hasAttribute("inert")).toBe(true);
+    expect(trend.style.display).toBe("none");
+    expect(trend.querySelector(".daily-chart-compact")).toBe(chart);
+    expect(trend.querySelector(".daily-bar-wrapper")).toBe(bar);
+    expect(heatmap.isConnected).toBe(true);
+    expect(heatmapHost.hidden).toBe(true);
+    expect(heatmapHost.hasAttribute("inert")).toBe(true);
+    expect(heatmapHost.style.display).toBe("none");
+    expectAnalyticsHidden(true);
+    expect(alphaRow.isConnected).toBe(true);
     expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
     expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
     expect(options[0]!.getAttribute("aria-checked")).toBe("true");
@@ -83,8 +134,75 @@ describe("Usage query failure ownership", () => {
     expect(page.usageLoading).toBe(false);
     expect(page.textContent).toContain("synthetic-alpha session");
     expect(page.textContent).not.toContain("synthetic-beta session");
+    expect(trend.hidden).toBe(false);
+    expect(trend.hasAttribute("inert")).toBe(false);
+    expect(trend.style.display).toBe("");
+    expect(trend.querySelector(".daily-chart-compact")).toBe(chart);
+    expect(trend.querySelector(".daily-bar-wrapper")).toBe(bar);
+    expect(heatmapHost.hidden).toBe(false);
+    expect(heatmapHost.hasAttribute("inert")).toBe(false);
+    expect(heatmapHost.style.display).toBe("contents");
+    const currentCells = [...heatmap.querySelectorAll(".usage-heatmap__cell")];
+    currentCells.forEach((cell, index) => expect(cell).toBe(cells[index]));
+    expect(currentCells.at(-1)?.getAttribute("aria-label")).toContain("100");
+    expectAnalyticsHidden(false);
+    expect(page.querySelector('.session-bar-selection[aria-label="synthetic-alpha session"]')).toBe(
+      alphaRow,
+    );
+
+    reply = deferred<typeof original>();
+    page.read().callbacks.filters.onQueryDraftChange("model:synthetic-beta");
+    page.read().callbacks.filters.onApplyQuery();
+    await page.updateComplete;
+    reply.reject(new Error("Synthetic filter failed"));
+    await vi.advanceTimersByTimeAsync(0);
+    await page.updateComplete;
+    expect(page.textContent).toContain("Synthetic filter failed");
+    expect(trend.hidden).toBe(true);
+    expect(heatmapHost.hidden).toBe(true);
+    expectAnalyticsHidden(true);
     expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
     expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
+  });
+
+  it("does not mount hidden charts for an incomplete zero cache", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+    focusDocument();
+    const snapshot = cacheSnapshot("partial");
+    const zero = dailyEntry("2026-08-07", 0);
+    const original = {
+      ...snapshot.result,
+      totals: zero,
+      sessions: [{ key: "agent:main:uncomputed", usage: zero }],
+    };
+    const reply = deferred<typeof original>();
+    let pending = false;
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.usage"
+        ? pending
+          ? reply.promise
+          : original
+        : { updatedAt: Date.now(), providers: [] },
+    );
+    // SAFETY: The fixture exercises only the mocked request method.
+    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    await preloadUsage(page);
+    page.read().callbacks.filters.onDatesChange({ startDate: "2026-01-01" });
+    await vi.advanceTimersByTimeAsync(400);
+    await page.updateComplete;
+    expect(page.querySelector(".usage-loading-card")).not.toBeNull();
+    expect(page.querySelector(".daily-chart-compact")).toBeNull();
+    pending = true;
+    page.read().callbacks.filters.onQueryDraftChange("model:synthetic-alpha");
+    page.read().callbacks.filters.onApplyQuery();
+    await page.updateComplete;
+    expect(page.usageLoading).toBe(true);
+    expect(page.querySelector(".daily-chart-compact")).toBeNull();
+    expect(page.querySelector(".usage-heatmap")).toBeNull();
+    reply.resolve(original);
+    await vi.advanceTimersByTimeAsync(0);
+    await page.updateComplete;
   });
 
   it.each(["start date", "end date", "scope", "time zone", "agent", "creator"] as const)(
@@ -96,6 +214,10 @@ describe("Usage query failure ownership", () => {
       const snapshot = cacheSnapshot("fresh");
       const original = {
         ...snapshot.result,
+        aggregates: {
+          ...snapshot.result.aggregates,
+          costDaily: [dailyEntry("2026-08-07", 100, 1)],
+        },
         creatorOptions: [
           { key: "profile:opaque-alex", actor: { type: "human" as const, label: "Alex Morgan" } },
         ],
@@ -144,6 +266,13 @@ describe("Usage query failure ownership", () => {
       try {
         const page = await createPage(client, true, context);
         await preloadUsage(page);
+        page.read().callbacks.filters.onDatesChange({ startDate: "2026-01-01" });
+        await vi.advanceTimersByTimeAsync(400);
+        await page.updateComplete;
+        const originalChart = page.querySelector(".daily-chart-compact")!;
+        const originalHeatmap = page.querySelector(".usage-heatmap")!;
+        expect(originalChart).not.toBeNull();
+        expect(originalHeatmap).not.toBeNull();
         expect(page.textContent).toContain("Old query row");
         expect(page.read().data.filterOptions?.agent).toEqual(["main"]);
         if (change === "creator") {
@@ -180,6 +309,10 @@ describe("Usage query failure ownership", () => {
         await page.updateComplete;
         expect(page.usageSelectedSessions).toEqual([]);
         expect(page.read().data.filterOptions).toBeUndefined();
+        expect(originalChart.isConnected).toBe(false);
+        expect(originalHeatmap.isConnected).toBe(false);
+        expect(page.querySelector(".daily-chart-compact")).toBeNull();
+        expect(page.querySelector(".usage-heatmap")).toBeNull();
         expect.soft(page.textContent).not.toContain("Old query row");
         expect
           .soft(

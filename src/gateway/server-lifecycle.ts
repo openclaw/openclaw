@@ -37,6 +37,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { createGatewayDiagnosticsConfigurator } from "./server-diagnostics.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
+import { createGatewayCloseEntrypoints } from "./server-lifecycle-close.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions, GatewayServerOptions } from "./server-public.js";
@@ -375,6 +376,9 @@ export async function prepareGatewayLifecycle(params: {
     port,
     workspaceDir: defaultWorkspaceDir,
     isClosing: () => lifecycle.closePreludeStarted,
+    getConfig: getRuntimeConfig,
+    getPluginRegistry: () => pluginRuntime.registry,
+    logger: logCron,
     runHook: async (event, ctx) => {
       try {
         const hookRunner = (await import("../plugins/hooks.js")).createHookRunner(
@@ -438,7 +442,6 @@ export async function prepareGatewayLifecycle(params: {
       step("model-accounts", stopModelAccountsForClose),
       step("mention-inbox", () => mentionInbox.dispose()),
       step("sandbox-registry", () => sandboxRegistry.drain()),
-      step("talk-persistence", () => talkClose.drain()),
     ]);
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     await step("prelude-fence", () => markClosePreludeStarted(options));
@@ -462,6 +465,7 @@ export async function prepareGatewayLifecycle(params: {
   let exitAfterClose = false;
   const runClosePrelude = async () => {
     await beginClosePrelude();
+    await step("talk-persistence", () => talkClose.drain());
     stopNodeConnectionNotifications();
     await watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
@@ -707,11 +711,6 @@ export async function prepareGatewayLifecycle(params: {
     unregisterConnectionDependentSidecar: connectionDependentSidecarStopOwner.remove,
     registerPostReadySidecars: postReadySidecarStopOwner.publish,
     registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
-    prepareClose: async (options?: GatewayCloseOptions) => {
-      const close = await params.sdkResourceHost.run(() => prepareClose(options));
-      return () => params.sdkResourceHost.run(close);
-    },
-    closeOnStartupFailure: (error?: unknown) =>
-      params.sdkResourceHost.run(() => closeOnStartupFailure(error)),
+    ...createGatewayCloseEntrypoints(params.sdkResourceHost, prepareClose, closeOnStartupFailure),
   };
 }

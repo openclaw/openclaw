@@ -150,7 +150,7 @@ describe("scheduled command timeouts", () => {
           run,
           "Scheduled command settled before its migration preflight",
         );
-        await vi.advanceTimersByTimeAsync(2_000);
+        await vi.advanceTimersByTimeAsync(500);
         expect(settled).toBe(false);
         expect(runCommandJob).not.toHaveBeenCalled();
         if (completion === "revoked") {
@@ -168,7 +168,7 @@ describe("scheduled command timeouts", () => {
           run,
           "Scheduled command settled before entering the abort-ignoring runner",
         );
-        await vi.advanceTimersByTimeAsync(999);
+        await vi.advanceTimersByTimeAsync(499);
         expect(commandSignal?.aborted).toBe(false);
         expect(settled).toBe(false);
         await vi.advanceTimersByTimeAsync(1);

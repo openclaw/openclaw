@@ -484,10 +484,12 @@ export async function compactEmbeddedAgentSessionDirect(
         });
         return fallbackResult.result;
       };
-      return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-        owner.captureContext();
-        return compactPrepared();
-      });
+      return await preparedModelRuntimeLease.run(() =>
+        withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+          owner.captureContext();
+          return compactPrepared();
+        }),
+      );
     } catch (err) {
       return buildCompactionFailureResult(
         isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),

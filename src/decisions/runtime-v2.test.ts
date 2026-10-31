@@ -20,12 +20,9 @@ import { decisionBatchV1ToV2 } from "./compatibility.js";
 import { createDecisionRegistry, unavailable } from "./contract.test-support.js";
 import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
 import type { DecisionProviderContextV2 } from "./provider-context.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
 import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
-import {
-  evaluateDecisionInRegistry,
-  evaluateDecisionV2InRegistry,
-  prepareDecisionProviderReload,
-} from "./runtime.js";
+import { evaluateDecisionInRegistry, evaluateDecisionV2InRegistry } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
 
 // mock-isolation: Keep model preparation and credential discovery outside decision host contract tests.

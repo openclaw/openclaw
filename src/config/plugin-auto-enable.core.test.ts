@@ -68,6 +68,7 @@ const setupRegistryMock = vi.hoisted(() => ({
   ),
 }));
 
+// mock-isolation: Auto-enable fixtures control setup probes without executing discovered plugin modules.
 vi.mock("../plugins/setup-registry.js", () => ({
   clearPluginSetupRegistryCache: vi.fn(),
   resolvePluginSetupAutoEnableReasons: setupRegistryMock.resolvePluginSetupAutoEnableReasons,

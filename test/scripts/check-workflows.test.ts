@@ -322,7 +322,6 @@ describe("check-workflows", () => {
     }
     for (const name of [
       "Checkout",
-      "Setup Node.js",
       "Setup pnpm",
       "Runtime versions",
       "Capture node path",
@@ -336,8 +335,8 @@ describe("check-workflows", () => {
       ref: "${{ inputs.target_ref || github.ref }}",
       "persist-credentials": false,
     });
-    expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
-      REQUESTED_NODE_VERSION:
+    expect(native.steps.find((step) => step.name === "Setup pnpm")?.with).toMatchObject({
+      "node-version":
         "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(

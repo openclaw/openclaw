@@ -31,6 +31,10 @@ export class TranscriptOffsetState {
   recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null =
     null;
 
+  get hasPendingCommand(): boolean {
+    return this.pendingScrollOffset !== null || this.scrollCommand !== null;
+  }
+
   get touchActive(): boolean {
     return this.touching || this.touchScrolling;
   }

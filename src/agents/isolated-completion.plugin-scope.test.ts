@@ -1,7 +1,9 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as fixtures from "./isolated-completion.test-support.js";
+import { acquirePreparedModelRuntimeSnapshotInvocation } from "./prepared-model-runtime.resources.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 // Keep inference/auth synthetic; exercise the real entrypoint's registry plan and loader.
@@ -97,6 +99,7 @@ it("completes without loading configured context/memory or unrelated startup plu
         .toSorted(),
     ).toEqual(["codex", "openai"]);
     expect(registry?.contextEngines.size).toBe(0);
+    const invocation = acquirePreparedModelRuntimeSnapshotInvocation({ pluginRegistry: registry });
     return {
       snapshot: {
         ...fixtures.preparedModelRuntime,
@@ -104,20 +107,31 @@ it("completes without loading configured context/memory or unrelated startup plu
         metadataSnapshot: metadata,
         pluginRegistry: registry,
       },
+      run: <T>(run: () => T): T => invocation.run(run),
       [Symbol.asyncDispose]: async () => {
-        if (registry) {
-          await disposePluginRegistryInstances(registry);
+        try {
+          await invocation.release();
+        } finally {
+          if (registry) {
+            await disposePluginRegistryInstances(registry);
+          }
         }
       },
     };
   });
   useHarness("Gateway log rotation");
-  await expect(
-    fixtures.runIsolatedCompletion({ ...fixtures.isolatedRequest(), config }),
-  ).resolves.toMatchObject({
-    text: "Gateway log rotation",
-  });
-  expect(Reflect.get(globalThis, contextEvaluation)).toBeUndefined();
+  // Plugin selection does not depend on cold-loader wall time; deadline tests own the budget.
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  try {
+    await expect(
+      fixtures.runIsolatedCompletion({ ...fixtures.isolatedRequest(), config }),
+    ).resolves.toMatchObject({
+      text: "Gateway log rotation",
+    });
+    expect(Reflect.get(globalThis, contextEvaluation)).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it("reports the CLI owner the run dispatches to", async () => {

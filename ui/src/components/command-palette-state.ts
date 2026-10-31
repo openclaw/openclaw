@@ -444,7 +444,10 @@ export class CommandPaletteState {
       current.agentId === agentId &&
       (current.loadedAt === undefined || Date.now() - current.loadedAt < CATALOG_CACHE_TTL_MS);
     const rebound = this.modelReader.bind(gateway, { agentId });
-    if ((!reuseCatalog && !force) || rebound || this.modelReader.failed) {
+    if (
+      !this.modelReader.pending &&
+      ((!reuseCatalog && !force) || rebound || this.modelReader.failed)
+    ) {
       void this.modelReader.read();
     }
     if (reuseCatalog) {

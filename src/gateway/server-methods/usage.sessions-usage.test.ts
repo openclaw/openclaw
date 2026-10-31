@@ -238,18 +238,6 @@ it("returns complete family usage while other reports occupy worker input capaci
         sessionId,
         sessionFile,
         mtime: 1000,
-        transcriptFile: {
-          kind: "sqlite" as const,
-          filePath: sessionFile,
-          sourcePath: sessionFile,
-          sessionId,
-          size: 1024,
-          mtimeMs: 1000,
-          eventCount: 4,
-          maxSeq: 4,
-          generation: "synthetic-generation",
-          cold: false,
-        },
       };
     }),
   );
@@ -267,7 +255,7 @@ it("returns complete family usage while other reports occupy worker input capaci
     ),
     families.map(({ key }) => [key, "opus"] as const),
   );
-  // Charge the observed background queue without allocating its payload. Two
+  // Leave 256 KiB for reports without allocating the background payload. Two
   // slots let a report finish while the background preparation remains admitted.
   const pool = new WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
     workerUrl: resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker),
@@ -275,7 +263,7 @@ it("returns complete family usage while other reports occupy worker input capaci
     idleTimeoutMs: 0,
   });
   const release = createDeferred();
-  const backgroundBytes = 265_155_910;
+  const backgroundBytes = DEFAULT_WORKER_PENDING_BYTES - 256 * 1024;
   const background = pool.run(
     async () => {
       await release.promise;
@@ -333,19 +321,26 @@ it("returns complete family usage while other reports occupy worker input capaci
 it("keeps completed batches after exhausting the report allowance", async () => {
   const originalDiscovery = discovery.getMockImplementation()!;
   const originalLoad = summaryLoader.getMockImplementation()!;
+  let elapsed = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   discovery.mockResolvedValue(discoveredRows("budget", 1025, true));
-  summaryLoader.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
-    summaries: sessions.map(() =>
-      reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
-    ),
-    remainingReportBytes: 0,
-    cacheStatus: {
-      status: reportBudgetBytes === 0 ? "partial" : "fresh",
-      cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
-      pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
-      staleFiles: 0,
+  summaryLoader.mockImplementation(
+    async ({ sessions, reportBudgetBytes, maxPublicationWaitMs }) => {
+      elapsed += maxPublicationWaitMs ?? 0;
+      return {
+        summaries: sessions.map(() =>
+          reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
+        ),
+        remainingReportBytes: 0,
+        cacheStatus: {
+          status: reportBudgetBytes === 0 ? "partial" : "fresh",
+          cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
+          pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
+          staleFiles: 0,
+        },
+      };
     },
-  }));
+  );
   try {
     const result = await readSessionsUsage({});
     expect(result).toMatchObject({
@@ -353,7 +348,9 @@ it("keeps completed batches after exhausting the report allowance", async () => 
       cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 769 },
     });
     expect(summaryLoader.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
+    expect(elapsed, "publication waiting is shared by every batch in the report").toBe(100);
   } finally {
+    clock.mockRestore();
     discovery.mockImplementation(originalDiscovery);
     summaryLoader.mockImplementation(originalLoad);
   }

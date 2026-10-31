@@ -1,6 +1,5 @@
 import { lazy, Show } from "solid-js";
 import { getSkillDisplayName, getSlashCommandDescription } from "../../../lib/chat/commands.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
@@ -16,7 +15,6 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 const SkillMenuOptions = lazy(() => import("./chat-composer-skill-menu-options.tsx"), {
   export: "SkillMenuOptions",
 });
-warmWhenIdle(SkillMenuOptions.preload);
 
 export function SkillMenu(props: { menu: SkillMenuState; host: SkillMenuHost }) {
   const state = () => props.menu.state;

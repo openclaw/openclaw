@@ -319,12 +319,21 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
       // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
       key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
+      // Fixed update recovery/cohort prefixes cannot address authProfiles.store.
+      ...[
+        "beginPluginCohortRecovery",
+        "writePluginCohortRecovery",
+        "recordPluginCohortIndexPublicationInDatabase",
+        "recordPluginCohortMigrationPublicationInDatabase",
+      ].map((name) => key("src/infra/update-run-recovery-store.ts", name)),
     ],
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
     [
       key(machineState, "updateConfigMachineState"),
+      // Deletes only the exact run/transaction-bound update recovery pair.
+      key("src/infra/update-run-recovery-store.ts", "deletePluginCohortRecovery"),
       // Both receipt writers construct only automation-default: keys in their kernel.
       ...["recordDefaultProactiveJobInDatabase", "recordConvertedProactiveJobInDatabase"].map(
         (name) => key("src/cron/proactive-job-receipt.kernel.ts", name),
@@ -695,6 +704,14 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
+  // Private restore output copies the validated named pair verbatim under parent exclusion.
+  [
+    key(
+      "src/infra/update-database-restore-source.ts",
+      "prepareUpdateDatabaseRestoreSourceInProcess",
+    ),
+    2,
+  ],
   ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
     key(sessionMembers, name),
     1,
@@ -892,6 +909,10 @@ const credentialCommandOwners = new Map([
 ]);
 
 const repeatedEdges = new Map([
+  [
+    `${key(machineState, "writeConfigMachineStateInDatabase")}<-${key("src/infra/update-run-recovery-store.ts", "beginPluginCohortRecovery")}`,
+    2,
+  ],
   ...[
     key(
       "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
@@ -1217,6 +1238,8 @@ export function inspectPersonalCredentialWriters(
       );
     };
     const references: ts.Node[] = [];
+    const commandNodes: (readonly [ts.Node, ts.Expression])[] = [];
+    const commandExpressions: ts.Expression[] = [];
     const visit = (node: ts.Node) => {
       if (
         ts.isTypeNode(node) ||
@@ -1231,20 +1254,9 @@ export function inspectPersonalCredentialWriters(
         node.name.text === "type"
       ) {
         const initializer = ts.isPropertyAssignment(node) ? node.initializer : node.name;
-        // Literal command values are already exact; only expressions need semantic resolution.
-        const type = ts.isStringLiteralLikeNode(initializer)
-          ? undefined
-          : checker.getTypeAtLocation(initializer);
-        const commands = ts.isStringLiteralLikeNode(initializer)
-          ? [initializer.text]
-          : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
-              .filter((value) => value.isStringLiteralType())
-              .map((value) => value.value);
-        for (const command of commands) {
-          const owner = credentialCommandOwners.get(command);
-          if (owner && key(file, operation(node)) !== owner) {
-            fail(node, `${command} credential writes require the host publication adapter`);
-          }
+        commandNodes.push([node, initializer]);
+        if (!ts.isStringLiteralLikeNode(initializer)) {
+          commandExpressions.push(initializer);
         }
       }
       if (
@@ -1370,6 +1382,28 @@ export function inspectPersonalCredentialWriters(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
+    // Literal commands need no compiler query; resolve every expression in the
+    // same immutable file together instead of one native round trip per field.
+    const commandTypes = commandExpressions.length
+      ? checker.getTypeAtLocation(commandExpressions)
+      : [];
+    let commandTypeIndex = 0;
+    for (const [node, initializer] of commandNodes) {
+      const type = ts.isStringLiteralLikeNode(initializer)
+        ? undefined
+        : commandTypes[commandTypeIndex++];
+      const commands = ts.isStringLiteralLikeNode(initializer)
+        ? [initializer.text]
+        : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
+            .filter((value) => value.isStringLiteralType())
+            .map((value) => value.value);
+      for (const command of commands) {
+        const owner = credentialCommandOwners.get(command);
+        if (owner && key(file, operation(node)) !== owner) {
+          fail(node, `${command} credential writes require the host publication adapter`);
+        }
+      }
+    }
     const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
     for (const [index, node] of references.entries()) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)

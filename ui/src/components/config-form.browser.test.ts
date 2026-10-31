@@ -6,6 +6,7 @@ import {
   renderAnalyzedFormFixture,
   renderConfigFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { ConfigFormProps, JsonSchema } from "./config-form.shared.ts";
 
@@ -79,12 +80,50 @@ function edit(input: HTMLInputElement | HTMLSelectElement, value: string, type =
 afterEach(() => i18n.setLocale("en"));
 
 describe("config form renderer", () => {
+  it("appends complete sections without replacing focused edits or hiding later fields", async () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [
+        `part${index}`,
+        object({ field: { type: "string", title: `Field ${index}` } }),
+      ]),
+    );
+    const value = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [`part${index}`, { field: `Value ${index}` }]),
+    );
+    const props = { schema: object(properties), value, progressive: true };
+    renderRaw(props);
+    const first = query("input.settings-input", HTMLInputElement);
+    expect(all("input.settings-input")).toHaveLength(1);
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    first.focus();
+    edit(first, "Editing the first field");
+    first.setSelectionRange(2, 8);
+
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(8));
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(query("input.settings-input", HTMLInputElement)).toBe(first);
+    expect(document.activeElement).toBe(first);
+    expect(first.value).toBe("Editing the first field");
+    expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+    expect(container.textContent).toContain("Field 7");
+
+    renderRaw({
+      ...props,
+      schema: object({ ...properties, part8: object({ field: { type: "string" } }) }),
+      value: { ...value, part8: { field: "Added after completion" } },
+    });
+    expect(all("input.settings-input")).toHaveLength(9);
+    expect(query("input.settings-input", HTMLInputElement)).toBe(first);
+    expect(first.value).toBe("Editing the first field");
+    expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+  });
+
   it.each([
     { label: "Ingress", initiallyOpen: false },
     { label: "Portals", initiallyOpen: true },
   ])(
     "retains the manually toggled $label disclosure across a form update",
-    ({ label, initiallyOpen }) => {
+    async ({ label, initiallyOpen }) => {
       const props = {
         schema: object({
           gateway: object({
@@ -98,19 +137,37 @@ describe("config form renderer", () => {
         }),
         value: { gateway: { portals: { ingress: { port: 443 } } } },
       };
-      const findDisclosure = () =>
+      const findDisclosure = (name = label) =>
         all<HTMLDetailsElement>("details.cfg-object").find(
           (node) =>
             node.querySelector(":scope > summary .settings-row__title")?.textContent?.trim() ===
-            label,
+            name,
         );
       renderRaw(props);
       const disclosure = expectElement(findDisclosure(), label);
+      expect(disclosure.open).toBe(initiallyOpen);
+      expect(container.querySelector('input[type="number"]')).toBeNull();
+
+      const ingress = expectElement(findDisclosure("Ingress"), "Ingress");
+      query("summary", HTMLElement, ingress).click();
+      await waitForSolid(() =>
+        expect(container.querySelector('input[type="number"]')).not.toBeNull(),
+      );
       const input = query('input[type="number"]', HTMLInputElement);
       expect(input.value).toBe("443");
-      expect(disclosure.open).toBe(initiallyOpen);
-      query("summary", HTMLElement, disclosure).click();
+      if (initiallyOpen) {
+        query("summary", HTMLElement, disclosure).click();
+      }
       expect(disclosure.open).toBe(!initiallyOpen);
+
+      // Once opened, native disclosure toggles keep the actual editor and its draft.
+      input.value = "9443";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      query("summary", HTMLElement, disclosure).click();
+      await waitForSolid(() => expect(container.querySelector('input[type="number"]')).toBe(input));
+      expect(input.value).toBe("9443");
+      query("summary", HTMLElement, disclosure).click();
+      await waitForSolid(() => expect(disclosure.open).toBe(!initiallyOpen));
 
       renderRaw({
         ...props,

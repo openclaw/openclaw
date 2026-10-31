@@ -60,17 +60,51 @@ type RealtimeVoiceAgentConsultRunRegistration = {
   cleanupBeforeRun?: () => void;
 };
 
-/**
- * Fails closed when a realtime consult would cross a model-selection lock.
- */
-export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(params: {
+type RealtimeVoiceAgentConsultModelLockParams = {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   agentId: string;
   sessionKey: string;
   spawnedBy?: string | null;
   storePath?: string;
-}): void {
+};
+
+/**
+ * Fails closed when a realtime consult would cross a model-selection lock.
+ */
+export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(
+  params: RealtimeVoiceAgentConsultModelLockParams,
+): void {
+  for (const candidate of collectModelSelectionLockCandidates(params)) {
+    assertModelSelectionUnlocked(
+      params.agentRuntime.session.getSessionEntry({ ...candidate, readConsistency: "latest" }),
+    );
+  }
+}
+
+/** Gateway consults read lock state through the worker-backed session reader. */
+async function assertConsultModelSelectionUnlocked(
+  params: RealtimeVoiceAgentConsultModelLockParams,
+): Promise<void> {
+  for (const candidate of collectModelSelectionLockCandidates(params)) {
+    assertModelSelectionUnlocked(
+      await params.agentRuntime.session.getSessionEntryAsync({
+        ...candidate,
+        readConsistency: "latest",
+      }),
+    );
+  }
+}
+
+function assertModelSelectionUnlocked(entry: SessionEntry | undefined): void {
+  // Realtime consults select a configured provider/model and may run fast-context first.
+  // Until they preserve native bindings, a locked transcript must never cross runtimes.
+  if (isModelSelectionLocked(entry)) {
+    throw new ModelSelectionLockedError();
+  }
+}
+
+function collectModelSelectionLockCandidates(params: RealtimeVoiceAgentConsultModelLockParams) {
   const candidates = new Map<string, { agentId: string; sessionKey: string; storePath: string }>();
   const remember = (sessionKey: string, fallbackAgentId: string, storePath?: string) => {
     const candidateAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId;
@@ -99,19 +133,7 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(params: {
     }
   }
 
-  for (const { agentId, sessionKey, storePath } of candidates.values()) {
-    const entry = params.agentRuntime.session.getSessionEntry({
-      agentId,
-      storePath,
-      sessionKey,
-      readConsistency: "latest",
-    });
-    // Realtime consults select a configured provider/model and may run fast-context first.
-    // Until they preserve native bindings, a locked transcript must never cross runtimes.
-    if (isModelSelectionLocked(entry)) {
-      throw new ModelSelectionLockedError();
-    }
-  }
+  return candidates.values();
 }
 
 function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -322,7 +344,7 @@ export async function consultRealtimeVoiceAgent(params: {
     spawnedBy: params.spawnedBy,
     storePath,
   };
-  assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+  await assertConsultModelSelectionUnlocked(modelLockParams);
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
     "Realtime voice agent consult interrupted by a session lifecycle change.",
@@ -332,8 +354,8 @@ export async function consultRealtimeVoiceAgent(params: {
     scope: storePath,
     identities: [params.sessionKey, initialSessionEntry?.sessionId],
     onInterrupt: () => lifecycleAbortController.abort(lifecycleInterruption),
-    assertAllowed: () => {
-      const currentEntry = params.agentRuntime.session.getSessionEntry({
+    assertAllowed: async () => {
+      const currentEntry = await params.agentRuntime.session.getSessionEntryAsync({
         agentId,
         storePath,
         sessionKey: params.sessionKey,
@@ -349,7 +371,7 @@ export async function consultRealtimeVoiceAgent(params: {
       if (archivedSessionError) {
         throw new Error(archivedSessionError);
       }
-      assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+      await assertConsultModelSelectionUnlocked(modelLockParams);
     },
   });
   const abortFromCaller = () => lifecycleAbortController.abort(params.abortSignal?.reason);
@@ -490,7 +512,7 @@ export async function consultRealtimeVoiceAgent(params: {
         deliveryContext: consultDeliveryContext,
       });
       const sessionId = sessionEntry.sessionId;
-      assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+      await assertConsultModelSelectionUnlocked(modelLockParams);
 
       const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
@@ -502,7 +524,8 @@ export async function consultRealtimeVoiceAgent(params: {
       let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
       try {
         abortSignal.throwIfAborted();
-        assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+        await assertConsultModelSelectionUnlocked(modelLockParams);
+        abortSignal.throwIfAborted();
         // Voice consults suppress verbose/reasoning output because the bridge needs a short,
         // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
         runPromise = params.agentRuntime.runEmbeddedAgent({

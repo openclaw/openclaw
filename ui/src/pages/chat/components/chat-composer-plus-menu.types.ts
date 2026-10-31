@@ -63,3 +63,16 @@ export type ChatComposerPlusMenuResolvedProps = Omit<ChatComposerPlusMenuBodyPro
   menu: ChatComposerPlusMenuContentProps;
   open: boolean;
 };
+
+export type ChatComposerPlusMenuSubviewProps = ChatComposerPlusMenuResolvedProps & {
+  searching: boolean;
+  query: string;
+  searchHeight: number | undefined;
+  expanded: string | null;
+  onSearchingChange: (value: boolean) => void;
+  onQueryChange: (value: string) => void;
+  onSearchHeightChange: (value: number | undefined) => void;
+  onExpandedChange: (value: string | null) => void;
+  closeSearch: () => boolean;
+  changeView: (view: ChatComposerPlusMenuView) => void;
+};

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import {
   disposePluginRegistryInstances,
   waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 import { startPluginServices } from "../plugins/services.test-support.js";
+import { markGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
   firstReloaded,
@@ -19,10 +21,204 @@ import {
 import {
   createCleanupChannels,
   expectSiblingUnchanged,
+  invokeReloadMethod,
   observeRetainedWork,
   type RecoveryFixtureFactory,
 } from "./server-plugin-reload.recovery.test-support.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
+
+export async function verifySerializedCandidateStartup(
+  createRecoveryFixture: RecoveryFixtureFactory,
+  generationOverlap: false | undefined | "mixed",
+  signal: AbortSignal,
+) {
+  const stop = heldWork();
+  const events: string[] = [];
+  let registrations = 0;
+  const fixture = await createRecoveryFixture({
+    generationOverlap: generationOverlap === "mixed" ? true : generationOverlap,
+    abortOnCandidateStart: false,
+    initialStop: async () => {
+      events.push("stop:1");
+      await stop.run();
+    },
+    registerFirst(api) {
+      const generation = ++registrations;
+      events.push(`register:${generation}`);
+      assert(api.lifecycle.onDispose);
+      api.lifecycle.onDispose(() => {
+        events.push(`dispose:${generation}`);
+      });
+    },
+  });
+  if (generationOverlap === "mixed") {
+    expect(fixture.instance().lifecycle.runInBackgroundContext(() => "background ready")).toBe(
+      "background ready",
+    );
+  }
+  const reloading = fixture.reload(
+    undefined,
+    generationOverlap === "mixed" ? ["first", "sibling"] : ["first"],
+  );
+  try {
+    await withinTest(stop.entered, signal);
+    expect(events).toEqual(["register:1", "stop:1"]);
+    expect(fixture.candidates).toHaveLength(0);
+    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    stop.release();
+    await expect(withinTest(reloading, signal)).resolves.toMatchObject({
+      runtime: {
+        pluginIds: generationOverlap === "mixed" ? ["first", "sibling"] : ["first"],
+      },
+    });
+    expect(events).toEqual(["register:1", "stop:1", "dispose:1", "register:2"]);
+    if (generationOverlap === "mixed") {
+      fixture.expectServices({ firstStop: 1, siblingStart: 2, siblingStop: 1 });
+      expect(fixture.instance().lifecycle.signal.aborted).toBe(true);
+    } else {
+      expectSiblingUnchanged(fixture);
+    }
+  } finally {
+    stop.release();
+    await reloading;
+  }
+}
+
+export async function verifyOverlappingCandidatePreparationFailure(
+  createRecoveryFixture: RecoveryFixtureFactory,
+  signal: AbortSignal,
+) {
+  const failure = new Error("successor bindings could not be prepared");
+  const disposed: number[] = [];
+  let registrations = 0;
+  const fixture = await createRecoveryFixture({
+    generationOverlap: true,
+    abortOnCandidateStart: false,
+    prepareAttached: rejectWith(failure),
+    registerFirst(api) {
+      const generation = ++registrations;
+      api.registerGatewayMethod("first.generation", ({ respond }) => {
+        respond(true, { generation });
+      });
+      assert(api.lifecycle.onDispose);
+      api.lifecycle.onDispose(() => {
+        disposed.push(generation);
+      });
+    },
+  });
+  const previous = fixture.instance();
+  const admitted = previous.retainConsumer();
+  const reloading = fixture.reload();
+  try {
+    await expect(withinTest(reloading, signal)).rejects.toThrow(failure.message);
+    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    expect(previous.acceptingCalls).toBe(true);
+    expect(previous.lifecycle.signal.aborted).toBe(false);
+    const response = await invokeReloadMethod(fixture.registryOwner.registry, "first.generation");
+    expect(response).toHaveBeenCalledWith(true, { generation: 1 }, undefined, undefined);
+    expect(admitted.run(() => "admitted predecessor")).toBe("admitted predecessor");
+    expect(registrations).toBe(2);
+    expect(disposed).toEqual([2]);
+    fixture.expectServices({ firstStart: 1, firstStop: 0 });
+    expectSiblingUnchanged(fixture);
+  } finally {
+    admitted.release();
+    await reloading.catch(() => {});
+  }
+}
+
+export async function verifyOverlappingGenerationRetirement(
+  createRecoveryFixture: RecoveryFixtureFactory,
+  action: "reload again" | "restart",
+  signal: AbortSignal,
+) {
+  const disposed: number[] = [];
+  let registrations = 0;
+  const fixture = await createRecoveryFixture({
+    generationOverlap: true,
+    abortOnCandidateStart: false,
+    registerFirst(api) {
+      const generation = ++registrations;
+      api.registerGatewayMethod("first.generation", ({ respond }) => {
+        respond(true, { generation });
+      });
+      assert(api.lifecycle.onDispose);
+      api.lifecycle.onDispose(() => {
+        disposed.push(generation);
+      });
+    },
+  });
+  const previous = fixture.instance();
+  const first = previous.retainConsumer();
+  let second: ReturnType<typeof previous.retainConsumer> | undefined;
+  let shutdown: Promise<unknown> | undefined;
+  let reloading: Promise<unknown> | undefined;
+  try {
+    reloading = fixture.reload();
+    await expect(withinTest(reloading, signal)).resolves.toMatchObject(firstReloaded);
+    const successorRegistry = fixture.registryOwner.registry;
+    const successor = pluginInstance(successorRegistry);
+    expect(successor).not.toBe(previous);
+    expect(disposed).toEqual([]);
+    expect(() => previous.run(() => "fresh predecessor call")).toThrow();
+    const oldResponse = await first.run(() =>
+      invokeReloadMethod(fixture.previousRegistry, "first.generation"),
+    );
+    expect(oldResponse).toHaveBeenCalledWith(true, { generation: 1 }, undefined, undefined);
+    const newResponse = await invokeReloadMethod(successorRegistry, "first.generation");
+    expect(newResponse).toHaveBeenCalledWith(true, { generation: 2 }, undefined, undefined);
+    fixture.expectServices({ firstStop: 0 });
+    expectSiblingUnchanged(fixture);
+
+    if (action === "reload again") {
+      second = successor.retainConsumer();
+      reloading = fixture.reload();
+      await expect(withinTest(reloading, signal)).resolves.toMatchObject(firstReloaded);
+      const latest = fixture.registryOwner.registry;
+      expect(latest).not.toBe(successorRegistry);
+      expect(disposed).toEqual([]);
+      const latestResponse = await invokeReloadMethod(latest, "first.generation");
+      expect(latestResponse).toHaveBeenCalledWith(true, { generation: 3 }, undefined, undefined);
+      const middleResponse = await second.run(() =>
+        invokeReloadMethod(successorRegistry, "first.generation"),
+      );
+      expect(middleResponse).toHaveBeenCalledWith(true, { generation: 2 }, undefined, undefined);
+      first.release();
+      await withinTest(waitForPluginRegistryRetirement(fixture.previousRegistry), signal);
+      expect(disposed).toEqual([1]);
+      expect(successor.lifecycle.signal.aborted).toBe(false);
+      second.release();
+      await withinTest(waitForPluginRegistryRetirement(successorRegistry), signal);
+      expect(disposed).toEqual([1, 2]);
+      expect(pluginInstance(latest).lifecycle.signal.aborted).toBe(false);
+      expectSiblingUnchanged(fixture);
+    } else {
+      fixture.runtime.requestEntryLifetime.beginClose();
+      markGatewayRestartDraining();
+      const stopping = observeSettlement(
+        (async () => {
+          await fixture.owner.currentServices()?.stop();
+          await fixture.lifetime.stop();
+          await fixture.registryOwner.close();
+          await fixture.runtime.kernel.pluginMetadata.close();
+        })(),
+      );
+      shutdown = stopping.result;
+      await nextTurn();
+      expect(stopping.state.settled).toBe(false);
+      expect(disposed).not.toContain(1);
+      first.release();
+      expect(await withinTest(shutdown, signal)).toBeUndefined();
+      expect(disposed.toSorted((left, right) => left - right)).toEqual([1, 2]);
+      expect(previous.lifecycle.signal.aborted).toBe(true);
+      expect(successor.lifecycle.signal.aborted).toBe(true);
+    }
+  } finally {
+    first.release();
+    second?.release();
+    await Promise.allSettled([reloading, shutdown]);
+  }
+}
 
 export async function verifyManagedCandidateRetirement(
   createRecoveryFixture: RecoveryFixtureFactory,

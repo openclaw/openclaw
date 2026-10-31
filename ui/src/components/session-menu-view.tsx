@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -19,6 +20,8 @@ import { useSessionSnoozeEntries } from "./session-menu-snooze.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "./solid/menu.tsx";
+
+registerSessionMenuEnglish();
 
 export function SessionMenuShortcut(props: { shortcut: string; alias?: KeyboardShortcutCombo }) {
   return (

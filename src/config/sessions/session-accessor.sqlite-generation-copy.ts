@@ -153,28 +153,40 @@ function readSqliteSessionGenerationFacts(
       }
     }
   };
+  const events = getSessionKysely(database.db)
+    .selectFrom("transcript_events")
+    .where("session_id", "=", window.session_id)
+    .orderBy("seq");
+  if (coldArchive) {
+    // The archive owns content identity; retained navigation is only a derived custody fact.
+    hashRows("events", iterateSqliteQuerySync(database.db, events.selectAll()));
+  } else {
+    hashRows(
+      "events",
+      iterateSqliteQuerySync(
+        database.db,
+        events
+          .select(["session_id", "seq"])
+          .select(transcriptEventJsonSql(database.db).as("event_json"))
+          .select("created_at"),
+      ),
+      (row) => ["event", row.seq, row.event_json],
+    );
+  }
   hashRows(
-    "events",
-    iterateSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select(["session_id", "seq"])
-        .select(transcriptEventJsonSql(database.db).as("event_json"))
-        .select("created_at")
-        .where("session_id", "=", window.session_id)
-        .orderBy("seq"),
-    ),
-    (row) => ["event", row.seq, row.event_json],
+    "identities",
+    rows.identities,
+    coldArchive
+      ? undefined
+      : (row) => [
+          "identity",
+          row.event_id,
+          row.event_type,
+          row.parent_id,
+          row.seq,
+          row.message_idempotency_key,
+        ],
   );
-  hashRows("identities", rows.identities, (row) => [
-    "identity",
-    row.event_id,
-    row.event_type,
-    row.parent_id,
-    row.seq,
-    row.message_idempotency_key,
-  ]);
   hashRows("rewriteWatermarks", rows.rewriteWatermarks, () => ["rewrite"]);
   hashRows("trajectoryEvents", rows.trajectoryEvents, (row) => [
     "trajectory",

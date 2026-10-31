@@ -79,9 +79,9 @@ export async function migrateLegacyDesktopStreamOptOuts(
   cfg: OpenClawConfig,
   baseDir?: string,
 ): Promise<number> {
-  return await withDevicePairingLock(async () =>
+  return await withDevicePairingLock(async () => {
     // The lock may await; boot admission covers only the acquired synchronous database work.
-    withEngineStoreAdmission(() => {
+    return withEngineStoreAdmission(() => {
       const options = baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
       if (isArtifactPreservingStateRead("agent", resolveDatabasePath(options))) {
         throw new Error(
@@ -129,6 +129,6 @@ export async function migrateLegacyDesktopStreamOptOuts(
         { ...options, database },
         { operationLabel: "preserve legacy desktop stream opt-outs" },
       );
-    }),
-  );
+    });
+  }, "preserve legacy desktop stream opt-outs");
 }

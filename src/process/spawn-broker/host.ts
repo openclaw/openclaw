@@ -16,7 +16,6 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { getAgentExecCgroup } from "../linux-exec-cgroup.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
 import { observeBrokerChildDiagnostics } from "./child-diagnostics.js";
@@ -156,6 +155,8 @@ export class SpawnBrokerHost {
     return this.fileReads.read(filePath, signal);
   }
 
+  readonly readFilePage = this.fileReads.readPage.bind(this.fileReads);
+
   captureNativeResource(
     input: BrokerNativeResourceInput,
     callbacks: BrokerNativeResourceCallbacks,
@@ -235,14 +236,14 @@ export class SpawnBrokerHost {
     ).child;
   }
 
-  spawnExeca(argv: string[], options: BrokerExecaOptions) {
+  spawnExeca(argv: string[], options: BrokerExecaOptions, execCgroup?: string) {
     const id = ++this.sequence;
     const request = this.admit({
       type: "spawn-execa",
       id,
       argv,
       options,
-      execCgroup: getAgentExecCgroup(),
+      execCgroup,
     });
     return {
       child: request.child,

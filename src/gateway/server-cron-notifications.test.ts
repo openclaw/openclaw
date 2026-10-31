@@ -22,6 +22,11 @@ const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard:
     vi.fn<(request: GuardedFetchOptions) => Promise<ReturnType<typeof webhookResponse>>>(),
   sendCronAnnouncePayloadStrict: vi.fn(),
+  commitCronConversationResult:
+    vi.fn<typeof import("../cron/conversation-result.js").commitCronConversationResult>(),
+  loadGatewaySessionEntryReadOnlyInWorker: vi.fn(async () => ({
+    entry: { sessionId: "owner-session" },
+  })),
   resolveDeliveryTarget: vi.fn<typeof deliveryTarget.resolveDeliveryTarget>(
     async (_cfg, _agentId, target) => ({
       ok: true,
@@ -49,6 +54,16 @@ vi.mock("../cron/delivery.js", async (importOriginal) => {
 vi.mock("../cron/isolated-agent/delivery-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof deliveryTarget>()),
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
+}));
+
+vi.mock("../cron/conversation-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/conversation-result.js")>()),
+  commitCronConversationResult: mocks.commitCronConversationResult,
+}));
+
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadGatewaySessionEntryReadOnlyInWorker,
 }));
 
 import {
@@ -181,6 +196,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     vi.clearAllMocks();
     mocks.fetchWithSsrFGuard.mockImplementation(async () => webhookResponse());
     mocks.sendCronAnnouncePayloadStrict.mockResolvedValue(sentFailureAlert());
+    mocks.commitCronConversationResult.mockResolvedValue({ ok: true });
   });
 
   afterEach(() => {
@@ -188,6 +204,50 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     resetGatewayWorkAdmission();
     setActiveDegradedSecretOwners([]);
   });
+
+  it.each([
+    { name: "quiet trigger", status: "skipped", quietTrigger: true, notice: false },
+    { name: "unstarted skip", status: "skipped", quietTrigger: false, notice: true },
+    { name: "unstarted error", status: "error", quietTrigger: false, notice: true },
+  ] as const)(
+    "keeps the $name conversation outcome separate from its completion webhook",
+    async ({ status, quietTrigger, notice }) => {
+      const job = createCompletionWebhookJob();
+      job.sessionKey = "agent:main:owner";
+      const logger = { warn: vi.fn() };
+      const evt = {
+        jobId: job.id,
+        action: "finished" as const,
+        status,
+        completionStatus: "failed" as const,
+        runAtMs,
+        error: "The payload did not run.",
+      };
+      dispatchCompletion(job, {
+        evt,
+        runNotStarted: true,
+        quietTrigger,
+        resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+        logger,
+      });
+
+      await waitForFast(() => {
+        expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+      expect(webhookRequestBody()).toMatchObject(evt);
+      expect(mocks.commitCronConversationResult).toHaveBeenCalledTimes(notice ? 1 : 0);
+      if (notice) {
+        expect(mocks.commitCronConversationResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            conversation: { sessionKey: "agent:main:owner", sessionId: "owner-session" },
+            payloads: [{ text: expect.stringContaining("did not start") }],
+          }),
+        );
+      }
+      expect(logger.warn).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["captured default", undefined, "alpha", "alpha"],
