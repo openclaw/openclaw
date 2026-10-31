@@ -44,8 +44,10 @@ export function buildCapabilityProviderDefaultRefs(params: {
   const preferred = normalizeProviderForMatch(params.preferredProvider, params.normalizeProviderId);
   const prioritized: string[] = [];
   const remaining: string[] = [];
-  for (const providerId of [...defaults.keys()].toSorted()) {
-    const entry = defaults.get(providerId)!;
+  // Preserve the original default string sort's UTF-16 ordering.
+  for (const [providerId, entry] of [...defaults].toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  )) {
     const matchesPreferred =
       preferred !== undefined &&
       (normalizeProviderForMatch(providerId, params.normalizeProviderId) === preferred ||
