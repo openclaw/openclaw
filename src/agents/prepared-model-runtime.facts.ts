@@ -11,6 +11,10 @@ import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "../plugins/plugin-generation-metrics.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   getPreparedMessageToolCatalog,
@@ -112,6 +116,7 @@ export async function prepareWorkspaceBuildGroup(
   buildStats: Pick<
     PreparedModelRuntimeBuildStats,
     | "runtimePluginMs"
+    | "pluginPreparation"
     | "pluginMetadataMs"
     | "staticProviderCatalogMs"
     | "ambientCredentialsMs"
@@ -165,16 +170,19 @@ export async function prepareWorkspaceBuildGroup(
   await using _ = options.registryResources ? undefined : registryResources;
   registryResources.retainGeneration(reusablePluginGeneration);
   // Borrowing spans the caller's construction; registry acquisition is selected independently.
-  const preparingRegistries = prepareWorkspacePluginRegistries(
-    input,
-    pluginMetadataSnapshot,
-    (registry) => registryResources.retainRegistry(registry),
-    loadInboundPluginRegistry,
-    preferBuiltPluginArtifacts,
-    reusablePluginGeneration,
-    options.getConfiguredHarnessRuntimes,
-    undefined,
-    options.loadRuntimeRegistry,
+  const preparationMetrics = createPluginGenerationMetrics();
+  const preparingRegistries = withPluginGenerationMetrics(preparationMetrics, () =>
+    prepareWorkspacePluginRegistries(
+      input,
+      pluginMetadataSnapshot,
+      (registry) => registryResources.retainRegistry(registry),
+      loadInboundPluginRegistry,
+      preferBuiltPluginArtifacts,
+      reusablePluginGeneration,
+      options.getConfiguredHarnessRuntimes,
+      undefined,
+      options.loadRuntimeRegistry,
+    ),
   );
   const { inboundPluginRegistry, runtimePluginRegistry, primaryRegistry } =
     preparingRegistries instanceof Promise ? await preparingRegistries : preparingRegistries;
@@ -186,6 +194,8 @@ export async function prepareWorkspaceBuildGroup(
       ? Object.freeze({ registry: primaryRegistry, resources })
       : undefined;
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
+  // Descendant tasks can retain the scope after this measured phase has finished.
+  const pluginPreparation = { ...preparationMetrics };
   prepareOwnedPluginLoadContext(
     input,
     env,
@@ -459,6 +469,7 @@ export async function prepareWorkspaceBuildGroup(
       agentFacts,
       buildStats: {
         runtimePluginMs,
+        pluginPreparation,
         pluginMetadataMs,
         staticProviderCatalogMs,
         ambientCredentialsMs,
