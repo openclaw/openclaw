@@ -1,17 +1,15 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type {
   ConfigFileSnapshot,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
-import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
-import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import { configFailureHeading } from "../config/io.invalid-config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { formatConfigFilePath } from "../config/logging.js";
-import { CONFIG_PATH } from "../config/paths.js";
 import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -25,12 +23,11 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
-import { danger, success, warn } from "../globals.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { type RuntimeEnv, defaultRuntime, ExitError, writeRuntimeJson } from "../runtime.js";
+import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 import { assertSecureExecCommandPath } from "../secrets/exec-provider-path-validation.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -43,112 +40,12 @@ import {
 } from "../secrets/ref-contract.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { shortenHomePath } from "../utils.js";
-import { formatCliCommand } from "./command-format.js";
 import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath } from "./config-cli-path.js";
 import { formatInvalidConfigRepairHint } from "./config-recovery-hints.js";
 import type { ConfigSetDryRunError, ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { writeInvalidConfigCliJson } from "./config-validation-output.js";
-import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
-
-export async function runConfigValidationCli({
-  json,
-  runtime = defaultRuntime,
-}: {
-  json: boolean;
-  runtime?: RuntimeEnv;
-}): Promise<void> {
-  let outputPath = CONFIG_PATH ?? "openclaw.json";
-  try {
-    const { readConfigSnapshotForEngineSelection } =
-      await import("../commands/config-preflight-snapshot.js");
-    const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-    const selected = await readConfigSnapshotForEngineSelection();
-    const snapshot =
-      isConfigReadFailure(selected) ||
-      selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
-        ? selected
-        : await finishConfigValidationForCli(
-            await readConfigFileSnapshotWithPluginMetadata({
-              observe: false,
-              prepareValidation: "strict",
-              completePluginMetadata: false,
-            }),
-          );
-    outputPath = snapshot.path;
-    const shortPath = shortenHomePath(outputPath);
-    if (!snapshot.exists) {
-      if (json) {
-        writeRuntimeJson(
-          runtime,
-          { ...formatCliJsonFailure("file not found"), valid: false, path: outputPath },
-          0,
-        );
-      } else {
-        runtime.error(danger(`Config file not found: ${formatConfigFilePath(outputPath)}`));
-        runtime.error(
-          `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
-        );
-      }
-      exitCliAfterOutput(runtime, 1);
-    }
-    if (!snapshot.valid) {
-      const issues = normalizeConfigIssues(snapshot.issues);
-      if (json) {
-        writeRuntimeJson(runtime, {
-          ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
-          repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
-          valid: false,
-          path: outputPath,
-          issues,
-        });
-      } else {
-        runtime.error(`Config needs correction: ${formatConfigFilePath(outputPath)}`);
-        for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
-          runtime.error(`  ${line}`);
-        }
-        runtime.error("");
-        runtime.error(
-          formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
-        );
-        runtime.error(
-          `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
-        );
-      }
-      exitCliAfterOutput(runtime, 1);
-    }
-    const warnings = normalizeConfigIssues(snapshot.warnings);
-    if (json) {
-      writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
-    } else {
-      runtime.log(success(`Config valid: ${formatConfigFilePath(outputPath)}`));
-      if (warnings.length > 0) {
-        runtime.log(warn(`${warnings.length} warning(s):`));
-        for (const line of formatConfigIssueLines(warnings, warn("!"), {
-          normalizeRoot: true,
-        })) {
-          runtime.log(`  ${line}`);
-        }
-      }
-    }
-  } catch (err) {
-    if (err instanceof ExitError) {
-      throw err;
-    }
-    if (json) {
-      writeRuntimeJson(
-        runtime,
-        { ...formatCliJsonFailure(err), valid: false, path: outputPath },
-        0,
-      );
-    } else {
-      runtime.error(danger(terminalText`Config validation error: ${formatErrorMessage(err)}`));
-    }
-    exitCliAfterOutput(runtime, 1);
-  }
-}
 
 export function ensureValidConfigSnapshotForCli(
   snapshot: ConfigFileSnapshot,

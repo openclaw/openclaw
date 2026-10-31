@@ -6,40 +6,25 @@ import {
   withRuntimeWorkerGeneration,
 } from "../infra/runtime-worker-generation.js";
 import * as workers from "../infra/worker-native-lifecycle.js";
-import { ExitError } from "../runtime.js";
 import * as database from "../state/openclaw-state-db-cache.js";
 import * as lifecycle from "./gateway-cli/run-loop.test-support.js";
 import { withCliCommandCleanup, withCliProcessScope } from "./runtime-cleanup-scope.js";
 import { runCliDisposer, waitForPendingCliDisposers } from "./runtime-cleanup.js";
-import { runPostPluginChecks } from "./update-cli/update-command-post-plugin-checks.js";
-
-const validate = vi.hoisted(() => vi.fn());
-vi.mock("./config-cli-validation.js", () => ({ runConfigValidationCli: validate }));
-vi.mock("./json-output-mode.js", () => ({
-  withConsoleLogsRoutedToStderrForJson: (_args: string[], run: () => unknown) => run(),
-}));
 
 const closeDatabase = vi.spyOn(database, "closeOpenClawStateDatabaseAsync");
 const closeWorkers = vi.spyOn(workers, "closeDefaultRetainedNativeWorkerSource");
 const closePostgres = vi.spyOn(postgres, "closePostgresPool");
 const events: string[] = [];
-const sharedCloseEvents = ["database", "workers", "postgres"];
-let previousExitCode: typeof process.exitCode;
 
 beforeEach(() => {
-  previousExitCode = process.exitCode;
   vi.useFakeTimers();
   events.length = 0;
   closeDatabase.mockReset().mockImplementation(async () => void events.push("database"));
   closeWorkers.mockReset().mockImplementation(async () => void events.push("workers"));
   closePostgres.mockReset().mockImplementation(async () => void events.push("postgres"));
   vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
-  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
 });
 afterEach(() => {
-  process.exitCode = previousExitCode;
-  vi.unstubAllEnvs();
   vi.useRealTimers();
   vi.mocked(console.error).mockRestore();
 });
@@ -86,7 +71,14 @@ it("keeps PostgreSQL services through generation settlement and native backend c
     expect(closePostgres).not.toHaveBeenCalled();
     backendClose.release();
     await closing;
-    expect(events).toEqual(["settled", "backend-close", "released", ...sharedCloseEvents]);
+    expect(events).toEqual([
+      "settled",
+      "backend-close",
+      "released",
+      "database",
+      "workers",
+      "postgres",
+    ]);
   } finally {
     settlement.release();
     backendClose.release();
@@ -111,59 +103,50 @@ it.each(["database", "workers"] as const)(
   },
 );
 
-it.each([false, true])(
-  "joins post-plugin=%s cleanup after expired disposal and late writes",
-  async (postPlugin) => {
-    const parent = lifecycle.createLifecycleGate();
-    const write = lifecycle.createLifecycleGate();
-    const completed = vi.fn();
-    const work = async () => {
-      await runCliDisposer("plugin-parent", async () => {
-        await parent.wait();
-        await runCliDisposer("plugin-write", async () => {
-          await write.wait();
-          events.push("write");
-        });
+it("defers shared-state closure until expired disposal and its late write settle", async () => {
+  const parent = lifecycle.createLifecycleGate();
+  const write = lifecycle.createLifecycleGate();
+  const completed = vi.fn();
+  const closing = runCommand(async () => {
+    await runCliDisposer("plugin-parent", async () => {
+      await parent.wait();
+      await runCliDisposer("plugin-write", async () => {
+        await write.wait();
+        events.push("write");
       });
-      if (postPlugin) {
-        throw new ExitError(0);
-      }
-      return "command-result";
-    };
-    validate.mockImplementation(work);
-    const closing = (
-      postPlugin
-        ? runPostPluginChecks({ skipConfigValidation: false, includeOptionalInspections: false })
-        : runCommand(work)
-    ).then(completed);
-    try {
-      await parent.entered;
-      await vi.advanceTimersByTimeAsync(5_000);
-      await vi.waitFor(() =>
-        expect(console.error).toHaveBeenCalledWith(
-          "CLI cleanup deferred: shared-state until pending disposers settle: plugin-parent",
-        ),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(completed).toHaveBeenCalledTimes(postPlugin ? 0 : 1);
-      // A subsequent command's drain must follow the first without waiting on itself.
-      await runCommand(() => {});
-      parent.release();
-      await write.entered;
-      await lifecycle.advanceWithoutCalls(5_000, closeDatabase);
-      write.release();
-      await waitForPendingCliDisposers();
-      await closing;
-      expect(completed).toHaveBeenCalledOnce();
-      expect(events).toEqual(["write", ...sharedCloseEvents, ...sharedCloseEvents]);
-    } finally {
-      parent.release();
-      write.release();
-      await closing;
-      await waitForPendingCliDisposers();
-    }
-  },
-);
+    });
+    return "command-result";
+  }).then(completed);
+  try {
+    await parent.entered;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(completed).toHaveBeenCalledWith("command-result");
+    expect(console.error).toHaveBeenCalledWith(
+      "CLI cleanup deferred: shared-state until pending disposers settle: plugin-parent",
+    );
+    // A subsequent command's drain must follow the first without waiting on itself.
+    await runCommand(() => {});
+    parent.release();
+    await write.entered;
+    await lifecycle.advanceWithoutCalls(5_000, closeDatabase);
+    write.release();
+    await waitForPendingCliDisposers();
+    expect(events).toEqual([
+      "write",
+      "database",
+      "workers",
+      "postgres",
+      "database",
+      "workers",
+      "postgres",
+    ]);
+  } finally {
+    parent.release();
+    write.release();
+    await closing;
+    await waitForPendingCliDisposers();
+  }
+});
 
 it.each(["database", "workers", "postgres"] as const)("bounds %s cleanup", async (stage) => {
   const stalled = lifecycle.createLifecycleGate();

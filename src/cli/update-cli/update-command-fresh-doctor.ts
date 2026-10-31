@@ -75,8 +75,13 @@ import {
 } from "./update-command-doctor-child.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
-import { applyPostPluginUpdateChecks } from "./update-command-post-plugin-readiness.js";
-import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
+import { validatePostPluginConfigInFreshProcess } from "./update-command-post-plugin-config-check.js";
+import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
+import {
+  applyPostPluginConfigValidation,
+  POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+  type PostPluginConfigValidation,
+} from "./update-command-post-plugin-validation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -539,7 +544,6 @@ export async function completePostCorePluginUpdate(
   > & {
     pluginUpdate: PostCorePluginUpdateResult;
     beforeDoctor?: () => Promise<void>;
-    candidateRuntime?: boolean;
   },
 ): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
@@ -558,6 +562,7 @@ export async function completePostCorePluginUpdate(
   assertCurrent();
   let pluginUpdate = params.pluginUpdate;
   let entryPath: string | undefined;
+  let freshConfigValidation: PostPluginConfigValidation | undefined;
   let includeOptionalInspections = false;
   if (pluginUpdate.status !== "error") {
     try {
@@ -686,18 +691,31 @@ export async function completePostCorePluginUpdate(
     assertCurrent();
     // No authored file is a valid unconfigured install, not an invalid config.
     // Existing files still need the target schema; every install needs readiness.
-    pluginUpdate = await applyPostPluginUpdateChecks({
-      root: params.root,
-      entryPath,
-      pluginUpdate,
-      timeoutMs: checkTimeoutMs,
-      candidateRuntime: params.candidateRuntime,
-      skipConfigValidation: !configSnapshot.exists && configSnapshot.valid,
-      includeOptionalInspections,
-      assertCurrent,
-      ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
-    });
+    freshConfigValidation =
+      !configSnapshot.exists && configSnapshot.valid
+        ? { status: "valid" }
+        : await validatePostPluginConfigInFreshProcess({
+            ...params,
+            entryPath,
+            timeoutMs: checkTimeoutMs,
+          });
+    assertCurrent();
+    if (freshConfigValidation.status === "valid") {
+      pluginUpdate = await applyPostPluginUpdateReadiness({
+        root: params.root,
+        entryPath,
+        pluginUpdate,
+        timeoutMs: checkTimeoutMs,
+        includeOptionalInspections,
+        ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
+      });
+    }
   }
   assertCurrent();
+  // Strict validity belongs to the target runtime even when no plugin changed.
+  // The parent may retain the previous schema; its snapshot is best-effort context.
+  if (freshConfigValidation) {
+    pluginUpdate = applyPostPluginConfigValidation(pluginUpdate, freshConfigValidation);
+  }
   return { pluginUpdate, configSnapshot };
 }

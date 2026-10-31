@@ -13,6 +13,8 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as nativeLaunchAgentRecovery from "../daemon-cli/launchd-recovery.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
@@ -27,6 +29,37 @@ const tempDirs = createTempDirTracker();
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
+});
+
+describe("applyPostPluginConfigValidation", () => {
+  const pluginUpdate = {
+    status: "ok",
+    changed: true,
+    sync: {
+      changed: true,
+      switchedToBundled: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: [],
+    },
+    npm: { changed: true, outcomes: [] },
+    integrityDrifts: [],
+    warnings: [],
+  } satisfies PostCorePluginUpdateResult;
+
+  it("fails closed when updated plugin migrations leave config invalid", () => {
+    expect(
+      applyPostPluginConfigValidation(pluginUpdate, { status: "invalid", failureFacts: [] }),
+    ).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [
+        {
+          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+        },
+      ],
+    });
+  });
 });
 
 describe("resolveUpdatedGatewayRestartPort", () => {

@@ -202,6 +202,25 @@ export function registerFreshDoctorDiagnosticTests({
     },
   );
 
+  it("records an untraced Doctor once with explicitly unknown deferred selectors", async () => {
+    mocks.command.mockResolvedValueOnce({ stdout: "", stderr: "" });
+    const onDoctorStep = vi.fn();
+    await runUpdateFinalizationDoctorInFreshProcess({
+      ...updateOptions,
+      phase: "pre-plugin",
+      root: tempDirs.make("fresh-doctor-untraced-"),
+      onDoctorStep,
+    });
+    expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        name: "pre-plugin doctor",
+        exitCode: 0,
+        deferredInspectionCheckIds: null,
+      }),
+    );
+    expect(onDoctorStep.mock.calls[0]?.[0].diagnostics).toBeUndefined();
+  });
+
   it("captures an explicitly reported missing-module failure after long warnings for current and released readers", async () => {
     const root = tempDirs.make("post-plugin-validation-command-");
     const stateDir = path.join(root, "state");

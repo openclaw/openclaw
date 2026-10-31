@@ -269,7 +269,6 @@ export async function convergeUpdatePlugins(params: {
         // retains its stopped interval or parks an already-current core here.
         const producedPluginUpdate = postCorePluginUpdate;
         const completedPluginUpdate = await completePostCorePluginUpdate({
-          candidateRuntime: params.candidateRuntime,
           root: postUpdateRoot,
           databaseBackup: params.databaseBackup,
           onDoctorStep: (step) => params.result.steps.push(step),

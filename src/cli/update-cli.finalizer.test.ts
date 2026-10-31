@@ -84,8 +84,8 @@ describe("update-cli", () => {
       const actualReadiness = await vi.importActual<typeof readiness>(
         "./update-cli/update-command-post-plugin-readiness.js",
       );
-      vi.mocked(readiness.applyPostPluginUpdateChecks).mockImplementation(
-        actualReadiness.applyPostPluginUpdateChecks,
+      vi.mocked(readiness.applyPostPluginUpdateReadiness).mockImplementation(
+        actualReadiness.applyPostPluginUpdateReadiness,
       );
       const runOtherCommand = vi.mocked(update.runUtf8CommandWithTimeout).getMockImplementation();
       vi.mocked(update.runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
@@ -302,9 +302,11 @@ describe("update-cli", () => {
     );
     const finalizationCommands = vi
       .mocked(update.runExec)
-      .mock.calls.filter(([, args]) => args[0] === entryPath && args[1] === "doctor")
+      .mock.calls.filter(
+        ([, args]) => args[0] === entryPath && ["doctor", "config"].includes(args[1] ?? ""),
+      )
       .map(([, args]) => args.slice(1));
-    expect(finalizationCommands).toEqual([repairArgs, quietRepairArgs]);
+    expect(finalizationCommands).toEqual([repairArgs, quietRepairArgs, validationArgs]);
     expect(update.doctorCommand).not.toHaveBeenCalled();
     expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
   });
