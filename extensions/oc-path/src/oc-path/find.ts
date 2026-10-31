@@ -247,15 +247,13 @@ function dispatchSeg<T extends object, Child extends object>(
   } else {
     key = JSON.stringify([remaining, walked]);
   }
-  let visited = context.visited.get(memoIdentity);
-  if (visited?.has(key)) {
+  // Alias cycles revisit the same node with the same remaining pattern on the active branch.
+  const cycleKey = JSON.stringify(["active", remaining.map(({ value }) => value)]);
+  const visited = context.visited.get(memoIdentity) ?? new Set<string>();
+  if (visited.has(key) || visited.has(cycleKey)) {
     return;
   }
-  if (!visited) {
-    visited = new Set();
-    context.visited.set(memoIdentity, visited);
-  }
-  visited.add(key);
+  context.visited.set(memoIdentity, visited.add(key));
   const cur = expectDefined(subs[i], "dispatch index checked by walker");
 
   if (isUnionSeg(cur.value)) {
@@ -285,11 +283,13 @@ function dispatchSeg<T extends object, Child extends object>(
   if (cur.value === WILDCARD_RECURSIVE) {
     // Terminal Markdown item walkers also need the consumed-child match.
     ops.walk(node, subs, i + 1, walked, context);
+    visited.add(cycleKey);
     for (const m of ops.enumerate(node)) {
       const nextWalked: readonly SlotSub[] = [...walked, { slot: cur.slot, value: m.keySub }];
       ops.walk(m.child, subs, i + 1, nextWalked, context);
       ops.walk(m.child, subs, i, nextWalked, context);
     }
+    visited.delete(cycleKey);
     return;
   }
 

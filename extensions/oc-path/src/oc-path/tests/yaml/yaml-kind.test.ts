@@ -150,6 +150,7 @@ describe("YAML", () => {
     const raw =
       "defaults: &defaults\n  model: small\n  retries: 2\n" +
       "steps:\n  - id: fetch\n    with: *defaults\n  - id: classify\n    model: &big large\n" +
+      "  - id: rerank\n    model: *big\n" +
       "fallback: *big\n";
     const ast = parseYaml(raw);
 
@@ -170,8 +171,17 @@ describe("YAML", () => {
       findOcPaths(ast, path("steps/[model=large]/id")).map(({ match }) =>
         match.kind === "leaf" ? match.valueText : match.kind,
       ),
-    ).toEqual(["classify"]);
+    ).toEqual(["classify", "rerank"]);
     expect(set(raw, "fallback", "medium").raw).toContain("fallback: medium\n");
     expect(set(raw, "fallback", "medium").raw).toContain("model: &big large\n");
+  });
+
+  it("stops recursive find at cyclic YAML aliases", () => {
+    const ast = parseYaml("root: &root\n  label: ok\n  self: *root\n");
+
+    expect(findOcPaths(ast, path("**/label")).map(({ path: p }) => [p.section, p.item])).toEqual([
+      ["root", "label"],
+      ["root.self", "label"],
+    ]);
   });
 });
