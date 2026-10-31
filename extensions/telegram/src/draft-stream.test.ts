@@ -122,6 +122,7 @@ describe("createTelegramDraftStream", () => {
     await expect(stream.waitForInFlight()).rejects.toBe(validationError);
     stream.update("Second preview");
     await expect(stream.flush()).rejects.toBe(validationError);
+    await expect(stream.stop()).rejects.toBe(validationError);
 
     expect(validateProviderMessage).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
@@ -301,12 +302,13 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it("keeps a rotated preview visible when its replacement send fails", async () => {
+  it("keeps a rotated preview visible until final-send recovery replaces it", async () => {
     await withFakeTimers(async () => {
       const api = createMockDraftApi();
       api.sendMessage
         .mockResolvedValueOnce({ message_id: 17 })
-        .mockRejectedValueOnce(new Error("replacement rejected"));
+        .mockRejectedValueOnce(new Error("replacement rejected"))
+        .mockResolvedValueOnce({ message_id: 42 });
       const stream = createDraftStream(api, { warn: vi.fn() });
 
       await updateAndFlush(stream, "Answer preview");
@@ -315,12 +317,7 @@ describe("createTelegramDraftStream", () => {
       await stream.stop();
 
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(api.sendMessage).toHaveBeenCalledTimes(2);
-      expect(stream.sendMayHaveLanded()).toBe(true);
-      expect(api.deleteMessage).not.toHaveBeenCalled();
-
-      await stream.clear();
-      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.sendMessage).toHaveBeenCalledTimes(3);
       expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
     });
   });
@@ -355,6 +352,34 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(stream.sendMayHaveLanded?.()).toBe(false);
     expect(stream.messageId()).toBe(17);
+  });
+
+  it("delivers the final text when the preview send fails permanently", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(new Error("permanent network error"));
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    await updateAndFlush(stream, "Final answer");
+    await stream.stop();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expectNthPreviewSend(api, 2, "Final answer");
+    expect(stream.lastDeliveredText()).toBe("Final answer");
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream stopped with undelivered final text; recovering via fresh final send",
+    );
+  });
+
+  it("does not send a duplicate when the preview already delivered the final text", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    await updateAndFlush(stream, "Final answer");
+    await stream.stop();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
   it("treats message-is-not-modified edits as delivered", async () => {
