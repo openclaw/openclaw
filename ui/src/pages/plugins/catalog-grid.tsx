@@ -274,13 +274,16 @@ export function PluginCatalogGrid<T extends { id: string }>(props: {
     const columnCount = view().columns;
     const rowCount = Math.ceil(props.items.length / columnCount);
     const visibleRows = new Set(view().rows.map((row) => row.index));
-    // Natural tracks keep the initial viewport stable while its geometry is measured.
+    const focusedIndex = indexes().get(focused() ?? "");
+    // Natural tracks keep the first rows stable while geometry is measured.
+    // Retain a focused row and its neighbor when crossing the windowing threshold.
     if (visibleRows.size === 0) {
-      return props.items.slice(0, 60);
+      const focusedEnd =
+        focusedIndex === undefined ? 0 : (Math.floor(focusedIndex / columnCount) + 2) * columnCount;
+      return props.items.slice(0, Math.max(24, focusedEnd));
     }
     // Data can move a focused card before the next measured frame. Keep its
     // native focus and adjacent Tab destinations alive at their new positions.
-    const focusedIndex = indexes().get(focused() ?? "");
     if (focusedIndex !== undefined) {
       const focusedRow = Math.floor(focusedIndex / columnCount);
       for (const row of [focusedRow - 1, focusedRow, focusedRow + 1]) {
