@@ -52,24 +52,22 @@ suite.define(() => {
               ) {
                 return false;
               }
-              const open = indexedDB.open("openclaw-chat-snapshots");
-              const db = await new Promise<IDBDatabase>((resolve, reject) => {
-                open.onsuccess = () => resolve(open.result);
-                open.onerror = () =>
-                  reject(open.error ?? new Error("Snapshot database failed to open"));
-              });
-              try {
-                const read = db.transaction("snapshots").objectStore("snapshots").count();
-                return await new Promise<boolean>((resolve, reject) => {
-                  read.onsuccess = () =>
-                    resolve(
-                      read.result > 0 &&
-                        Object.keys(localStorage).some((key) =>
-                          key.startsWith("openclaw.control.bootRecord.v1:"),
-                        ),
-                    );
-                  read.onerror = () => reject(read.error ?? new Error("Snapshot count failed"));
+              const result = <T>(request: IDBRequest<T>) =>
+                new Promise<T>((resolve, reject) => {
+                  request.addEventListener("success", () => resolve(request.result));
+                  request.addEventListener("error", () =>
+                    reject(request.error ?? new Error("Snapshot request failed")),
+                  );
                 });
+              const db = await result(indexedDB.open("openclaw-chat-snapshots"));
+              try {
+                return (
+                  (await result(db.transaction("snapshots").objectStore("snapshots").count())) >
+                    0 &&
+                  Object.keys(localStorage).some((key) =>
+                    key.startsWith("openclaw.control.bootRecord.v1:"),
+                  )
+                );
               } finally {
                 db.close();
               }
@@ -105,8 +103,8 @@ suite.define(() => {
         expect(
           await status.evaluate((element) => {
             const indicator = element.getBoundingClientRect();
-            const header = element.closest(".chat-pane__header")!.getBoundingClientRect();
-            return indicator.top >= header.top && indicator.bottom <= header.bottom;
+            const bounds = element.closest(".chat-pane__header")!.getBoundingClientRect();
+            return indicator.top >= bounds.top && indicator.bottom <= bounds.bottom;
           }),
         ).toBe(true);
         await capture("slow");

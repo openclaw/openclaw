@@ -450,11 +450,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      gatewayStatus: this.gatewayStatus ?? {
-        kind: resolveGatewayStatus(sharingSnapshot),
-        lastError: sharingSnapshot.lastError,
-        onRetry: this.context.gateway.connect,
-      },
+      // Mobile owns notice placement, including suppression while its drawer is open.
+      gatewayStatus: this.mergedChrome
+        ? this.gatewayStatus
+        : (this.gatewayStatus ?? {
+            kind: resolveGatewayStatus(sharingSnapshot),
+            lastError: sharingSnapshot.lastError,
+            onRetry: this.context.gateway.connect,
+          }),
       savedConversation: Boolean(
         this.state && !this.state.connected && this.state.chatMessages.length,
       ),
