@@ -6,7 +6,7 @@ export const proofRegions = {
   header: ".chat-pane__header",
   transcript: ".chat-thread-viewport, .chat-thread",
   details: ".chat-details",
-  composer: ".agent-chat__input",
+  composer: ".agent-chat__input, .agent-chat__disabled-banner--replacement",
   dashboard: "openclaw-board-view",
 };
 
