@@ -33,7 +33,11 @@ function reportForegroundActivity(change: 1 | -1): void {
     .catch(() => {}); // Optional offline caching never owns request success.
 }
 
-export function trackForegroundActivity<T>(request: Promise<T>): Promise<T> {
+export function beginForegroundActivity(): () => void {
   reportForegroundActivity(1);
-  return request.finally(() => reportForegroundActivity(-1));
+  return () => reportForegroundActivity(-1);
+}
+
+export function trackForegroundActivity<T>(request: Promise<T>): Promise<T> {
+  return request.finally(beginForegroundActivity());
 }
