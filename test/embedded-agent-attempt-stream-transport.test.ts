@@ -96,6 +96,7 @@ function createTransportFixture(
       promptCacheKey: undefined,
       resolvedApiKey: undefined,
       authStorage: { getApiKey: async () => testCase.apiKey ?? "test-api-key" },
+      modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true }) },
       runId: "run-transport-1",
       admittedRunContext,
       runtimePlan: {
@@ -149,6 +150,7 @@ function createMediaTransportFixture(modelId: string, workspaceDir = "/tmp", age
       model,
       modelId,
       provider: model.provider,
+      modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true }) },
       runId: `run-${modelId}`,
       sessionId: `session-${modelId}`,
       admittedRunContext,

@@ -61,6 +61,7 @@ import {
   prepareWorkspacePluginRegistries,
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { sanitizeInheritedModelsJsonContents } from "./prepared-model-runtime.inherited-catalog.js";
 import {
   prepareOwnedPluginLoadContext,
   prepareOwnedPluginMetadataSnapshotParams,
@@ -499,6 +500,23 @@ export function captureModelsJsonContents(agentDir: string): string | null {
     throw error;
   }
 }
+
+export function captureModelsJsonSource(
+  input: Pick<PreparedModelRuntimeInput, "agentDir" | "fallbackAgentDir">,
+): Readonly<{ contents: string | null; sanitizedFallback: boolean }> {
+  const localContents = captureModelsJsonContents(input.agentDir);
+  if (localContents !== null || !input.fallbackAgentDir) {
+    return { contents: localContents, sanitizedFallback: false };
+  }
+  const inheritedContents = captureModelsJsonContents(input.fallbackAgentDir);
+  return inheritedContents === null
+    ? { contents: null, sanitizedFallback: false }
+    : {
+        contents: sanitizeInheritedModelsJsonContents(inheritedContents),
+        sanitizedFallback: true,
+      };
+}
+
 /** Record discovery scope before config projection or auth-owner publication can replace it. */
 export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
   const { models, auth, env } = input.config;
@@ -545,7 +563,8 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   for (const facts of params.agentFacts) {
     await nextTurn();
     params.assertCurrent?.(facts.input);
-    const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
+    const modelsJsonSource = captureModelsJsonSource(facts.input);
+    const modelsJsonContents = modelsJsonSource.contents;
     // Signed-in providers browse known manifest rows until their account listing publishes. Scope
     // by current credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
     // credential-only providers out of facts.providerIds.
@@ -570,6 +589,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,
       credentials: facts.credentials,
       modelsJsonContents,
+      modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
       pluginCatalogs,
       staticProviderConfigs,
     });
@@ -599,6 +619,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
           config: facts.input.config,
           includePluginCatalogs: true,
           modelsJsonContents,
+          modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
           pluginCatalogs,
           staticProviderConfigs,
           pluginMetadataSnapshot,

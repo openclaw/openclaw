@@ -98,6 +98,7 @@ describe("embedded native provider authority", () => {
           model,
           modelId: model.id,
           provider: model.provider,
+          modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true }) },
           resolvedApiKey: "synthetic-bedrock-key",
           sessionTarget: target,
           sessionFile: target.sessionKey,
