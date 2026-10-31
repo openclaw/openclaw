@@ -310,21 +310,23 @@ await main().catch(
       // Evidence failure must not expose the exception it was meant to keep private.
     }
     // Only installed public module names and numeric coordinates leave private evidence.
-    // Include causes: startup refusals need not retain an async frame in this driver.
+    // Prefer causes so wrapper frames cannot crowd the failing owner out of the cap.
     const sites = [];
     for (
       let cause = error, depth = 0;
       cause instanceof Error && depth < 4;
       cause = cause.cause, depth++
     ) {
+      const causeSites = [];
       for (const line of cause.stack?.split("\n", 16).slice(1) ?? []) {
         const frame = line.startsWith("    at ")
           ? line.match(/\/([^/]+\.m?js):(\d{1,8}):(\d{1,8})\)?$/u)
           : null;
         if (frame && sourceFiles.has(frame[1])) {
-          sites.push(frame.slice(1).join(":"));
+          causeSites.push(frame.slice(1).join(":"));
         }
       }
+      sites.unshift(...causeSites);
     }
     fs.writeSync(
       2,

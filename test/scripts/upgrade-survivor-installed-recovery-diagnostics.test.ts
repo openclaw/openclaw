@@ -120,13 +120,20 @@ it.each([false, true])(
     fs.writeFileSync(
       path.join(candidate, "dist/update-managed-service-handoff-fixture.mjs"),
       `
+      import { fail } from './failing-worker-fixture.mjs';
       async function startManagedServiceUpdateHandoff() {
         setInterval(() => {}, 1000);
-        throw new Error(${JSON.stringify(secret)}, { cause: new Error(${JSON.stringify(privateData)}) });
+        try { fail(); } catch (cause) {
+          throw new Error(${JSON.stringify(secret)}, { cause });
+        }
       }
       function transferManagedServiceUpdateHandoff() { throw new Error('unexpected transfer'); }
       export { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff };
     `,
+    );
+    fs.writeFileSync(
+      path.join(candidate, "dist/failing-worker-fixture.mjs"),
+      `export function fail() { throw new Error(${JSON.stringify(privateData)}); }\n`,
     );
     writeJson(f.env.OPENCLAW_CONFIG_PATH, { gateway: {}, plugins: { enabled: false } });
     const daemonLog = path.join(f.root, "gateway.log");
@@ -154,7 +161,7 @@ it.each([false, true])(
     );
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(
-      "phase=start-candidate-handoff sites=update-managed-service-handoff-fixture.mjs:",
+      "phase=start-candidate-handoff sites=failing-worker-fixture.mjs:",
     );
     expect(result.stderr).toContain(
       unavailable
