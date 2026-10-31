@@ -11,13 +11,14 @@ export const proofRegions = {
 };
 
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string) {
+export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = false) {
   if (window !== window.top) {
     return undefined;
   }
   const data = {
     firstAppDomMs: null as number | null,
     firstMainDomMs: null as number | null,
+    firstTranscriptDomMs: null as number | null,
     firstDashboardContentDomMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
     finalRowsDomMs: null as number | null,
@@ -27,6 +28,14 @@ export function installWarmReloadBrowserProbe(route: string) {
     cls: 0,
     loafBlockingMs: 0,
     loaf: [] as Array<{ atMs: number; durationMs: number; blockingMs: number }>,
+    indexedDb: [] as Array<{
+      store: string;
+      operation: string;
+      atMs: number;
+      completedAtMs: number | null;
+      outcome?: "success" | "error";
+      found?: boolean;
+    }>,
     shifts: [] as Array<{ atMs: number; value: number }>,
     domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
     animationSamples: [] as ReloadAnimationSample[],
@@ -49,6 +58,40 @@ export function installWarmReloadBrowserProbe(route: string) {
     stopped: false,
   };
   Reflect.set(window, "__warmReloadProof", data);
+  if (traceIndexedDb) {
+    for (const operation of ["get", "getAll", "getAllKeys", "put"] as const) {
+      const original = IDBObjectStore.prototype[operation];
+      Object.defineProperty(IDBObjectStore.prototype, operation, {
+        configurable: true,
+        value: function (this: IDBObjectStore, ...args: unknown[]) {
+          const request = Reflect.apply(original, this, args) as IDBRequest;
+          if (!data.stopped && this.transaction.db.name === "openclaw-chat-snapshots") {
+            const entry: (typeof data.indexedDb)[number] = {
+              store: this.name,
+              operation,
+              atMs: performance.now(),
+              completedAtMs: null,
+            };
+            data.indexedDb.push(entry);
+            for (const outcome of ["success", "error"] as const) {
+              request.addEventListener(
+                outcome,
+                () => {
+                  entry.completedAtMs = performance.now();
+                  entry.outcome = outcome;
+                  if (outcome === "success" && operation === "get") {
+                    entry.found = request.result !== undefined;
+                  }
+                },
+                { once: true },
+              );
+            }
+          }
+          return request;
+        },
+      });
+    }
+  }
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (
       typeof event.data === "object" &&
@@ -339,17 +382,22 @@ export function installWarmReloadBrowserProbe(route: string) {
     if (document.querySelector("openclaw-app-shell")) {
       data.firstAppDomMs ??= performance.now();
     }
+    const visibleTranscriptRows = rowElements.filter((row) => {
+      const box = row.getBoundingClientRect();
+      return (
+        box.bottom > 0 &&
+        box.y < innerHeight &&
+        box.width > 0 &&
+        Boolean(row.querySelector(".chat-text")?.textContent?.trim())
+      );
+    });
+    if (visibleTranscriptRows.length > 0) {
+      data.firstTranscriptDomMs ??= performance.now();
+    }
     if (
-      rowElements.some((row) => {
-        const box = row.getBoundingClientRect();
-        return (
-          box.bottom > 0 &&
-          box.y < innerHeight &&
-          box.width > 0 &&
-          row.closest("[data-region]")?.getAttribute("data-region") === "main" &&
-          Boolean(row.querySelector(".chat-text")?.textContent?.trim())
-        );
-      })
+      visibleTranscriptRows.some(
+        (row) => row.closest("[data-region]")?.getAttribute("data-region") === "main",
+      )
     ) {
       data.firstMainDomMs ??= performance.now();
     }
