@@ -413,10 +413,6 @@
   width: min(280px, calc(100vw - 48px));
   gap: var(--space-3);
   padding: var(--space-3);
-  background: var(--bg-elevated);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--overlay-shadow);
 }
 
 .sessions-filter-popover__fields {

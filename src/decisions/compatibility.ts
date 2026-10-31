@@ -1,5 +1,6 @@
+import type { DecisionEntry } from "./input-types.js";
 import type { DecisionBatchResultV2, DecisionBatchV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionBatchResult, DecisionEntry } from "./types.js";
+import type { DecisionBatch, DecisionBatchResult } from "./types.js";
 import { finiteJson } from "./validation-common.js";
 import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-v2.js";
 import {

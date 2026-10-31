@@ -7,7 +7,7 @@ import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";

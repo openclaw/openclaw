@@ -3,6 +3,7 @@ import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { exactButton, newChatPage, chatMessage } from "./chat-flow.test-support.ts";
@@ -238,6 +239,7 @@ suite.define(() => {
     await expectFocused(sidebarTrigger);
 
     await page.setViewportSize({ height: 844, width: 390 });
+    await openChatPanels(page, "mobile");
     await sidebarTrigger.click();
     await sidebarDialog.waitFor({ state: "visible" });
     await page

@@ -141,7 +141,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
               {
                 kind: "content",
                 id: "separator",
-                content: <hr class="sidebar-online__menu-separator" />,
+                content: <hr class="sidebar-online__menu-separator" role="separator" />,
               },
               {
                 id: "activity",

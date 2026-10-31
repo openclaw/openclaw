@@ -39,7 +39,6 @@
 ["extensions/browser/plugin-registration.node-host-laziness.test.ts","./register.runtime.js","e1140dffb33c85a8729e3f9913358553efa36229ee1ef3fb1100958e18c9cce6",1]
 ["extensions/browser/plugin-registration.node-host-laziness.test.ts","./src/browser-proxy-upload-cleanup.runtime.js","44578adc9f05b9d8f6046d64b276facc4aad5ae4349d895d7ef1b71eb882afd5",1]
 ["extensions/browser/plugin-registration.shutdown.test.ts","./src/browser/session-tab-store.js","4127784b516b1c596e9541fd29fff37354ae2e8b52db2c442e7f80149b2aee7c",1]
-["extensions/browser/plugin-registration.shutdown.test.ts","./src/browser/system-profile-import-state.js","c96a446df2b3faf3c83bac833ae487448d7b7a2582d33d71ac784f40e0f4de7e",1]
 ["extensions/browser/src/attached-browser-tool-runtime.test.ts","./browser/bridge-server.js","2fdfe106aa9c1a695385e907fa42766aa2eb556b2f11129a975057e0a31ddb2a",1]
 ["extensions/browser/src/attached-browser-tool-runtime.test.ts","./browser/pw-session.js","32b837522fdd29cbca5bf88dd6413242bf9fe7be27bff0476287fa43aab6551d",1]
 ["extensions/browser/src/browser-dashboard.concurrency.test.ts","./browser/cdp.helpers.js","f5b6e6acd9a557cea66720664e09e4b3af1d00a1e0db95717f706d6a62651c02",1]

@@ -1,18 +1,13 @@
 /** Canonical route-capability schema for provider-owned manifest augmentation. */
 export { ModelInferenceCapabilitiesSchema } from "../../packages/model-catalog-core/src/model-inference-capabilities.js";
 
+export type { JsonValue, DecisionEntry, DecisionQuestion } from "../decisions/input-types.js";
+export type { DecisionBatch, DecisionAnswer, DecisionBatchResult } from "../decisions/types.js";
 export type {
-  JsonValue,
-  DecisionEntry,
-  DecisionQuestion,
-  DecisionBatch,
-  DecisionAnswer,
-  DecisionBatchResult,
   ProviderFailureReason,
-  UnavailableReason,
   ProviderDecisionOutcome,
-  DecisionOutcome,
-} from "../decisions/types.js";
+} from "../decisions/provider-outcomes.js";
+export type { UnavailableReason, DecisionOutcome } from "../decisions/host-outcomes.js";
 export type { DecisionProviderV1, DecisionProviderV2 } from "../decisions/provider-types.js";
 export type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
 export type { DecisionRuntimeV1, DecisionRuntimeV2 } from "../decisions/runtime-types.js";
@@ -23,9 +18,9 @@ export type {
   DecisionBatchV2,
   DecisionAnswerV2,
   DecisionBatchResultV2,
-  ProviderDecisionOutcomeV2,
-  DecisionOutcomeV2,
 } from "../decisions/types-v2.js";
+export type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
+export type { DecisionOutcomeV2 } from "../decisions/host-outcomes.js";
 export {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,

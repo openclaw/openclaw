@@ -1,4 +1,7 @@
-import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
+import type {
+  DecisionAnswerCapabilities,
+  ModelDecisionCapabilities,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import type { DecisionBatchResultV2, DecisionBatchV2 } from "./types-v2.js";
 import {
   decisionEntry,
@@ -169,7 +172,7 @@ export function validateDecisionBatchV2(batch: unknown): batch is DecisionBatchV
 export function validateDecisionResultV2(
   batch: DecisionBatchV2,
   value: unknown,
-  capabilities?: ModelDecisionCapabilities,
+  capabilities?: DecisionAnswerCapabilities | ModelDecisionCapabilities,
 ): value is DecisionBatchResultV2 {
   // The supplied batch is normally admitted already; guarding it also makes this pure boundary safe.
   try {
@@ -186,7 +189,7 @@ export function validateDecisionResultV2(
 export function validateAdmittedDecisionResultV2(
   batch: DecisionBatchV2,
   value: unknown,
-  capabilities?: ModelDecisionCapabilities,
+  capabilities?: DecisionAnswerCapabilities,
 ): value is DecisionBatchResultV2 {
   if (
     finiteJson(value, { rejectProxies: true }) !== "valid" ||
