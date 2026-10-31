@@ -653,14 +653,19 @@ the search; Arrow Down and Enter let you select a matching owner.
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Public access**, select **Enable public access…**, review the warning, then select **Make public**.
 3. Select **Copy public link** to copy the normal thread URL. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
-4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user messages and assistant final answers become visible to public readers automatically.
+4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
-The public page excludes tools, reasoning, files, images, widgets, hidden messages,
-and internal metadata. Included text is not secret-masked, so review the
-conversation for credentials and other sensitive content before publishing. Public access does not let visitors send
-messages or grant authenticated Control UI permissions. For link lifecycle, pagination,
-backup behavior, and login-proxy configuration, see
+Alongside visible conversation text, the public page can show eligible shared
+images (including tool-result images), saved inline widgets, and collapsed
+tool-step summaries.
+Other attachments appear as filename chips without download links. Raw tool-result
+text, reasoning, hidden messages, internal metadata, and pinned dashboard widgets
+remain excluded. Included text is not secret-masked, so review the conversation
+for credentials and other sensitive content before publishing. Public access does
+not let visitors send messages or grant authenticated Control UI permissions. For
+image and widget checks, content limits, link lifecycle, pagination, backup behavior,
+and login-proxy configuration, see
 [Public session transcripts](/web/urls#public-session-transcripts).
 
 ### Session placement
