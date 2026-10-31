@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  isCommunityClawHubInstallRecord as isCommunity,
   isOfficialCatalogLookupPluginIdReplacement as isReplacement,
   isThirdPartyNpmInstallRecord as isThirdParty,
   isTrustedOfficialCatalogLookupDuplicate as isDuplicate,
@@ -39,6 +40,47 @@ function clawhubInstall(
     ...overrides,
   };
 }
+
+describe("community ClawHub install identity", () => {
+  const community = (overrides: Partial<PluginInstallRecord> = {}) =>
+    clawhubInstall("@vendor/demo", { clawhubChannel: "community", ...overrides });
+
+  it("accepts a consistent community listing without granting official trust", () => {
+    expect(isCommunity("demo", "@vendor/demo", community())).toBe(true);
+    expect(isTrusted({ pluginId: "demo", packageName: "@vendor/demo", record: community() })).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    { clawhubChannel: "official" },
+    { clawhubChannel: undefined },
+    { clawhubUrl: undefined },
+    { clawhubUrl: "https://example.invalid" },
+    { clawhubPackage: "@vendor/other" },
+    { resolvedName: "@vendor/other" },
+    { spec: "clawhub:@vendor/other" },
+    { spec: undefined, clawhubPackage: undefined },
+    { source: "npm" },
+  ] satisfies Partial<PluginInstallRecord>[])(
+    "rejects inconsistent community evidence %j",
+    (override) => {
+      expect(isCommunity("demo", "@vendor/demo", community(override))).toBe(false);
+    },
+  );
+
+  it("rejects official catalog identities recorded as community", () => {
+    expect(
+      isCommunity(
+        "acpx",
+        "@openclaw/acpx",
+        clawhubInstall("@openclaw/acpx", { clawhubChannel: "community" }),
+      ),
+    ).toBe(false);
+    expect(isCommunity("acpx", "@vendor/demo", community())).toBe(false);
+    expect(isCommunity("demo", undefined, community())).toBe(false);
+  });
+});
 
 describe("official plugin install trust", () => {
   const packageName = "@openclaw/fish-audio-speech";
