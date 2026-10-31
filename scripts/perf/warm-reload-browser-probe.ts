@@ -38,6 +38,15 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     }>,
     shifts: [] as Array<{ atMs: number; value: number }>,
     domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
+    sidebarFrames: [] as Array<{
+      atMs: number;
+      host: boolean;
+      frame: boolean;
+      state: string | null;
+      saved: string | null;
+      rows: number;
+      sections: number;
+    }>,
     animationSamples: [] as ReloadAnimationSample[],
     animationProbeMs: 0,
     animationPolicy:
@@ -380,6 +389,20 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     const rows = rowElements.length;
     const sidebarRows = document.querySelectorAll("openclaw-app-sidebar [data-session-key]").length;
     const board = Boolean(document.querySelector("openclaw-board-view iframe"));
+    const sidebar = document.querySelector("aside.sidebar");
+    data.sidebarFrames.push({
+      atMs: performance.now(),
+      host: Boolean(document.querySelector("openclaw-app-sidebar")),
+      frame: Boolean(sidebar),
+      state: sidebar?.getAttribute("data-snapshot-state") ?? null,
+      saved: sidebar?.getAttribute("data-snapshot-saved") ?? null,
+      rows: new Set(
+        [...document.querySelectorAll("openclaw-app-sidebar [data-session-key]")].map((row) =>
+          row.getAttribute("data-session-key"),
+        ),
+      ).size,
+      sections: document.querySelectorAll("openclaw-app-sidebar [data-session-section]").length,
+    });
     if (document.querySelector("openclaw-app-shell")) {
       data.firstAppDomMs ??= performance.now();
     }
