@@ -1,4 +1,5 @@
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 
 const USAGE_CACHE_TTL_MS = 30_000;
 const USAGE_CACHE_MAX = 256;
@@ -6,9 +7,11 @@ const USAGE_CACHE_MAX = 256;
 export type UsageCacheEntry<T extends object> = {
   configRef: object;
   revision: string | number;
-  lastAccessedAt: number;
+  /** Monotonic last-access reading for eviction ordering; never persisted or serialized. */
+  lastAccessedMonotonic: number;
   value?: T;
-  updatedAt?: number;
+  /** Monotonic completion reading anchoring TTL freshness; never persisted or serialized. */
+  updatedAtMonotonic?: number;
   inFlight?: Promise<T>;
 };
 
@@ -18,9 +21,9 @@ function setUsageCache<T extends object>(
   entry: UsageCacheEntry<T>,
   maxEntries: number,
 ): void {
-  const cutoff = Date.now() - USAGE_CACHE_TTL_MS;
+  const cutoff = monotonicNow() - USAGE_CACHE_TTL_MS;
   for (const [key, candidate] of cache) {
-    if (key !== cacheKey && !candidate.inFlight && candidate.lastAccessedAt <= cutoff) {
+    if (key !== cacheKey && !candidate.inFlight && candidate.lastAccessedMonotonic <= cutoff) {
       cache.delete(key);
     }
   }
@@ -52,28 +55,30 @@ export async function loadUsageResultCached<T extends object>(params: {
   shareInFlight?: boolean;
 }): Promise<T> {
   const { cache, cacheKey, configRef, revision } = params;
-  const now = Date.now();
+  const nowMonotonic = monotonicNow();
   const candidate = cache.get(cacheKey);
   const cached =
     candidate?.configRef === configRef && candidate.revision === revision ? candidate : undefined;
   if (cached) {
-    cached.lastAccessedAt = now;
+    cached.lastAccessedMonotonic = nowMonotonic;
   }
   if (
     cached?.value &&
-    cached.updatedAt !== undefined &&
-    (params.revisionOnly || now - cached.updatedAt < USAGE_CACHE_TTL_MS)
+    cached.updatedAtMonotonic !== undefined &&
+    (params.revisionOnly || nowMonotonic - cached.updatedAtMonotonic < USAGE_CACHE_TTL_MS)
   ) {
     return cached.value;
   }
   if (cached?.inFlight && params.shareInFlight !== false) {
-    return cached.value && cached.updatedAt ? cached.value : await cached.inFlight;
+    return cached.value && cached.updatedAtMonotonic !== undefined
+      ? cached.value
+      : await cached.inFlight;
   }
 
   // Each request-owned flight may reuse settled data, but owns its publication and cleanup.
   const entry: UsageCacheEntry<T> = cached
     ? { ...cached, inFlight: undefined }
-    : { configRef, revision, lastAccessedAt: now };
+    : { configRef, revision, lastAccessedMonotonic: nowMonotonic };
   // Stale responses and cache eviction do not release the initiating owner's work.
   const inFlight = trackAsyncWork(() =>
     params
@@ -81,11 +86,11 @@ export async function loadUsageResultCached<T extends object>(params: {
       .then((value) => {
         if (params.isComplete?.(value) ?? true) {
           entry.value = value;
-          entry.updatedAt = Date.now();
+          entry.updatedAtMonotonic = monotonicNow();
         } else if (!entry.value) {
           // Partial snapshots serve cold callers without masking the next refresh.
           entry.value = value;
-          delete entry.updatedAt;
+          delete entry.updatedAtMonotonic;
         }
         return value;
       })
@@ -97,11 +102,11 @@ export async function loadUsageResultCached<T extends object>(params: {
       })
       .finally(() => {
         entry.inFlight = undefined;
-        entry.lastAccessedAt = Date.now();
+        entry.lastAccessedMonotonic = monotonicNow();
       }),
   );
 
   entry.inFlight = inFlight;
   setUsageCache(cache, cacheKey, entry, params.maxEntries ?? USAGE_CACHE_MAX);
-  return entry.value && entry.updatedAt ? entry.value : await inFlight;
+  return entry.value && entry.updatedAtMonotonic !== undefined ? entry.value : await inFlight;
 }

@@ -42,7 +42,7 @@ beforeEach(() => {
   configRef = {};
   now = 1_000;
   vi.useRealTimers();
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   loader.mockReset().mockResolvedValue(summary());
 });
 afterEach(async () => {
@@ -104,7 +104,7 @@ it("retains a stale refresh after its cache entry is replaced", async () => {
   const gate = blocked();
   const params = query("stale");
   const first = await original.track(() => load(params));
-  expect(cache.get(params.cacheKey)?.updatedAt).toBe(now);
+  expect(cache.get(params.cacheKey)?.updatedAtMonotonic).toBe(now);
   now = 31_000;
   loader.mockReturnValueOnce(gate.promise);
   expect(await original.track(() => load(params))).toEqual(first);
@@ -177,4 +177,33 @@ it("preserves a complete stale result when a refresh is partial", async () => {
   expect(cache.get(params.cacheKey)?.inFlight).toBeUndefined();
   expect((await load(params)).totals.totalTokens).toBe(20);
   expect(loader).toHaveBeenCalledTimes(3);
+});
+
+it("serves fresh entries across a wall-clock forward step", async () => {
+  // Pin the wall clock before the first load so the step is genuinely forward.
+  const wall = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  const params = query("fresh");
+  await load(params);
+  expect(loader).toHaveBeenCalledTimes(1);
+  // The wall clock jumps forward an hour; no monotonic time passes.
+  wall.mockReturnValue(1_700_000_000_000 + 3_600_000);
+  expect(await load(params)).toEqual(summary());
+  expect(loader).toHaveBeenCalledTimes(1);
+});
+
+it("still refreshes expired entries across a wall-clock backward step", async () => {
+  // Pin the wall clock before the first load so the step is genuinely backward.
+  const wall = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  const params = query("stale");
+  await load(params);
+  expect(loader).toHaveBeenCalledTimes(1);
+  now += 30_001;
+  // The wall clock jumps back an hour; the expired entry must not resurrect.
+  wall.mockReturnValue(1_700_000_000_000 - 3_600_000);
+  loader.mockResolvedValueOnce(summary(2));
+  // The stale value is served immediately while the background refresh must still run.
+  await load(params);
+  await cache.get("stale")?.inFlight;
+  expect(loader).toHaveBeenCalledTimes(2);
+  expect((await load(params)).totals.totalTokens).toBe(2);
 });
