@@ -3,9 +3,10 @@ import { isProxy } from "node:util/types";
 import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { Type } from "typebox";
 import { decisionBatchV1ToV2 } from "../../decisions/compatibility.js";
-import type { DecisionBatchV2, DecisionOutcomeV2 } from "../../decisions/types-v2.js";
+import type { DecisionOutcomeV2 } from "../../decisions/host-outcomes.js";
+import { validateDecisionBatchV2 } from "../../decisions/input-validation.js";
+import type { DecisionBatchV2 } from "../../decisions/types-v2.js";
 import { isPlainDecisionRecord } from "../../decisions/validation-common.js";
-import { validateDecisionBatchV2 } from "../../decisions/validation-v2.js";
 import { textResult } from "./tool-results.js";
 
 const entry = {

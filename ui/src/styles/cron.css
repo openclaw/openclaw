@@ -190,7 +190,6 @@
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
-  box-shadow: var(--overlay-shadow);
 }
 
 .cron-error-banner {
@@ -1141,13 +1140,6 @@
 }
 
 /* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
-.cron-job-menu > .oc-menu,
-.cron-filter-dropdown__details > .oc-menu {
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
 .cron-job-menu > .oc-menu {
   min-width: 170px;
 }

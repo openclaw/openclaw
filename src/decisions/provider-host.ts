@@ -19,21 +19,19 @@ import {
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "./compatibility.js";
+import { DecisionContractError } from "./contract-error.js";
 import {
   decisionDebugEnabled,
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
 import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { DecisionOutcome, DecisionOutcomeV2, UnavailableReason } from "./host-outcomes.js";
+import type { ProviderFailureReason } from "./provider-outcomes.js";
 import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
-import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
-import type {
-  DecisionBatch,
-  DecisionOutcome,
-  ProviderFailureReason,
-  UnavailableReason,
-} from "./types.js";
-import { DecisionContractError, validateDecisionResult } from "./validation.js";
+import type { DecisionBatchV2 } from "./types-v2.js";
+import type { DecisionBatch } from "./types.js";
+import { validateDecisionResult } from "./validation.js";
 
 type Options = DecisionEvaluateOptionsV2;
 type Batch = DecisionBatch | DecisionBatchV2;

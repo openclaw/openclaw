@@ -133,12 +133,7 @@ openclaw-board-view {
 
 .board-tabs__overflow-panel,
 .board-widget__menu-panel {
-  --oc-overlay-distance: 0px;
-
   min-width: 190px;
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .board-widget__menu-panel {
@@ -304,18 +299,8 @@ openclaw-board-widget-cell {
   padding: 5px 9px;
 }
 
-.board-widget__menu .oc-menu-item {
-  font-size: 11px;
-  min-height: var(--menu-item-height);
-}
-
 .board-widget__menu .oc-menu-item__check {
   color: inherit;
-}
-
-.board-widget__menu-separator {
-  border-top: 1px solid var(--board-line);
-  margin: 5px 3px;
 }
 
 .board-widget__menu-danger,

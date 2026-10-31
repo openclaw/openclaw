@@ -1,18 +1,12 @@
+import { DecisionContractError } from "./contract-error.js";
 import type { DecisionBatch, DecisionBatchResult } from "./types.js";
 import {
   decisionEntry,
+  exactKeys,
   finiteJson,
   isPlainDecisionRecord,
   validDecisionCriteria,
 } from "./validation-common.js";
-
-/** A caller contract defect is not a provider outage. Never include evidence in errors. */
-export class DecisionContractError extends Error {
-  constructor() {
-    super("Invalid decision contract; check the input and evaluation options.");
-    this.name = "DecisionContractError";
-  }
-}
 
 export const MAX_DECISION_V1_QUESTIONS = 256;
 
@@ -68,13 +62,6 @@ function probability(value: unknown): value is number {
 function distribution(values: unknown[]): values is number[] {
   return values.every(probability) && values.some((value) => value > 0);
 }
-export function exactKeys(left: object, right: object): boolean {
-  const keys = Object.keys(left);
-  return (
-    keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key))
-  );
-}
-
 /** Validate all answers before returning any; provider data never grants partial acceptance. */
 export function validateDecisionResult(
   batch: Pick<DecisionBatch, "questions">,

@@ -21,4 +21,5 @@ export type AcpReplayWorkerOperations = {
     output: void;
   };
   "acpReplay.read": { input: AcpReplayReadInput; output: AcpEventLedgerReplay };
+  "acpReplay.sessionKey": { input: { sessionId: string }; output: string | undefined };
 };

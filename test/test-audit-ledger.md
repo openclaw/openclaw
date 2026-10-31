@@ -22,26 +22,35 @@ keeps the current campaign state instead of repeating historical checkpoints.
 
 - [189405](https://github.com/openclaw/openclaw/pull/189405): Five implied/mock/self assertions and one unused import; all180 cases remain. Five owner faults fail ten keeper cases; all removal phases clean before/after; 47 CI checks pass. −6 test LOC, no declarations or production removed.
 
+- [189429](https://github.com/openclaw/openclaw/pull/189429): 49 unselected failover fixture rows and newly unused alias/imports; all55 selected inputs and consumer bytes identical. 257 tests/14 suites before/after, all removal phases clean, 56 CI checks pass. −189 support LOC; no declarations, assertions or production changed.
+
+- [189460](https://github.com/openclaw/openclaw/pull/189460): Two unused core test publications, exact retirement-map rows and two generated cast allowances; native lifecycle/factory owners and all14 consumer files plus both live fixtures preserved. 195 tests/14 suites before/after/final head; all removal phases clean; CI gate green. −38 net production LOC; no declarations or assertions removed.
+
+- [189510](https://github.com/openclaw/openclaw/pull/189510): Obsolete ElevenLabs/Tlon mocks, unused xAI inspector and impossible Nextcloud fixture branch; all159 cases/eight suites remain. Baseline/candidate/final head pass, all removal phases clean, CI green. −30 net test/support LOC; no declarations removed.
+
 All landed batches completed focused checks, independent review and every removal
 scan phase. Existing Knip findings were attributed, never suppressed; unused-file
 and script-export scans were clean. PR189313 used the native inherited-failure
 route: tested main introduced three unawaited SDK-host closes; the PR's original
 file passes typed lint and the identical tested-main file reproduces all three.
-Its failed CI remains failed; no current-head CI success is claimed.
+Its failed CI remains failed; no current-head CI success is claimed. PR189510 retains an inherited local Tlon max-lines failure (1,028→1,024 effective lines); no allowance added, CI passed.
 
 ## Current qualification
 
-[189429](https://github.com/openclaw/openclaw/pull/189429), pinned main
-`4afb241323b`: remove49 unselected failover corpus rows. Classifier38 IDs and
-retry18 overlap once; corpus104→55, overflow56→8, billing7→6. Actual imported
-selected payloads, expectations, order, selectors and both consumer files match
-the baseline exactly. Retain `structuredSource` for the selected auth-format row;
-remove only newly unused `errorsSource` and overflow imports. Independent
-preservation review found no assertions to carry. Native baseline and candidate
-both pass257 tests/14 suites; typed lint, scoped TypeScript and format pass.
-−189 fixture/support LOC; no declarations, assertions or production changed.
-All removal phases passed before and after. Final review and PR CI remain
-workflow gates.
+Pinned main `ec004ac80b18`: simplify private plugin fixtures and implied assertions.
+Remove 18 unused Memory Wiki inventory payload cells; every method name/order and
+all nine live dispatch rows remain identical. Remove only four provider assertion
+statements: Cloudflare active-wrapper identity, Volcengine identity/frozen-value
+self-checks and Google config separation identity. All 49 cases/four suites pass
+before and after. Five owner faults fail retained payload, exact-result,
+frozen-input, helper-identity and distinct-token assertions; production bytes
+restored. All declarations remain; no assertion transfer. Focused typed lint,
+TypeScript, source format and diff checks pass.
+Baseline dependency/export phases report only the existing
+`src/tts/directive-facts.ts: resolveTtsDirectiveBody` export and its
+`directives` re-export. Full-tree raw export, unused-file and script-export scans
+are clean; no suppression or production change. Candidate removal scans,
+committed review, final published-head proof and PR CI are pending.
 
 ## Completed source review
 
@@ -58,10 +67,10 @@ permission to delete without root qualification.
 - Core content/runtime: Templates31/230; logging64/465; meeting bot30/183 direct+inherited; hooks41; TTS23; media-understanding43/241; context/chat/Canvas19/139; generation19/103; web/fetch8/69; status/storage25/207; realtime1/13.
 - Core setup/tools: Bootstrap/provider/interactive/plugin state21/179; daemon127/920; Talk39/250 plus inherited table; wizard30/239; security46/181; model commands35/215; catalog/memory SDK7/71; Doctor118/673.
 - Core entrypoints: Root src25; root docs/scripts21/63; direct channels103; CLI Gateway31/246; admin/share/Bonjour8/41. Deeper nested channel owners remain open.
-- Agent internals: 429 unique suites/2,824 physical sites/107,109 test LOC: R2809/F12/C1/D2. Latest worktree registry/templates, allocation/capacity and checkout/source23/107 all retained; separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
+- Agent internals: 782 unique suites/5,418 physical sites: R5398/F17/C1/D2. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 222 unique suites/1,368 physical sites: R1349/F19. Latest complete usage28/142 R and Cron page26/120 R119/F1; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: 581 unique suites/3,596 physical sites: R3191/F405. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -71,11 +80,11 @@ permission to delete without root qualification.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf1,164 suites/72 owners; including known root exclusions1,235 suites/105 owners. Remaining3,069 directory suites/73 owners plus3 root suites. Latest meeting adapters, Muse, Baseten, Beam, Requesty and Vydra retain distinct runtime/transport/lifecycle contracts. Source-only; no runtime verdict.
+- Plugin lane progress: Leaf1,577 suites/128 closed owners; combined1,651 suites/161 closed directory owners plus the closed three-suite root boundary. Remaining2,656 directory suites/17 owners, including LINE10; LINE51/61 is partial. Signal44, memory-wiki50 and Crabbox53 are source-closed; keep their identity, cache, compiler and mutation contracts. Root media/CLI suites retain provider and import-policy proof. Source-only; no runtime verdict.
 
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. The49 unselected failover corpus rows are active above. Pending: X midnight-spend replay; Cua enum and Twitch settled flag; Nextcloud upload-table unreachable branch; unused xAI request-header label; unused Swarm reset publication and registration; OC Path malformed-line replay and repeated round-trip assertion. Each needs current-source and runtime keeper qualification.
+- Keep source-only candidates separate from applied removals. Obsolete plugin fixture controls are active above. Pending: X midnight-spend replay; Cua enum and Twitch settled flag; OC Path malformed-line replay and repeated round-trip assertion. Each needs current-source and runtime keeper qualification.
 - Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.

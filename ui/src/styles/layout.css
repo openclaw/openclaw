@@ -2028,6 +2028,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   font-weight: 500;
   letter-spacing: -0.008em;
   color: var(--text);
+  transition: opacity var(--duration-normal) ease-out;
 }
 
 .sidebar-recent-sessions
@@ -2233,12 +2234,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-online__menu .oc-menu-item__icon svg {
   width: 16px;
   height: 16px;
-}
-
-.sidebar-online__menu-separator {
-  margin: 4px;
-  border: 0;
-  border-top: 1px solid var(--border);
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -2500,10 +2495,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-customize-menu__item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   min-height: var(--menu-item-height);
-  padding: 0 8px;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--menu-item-radius);
   background: transparent;
@@ -2532,10 +2527,10 @@ openclaw-session-menu[popover] {
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  background: var(--popover);
-  box-shadow: var(--overlay-shadow);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
   position: fixed;
   z-index: 121;
   animation: menu-in 140ms var(--ease-out);
@@ -3363,15 +3358,13 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-identity-menu {
-  --menu-item-height: 32px;
-  --menu-padding: 6px;
-
   overflow: visible;
 }
 
 .sidebar-identity-menu__header {
+  gap: 8px;
   min-height: 42px;
-  padding: 3px 4px;
+  padding: 3px 8px;
 }
 
 /* Host elements are display:contents, so the anchor itself is the flex item;
@@ -4021,8 +4014,23 @@ html.openclaw-native-web-chrome
   border-radius: 0;
 }
 
-.sidebar-recent-session--creating:not(:has(.sidebar-recent-session__name)) {
-  --session-row-bg: color-mix(in srgb, var(--text) 4%, transparent);
+/* A new session's row arrives once the Gateway lists it, without a placeholder.
+   Its title stays transparent while naming runs, then fades in with the name. */
+.sidebar-recent-session--naming {
+  animation: sidebar-session-arrive var(--duration-normal) ease-out;
+}
+
+.sidebar-recent-session--naming .sidebar-recent-session__name {
+  opacity: 0;
+}
+
+@keyframes sidebar-session-arrive {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .sidebar-recent-session__subtitle--narration {

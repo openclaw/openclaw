@@ -416,6 +416,19 @@ Stop OpenClaw processes and back up both databases named in the warning before r
 For the retired QMD memory backend, including config rewrites and derived
 workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
+Doctor also reclaims legacy memory reindex shadows named `<database>.tmp-<uuid>`
+and their SQLite companions once the primary has been archived as `.migrated`
+and no primary or primary companion remains. Every file in the shadow family
+must be a regular file at least 24 hours old. Doctor previews eligible files and
+declares them for migration backups. Every cleanup path also reports each file
+to standard error before removing it, including automatic Doctor migrations
+without a backup capture. Failed removals produce recoverable warnings.
+Live indexes, current `.memory-reindex-<uuid>` shadows,
+configured import sources (including aliases), and unresolved legacy recovery
+files remain untouched. Newly archived indexes
+become eligible on the next Doctor run. This repair runs in candidate Doctor;
+the installed updater needs no new protocol.
+
 This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars block the import: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
 
 After explicit repair (`--fix`, `--repair`, or `--yes`), Doctor verifies runtime schema readiness for existing configured, default-layout, and registered databases before reporting completion, including stores whose migration failed before registration. A blocked required migration exits nonzero; stop the Gateway and other OpenClaw processes, then rerun repair. Unrelated advisory warnings, including archived transcript repair failures, do not make a ready database fail this check. Missing databases are not created by the readiness check.

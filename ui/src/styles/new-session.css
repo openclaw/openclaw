@@ -628,9 +628,6 @@ span.new-session-page__select {
 .session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
   color: var(--text);
 }
 
@@ -677,21 +674,15 @@ span.new-session-page__select {
 .oc-popover.new-session-page__select,
 .oc-popover.new-session-page__branch-popup {
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .oc-popover.new-session-page__select {
   --oc-overlay-max-width: min(320px, calc(100vw - 24px));
-  --oc-overlay-distance: 8px;
 
-  min-width: min(224px, var(--oc-overlay-available-width, 100%));
+  min-width: min(220px, var(--oc-overlay-available-width, 100%));
 }
 
 .oc-popover.new-session-page__branch-popup {
-  --oc-overlay-distance: 0px;
-
   width: anchor-size(width);
 }
 
@@ -1603,7 +1594,6 @@ span.new-session-page__select {
 }
 
 .new-session-page__cloud-config-card {
-  --openclaw-tooltip-background-color: var(--bg-elevated);
   --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
 }
 

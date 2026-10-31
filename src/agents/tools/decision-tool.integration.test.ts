@@ -3,11 +3,8 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type {
-  DecisionBatchResultV2,
-  DecisionBatchV2,
-  ProviderDecisionOutcomeV2,
-} from "../../decisions/types-v2.js";
+import type { ProviderDecisionOutcomeV2 } from "../../decisions/provider-outcomes.js";
+import type { DecisionBatchResultV2, DecisionBatchV2 } from "../../decisions/types-v2.js";
 import type { DecisionBatch } from "../../decisions/types.js";
 import {
   createColdPluginFixture,
