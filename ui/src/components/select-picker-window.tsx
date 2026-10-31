@@ -6,9 +6,9 @@ import {
   observeElementRect,
   Virtualizer,
 } from "@tanstack/virtual-core";
-import { createSignal, For, onSettled } from "solid-js";
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
-import { measureObservedRow, revealVirtualRow } from "../lib/virtual-row-geometry.ts";
+import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import type { PickerOption } from "./select-picker-types.ts";
 
 export type PickerWindowRow<Option> = {
@@ -19,11 +19,12 @@ export type PickerWindowRow<Option> = {
 };
 
 /** Mounted only for an open, caller-sized large picker. The menu owns selection;
- * virtual-core owns row geometry and reveal. */
+ * virtual-core owns geometry, and the existing scroll primitive owns reveal. */
 export default function PickerWindow<Option extends PickerOption>(props: {
   options: readonly Option[];
   active: string | null;
   viewport: () => HTMLDivElement;
+  target: () => HTMLDivElement | undefined;
   pointerHighlight: () => boolean;
   renderRow: (
     row: () => PickerWindowRow<Option>,
@@ -47,23 +48,10 @@ export default function PickerWindow<Option extends PickerOption>(props: {
       })),
       height: virtualizer.getTotalSize(),
     });
-  const reveal = (index: number) => {
-    if (!props.pointerHighlight()) {
-      revealVirtualRow(virtualizer, index);
-    }
-  };
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: props.viewport,
     estimateSize: () => 32,
-    measureElement: (element, entry, instance) => {
-      const size = measureObservedRow(element, entry, instance);
-      if (entry && element.dataset.value === props.active) {
-        // A wrapped active row can outgrow its estimate after the initial reveal.
-        onSettled(() => reveal(instance.indexFromElement(element)));
-      }
-      return size;
-    },
     observeElementRect,
     observeElementOffset,
     scrollToFn: elementScroll,
@@ -71,6 +59,13 @@ export default function PickerWindow<Option extends PickerOption>(props: {
     useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
+  const [registeredActive, setRegisteredActive] = createSignal<HTMLDivElement>();
+  const measureRow = (element: HTMLDivElement | null) => {
+    virtualizer.measureElement(element);
+    if (element && element === props.target()) {
+      setRegisteredActive(element);
+    }
+  };
   onSettled(() => {
     const { _didMount: mount } = virtualizer;
     return mount();
@@ -98,10 +93,6 @@ export default function PickerWindow<Option extends PickerOption>(props: {
       const { _willUpdate: update } = virtualizer;
       update();
       publish();
-      // Commit the spacer and rows before scrolling against their geometry.
-      if (activeIndex >= 0) {
-        onSettled(() => reveal(activeIndex));
-      }
     },
     { targets: () => [props.viewport()], changeTiming: "sync" },
   );
@@ -109,10 +100,30 @@ export default function PickerWindow<Option extends PickerOption>(props: {
   const height = () =>
     window().source === props.options ? window().height : props.options.length * 32;
   const rows = () => (window().source === props.options ? window().rows : []);
+  const activeTarget = createMemo(() => {
+    const registered = registeredActive();
+    const active = props.active;
+    return props.target() ?? (registered?.dataset.value === active ? registered : undefined);
+  });
+  // Row registration admits reveal after DOM commit without waiting for a WebKit frame.
+  createScrollPosition(
+    () => {
+      const staticTarget = activeTarget();
+      return {
+        reveal: staticTarget
+          ? {
+              identity: [props.options, props.active, staticTarget],
+              target: () => (props.pointerHighlight() ? undefined : staticTarget),
+            }
+          : undefined,
+      };
+    },
+    { region: props.viewport },
+  );
   return (
     <div class="picker-select__window" style={{ height: `${height()}px` }}>
       <For each={rows()} keyed={(row) => row.option.value}>
-        {(row) => props.renderRow(row, virtualizer.measureElement)}
+        {(row) => props.renderRow(row, measureRow)}
       </For>
     </div>
   );

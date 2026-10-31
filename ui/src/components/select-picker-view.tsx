@@ -686,6 +686,7 @@ export function PickerContent<Option extends PickerOption>(props: {
               options={rows()}
               active={active()}
               viewport={() => list}
+              target={() => optionElements.get(menu.highlightedValueNow() ?? "")}
               pointerHighlight={() => pointerHighlight}
               renderRow={(entry, measure) => (
                 <OptionRow
