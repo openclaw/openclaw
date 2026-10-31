@@ -21,6 +21,7 @@ vi.mock("../../lib/sessions/session-message-subscriptions.runtime.ts", async (im
   return importOriginal();
 });
 
+// mock-isolation: Hold the lazy view unresolved to prove navigation does not wait for it.
 vi.mock("../../components/board/board-view.tsx", async () => {
   runtime.boardStarted();
   runtime.boardReady.resolve();
@@ -28,6 +29,7 @@ vi.mock("../../components/board/board-view.tsx", async () => {
   return {};
 });
 
+// mock-isolation: Hold the sidebar unresolved independently without mounting its observers.
 vi.mock("./components/chat-sidebar-region.runtime.tsx", async () => {
   runtime.sidebarStarted();
   runtime.sidebarReady.resolve();

@@ -135,6 +135,9 @@ does not simulate TLS, TCP handshake latency, packet loss, or Internet routing.
 Decode/hash instrumentation has overhead. Native renderer thread CPU counters
 exclude time descheduled by the host. Every action uses a fresh inspector session
 so counters cannot accumulate across navigations or earlier actions.
+`cpuMs` stops at readiness. `settledCpuMs` and `settledElapsedMs` include the
+existing post-readiness drain; compare completed HTTP/RPC work as well as these
+counters when earlier readiness changes which background replies arrive first.
 `gatewayCpuMs` records process user/system CPU from action start through the
 driver's readiness assertion, excluding fixture setup and the post-readiness
 tail. It includes Gateway workers, the benchmark driver/proxy, and instrumentation;

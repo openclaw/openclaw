@@ -939,6 +939,19 @@ async function runWorker() {
                     ? readiness.pageMs
                     : Math.max(readiness.transcriptMs, readiness.composerMs);
               const cpuAfter = (await performanceSession.send("Performance.getMetrics")).metrics;
+              const cpuMetrics = (metrics: typeof cpuAfter) =>
+                Object.fromEntries(
+                  metrics
+                    .filter((metric) =>
+                      [
+                        "TaskDuration",
+                        "ScriptDuration",
+                        "LayoutDuration",
+                        "RecalcStyleDuration",
+                      ].includes(metric.name),
+                    )
+                    .map((metric) => [metric.name, metric.value * 1000]),
+                );
               const navigationStart = cpuAfter.find((metric) => metric.name === "NavigationStart");
               if (!navigationStart) {
                 throw new Error("Chrome did not report the navigation clock");
@@ -957,6 +970,8 @@ async function runWorker() {
                   () => true,
                   () => false,
                 );
+              const settledCpu = (await performanceSession.send("Performance.getMetrics")).metrics;
+              const settledElapsedMs = performance.now() - startedAtMs;
               const observed = decoded.slice(decodedStart);
               const arrivals = new Map<WireFrame, (typeof observed)[number]>();
               for (const event of observed) {
@@ -1124,18 +1139,9 @@ async function runWorker() {
                 },
                 gatewayCpuMs: { user: gatewayCpu.user / 1000, system: gatewayCpu.system / 1000 },
                 gatewayRssBytes,
-                cpuMs: Object.fromEntries(
-                  cpuAfter
-                    .filter((m) =>
-                      [
-                        "TaskDuration",
-                        "ScriptDuration",
-                        "LayoutDuration",
-                        "RecalcStyleDuration",
-                      ].includes(m.name),
-                    )
-                    .map((m) => [m.name, m.value * 1000]),
-                ),
+                cpuMs: cpuMetrics(cpuAfter),
+                settledCpuMs: cpuMetrics(settledCpu),
+                settledElapsedMs,
               });
               console.log(`Completed ${name}: ${JSON.stringify(readiness)}`);
               if (values.screenshots && pair === 0) {
