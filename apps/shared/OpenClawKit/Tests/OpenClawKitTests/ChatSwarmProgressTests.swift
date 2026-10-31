@@ -78,6 +78,23 @@ struct ChatSwarmProgressTests {
         #expect(groups.single?.phases.single?.dots.map(\.status) == [.queued, .running, .done, .failed])
     }
 
+    @Test func `paused children read Paused and keep their group listed`() {
+        let groupID = "swarm:agent:main:parent:paused"
+        var nested = self.session(key: "nested", status: "done", groupID: groupID, subagentRunState: "paused")
+        nested.hasActiveSubagentRun = true
+        let sessions = [
+            self.session(key: "paused", status: "done", groupID: groupID, subagentRunState: "paused"),
+            nested,
+            self.session(key: "done", status: "done", groupID: groupID),
+        ]
+
+        let group = buildOpenClawChatSwarmGroups(sessions: sessions) { $0 == "agent:main:parent" }.single
+        #expect(group?.phases.single?.dots.map(\.status) == [.paused, .running, .done])
+        #expect(group?.paused == 1)
+        #expect(group?.running == 1)
+        #expect(buildOpenClawChatSwarmGroups(sessions: [sessions[0]]) { $0 == "agent:main:parent" }.single?.paused == 1)
+    }
+
     @Test func `child pager deduplicates pages and reports a moving list incomplete`() async throws {
         let groupID = "swarm:agent:main:parent:paged"
         let pages = [

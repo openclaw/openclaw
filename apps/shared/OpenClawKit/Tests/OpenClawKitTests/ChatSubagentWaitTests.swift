@@ -80,6 +80,29 @@ struct ChatSubagentWaitTests {
         #expect(wait?.child == nil)
     }
 
+    @Test func `paused helpers keep the wait open without counting as running`() {
+        // The parent's descendant flag omits paused children.
+        let parent = self.session("parent")
+        var paused = self.session("paused", parent: "parent")
+        paused.status = "done"
+        paused.subagentRunState = "paused"
+        let wait = ChatSubagentWait.resolve(session: parent, sessions: [parent, paused], runActive: false)
+        #expect(wait?.child == .init(key: "paused", name: "paused", paused: true))
+        #expect(wait?.pausedCount == 1)
+        var other = paused
+        other.key = "other"
+        let both = ChatSubagentWait.resolve(session: parent, sessions: [parent, paused, other], runActive: false)
+        #expect(both?.child == nil)
+        #expect(both?.pausedCount == 2)
+        // A paused helper whose own descendants run is running, not paused.
+        paused.hasActiveSubagentRun = true
+        let nested = ChatSubagentWait.resolve(
+            session: self.session("parent", helperRunning: true), sessions: [parent, paused], runActive: false)
+        #expect(nested?.child?.paused == false)
+        #expect(nested?.pausedCount == 0)
+        #expect(ChatSubagentWait.resolve(session: parent, sessions: [parent, paused], runActive: true) == nil)
+    }
+
     @Test func `spawnedBy and childSessions identify helpers without a parent key`() {
         var parent = self.session("parent", helperRunning: true)
         var child = self.session("child", running: true)

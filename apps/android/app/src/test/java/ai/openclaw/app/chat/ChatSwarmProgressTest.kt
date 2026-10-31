@@ -124,6 +124,30 @@ class ChatSwarmProgressTest {
   }
 
   @Test
+  fun pausedChildrenReadPausedAndKeepTheirGroupListed() {
+    val groupId = "swarm:agent:main:parent:paused"
+    val paused = session("paused", "done", groupId, subagentRunState = "paused")
+    val rows =
+      listOf(
+        paused,
+        session("nested", "done", groupId, subagentRunState = "paused").copy(hasActiveSubagentRun = true),
+        session("done", "done", groupId),
+      )
+
+    val group = buildChatSwarmGroups(rows) { it == "agent:main:parent" }.single()
+    assertEquals(
+      listOf(ChatSwarmDotStatus.Paused, ChatSwarmDotStatus.Running, ChatSwarmDotStatus.Done),
+      group.phases
+        .single()
+        .dots
+        .map(ChatSwarmDot::status),
+    )
+    assertEquals(1, group.paused)
+    assertEquals(1, group.running)
+    assertEquals(1, buildChatSwarmGroups(listOf(paused)) { it == "agent:main:parent" }.single().paused)
+  }
+
+  @Test
   fun phasesUseTheLowestObservedRankAndPreserveWorkerOrderWithinEachPhase() {
     val groupId = "swarm:agent:main:parent:phases"
     val rows =
@@ -253,6 +277,7 @@ class ChatSwarmProgressTest {
         groupId = "private-group",
         label = "private-label",
         running = 1,
+        paused = 0,
         done = 0,
         failed = 0,
         narrator = null,

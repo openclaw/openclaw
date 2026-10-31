@@ -98,7 +98,9 @@ struct ChatSessionSidebarRowFacts {
             declaration?.attention.map { Self.attentionSymbols[$0] ?? "hand.raised.fill" } ??
             (hasError ? "exclamationmark.triangle.fill" : nil)
         let custom = ChatPayloadDecoding.trimmedNonEmptyString(session.icon).map(Self.icon)
-        let terminal = isChild && !running ? Self.terminalBadge(session.status) : nil
+        // A child paused on sessions_yield keeps its terminal status but has not finished.
+        let terminal = isChild && !running
+            ? Self.terminalBadge(session.subagentRunState == "paused" ? "paused" : session.status) : nil
         self.glyph = attentionIcon.map(Glyph.symbol) ?? custom ?? terminal?.glyph
         self.glyphTone = attentionIcon != nil ? (hasError ? .danger : .warning) :
             custom == nil ? terminal?.tone ?? .secondary : .secondary
@@ -215,6 +217,7 @@ struct ChatSessionSidebarRowFacts {
                 String(localized: "Timed out"),
                 .danger)
         case "interrupted": (symbol, label, tone) = ("pause.fill", String(localized: "Interrupted"), .secondary)
+        case "paused": (symbol, label, tone) = ("pause.circle", String(localized: "Paused"), .secondary)
         case "failed": (symbol, label, tone) = ("exclamationmark.triangle.fill", String(localized: "Failed"), .danger)
         default: return nil
         }

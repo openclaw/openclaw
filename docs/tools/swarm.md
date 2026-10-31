@@ -443,8 +443,13 @@ collector retention policy. This is not a permanent execution archive.
 Native Android, iOS, and macOS chat surfaces still show active-only phase-grouped
 grids, capped at 256 markers per phase with an overflow count. Accessible labels
 identify each child's status. Native clients present killed and timed-out children
-as failed. Native groups leave the widget when none of their children are queued
-or running. The native widget disappears when no active groups remain.
+as failed. A child that called `sessions_yield` and waits for a continuation reads
+**Paused**, with an outlined marker and a paused count in the group summary; once
+its own children run, it reads **Running**. Native groups leave the widget when
+none of their children are queued, running, or paused. The native widget
+disappears when no active groups remain. The Wear OS Agent Pulse has no paused
+state yet: it lists only groups with queued or running work and counts paused
+children there as done.
 
 Collector children appear in their session transcripts. They have no session-sidebar
 rows. Their activity and unread failures still contribute to the parent’s sidebar
