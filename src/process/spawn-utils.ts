@@ -33,9 +33,9 @@ export function spawnProcess(
         )
       : initiateSpawn
         ? initiateSpawn(() =>
-            runWithMainThreadTask("process:spawn:native", () => spawn(command, args, options)),
+            runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
           )
-        : runWithMainThreadTask("process:spawn:native", () => spawn(command, args, options));
+        : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }

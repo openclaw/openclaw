@@ -635,8 +635,10 @@ export function spawnCommandWithInvocation<
           commandOptions,
           remoteOptions,
         )
-      : runWithMainThreadTask("process:spawn:command", () =>
-          execa(invocation.command, invocation.args, commandOptions),
+      : runWithMainThreadTask(
+          "process:spawn",
+          () => execa(invocation.command, invocation.args, commandOptions),
+          "command",
         );
   // nice execs Git in the same child; retain its family and operation attribution.
   const niceGit = argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git";

@@ -25,12 +25,15 @@ export async function spawnNodeTerminalPty(
     throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
-  const child = runWithMainThreadTask("process:spawn:pty-helper", () =>
-    spawn(node, resolveRuntimeWorkerArgv(worker, node), {
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      serialization: "json",
-      env: process.env,
-    }),
+  const child = runWithMainThreadTask(
+    "process:spawn",
+    () =>
+      spawn(node, resolveRuntimeWorkerArgv(worker, node), {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        serialization: "json",
+        env: process.env,
+      }),
+    "pty-helper",
   );
   const stdout = child.stdout;
   const stderrPipe = child.stderr;
