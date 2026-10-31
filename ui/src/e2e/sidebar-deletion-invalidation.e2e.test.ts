@@ -10,11 +10,7 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Cross-tab sidebar deletion invalidation" });
-type DeletionProbe = {
-  sent: number;
-  received: number;
-  wipes: number;
-  writes: number;
+type DeletionProbe = Record<"sent" | "received" | "wipes" | "writes", number> & {
   exchanged: Promise<void>;
 };
 declare global {
@@ -100,44 +96,23 @@ suite.define(() => {
                 changed();
               }
             });
-            // oxlint-disable-next-line typescript/unbound-method -- call preserves each native object-store receiver.
-            const remove = IDBObjectStore.prototype.delete;
-            IDBObjectStore.prototype.delete = function (key) {
-              if (this.name === "sidebarSnapshots") {
-                probe.wipes += 1;
-              }
-              return remove.call(this, key);
-            };
-            // oxlint-disable-next-line typescript/unbound-method -- preserve native object-store receiver.
-            const put = IDBObjectStore.prototype.put;
-            IDBObjectStore.prototype.put = function (...args) {
-              if (this.name === "sidebarSnapshots") {
-                probe.writes += 1;
-              }
-              return put.apply(this, args);
-            };
-            // oxlint-disable-next-line typescript/unbound-method -- preserve native cursor receiver.
-            const update = IDBCursor.prototype.update;
-            IDBCursor.prototype.update = function (value) {
-              if (
-                this.source instanceof IDBObjectStore &&
-                this.source.name === "sidebarSnapshots"
-              ) {
-                probe.writes += 1;
-              }
-              return update.call(this, value);
-            };
-            // oxlint-disable-next-line typescript/unbound-method -- preserve native cursor receiver.
-            const removeCursor = IDBCursor.prototype.delete;
-            IDBCursor.prototype.delete = function () {
-              if (
-                this.source instanceof IDBObjectStore &&
-                this.source.name === "sidebarSnapshots"
-              ) {
-                probe.wipes += 1;
-              }
-              return removeCursor.call(this);
-            };
+            const observe = <Args extends unknown[], Result>(
+              operation: (...args: Args) => Result,
+              counter: "writes" | "wipes",
+            ) =>
+              function (this: IDBObjectStore | IDBCursor, ...args: Args) {
+                const source = this instanceof IDBCursor ? this.source : this;
+                if (source instanceof IDBObjectStore && source.name === "sidebarSnapshots") {
+                  probe[counter] += 1;
+                }
+                return operation.apply(this, args);
+              };
+            // oxlint-disable typescript/unbound-method -- observe preserves native receivers and arguments.
+            IDBObjectStore.prototype.delete = observe(IDBObjectStore.prototype.delete, "wipes");
+            IDBObjectStore.prototype.put = observe(IDBObjectStore.prototype.put, "writes");
+            IDBCursor.prototype.update = observe(IDBCursor.prototype.update, "writes");
+            IDBCursor.prototype.delete = observe(IDBCursor.prototype.delete, "wipes");
+            // oxlint-enable typescript/unbound-method
           },
           {
             key: deleted.key,
@@ -146,8 +121,9 @@ suite.define(() => {
             profileId,
           },
         );
-        const peer = await context.newPage();
-        const pages = [page, peer];
+        const pages = [page, await context.newPage()];
+        const row = (target: typeof page, key: string) =>
+          target.locator(`aside.sidebar [data-session-key="${key}"]`);
         const gateways: Array<Awaited<ReturnType<typeof installMockGateway>>> = [];
         for (const target of pages) {
           const gateway = await installMockGateway(target, {
@@ -185,11 +161,8 @@ suite.define(() => {
           await target.goto(controlUiSessionUrl(suite.server.baseUrl, retained.key));
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
-          await target
-            .locator(`aside.sidebar [data-session-key="${retained.key}"]`)
-            .first()
-            .waitFor();
-          const deletedRow = target.locator(`aside.sidebar [data-session-key="${deleted.key}"]`);
+          await row(target, retained.key).first().waitFor();
+          const deletedRow = row(target, deleted.key);
           if (subagent) {
             // Ephemeral runs are lifecycle targets, never pinnable sidebar destinations.
             expect(await deletedRow.count()).toBe(0);
@@ -200,8 +173,7 @@ suite.define(() => {
         }
         for (const target of pages) {
           await target.evaluate(() => {
-            window.openclawDeletionSnapshotProbe.wipes = 0;
-            window.openclawDeletionSnapshotProbe.writes = 0;
+            Object.assign(window.openclawDeletionSnapshotProbe, { wipes: 0, writes: 0 });
           });
         }
         await page.clock.install();
@@ -236,16 +208,12 @@ suite.define(() => {
         await page.clock.resume();
         for (const target of pages) {
           await target.evaluate(() => window.openclawDeletionSnapshotProbe.exchanged);
-          expect(
-            await target.evaluate(() => {
-              const { sent, received, wipes } = window.openclawDeletionSnapshotProbe;
-              return { sent, received, wipes };
-            }),
-          ).toEqual({ sent: 1, received: 1, wipes: 0 });
-          await target
-            .locator(`aside.sidebar [data-session-key="${deleted.key}"]`)
-            .first()
-            .waitFor({ state: "detached" });
+          expect(await target.evaluate(() => window.openclawDeletionSnapshotProbe)).toMatchObject({
+            sent: 1,
+            received: 1,
+            wipes: 0,
+          });
+          await row(target, deleted.key).first().waitFor({ state: "detached" });
         }
         const writes = await Promise.all(
           pages.map((target) => target.evaluate(() => window.openclawDeletionSnapshotProbe.writes)),
@@ -256,17 +224,15 @@ suite.define(() => {
         );
         console.info("deletion-cache-writes-per-two-virtual-minutes", { tail, writes });
         await page.locator("aside.sidebar").screenshot({
-          path: `${suite.artifactDir}/${tail.startsWith("subagent") ? "subagent" : "normal"}-live.png`,
+          path: `${suite.artifactDir}/${subagent ? "subagent" : "normal"}-live.png`,
         });
         await page.reload();
         await gateways[0]!.waitForRequest("connect");
         await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-        await page.locator(`aside.sidebar [data-session-key="${retained.key}"]`).first().waitFor();
-        expect(
-          await page.locator(`aside.sidebar [data-session-key="${deleted.key}"]`).count(),
-        ).toBe(0);
+        await row(page, retained.key).first().waitFor();
+        expect(await row(page, deleted.key).count()).toBe(0);
         await page.locator("aside.sidebar").screenshot({
-          path: `${suite.artifactDir}/${tail.startsWith("subagent") ? "subagent" : "normal"}-cached.png`,
+          path: `${suite.artifactDir}/${subagent ? "subagent" : "normal"}-cached.png`,
         });
       });
     },
