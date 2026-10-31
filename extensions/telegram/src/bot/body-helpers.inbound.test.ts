@@ -108,3 +108,15 @@ it("reopens enclosing formatting across a quote block", () => {
     "**bold before**\n> **quoted**\n\n**bold after**",
   );
 });
+
+it("renders forwarded rich messages so debounce sees text", () => {
+  const rich = (text: string) =>
+    ({ rich_message: { blocks: [{ type: "paragraph", text }] } }) as Parameters<
+      typeof getTelegramTextParts
+    >[0];
+
+  expect(getTelegramTextParts(rich("first forward")).text).toBe("first forward");
+  expect(joinParts(rich("first forward"), rich("second forward")).text).toBe(
+    "first forward\nsecond forward",
+  );
+});

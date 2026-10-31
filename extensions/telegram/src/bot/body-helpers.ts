@@ -250,7 +250,15 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
       entities: [],
     };
   }
-  return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
+  if (msg.poll) {
+    return { text: formatTelegramPollText(msg.poll), entities: [] };
+  }
+  // Forwarded rich messages carry no text/caption, but the agent prompt renders them;
+  // returning an empty part made the inbound debounce treat them as non-text.
+  // Rendered text only: a non-text rich message stays empty so media/caption
+  // callers keep treating it as non-text, exactly like the prompt placeholder.
+  const richText = msg.rich_message ? (resolveTelegramRichMessageText(msg) ?? "") : "";
+  return { text: richText, entities: [] };
 }
 
 export function joinTelegramTextParts(
