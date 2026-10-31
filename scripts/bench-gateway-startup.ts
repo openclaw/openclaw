@@ -77,6 +77,7 @@ import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ran
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
 type GatewayBenchCase = {
+  agentDatabaseMib?: number;
   agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
   bundledPluginFixture?: OpenClawConfig;
   completionTracePhase?: string;
@@ -465,6 +466,18 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
   }
   let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  if (cases.length === 1 && cases[0]?.id === "teamBoot" && flags.has("--agent-database-mib")) {
+    cases = [
+      {
+        ...cases[0],
+        agentDatabaseMib: parseNonNegativeInt(
+          flags.get("--agent-database-mib")?.[0],
+          0,
+          "--agent-database-mib",
+        ),
+      },
+    ];
+  }
   if (flags.has("--team-scale")) {
     if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
       throw new CliArgumentError("--team-scale requires --case teamBoot");
@@ -621,7 +634,7 @@ Options:
   --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
   --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
-  --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
+  --agent-database-mib <n> Slow-agent cache payload (default: 512), or teamBoot total transcript database size
   --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
   --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
 
@@ -1444,6 +1457,8 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
         import("../src/state/config-machine-state-async.js"),
       ]);
+    const { appendTranscriptEventsInTransaction } =
+      await import("../src/config/sessions/session-accessor.sqlite-transcript-store.js");
     const now = Date.parse("2026-10-19T00:00:00Z");
     const agents = buildBenchAgentList(root, benchCase.agentTopology)!;
     const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
@@ -1467,6 +1482,46 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           { agentId, env },
         );
         database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        // Real incompressible transcript pages exercise state-size-dependent startup work.
+        const targetBytes = ((benchCase.agentDatabaseMib ?? 0) * 1024 * 1024) / agents.length;
+        let message = 0;
+        while (statSync(database.path).size < targetBytes) {
+          agentDb.runOpenClawAgentWriteTransaction(
+            (writable) => {
+              for (let index = 0; index < 32; index++) {
+                const sessionIndex = message % 1250;
+                appendTranscriptEventsInTransaction(
+                  writable,
+                  {
+                    agentId,
+                    sessionKey: `agent:${agentId}:bench-${sessionIndex}`,
+                    sessionId: `team-boot-${agentId}-${sessionIndex}`,
+                  },
+                  [
+                    {
+                      type: "message",
+                      id: `startup-size-${message++}`,
+                      parentId: null,
+                      timestamp: new Date(now).toISOString(),
+                      message: {
+                        role: "user",
+                        content: [
+                          {
+                            type: "text",
+                            text: cipher.update(Buffer.alloc(192 * 1024)).toString("base64"),
+                          },
+                        ],
+                        timestamp: now,
+                      },
+                    },
+                  ],
+                );
+              }
+            },
+            { agentId, env },
+          );
+          database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
         if (benchCase.teamScale && databasePaths.length === 0) {
           // Inert canonical cache pages model a large agent DB without inventing schema.
           const insert = database.db.prepare(
@@ -1562,6 +1617,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
     writeBenchmarkJson(
       {
         pluginCount: benchCase.pluginCount,
+        agentDatabaseMib: benchCase.agentDatabaseMib,
         pluginMigrationFixture: benchCase.pluginMigrationFixture,
         teamScale: benchCase.teamScale ?? false,
         workspaceFileCount: benchCase.teamScale ? 62_000 : 0,
@@ -2339,12 +2395,16 @@ async function main() {
       const fixture = JSON.parse(
         readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
       ) as {
+        agentDatabaseMib?: number;
         bundledPluginFixture?: OpenClawConfig;
         publicationGitDelayMs?: number;
         publicationApiDelayMs?: number;
         teamScale?: boolean;
         pluginMigrationFixture?: GatewayBenchCase["pluginMigrationFixture"];
       };
+      if (fixture.agentDatabaseMib !== options.cases[0]?.agentDatabaseMib) {
+        throw new CliArgumentError("--agent-database-mib must match the prepared fixture");
+      }
       if (fixture.pluginMigrationFixture !== options.cases[0]?.pluginMigrationFixture) {
         throw new CliArgumentError("--plugin-migration-fixture must match the prepared fixture");
       }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   isPrimarySessionTranscriptFileName,
   resolveTrajectoryPath,
@@ -84,7 +85,7 @@ export async function verifyDeferredSessionDatabase(params: {
   const stats = readOnlySqliteDbStats(target);
   if (!snapshot.ok || !stats.ok || stats.stats.integrityCheck !== "ok") {
     throw new Error(
-      `Cannot verify retained session history against ${params.sqlitePath}; inspect SQLite integrity with openclaw doctor --session-sqlite validate. Sources remain protected.`,
+      `Cannot verify retained session history against ${params.sqlitePath}; inspect SQLite integrity with ${formatCliCommand("openclaw doctor --session-sqlite validate", params.env)}. Sources remain protected.`,
     );
   }
   const resolved = new Map(params.sources.map((source) => [source.originalPath, source.path]));
@@ -117,7 +118,7 @@ export async function verifyDeferredSessionDatabase(params: {
       snapshot.snapshot.sessionKeysBySessionId.get(record.entry.sessionId) !== record.sessionKey
     ) {
       throw new Error(
-        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Preserve ${record.transcriptPath ?? target.storePath} and its backups. Restore the intended session from a verified backup to ${params.sqlitePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Canonical edits and deletions were not replayed.`,
+        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Preserve ${record.transcriptPath ?? target.storePath} and its backups. Restore the intended session from a verified backup to ${params.sqlitePath}, then run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents", params.env)} against the same state directory. Canonical edits and deletions were not replayed.`,
       );
     }
   }
