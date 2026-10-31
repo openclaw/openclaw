@@ -296,26 +296,35 @@ describe("runCommandWithTimeout", () => {
     expect(result).toMatchObject({ stdout: "", outputLimitExceeded: true, termination: "signal" });
   });
 
-  it("retires a failed launch before its scope closes and keeps argv out of the error", async () => {
-    const privateArg = "private-command-argument";
-    const reservation = { spawned: vi.fn(), settled: vi.fn() };
-    await execSpawn.withCommandProcessScope(
-      async () => {
-        const error = await runCommandWithTimeout(
-          [`openclaw-missing-${process.pid}-${Date.now()}`, "--token", privateArg],
-          { timeoutMs: 3_000 },
-        ).catch((caught: unknown) => caught);
+  it.each(["missing-command", "missing-cwd"] as const)(
+    "retires a failed launch before its scope closes without leaking argv: %s",
+    async (failure) => {
+      const privateArg = "private-command-argument";
+      const missing = path.join(process.cwd(), `openclaw-missing-${process.pid}-${Date.now()}`);
+      const reservation = { spawned: vi.fn(), settled: vi.fn() };
+      const reserve = vi.fn(() => reservation);
+      // Windows rejects a missing command before custody; an absent cwd fails after reservation.
+      const reservations = failure === "missing-command" && process.platform === "win32" ? 0 : 1;
+      await execSpawn.withCommandProcessScope(
+        async () => {
+          const error = await runCommandWithTimeout(
+            [failure === "missing-command" ? missing : process.execPath, "--token", privateArg],
+            { timeoutMs: 3_000, ...(failure === "missing-cwd" ? { cwd: missing } : {}) },
+          ).catch((caught: unknown) => caught);
 
-        expect(error).toBeInstanceOf(Error);
-        expect(String(error)).not.toContain(privateArg);
-        expect(error).toMatchObject({ code: "ENOENT" });
-        expect(reservation.spawned).not.toHaveBeenCalled();
-        expect(reservation.settled).toHaveBeenCalledOnce();
-      },
-      undefined,
-      { reserve: () => reservation },
-    );
-  });
+          expect(error).toBeInstanceOf(Error);
+          expect(String(error)).not.toContain(privateArg);
+          expect(error).toMatchObject({ code: "ENOENT" });
+          expect(reserve).toHaveBeenCalledTimes(reservations);
+          expect(reservation.spawned).not.toHaveBeenCalled();
+          expect(reservation.settled).toHaveBeenCalledTimes(reservations);
+        },
+        undefined,
+        { reserve },
+      );
+      expect(reservation.settled).toHaveBeenCalledTimes(reservations);
+    },
+  );
 });
 
 describe("runCommandBuffered", () => {

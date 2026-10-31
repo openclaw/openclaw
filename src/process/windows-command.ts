@@ -19,9 +19,12 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   if (process.platform !== "win32" || argv.length === 0) {
     return null;
   }
-  const basename = normalizeLowercaseStringOrEmpty(
-    path.basename(expectDefined(argv[0], "argv entry at 0")),
-  ).replace(/\.(cmd|exe|bat)$/, "");
+  const command = expectDefined(argv[0], "argv entry at 0");
+  // Explicit paths and native executables must retain the caller-selected program.
+  if (path.basename(command) !== command || path.extname(command).toLowerCase() === ".exe") {
+    return null;
+  }
+  const basename = normalizeLowercaseStringOrEmpty(command).replace(/\.(cmd|bat)$/, "");
   const entryName = basename === "npx" ? "npx" : basename === "npm" ? "npm" : null;
   if (!entryName) {
     return null;
@@ -37,7 +40,6 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   }
   // Bun-based runs don't ship npm-cli.js next to process.execPath. The .cmd
   // fallback remains inside the trusted cmd.exe wrapper below.
-  const command = argv[0] ?? "";
   const extension = normalizeLowercaseStringOrEmpty(path.extname(command));
   return [extension ? command : `${command}.cmd`, ...argv.slice(1)];
 }

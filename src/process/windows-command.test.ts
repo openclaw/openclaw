@@ -66,6 +66,43 @@ windowsIt("explicit paths ignore PATHEXT", ({ cwd }) => {
   expect(resolveCommand([exe], { PATH: "", PATHEXT: ".CMD;.BAT" }, cwd).command).toBe(exe);
 });
 
+for (const manager of ["npm", "npx"]) {
+  windowsIt(
+    "preserves an explicit " + manager + " executable instead of substituting the host npm",
+    async ({ cwd }) => {
+      const command = path.join(cwd, manager + ".exe");
+      const hostDirectory = path.join(cwd, "host");
+      const hostExecutable = path.join(hostDirectory, "node.exe");
+      const npmBin = path.join(hostDirectory, "node_modules", "npm", "bin");
+      await mkdir(npmBin, { recursive: true });
+      await Promise.all([
+        writeFile(command, ""),
+        writeFile(hostExecutable, ""),
+        writeFile(path.join(npmBin, manager + "-cli.js"), ""),
+      ]);
+      using execPath = vi.spyOn(process, "execPath", "get");
+      execPath.mockReturnValue(hostExecutable);
+
+      for (const requested of [command, manager + ".exe"]) {
+        expect(
+          resolveCommand([requested, "--version"], { PATH: cwd, PATHEXT: ".EXE" }, cwd),
+        ).toMatchObject({
+          command,
+          args: ["--version"],
+          usesWindowsExitCodeShim: false,
+        });
+      }
+      expect(() =>
+        resolveCommand(
+          [path.join(cwd, "missing", manager + ".exe"), "--version"],
+          { PATH: "" },
+          cwd,
+        ),
+      ).toThrow("ENOENT");
+    },
+  );
+}
+
 windowsIt("honors PATHEXT precedence before package-manager shim fallback", ({ cwd }) => {
   expect(resolveCommand(["pnpm", "--version"], { PATH: cwd, PATHEXT: ".EXE;.CMD" })).toMatchObject({
     args: ["--version"],
@@ -107,7 +144,7 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
       "",
     ],
   ].flat();
-  it.each(["argv.cmd", "argv with spaces.cmd", "argv with ^caret.cmd"])(
+  it.each(["argv.cmd", "argv with spaces.cmd", "argv with ^caret.cmd", "npm.cmd", "npx.cmd"])(
     "preserves literal, empty and quoted argv through %s",
     (file) =>
       withTempDir("openclaw-batch-argv-", async (cwd) => {

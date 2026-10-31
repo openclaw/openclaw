@@ -1,0 +1,2 @@
+46
+# Explicit npm/npx selection, native wrapper argv preservation and pre/post-reservation failed-launch coverage.
