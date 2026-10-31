@@ -71,6 +71,10 @@ export function createXaiImageGenerationProviderMetadata() {
         aspectRatios: [...XAI_SUPPORTED_IMAGE_ASPECT_RATIOS],
         resolutions: ["1K", "2K"],
       },
+      // https://docs.x.ai/developers/model-capabilities/images/generation
+      output: {
+        qualitiesByModel: { "grok-imagine-image-2.0": ["low", "medium", "auto"] },
+      },
     },
   } satisfies Omit<ImageGenerationProvider, "generateImage">;
 }
