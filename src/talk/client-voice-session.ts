@@ -297,17 +297,6 @@ export function resolveClientVoiceRunBinding(runId?: string): ClientVoiceRunBind
   return runId ? voiceSessionByRunId.get(runId)?.binding : undefined;
 }
 
-async function agentDatabaseIsUsable(agentId: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(resolveOpenClawAgentSqlitePath({ agentId }));
-    // An empty placeholder is what recovery leaves behind when it displaces the
-    // database; treating it as usable would rebuild metadata recovery just dropped.
-    return stat.size > 0;
-  } catch {
-    return false;
-  }
-}
-
 function appendVoiceTranscript(
   params: {
     agentId: string;
@@ -421,19 +410,28 @@ function appendVoiceTranscript(
                 // only place that records its interaction time. Skip the touch when the
                 // agent database was displaced or removed: recovery owns that state and
                 // reopening it here would recreate metadata it deliberately dropped.
-                if (await agentDatabaseIsUsable(normalized.agentId)) {
-                  const entryScope = {
-                    agentId: normalized.agentId,
-                    sessionKey: normalized.sessionKey,
-                    sessionId: entry.sessionId,
-                    ...(normalized.sessionTarget.storePath
-                      ? { storePath: normalized.sessionTarget.storePath }
-                      : {}),
-                  };
-                  await patchSessionEntryCore(entryScope, () => ({
-                    lastInteractionAt: timestamp,
-                    updatedAt: timestamp,
-                  }));
+                const entryScope = {
+                  agentId: normalized.agentId,
+                  sessionKey: normalized.sessionKey,
+                  sessionId: entry.sessionId,
+                  ...(normalized.sessionTarget.storePath
+                    ? { storePath: normalized.sessionTarget.storePath }
+                    : {}),
+                };
+                // Best effort: a drifted, displaced, or worker-owned database must not fail
+                // the transcript write that already committed; recovery owns that state.
+                try {
+                  // An empty placeholder is what recovery leaves behind when it displaces
+                  // the database, so only touch a non-empty one.
+                  const agentDb = resolveOpenClawAgentSqlitePath({ agentId: normalized.agentId });
+                  if ((await fs.stat(agentDb)).size > 0) {
+                    await patchSessionEntryCore(entryScope, () => ({
+                      lastInteractionAt: timestamp,
+                      updatedAt: timestamp,
+                    }));
+                  }
+                } catch {
+                  // Keep the committed transcript authoritative; the timestamp retries later.
                 }
               }
 
