@@ -130,7 +130,7 @@ export async function acquireOpenClawStateLease(params: {
             ? "has no recorded expiry"
             : `expires at ${new Date(outcome.holder.expiresAt).toISOString()}`;
         log.warn(
-          `Waiting for ${params.label} held by ${outcome.holder.owner}; current lease ${expiry}.`,
+          `Waiting for ${params.label} ${outcome.holder.queued ? "behind queued writer" : "held by"} ${outcome.holder.description ?? outcome.holder.owner}; current lease ${expiry}.`,
         );
       }
       attempt += 1;

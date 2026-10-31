@@ -151,19 +151,23 @@ export function acquireOpenClawStateLeaseInWorker(
   const { identity, leaseMs, operationLabel, schemaPolicy } = input;
   const shared = input.observeExpiry ? takeLeaseExpiryObservation(identity) : undefined;
   // Worker threads share the process lifetime; arbitrary subprocess work does not.
-  const payloadJson = input.processBound
-    ? JSON.stringify({
-        owner: {
-          pid: process.pid,
-          host: hostname(),
-          startedAt: getFileLockProcessStartTime(
-            process.pid,
-            getSqliteWorkerStateContext().environment,
-          ),
-          processNamespace: readGatewayLockProcessNamespace(),
-        },
-      })
-    : null;
+  const payloadJson = JSON.stringify({
+    // Diagnostic identity never authorizes reclaiming an installer's live children.
+    holder: { purpose: operationLabel, pid: process.pid, host: hostname() },
+    ...(input.processBound
+      ? {
+          owner: {
+            pid: process.pid,
+            host: hostname(),
+            startedAt: getFileLockProcessStartTime(
+              process.pid,
+              getSqliteWorkerStateContext().environment,
+            ),
+            processNamespace: readGatewayLockProcessNamespace(),
+          },
+        }
+      : {}),
+  });
   try {
     return withLeaseWriteTransaction(
       {
@@ -180,7 +184,14 @@ export function acquireOpenClawStateLeaseInWorker(
         const facts = { kind: "state-lease-acquire", identity };
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
         reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
-        const result = acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs, payloadJson);
+        const result = acquireOpenClawStateLeaseInTransaction(
+          db,
+          identity,
+          leaseMs,
+          payloadJson,
+          undefined,
+          input.wait,
+        );
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
         if (shared && result.kind === "acquired") {
           stageLeaseExpiryObservation(db, shared, result.expiresAt);

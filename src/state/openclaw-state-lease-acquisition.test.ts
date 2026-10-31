@@ -37,7 +37,11 @@ import { OpenClawStateLeaseAcquisitionError } from "./openclaw-state-lease-error
 import type { OpenClawStateLeaseOptions } from "./openclaw-state-lease-options.js";
 import * as leaseStore from "./openclaw-state-lease-store.js";
 import * as leaseStorage from "./openclaw-state-lease-worker-storage.js";
-import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import {
+  withOpenClawStateLease,
+  withOpenClawStateLeaseAsync,
+  type OpenClawStateLeaseContext,
+} from "./openclaw-state-lease.js";
 import * as workerContext from "./openclaw-state-worker-context.js";
 
 afterEach(() => {
@@ -140,6 +144,11 @@ it("passes the exact persisted owner identity to the lease callback", async () =
         lease.assertOwned();
         expect(identity).toMatchObject({ scope: "core:test", key: "callback-identity" });
         const database = openOpenClawStateDatabase({ env: state.env });
+        const payload: unknown = JSON.parse(
+          leaseStore.readOpenClawStateLease(database.db, identity)?.payloadJson ?? "null",
+        );
+        expect(payload).toMatchObject({ holder: { purpose: "state.lease", pid: process.pid } });
+        expect(payload).not.toHaveProperty("owner");
         expect(leaseStore.readOpenClawStateLeaseExpiry(database.db, identity)).toBeGreaterThan(
           Date.now(),
         );
@@ -523,3 +532,141 @@ it.each([false, true])(
     });
   },
 );
+
+const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
+      ...actual.createSubsystemLogger(...args),
+      warn,
+    }),
+  };
+});
+
+it.each([
+  { ending: "update", kind: "native" },
+  { ending: "cancel", kind: "native" },
+  { ending: "update", kind: "worker" },
+  { ending: "cancel", kind: "worker" },
+])(
+  "does not starve a waiting plugin $ending behind periodic reacquisition ($kind)",
+  async ({ ending, kind }) => {
+    await withOpenClawTestState({ label: "lease-fairness" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const target = { scope: "core:plugin-lifecycle", key: "global" };
+      let holder = { ...target, owner: "periodic-0" };
+      const payload = JSON.stringify({
+        holder: { purpose: "gateway plugin-reconcile", pid: 1234, host: "fixture-host" },
+      });
+      const write = <T>(run: () => T) =>
+        runOpenClawStateWriteTransaction(run, { database, env: state.env });
+      write(() =>
+        leaseStore.acquireOpenClawStateLeaseInTransaction(database.db, holder, 30_000, payload),
+      );
+      const controller = new AbortController();
+      let polls = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => polls * 1_000);
+      vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+        polls++;
+        if (ending === "cancel") {
+          controller.abort();
+          return;
+        }
+        write(() => {
+          leaseStore.releaseOpenClawStateLeaseInTransaction(database.db, holder);
+          holder = { ...target, owner: `periodic-${polls}` };
+          leaseStore.acquireOpenClawStateLeaseInTransaction(database.db, holder, 30_000, payload);
+        });
+      });
+      const options = { ...target, leaseMs: 30_000, waitMs: 5_000, signal: controller.signal };
+      const update =
+        kind === "worker"
+          ? withOpenClawStateLeaseAsync(
+              options,
+              workerContext.captureOpenClawStateWorkerContext({ env: state.env }),
+              async (lease) => {
+                await lease.assertOwned();
+                return "updated";
+              },
+            )
+          : withOpenClawStateLease(
+              { ...options, database: { scope: "shared", options: { env: state.env } } },
+              async (lease) => {
+                lease.assertOwned();
+                return "updated";
+              },
+            );
+      if (ending === "cancel") {
+        await expect(update).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+        write(() => leaseStore.releaseOpenClawStateLeaseInTransaction(database.db, holder));
+        await expect(
+          withOpenClawStateLease(
+            {
+              ...target,
+              database: { scope: "shared", options: { env: state.env } },
+              leaseMs: 30_000,
+              waitMs: 0,
+            },
+            async () => "next",
+          ),
+        ).resolves.toBe("next");
+      } else {
+        await expect(update).resolves.toBe("updated");
+        expect(polls).toBe(1);
+      }
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("gateway plugin-reconcile (pid 1234 on fixture-host)"),
+      );
+      expect(database.db.prepare("SELECT * FROM state_leases").all()).toEqual([]);
+    });
+  },
+);
+
+it("admits waiters in arrival order and retires abandoned intents without preempting renewal", async () => {
+  await withOpenClawTestState({ label: "lease-fifo-expiry" }, async (state) => {
+    const { db } = openOpenClawStateDatabase({ env: state.env });
+    const identity = (owner: string) => ({ scope: "core:test", key: "fifo", owner });
+    const now = Date.now();
+    const acquire = (owner: string, wait = false, at = now) =>
+      runOpenClawStateWriteTransaction(
+        () =>
+          leaseStore.acquireOpenClawStateLeaseInTransaction(
+            db,
+            identity(owner),
+            60_000,
+            null,
+            at,
+            wait,
+          ),
+        { env: state.env },
+      );
+    const release = (owner: string) =>
+      runOpenClawStateWriteTransaction(
+        () => leaseStore.releaseOpenClawStateLeaseInTransaction(db, identity(owner)),
+        { env: state.env },
+      );
+    expect(acquire("holder").kind).toBe("acquired");
+    expect(acquire("z-first", true).kind).toBe("held");
+    expect(acquire("a-second", true).kind).toBe("held");
+    expect(
+      leaseStore.renewOpenClawStateLeaseInTransaction(
+        db,
+        identity("holder"),
+        60_000,
+        undefined,
+        now + 1,
+      ),
+    ).toBe(now + 60_001);
+    release("holder");
+    expect(acquire("a-second", true).kind).toBe("held");
+    expect(acquire("z-first", true).kind).toBe("acquired");
+    release("z-first");
+    expect(acquire("newcomer").kind).toBe("held");
+    // A dead waiter cannot hold admission after its intent expires.
+    expect(acquire("newcomer", false, now + 30_000).kind).toBe("acquired");
+    release("newcomer");
+    expect(db.prepare("SELECT * FROM state_leases").all()).toEqual([]);
+  });
+});
