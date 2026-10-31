@@ -68,6 +68,7 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 
 const initialHost = getAiTransportHost();
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-responses-transcript-");
@@ -238,11 +239,12 @@ describe("native OpenAI Responses SSE continuation", () => {
     const messages: Context["messages"] = [freezeJsonSnapshot(userMessage(text, 1))];
     const request = async (onPayload?: (payload: unknown) => void) => {
       sseState.outcomes.push(sdkUncitedCompletion(`resp_${sseState.requests.length}`, "answer"));
-      const stream = await wrapped(
-        astra,
-        { messages },
-        { apiKey: "synthetic-key", reasoningEffort: "low", onPayload },
-      );
+      const options = {
+        apiKey: "synthetic-key",
+        reasoningEffort: "low",
+        onPayload,
+      } satisfies OpenAIResponsesOptions;
+      const stream = await wrapped(astra, { messages }, options);
       for await (const event of stream) {
         void event;
       }
