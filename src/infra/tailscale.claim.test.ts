@@ -241,6 +241,60 @@ describe("private Tailscale Serve claims", () => {
     await claim.stop();
   });
 
+  it.each(["cli failure", "owner signal"] as const)(
+    "reports post-ready %s through Gateway recovery without raw CLI output",
+    async (ending) => {
+      vi.useFakeTimers();
+      const { owner, exit } = queueOwner();
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const cleanup = await startExposure("serve", log);
+      try {
+        if (ending === "cli failure") {
+          owner.emit("message", {
+            type: "failed",
+            code: 42,
+            signal: "SIGTERM",
+            stdout: "sensitive-stdout",
+            stderr: "sensitive-stderr",
+          });
+        }
+        exit(1, ending === "owner signal" ? "SIGKILL" : null);
+        await vi.advanceTimersByTimeAsync(0);
+        const warning = log.warn.mock.calls
+          .map(([message]) => message)
+          .find((message) => message.includes("route claim exited"));
+        const marker = "; exit=";
+        expect(warning).toContain(marker);
+        if (!warning) {
+          throw new Error("Missing managed route exit warning");
+        }
+        const diagnostic = JSON.parse(warning.slice(warning.indexOf(marker) + marker.length));
+        expect(diagnostic).toMatchObject({
+          workerCode: 1,
+          workerSignal: ending === "owner signal" ? "SIGKILL" : null,
+          ageMs: expect.any(Number),
+          stopping: false,
+          phase: "active",
+        });
+        if (ending === "cli failure") {
+          expect(diagnostic.cli).toEqual({
+            code: 42,
+            signal: "SIGTERM",
+            stdoutBytes: 16,
+            stderrBytes: 16,
+          });
+        } else {
+          expect(diagnostic.cli).toBeUndefined();
+        }
+        expect(warning).not.toContain("sensitive-stdout");
+        expect(warning).not.toContain("sensitive-stderr");
+        expect(getTailscalePublishedOrigin()).toBeUndefined();
+      } finally {
+        await cleanup?.();
+      }
+    },
+  );
+
   it("joins a cancelled Gateway claim even when readiness races shutdown", async () => {
     const pending = queueOwner({ ready: false });
     const controller = new AbortController();
@@ -378,7 +432,12 @@ describe("private Tailscale Serve claims", () => {
       } else {
         exit(1, null);
       }
-      await expect(claim.exited).resolves.toBeUndefined();
+      await expect(claim.exited).resolves.toMatchObject({
+        workerCode: ending === "stop" ? 0 : 1,
+        workerSignal: null,
+        stopping: ending === "stop",
+        phase: "active",
+      });
       expect(claim.isActive()).toBe(false);
       expect(runExecMock).toHaveBeenCalledTimes(2);
     },

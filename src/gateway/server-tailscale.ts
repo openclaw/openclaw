@@ -137,11 +137,11 @@ export async function startGatewayTailscaleExposure(params: {
   let recoveryFailure: AggregateError | undefined;
   const recovery = (async () => {
     while (!recoverySignal.aborted) {
-      await racePromiseWithAbortSignal(route.claim.exited, recoverySignal);
+      const exit = await racePromiseWithAbortSignal(route.claim.exited, recoverySignal);
       recoverySignal.throwIfAborted();
       route.clearPublishedOrigin?.();
       params.logTailscale.warn(
-        `${effectiveMode} route claim exited; recovering managed Tailscale ingress`,
+        `${effectiveMode} route claim exited; recovering managed Tailscale ingress; exit=${JSON.stringify(exit)}`,
       );
       for (let attempt = 1; ; attempt += 1) {
         await sleepWithAbort(computeBackoff(RECLAIM_BACKOFF, attempt), recoverySignal, {
