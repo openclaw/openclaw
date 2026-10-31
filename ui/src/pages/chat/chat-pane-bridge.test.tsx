@@ -12,13 +12,13 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import type { ChatPaneProps } from "./chat-pane.tsx";
 import "./chat-pane.tsx";
+import { discardPrewarmedChatSnapshot, prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { discardPrewarmedChatSnapshot, prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 

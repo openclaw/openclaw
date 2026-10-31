@@ -177,7 +177,7 @@ async function regionBoxes(page: Page) {
 
 async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = false) {
   return await page.evaluate(
-    async ({ key, removeTarget }) => {
+    async ({ key, removeTarget: shouldRemoveTarget }) => {
       // Inspect the existing disposable cache; never create or populate a database for proof.
       const name = "openclaw-chat-snapshots";
       if (!(await indexedDB.databases()).some((database) => database.name === name)) {
@@ -228,7 +228,7 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
               }),
           ),
         );
-        if (removeTarget && targetKeys.length) {
+        if (shouldRemoveTarget && targetKeys.length) {
           // The caller has left the app. Retain sidebar/settings while making the
           // next document's target visit genuinely uncached, including its memory.
           await new Promise<void>((resolve, reject) => {
@@ -242,7 +242,11 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
               }
             }
             transaction.addEventListener("complete", () => resolve(), { once: true });
-            transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+            transaction.addEventListener(
+              "abort",
+              () => reject(transaction.error ?? new Error("Snapshot cache removal aborted")),
+              { once: true },
+            );
           });
         }
         return {
@@ -833,9 +837,9 @@ try {
           }
           await waitForControlUiGatewayReady(page, 60000);
           const operator = values["transcript-late-paint"]
-            ? await evaluateControlUiContext(page, (context) => ({
-                gatewayUrl: context.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
-                userId: context.gateway.snapshot.selfUser?.id,
+            ? await evaluateControlUiContext(page, (application) => ({
+                gatewayUrl: application.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
+                userId: application.gateway.snapshot.selfUser?.id,
               }))
             : null;
           await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
@@ -982,9 +986,11 @@ try {
             await waitForControlUiGatewayReady(item.page, 60000);
             const visitedAtMs = await evaluateControlUiContext(
               item.page,
-              async (context, target) => {
+              async (application, routeTarget) => {
                 const started = performance.now();
-                await context.navigateAndWait(target.route, { pathname: target.pathname });
+                await application.navigateAndWait(routeTarget.route, {
+                  pathname: routeTarget.pathname,
+                });
                 return started;
               },
               { route, pathname: routePath },

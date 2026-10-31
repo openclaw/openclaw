@@ -1,19 +1,19 @@
-import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { sameRouteLocation } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import {
   buildAgentMainSessionKey,
   isDashboardSessionKey,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
+import { prewarmChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
-import { readBootRecord, type BootRecord } from "./boot-record.ts";
+import type { BootRecord } from "./boot-record.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
+import { readCredentialBootRecord } from "./gateway-store.credentials.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import {
   loadGatewaySessionSelection,
@@ -116,18 +116,11 @@ export function prepareApplicationStartup() {
   const hasPendingGateway = startup.pendingGatewayUrl !== null;
   const readStartupBootRecord = () =>
     ownsWarmBoot && !hasPendingGateway
-      ? readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
-          if (startup.pendingBootstrapToken || startup.password) {
-            return null;
-          }
-          if (["trusted-proxy", "tailscale", "password"].includes(method)) {
-            return settings.token.trim() ? null : "";
-          }
-          return method === "token"
-            ? settings.token
-            : settings.token.trim()
-              ? null
-              : loadCurrentDeviceAuthToken(settings.gatewayUrl);
+      ? readCredentialBootRecord({
+          gatewayUrl: settings.gatewayUrl,
+          token: settings.token,
+          bootstrapToken: startup.pendingBootstrapToken ?? "",
+          password: startup.password ?? "",
         })
       : null;
   let snapshotReadStarted = false;
@@ -140,7 +133,9 @@ export function prepareApplicationStartup() {
       if (!snapshotReadStarted) {
         snapshotReadStarted = true;
         const bootRecord = readStartupBootRecord();
-        if (!bootRecord) return;
+        if (!bootRecord) {
+          return;
+        }
         prewarmBootChat(bootRecord, settings.sessionKey, applicationLocation, basePath);
       }
     },
