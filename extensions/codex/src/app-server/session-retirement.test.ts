@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
@@ -121,7 +122,7 @@ describe("Codex session deletion subscriptions", () => {
     return { bindingStore, binding, client, remove, request, resume, seed, releaseClientLease };
   }
 
-  it.each(["context reset"] as const)(
+  it.each(["deletion", "context reset"] as const)(
     "%s rejects a claimed native thread before invoking the session transaction",
     async (operation) => {
       const fixture = createFixture(operation);
@@ -129,7 +130,13 @@ describe("Codex session deletion subscriptions", () => {
       await claimCodexAppServerLiveThread(fixture.client, fixture.binding.threadId);
       const transaction = vi.fn(async () => {});
 
-      await expect(fixture.remove(session, transaction)).rejects.toThrow("claimed by active work");
+      const failure = await fixture.remove(session, transaction).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AgentHarnessPreflightError);
+      expect(failure).toHaveProperty("scope", undefined);
+      expect(failure).toHaveProperty(
+        "message",
+        "Cannot delete a session while its Codex thread is claimed by active work",
+      );
 
       expect(transaction).not.toHaveBeenCalled();
       expect(fixture.bindingStore.read(session)).toEqual(fixture.binding);
