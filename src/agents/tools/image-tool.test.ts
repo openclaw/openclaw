@@ -394,9 +394,6 @@ function installImageUnderstandingProviderDeps(
     describeImagesWithModel?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["describeImagesWithModel"];
-    loadImageWebMediaRuntime?: NonNullable<
-      Parameters<typeof testing.setProviderDepsForTest>[0]
-    >["loadImageWebMediaRuntime"];
     resolveImageCompressionPolicy?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["resolveImageCompressionPolicy"];
@@ -446,9 +443,6 @@ function installImageUnderstandingProviderDeps(
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
       : {}),
-    ...(options?.loadImageWebMediaRuntime
-      ? { loadImageWebMediaRuntime: options.loadImageWebMediaRuntime }
-      : {}),
   });
 }
 
@@ -465,45 +459,6 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
       throw new Error("Expected fast local image tests to use a registered image provider");
     },
     resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
-    loadImageWebMediaRuntime: async () => ({
-      loadWebMedia: async (mediaUrl, options) => {
-        const localRoots =
-          options && typeof options !== "number" && "localRoots" in options
-            ? options.localRoots
-            : [];
-        const inboundRoots =
-          options && typeof options !== "number" && "inboundRoots" in options
-            ? options.inboundRoots
-            : [];
-        if (
-          localRoots !== "any" &&
-          !isInboundPathAllowed({
-            filePath: mediaUrl,
-            roots: [...(localRoots ?? []), ...(inboundRoots ?? [])],
-          })
-        ) {
-          throw new Error(`Local media path is not under an allowed directory: ${mediaUrl}`);
-        }
-        const readFile =
-          options && typeof options !== "number" && "readFile" in options
-            ? options.readFile
-            : undefined;
-        return {
-          buffer: readFile ? await readFile(mediaUrl) : await fs.readFile(mediaUrl),
-          contentType: "image/png",
-          kind: "image",
-          fileName: path.basename(mediaUrl),
-        };
-      },
-      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => {
-        return {
-          buffer,
-          contentType: contentType ?? "image/png",
-          kind: "image",
-          fileName,
-        };
-      },
-    }),
   });
 }
 
