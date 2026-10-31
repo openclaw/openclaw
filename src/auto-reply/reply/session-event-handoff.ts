@@ -3,7 +3,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
-import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
@@ -49,7 +48,7 @@ import type {
 } from "./session-event-contract.js";
 import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
-  captureScheduledSessionEventConfigPolicy,
+  captureSessionEventConfigPolicy,
   narrowSessionEventSettings,
 } from "./session-event-policy.js";
 import {
@@ -94,8 +93,10 @@ function enqueueSessionEventAttempt(
   acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
-  const { cfg, configPublication, agentId, sessionKey, env, storePath, operatorAuthority } =
-    prepareSessionEventInput(text, options);
+  const { cfg, agentId, sessionKey, env, storePath, operatorAuthority } = prepareSessionEventInput(
+    text,
+    options,
+  );
   const cleanupContinuation = prepareCronRunContinuationCleanup(sessionKey, storePath, env);
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
@@ -136,14 +137,11 @@ function enqueueSessionEventAttempt(
   let deferred = false;
   const automationAdmission: ScheduledAutomationAdmission = { admissionDeferred: false };
   let adopted = false;
-  // A policy publication rejected this occurrence's stale-config execution; finish()
-  // re-admits it under the current policy when it never started.
-  let configPublicationChanged = false;
-  let checkedConfig = cfg;
-  let checkedPublication = configPublication;
-  const configPolicyCurrent = options.scheduledAutomation
-    ? captureScheduledSessionEventConfigPolicy(cfg, agentId, options.scheduledAutomation.job)
-    : undefined;
+  const configPolicy = captureSessionEventConfigPolicy(
+    cfg,
+    agentId,
+    options.scheduledAutomation?.job,
+  );
   // Queue-owner abandonment (lifecycle cleanup) stays terminal.
   let abandoned = false;
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
@@ -230,19 +228,10 @@ function enqueueSessionEventAttempt(
   });
   const assertEffectCurrent = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
     assertSource();
-    const currentConfig = getSessionEventRuntimeConfig();
-    const publication = getRuntimeConfigSnapshotMetadata();
-    if (currentConfig === checkedConfig && publication === checkedPublication) {
-      return;
-    }
-    if (!configPolicyCurrent?.(currentConfig, [route?.channel, target?.deliveryContext?.channel])) {
-      // The dispatched run holds the config captured at enqueue; it must never execute
-      // under a superseded policy. finish() re-admits an unstarted occurrence instead.
-      configPublicationChanged = true;
-      throw new Error("Session event configuration changed; retry under the current policy");
-    }
-    checkedConfig = currentConfig;
-    checkedPublication = publication;
+    configPolicy.assertCurrent(getSessionEventRuntimeConfig(), [
+      route?.channel,
+      target?.deliveryContext?.channel,
+    ]);
   });
   const accept = () => {
     if (accepted || settlement === "finished") {
@@ -327,7 +316,7 @@ function enqueueSessionEventAttempt(
       // occurrence re-admits it under the current policy instead of destroying it.
       // Stop, abort and abandonment still settle terminally.
       const retainForConfigChange = () =>
-        configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
+        configPolicy.changed && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
       if (retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
         // Reuse this occurrence's bounded readmission, yielding before fresh authority.
@@ -560,6 +549,12 @@ function enqueueSessionEventAttempt(
         },
       },
       replyOptions: {
+        onModelSelected: options.scheduledAutomation
+          ? (selection) => {
+              configPolicy.selectModel(selection);
+              assertEffectCurrent();
+            }
+          : undefined,
         sessionPrincipalTurn:
           !options.scheduledAutomation &&
           !isCronSessionKey(sessionKey) &&
@@ -718,7 +713,7 @@ function enqueueSessionEventAttempt(
           onAbandoned: () => {
             // A stale-policy rejection before adoption also ends as abandonment;
             // only abandonment without that rejection (Stop, cleanup) is terminal.
-            abandoned ||= !configPublicationChanged;
+            abandoned ||= !configPolicy.changed;
             failure ??= "Session event was abandoned before execution";
           },
           onSettled: () => {

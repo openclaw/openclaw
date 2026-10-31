@@ -10,10 +10,12 @@
   padding: 0;
   margin: 0;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--session-hovercard-surface);
-  box-shadow: var(--overlay-shadow, var(--shadow-lg));
+  border: 1px solid transparent;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  corner-shape: superellipse(1.5);
   color: var(--text);
   pointer-events: none;
   opacity: 0;

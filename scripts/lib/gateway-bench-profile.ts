@@ -426,11 +426,11 @@ export function readGatewayHeapProfile(
     const stack = [...parents, formatFrame(node.callFrame)];
     let broadcasting = parentBroadcasting;
     let family = parentFamily;
-    if (node.callFrame.functionName === "broadcastInternal") {
+    const file = node.callFrame.url.split("/").at(-1);
+    if (node.callFrame.functionName === "broadcastInternal" || file === "server-broadcast.ts") {
       broadcasting = true;
       family = "otherBroadcast";
     }
-    const file = node.callFrame.url.split("/").at(-1);
     if (broadcasting) {
       if (
         [
@@ -484,7 +484,8 @@ export function readGatewayHeapProfile(
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
     broadcastAllocation: {
-      scope: "disjoint sampled allocation subtrees under broadcastInternal; not operation counts",
+      scope:
+        "disjoint sampled allocation subtrees under broadcastInternal or server-broadcast.ts; not operation counts",
       sourceProjectionObserved,
       sampledBytes: broadcastSampledBytes,
       projectionSelfSampledBytes,

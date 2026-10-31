@@ -161,7 +161,11 @@ export function selectUnmanifestedRecovery(params: {
         if (
           !item ||
           item.outcome !== "protected" ||
-          !["unmanifested-recovery-original", "orphan-update-capture"].includes(item.reason)
+          ![
+            "unmanifested-recovery-original",
+            "orphan-update-capture",
+            "superseded-unsealed-capture",
+          ].includes(item.reason)
         ) {
           throw new Error(
             `Cannot include unmanifested path ${file}: not an eligible known recovery original or orphan capture.`,

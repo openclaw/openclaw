@@ -82,9 +82,7 @@
   opacity: var(--rail-header-action-disabled-opacity);
 }
 
-.rail-header__action svg,
-.rail-header__action .nav-collapse-toggle__icon,
-.rail-header__action .nav-collapse-toggle__icon svg {
+.rail-header__action svg {
   display: block;
   width: var(--rail-header-action-glyph-size);
   height: var(--rail-header-action-glyph-size);

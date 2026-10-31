@@ -238,10 +238,12 @@ can differ from the personal default selected when the actual chat starts.
 
 **Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
-While a name is pending, the sidebar and chat header show a subtle loading bar
-instead of “New session.” A ready name replaces it immediately; if naming ends
-without a name, the ordinary fallback label returns. Reduced-motion preferences
-keep the placeholder still.
+The sidebar adds no placeholder row while a session is being created: the row
+appears once the Gateway lists the session and fades in. While a name is
+pending, the chat header shows a subtle loading bar instead of “New session,”
+and the sidebar row keeps its title blank; the name fades in when it is ready. If
+naming ends without a name, the ordinary fallback label appears. Reduced-motion
+preferences skip the fades and keep the placeholder still.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
@@ -370,6 +372,9 @@ still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
 machine running a session, and unavailable measurements are not shown as zero.
+The telemetry and backup overview reserves its space while those readings load,
+so the desktop stays in place. Scroll that overview when its contents exceed the
+available space; turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
 

@@ -306,7 +306,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: explicit OpenAI Decision execution function and context type (#188228).
       // +1: lossless Decision V1 compatibility predicate (#188251).
       // +1: callable-tool prompt guidance for harnesses (#187661).
-      3853,
+      // +1: accepted diagnostic trace-context normalizer (#189133).
+      3854,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -356,7 +357,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same shared automation tool-default resolver.
       // +12: reconcile the accepted callable export inventory after the cron budget update.
       // +3: Decision execution, V1 compatibility, and callable-tool prompt guidance.
-      2230,
+      // +1: the same diagnostic trace-context normalizer (#189133).
+      2231,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

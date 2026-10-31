@@ -8,7 +8,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
@@ -317,7 +317,7 @@ export async function proveAcceptedInventoryRecovery(
   await closeOpenClawStateDatabaseAsync();
   {
     using db = new DatabaseSync(resolveOpenClawStateSqlitePath());
-    const records = readLocalWorkspaceTree(db, saved.tree_root_digest!);
+    const records = decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, saved.tree_root_digest!));
     const child = records.get("media/review")!.children!;
     const missing = records.get(child)!.treeRef;
     expect(

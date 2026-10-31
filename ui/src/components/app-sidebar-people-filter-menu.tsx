@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
-import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../lib/reactive/platform.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
@@ -33,16 +34,19 @@ export function renderSidebarPeopleFilterMenuForMenus(
     update();
     menus.closePositionedMenu("peopleFilter", { restoreFocus: true });
   };
-  const sheet = () => isMobileNavLayout();
+  const sheet = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
   const changed = createMemo(
-    () => people().statusFilter !== "all" || people().sortMode !== "presence",
+    () =>
+      people().statusFilter !== "all" ||
+      people().sortMode !== "presence" ||
+      (!sheet() && people().presenceFilter !== "online"),
   );
   return (
     <SidebarSessionFilterPopover
       class="sidebar-session-sort-menu sidebar-people-filter-menu"
       anchor={menus.triggers.get("peopleFilter") ?? null}
       label={t("presence.filters.label")}
-      initialFocus={() => pickers.get("status")?.trigger}
+      initialFocus={() => pickers.get(sheet() ? "status" : "presence")?.trigger}
       focusTargets={() => [
         ...[...pickers.values()].flatMap((picker) => picker.elements()),
         ...(reset ? [reset] : []),
@@ -51,6 +55,26 @@ export function renderSidebarPeopleFilterMenuForMenus(
       content={
         <>
           <div class="sidebar-session-menu-section">
+            {/* Mobile keeps this choice in the panel header. */}
+            {sheet() ? undefined : (
+              <Picker
+                focusRef={(handle) => pickers.set("presence", handle)}
+                id="sidebar-people-presence"
+                label={t("presence.usersTitle")}
+                value={people().presenceFilter}
+                variant="submenu"
+                showOptionTooltips={false}
+                options={[
+                  { value: "online", label: t("presence.rosterTitle") },
+                  { value: "all", label: t("presence.allUsers") },
+                ]}
+                onChange={(value) => {
+                  if (value === "online" || value === "all") {
+                    commit(() => people().set("presenceFilter", value));
+                  }
+                }}
+              />
+            )}
             <Picker
               focusRef={(handle) => pickers.set("status", handle)}
               id="sidebar-people-status"
@@ -96,7 +120,14 @@ export function renderSidebarPeopleFilterMenuForMenus(
                 type="button"
                 id="sidebar-people-reset"
                 class="sidebar-session-filter-footer"
-                onClick={() => commit(() => people().resetView())}
+                onClick={() =>
+                  commit(() => {
+                    people().resetView();
+                    if (!sheet()) {
+                      people().set("presenceFilter", "online");
+                    }
+                  })
+                }
               >
                 {t("presence.filters.reset")}
               </button>

@@ -824,10 +824,10 @@ export function createHookRunner(
     if (!sourceFingerprint) {
       return undefined;
     }
-    const activeToolNames = [
-      ...new Set(params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean)),
-    ].toSorted();
-    const activeToolNameSet = new Set(activeToolNames);
+    const activeToolNameSet = new Set(
+      params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean),
+    );
+    const activeToolNames = Object.freeze([...activeToolNameSet].toSorted());
     const token = { active: true };
     const assertActive = () => {
       if (!token.active) {
@@ -844,6 +844,10 @@ export function createHookRunner(
       allows(toolName: string): boolean {
         assertActive();
         return activeToolNameSet.has(normalizeToolPolicyName(toolName));
+      },
+      list(): readonly string[] {
+        assertActive();
+        return activeToolNames;
       },
       assertActive,
     });

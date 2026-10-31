@@ -6,8 +6,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { closeSwarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -201,6 +204,7 @@ export async function withCommandPlugin(
     let agentTurnRuntime: ReturnType<typeof createGatewayInstanceRuntime> | undefined;
     const scheduledResults: Fixture["scheduledResults"] = [];
     const sessionEventPrompts: string[] = [];
+    const previousSubagentRuns = new Set(subagentRuns.keys());
     let fixtureRef: Fixture | undefined;
     const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
     const gatewayCronAgentDeps = createGatewayCronAgentDeps({
@@ -375,7 +379,30 @@ export async function withCommandPlugin(
     } finally {
       cron.stop();
       await cron.waitForIdle();
+      const queuedChildCleanups = [...subagentRuns.values()].filter(
+        (entry) =>
+          !previousSubagentRuns.has(entry.runId) &&
+          entry.requesterSessionKey === sessionKey &&
+          entry.collectorLaunchCleanupPending &&
+          entry.execution.outcome?.error ===
+            "Queued channel operator authority changed; submit a new request.",
+      );
+      // Queued source revocation still needs this lifecycle to delete the child session.
+      await closeSwarmScheduler(resolveGatewayContext);
       agentTurnRuntime?.close();
+      for (const child of queuedChildCleanups) {
+        expect
+          .soft(
+            loadSessionEntry({
+              agentId: child.childAgentId ?? "main",
+              sessionKey: child.childSessionKey,
+              storePath,
+            }),
+            "revoked queued child session is physically deleted before fixture retirement",
+          )
+          .toBeUndefined();
+        expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
+      }
       Reflect.deleteProperty(globalThis, bridge);
       resetGlobalHookRunner();
       resetPluginRuntimeStateForTest();

@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -38,7 +39,7 @@ it.skipIf(process.platform === "win32").each<[string, SchemaOverrides]>([
   ["unpaired baseline without metadata", { baseline: "2026.8.2", schema: undefined, actual: 15 }],
   ["published npm schema 16", { kind: "npm", schema: undefined, actual: 16 }],
   ["published npm rejects schema 17", { kind: "npm", schema: undefined, succeeds: false }],
-])("candidate schema: %s", (_name, overrides) => {
+])("candidate schema: %s", async (_name, overrides) => {
   const { scenario, kind, baseline, version, schema, actual, succeeds } = {
     scenario: "base",
     kind: "tarball",
@@ -65,7 +66,7 @@ it.skipIf(process.platform === "win32").each<[string, SchemaOverrides]>([
         ...(schema === undefined ? {} : { openclaw: { schemaVersions: { state: schema } } }),
       }),
     );
-    execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
+    await packToArchive({ pkgDir: join(root, "package"), outDir: root, outName: "candidate.tgz" });
   }
   const resolveCandidate = survivorFunctions(
     "resolve_candidate_version",

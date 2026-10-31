@@ -117,7 +117,7 @@ export function readShellView(host: ShellViewHost) {
         )
       : null;
   // Onboarding renders without any navigation chrome, so the settings takeover
-  // must not reserve its fixed sidebar column (the grid would stay off-center).
+  // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
@@ -139,7 +139,7 @@ export function readShellView(host: ShellViewHost) {
   });
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
-  // The settings sidebar has a fixed width, so the collapse state pauses too.
+  // Settings needs expanded navigation, so the collapse state pauses there too.
   const navCollapsed =
     !nativeEmbed &&
     navigationSnapshot.navCollapsed &&
@@ -148,7 +148,10 @@ export function readShellView(host: ShellViewHost) {
     !settingsTakeover;
   const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
   const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
-  const expandedNavWidth = navigationSnapshot.navWidth + railWidth;
+  // Settings replaces the rail and sidebar without moving the desktop reading surface.
+  const expandedNavWidth =
+    navigationSnapshot.navWidth +
+    (settingsTakeover && !mobileNavLayout ? NAVIGATION_RAIL_WIDTH : railWidth);
   const navigationSurfaceHidden = navigationSurfaceIsHidden({
     onboarding,
     navCollapsed,
