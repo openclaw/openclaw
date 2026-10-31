@@ -549,7 +549,7 @@ it("validates a through-anchor in one statement and observes later source writes
   expect(read().contextValidated).toBe(true);
 
   await replaceTranscriptEvents(scope, events);
-  expect(read).toThrow("Completed-turn transcript anchor changed");
+  expect(read).toThrow("Completed-turn transcript anchor changed (generation)");
 });
 
 it("reads a standalone watermark in one statement and observes committed appends and rewrites", async ({

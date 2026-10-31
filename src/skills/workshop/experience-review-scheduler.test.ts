@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence-error.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import {
   createSkillExperienceReviewScheduler,
@@ -7,10 +8,9 @@ import {
   type SkillExperienceReviewParams,
 } from "./experience-review-scheduler.js";
 
-// mock-isolation: Keep scheduler failures out of real log sinks.
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ debug: vi.fn(), warn: vi.fn() }),
-}));
+const log = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn() }));
+// mock-isolation: Capture diagnostic output without initializing real log sinks.
+vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 const source = {
   agentId: "main",
   sessionId: "session-1",
@@ -101,6 +101,31 @@ it("defers queued reviews when a foreground turn hits the shared rate limit", as
   now += 15 * 60_000;
   await fireTimers(1);
 });
+
+it.each([
+  [new SessionTranscriptReadFenceError("Session transcript changed during context read"), "debug"],
+  [new Error("provider request failed"), "warn"],
+] as const)(
+  "correlates rejected review evidence without exposing source values (%s)",
+  async (error, level) => {
+    runReview.mockRejectedValue(error);
+    turn(10);
+    log.debug.mockClear();
+    await fireTimers(1);
+    expect(log[level]).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        `skill experience review ${level === "debug" ? "cancelled" : "failed"}:`,
+      ),
+    );
+    const message = log[level].mock.calls[0]?.[0];
+    expect(message).toContain(
+      "source=08704289cffb1011742d56f052672a0fb6a3bc81c7e26ecabfa82c54d2e8fc2d",
+    );
+    expect(message).not.toContain(source.sessionKey);
+    expect(message).not.toContain(source.storePath);
+    expect(log[level === "debug" ? "warn" : "debug"]).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["reported", "messages", "interrupted"])("accumulates %s iterations", async (kind) => {
   const usedSkills = [
