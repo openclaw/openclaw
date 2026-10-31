@@ -106,8 +106,7 @@ export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Pr
 // (scripts/lib/update-compat-isolated-bridge.mjs). That updater's executor fence was never
 // admitted by this runtime, so Doctor runs through the published CLI, not executor custody.
 const servesOlderUpdater = () =>
-  (globalThis as Record<symbol, unknown>)[Symbol.for("openclaw.updateCompat.olderUpdater")] ===
-  true;
+  Reflect.get(globalThis, Symbol.for("openclaw.updateCompat.olderUpdater")) === true;
 
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   phase: "pre-plugin" | "post-plugin";
