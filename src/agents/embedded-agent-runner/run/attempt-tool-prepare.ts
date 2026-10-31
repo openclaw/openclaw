@@ -262,7 +262,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     projectConversationToolNames({
       capabilityProfile: runtimeCapabilityProfile,
       toolNames: [name],
-      warn: () => undefined,
     }).length === 1;
   const computerAllowed = shouldConstructTools && allowsConversationTool("computer");
   const pairedNodeComputerUse = (

@@ -256,7 +256,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
       workspaceDir: run.workspaceDir,
       capabilityProfile,
       runtimeToolsAllow: run.toolsAllow,
-      warn: params.warn ?? (() => {}),
+      warn: params.warn,
     });
     const prepared = await buildCodexUserMcpServersThreadConfigPatchForRuntime(projectionConfig, {
       agentId,

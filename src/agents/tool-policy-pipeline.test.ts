@@ -277,14 +277,6 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
-  test("dedupes identical unknown-allowlist warnings across repeated runs", () => {
-    const warnings: string[] = [];
-    const params = { allow: ["dedupe_case_unknown"], warnings };
-    runAllowlistWarningStep(params);
-    runAllowlistWarningStep(params);
-    expect(warnings).toHaveLength(1);
-  });
-
   test("evicts the oldest warning when the dedupe cache is full", () => {
     const warnings: string[] = [];
     const warn = (index: number) =>
@@ -398,4 +390,39 @@ describe("tool-policy-pipeline", () => {
     const rule = `${labelPrefix}...`;
     expectAudit(rule, "allow", "exec");
   });
+});
+
+test("keeps silent policy filtering without consuming a later warning", () => {
+  const warn = vi.fn();
+  const tools = [{ name: "read" }, { name: "write" }, { name: "exec" }];
+  const steps = buildDefaultToolPolicyPipelineSteps({
+    globalPolicy: {
+      allow: ["read", "write", "unknown_silent_projection_warning"],
+      deny: ["write"],
+    },
+  });
+  for (const sink of [undefined, warn, warn]) {
+    const onFilter = vi.fn();
+    const filtered = applyToolPolicyPipeline({
+      tools,
+      toolMeta: () => undefined,
+      steps,
+      warn: sink,
+      onFilter,
+    });
+    expect(filtered).toEqual([{ name: "read" }]);
+    expect(onFilter).toHaveBeenCalledExactlyOnceWith({
+      step: expect.objectContaining({ label: "tools.allow" }),
+      policy: {
+        allow: ["read", "write", "unknown_silent_projection_warning"],
+        deny: ["write"],
+      },
+      before: tools,
+      after: [{ name: "read" }],
+    });
+    expect(warn).toHaveBeenCalledTimes(sink ? 1 : 0);
+  }
+  expect(warn).toHaveBeenCalledWith(
+    "tools: tools.allow allowlist contains unknown entries (unknown_silent_projection_warning). These entries won't match any tool unless the plugin is enabled.",
+  );
 });

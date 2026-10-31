@@ -21,7 +21,7 @@ type FinalEffectiveToolPolicyParams = {
   workspaceDir?: string;
   metadataSnapshot?: PluginMetadataSnapshot;
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
-  warn: (message: string) => void;
+  warn?: (message: string) => void;
   onFilter?: (event: ToolPolicyFilterEvent) => void;
 };
 
@@ -36,7 +36,7 @@ export function applyFinalEffectiveToolPolicy(
   // Resolve here for warnings and to strip caller-only group metadata before
   // this pass; resolveGroupToolPolicy re-checks internally for all callers.
   if (trustedGroup.dropped) {
-    params.warn(
+    params.warn?.(
       "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
     );
   }
