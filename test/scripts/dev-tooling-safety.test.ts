@@ -35,6 +35,7 @@ import {
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 
 const tempDirs: string[] = [];
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -116,21 +117,9 @@ async function promptReadyBeforeSettlement(
   operation: PromiseLike<unknown>,
   readyPath = pidPath,
 ): Promise<number> {
-  // The fixture writes this record before its receipt; process exit travels separately.
+  // The receipt identifies pidPath; an escaped descendant can publish readiness in readyPath.
   const recorded = () => existsSync(readyPath) && readFileSync(readyPath, "utf8").trim() !== "";
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!recorded()) {
-        throw new Error("timed out waiting for condition");
-      }
-    },
-    (error: unknown) => {
-      if (!recorded()) {
-        throw error;
-      }
-    },
-  );
-  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
+  await fixtureReadyBeforeSettlement(receipts, pidPath, operation, recorded);
   return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 }
 

@@ -495,9 +495,9 @@ describe("findOcPaths — Markdown", () => {
     ]);
   });
 
-  it("enumerates frontmatter keys", () => {
+  it.each(["*", "**", '{missing,{name,"name"},role,*}'])("finds frontmatter via %s", (key) => {
     const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
-    const out = find(ast, "oc://SOUL.md/[frontmatter]/*");
+    const out = find(ast, "oc://SOUL.md/[frontmatter]/" + key);
     expect(out.map(({ path }) => path.item)).toEqual(["name", "role"]);
     expect(leafValues(out)).toEqual(["drafter", "writer"]);
   });

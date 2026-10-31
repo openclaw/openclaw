@@ -77,6 +77,17 @@ it("diagnoses a redaction marker returned by an older Gateway instead of reveali
   expect(runtime.writeStdout).not.toHaveBeenCalled();
 });
 
+it("reports a config read failure instead of calling the config invalid", async () => {
+  mocks.readConfigFileSnapshot.mockResolvedValue({
+    valid: false,
+    path: "/tmp/openclaw.json",
+    readError: new Error("EACCES"),
+    issues: [{ path: "", message: "read failed: EACCES", errorCode: "CONFIG_READ_FAILED" }],
+  });
+
+  await expectRefusal("Config could not be read at /tmp/openclaw.json");
+});
+
 it("refuses non-interactive output before reading config or secrets", async () => {
   mocks.isTerminalInteractive.mockReturnValueOnce(false);
   await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow("outside an interactive terminal");

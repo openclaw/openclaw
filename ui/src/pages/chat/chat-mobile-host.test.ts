@@ -67,6 +67,43 @@ it("consumes suspension facts without discarding navigation, and scopes retained
   });
 });
 
+it("enters each session closed on mobile while desktop keeps the saved open panels", () => {
+  const { pane, state } = createMountedPanes([]);
+  const runtime = getPaneTestRuntime(pane);
+  state.sidebarLayout = {
+    ...promoteSidebarPanel(openSlot({ columns: [] }, "workspace"), "workspace"),
+    open: true,
+  };
+  const saved = structuredClone(state.sidebarLayout);
+  const read = () => pane.render().layout!;
+  expect(isSidebarSlotVisible(read().region.layout, "workspace")).toBe(true);
+
+  runtime.mergedChrome = true;
+  expect(read().region.mobileHost!.open).toBe(false);
+  expect(isSidebarSlotVisible(read().region.layout, "workspace")).toBe(false);
+  read().region.mobileHost!.navigate({ area: "panels", slot: "workspace" });
+  expect(read().region.mobileHost!.open).toBe(true);
+
+  state.sessionKey = "agent:main:another-session";
+  expect(read().region.mobileHost!.open).toBe(false);
+  expect(isSidebarSlotVisible(read().region.layout, "workspace")).toBe(false);
+  // An explicit open delivered before the new session renders still applies.
+  const openWorkspace = read().primary.chat.onOpenWorkspace;
+  state.sessionKey = "agent:main:third-session";
+  openWorkspace?.();
+  expect(read().region.mobileHost!.open).toBe(true);
+  expect(isSidebarSlotVisible(read().region.layout, "workspace")).toBe(true);
+
+  // Returning to a parked pane's session starts closed as well.
+  pane.presented = false;
+  pane.presented = true;
+  expect(read().region.mobileHost!.open).toBe(false);
+
+  runtime.mergedChrome = false;
+  expect(state.sidebarLayout).toEqual(saved);
+  expect(isSidebarSlotVisible(read().region.layout, "workspace")).toBe(true);
+});
+
 it("selects a desktop-main Files panel on mobile without persisting the presentation", () => {
   const { pane, state } = createMountedPanes([]);
   const runtime = getPaneTestRuntime(pane);

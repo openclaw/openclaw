@@ -5,7 +5,6 @@ openclaw-chat-camera-capture {
     --openclaw-modal-width: 640px;
   }
   .camera {
-    box-sizing: border-box;
     max-height: var(--openclaw-modal-height-limit);
     overflow: auto;
     border: 1px solid var(--border);

@@ -6,6 +6,7 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { snapshotNodeWorkerEnv } from "../../node-host/node-worker-environment.js";
 import {
   DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
@@ -150,10 +151,13 @@ it.each(["npm", "corepack"])(
     const f = fixture();
     fs.symlinkSync(process.execPath, path.join(f.bin, "node"));
     for (const name of ["wc", "tr", "mkdir", "mktemp", "rm", "tar", "sha256sum"]) {
-      fs.symlinkSync(
-        execFileSync("which", [name], { encoding: "utf8" }).trim(),
-        path.join(f.bin, name),
-      );
+      const executable = resolveExecutablePath(name, {
+        env: process.env,
+        cwd: process.cwd(),
+        useCache: false,
+      });
+      expect(executable, `fixture tool ${name}`).toBeDefined();
+      fs.symlinkSync(executable!, path.join(f.bin, name));
     }
     write(
       path.join(f.bin, "curl"),

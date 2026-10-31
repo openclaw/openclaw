@@ -738,6 +738,13 @@ you to `openclaw update repair` and `openclaw gateway status --deep`.
 Only named data risks, such as unsettled Doctor writers or unverified migrated
 state, instruct you to keep the Gateway stopped.
 
+On Windows, recovery re-enables the Scheduled Task before starting the Gateway
+and retains that recovery handle until final readiness verification completes.
+Re-enabling autostart alone does not count as a Gateway start. This also applies
+when post-update verification fails during a same-version npm reinstall. The
+running updater must contain this fix; installing a newer candidate cannot
+change an older updater's recovery orchestration.
+
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing
 five-minute startup lease. If that lease ends while the same Gateway is still

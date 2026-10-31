@@ -46,11 +46,63 @@ function fixture(mode: "immediate" | "deferred" = "immediate") {
   return { db, logger, advance, run, warning };
 }
 
-function asWorker(operation: string, run: () => unknown) {
-  return withSqliteReaderOwner({ operation, ownerKind: "worker" }, run);
+function asWorker(
+  operation: string,
+  run: () => unknown,
+  holdContext?: Parameters<typeof withSqliteReaderOwner>[2],
+) {
+  return withSqliteReaderOwner({ operation, ownerKind: "worker" }, run, holdContext);
 }
 
 const thread = { isMainThread, pid: process.pid, threadId };
+
+it("names the admitted writer in a contending BEGIN and clears it after rollback", () => {
+  const filename = resources.file();
+  const holder = resources.open(filename, {}, true);
+  holder.exec("CREATE TABLE entries (id TEXT)");
+  const waiter = resources.open(filename, {}, true);
+  waiter.exec("PRAGMA busy_timeout = 0");
+  const advance = sqliteDiagnosticClock();
+  const logger = { warn: vi.fn() };
+  const attempt = () =>
+    runSqliteImmediateTransactionSync(waiter, () => {}, {
+      operationLabel: "pluginState.register",
+      logger,
+    });
+  expect(() =>
+    runSqliteImmediateTransactionSync(
+      holder,
+      () => {
+        advance(1_500);
+        expect(attempt).toThrow(/locked/);
+        expect(logger.warn).toHaveBeenCalledWith(
+          "SQLite transaction lock wait failed",
+          expect.objectContaining({
+            operation: "pluginState.register",
+            holderAtWaitStart: {
+              operation: "localWorkspace.pruneLegacy",
+              threadId,
+              heldMs: 1_500,
+            },
+          }),
+        );
+        throw new Error("rollback held writer");
+      },
+      { operationLabel: "localWorkspace.pruneLegacy", logger: { warn() {} } },
+    ),
+  ).toThrow("rollback held writer");
+  logger.warn.mockClear();
+  spySqliteExec(waiter, (sql) => {
+    if (sql === "BEGIN IMMEDIATE") {
+      advance(1_100);
+    }
+  });
+  attempt();
+  expect(logger.warn).toHaveBeenCalledWith(
+    "slow SQLite transaction step",
+    expect.not.objectContaining({ holderAtWaitStart: expect.anything() }),
+  );
+});
 
 it("attributes slow deletion statements without counting iterator consumers or exposing SQL", () => {
   const { db, advance, run, warning, logger } = fixture();
@@ -287,19 +339,25 @@ it.each([
     spySqliteExec(db, undefined, () => advance(elapsedMs));
 
     const diagnosticContext = { sessionId: "session-diagnostics", rows: 0 };
-    asWorker("worker.entries", () =>
-      run(
-        () => {
-          db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
-          diagnosticContext.rows = 1;
-          advance(elapsedMs);
-        },
-        {
-          busyTimeoutMs,
-          diagnosticContext,
-          ...(elapsedMs === 5 ? {} : { slowTransactionHoldMs: 0 }),
-        },
-      ),
+    const holdContext = { selector: "idempotency", outcome: "incomplete", rowsVisited: 0 };
+    asWorker(
+      "worker.entries",
+      () =>
+        run(
+          () => {
+            db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
+            diagnosticContext.rows = 1;
+            holdContext.rowsVisited = 1;
+            holdContext.outcome = "hit";
+            advance(elapsedMs);
+          },
+          {
+            busyTimeoutMs,
+            diagnosticContext,
+            ...(elapsedMs === 5 ? {} : { slowTransactionHoldMs: 0 }),
+          },
+        ),
+      holdContext,
     );
     expect(readEntries(db)).toEqual(["committed"]);
     if (elapsedMs === 5) {
@@ -327,7 +385,7 @@ it.each([
       ...labels,
       elapsedMs: 3_000,
       mode,
-      context: { sessionId: "session-diagnostics", rows: 1 },
+      context: { sessionId: "session-diagnostics", rows: 1, ...holdContext },
     });
   },
 );

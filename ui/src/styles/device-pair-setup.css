@@ -145,7 +145,6 @@
   width: min(320px, 100%);
   aspect-ratio: 1;
   place-items: center;
-  box-sizing: border-box;
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: 22px;

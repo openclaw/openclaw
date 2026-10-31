@@ -9,12 +9,19 @@ import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "../../infra/update-capture-privacy-marker.js";
+import { inspectUpdateRecoveryBackups } from "../../infra/update-recovery-backup-status.js";
+import { retainedCheckpointBinding } from "../../infra/update-retained-checkpoint.test-support.js";
+import {
+  createRetainedUpdateRecovery,
+  storeRetainedUpdateRecovery,
+} from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunRepairAttempt,
   recordUpdateRunStep,
+  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -49,13 +56,14 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
 
 function writeSealedCapture(root: string, runId: string, createdAt: string): string {
   const directory = writeCapture(root, runId, true);
+  const stateDir = root.slice(0, -".update-captures".length);
   writeFixtureJsonSync(
     path.join(directory, "manifest.json"),
     createMissingConfigRecoveryManifest({
       runId,
       installRoot: root,
-      stateDir: path.dirname(root),
-      configPath: path.join(root, "config.json"),
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
       createdAt,
     }),
   );
@@ -123,6 +131,19 @@ async function withCaptureHistory(
           { env },
         );
       }
+      if (status === "succeeded") {
+        recordUpdateRunVerification(
+          runId,
+          {
+            serviceRunning: true,
+            versionMatch: true,
+            settled: true,
+            coreReady: true,
+            pluginErrors: [],
+          },
+          { env },
+        );
+      }
       if (status) {
         clock.mockReturnValue((now += 60_000));
         finishUpdateRun(runId, { status }, { env });
@@ -140,7 +161,11 @@ async function withCaptureHistory(
   });
 }
 
-async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
+async function runCleanup(options: {
+  dryRun?: boolean;
+  yes?: boolean;
+  includeUnmanifested?: string[];
+}) {
   const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   await updateCleanupCommand({ ...options, json: true });
@@ -187,7 +212,7 @@ const expectedPreview = (captures: Record<string, string>) => ({
   },
   [captures.latest!]: {
     outcome: "protected",
-    reason: "awaiting-later-completed-update",
+    reason: "awaiting-later-verified-update",
     bytes: 1035,
   },
   [captures.neverActivated!]: {
@@ -308,3 +333,96 @@ it.each(["current", "pre-migration"] as const)(
     }, location);
   },
 );
+
+it("reclaims historical incomplete captures only after a verified successor and agrees with status", async () => {
+  await withCaptureHistory(async (_captures, root) => {
+    const historical = writeCapture(root, `doctor-${randomUUID()}`, false);
+    const orphan = writeSealedCapture(root, randomUUID(), "2026-08-01T00:00:00.000Z");
+    const doctors = [40, 39].map((age) =>
+      writeSealedCapture(
+        root,
+        `doctor-${randomUUID()}`,
+        new Date(Date.now() - age * 86_400_000).toISOString(),
+      ),
+    );
+    fs.writeFileSync(path.join(historical, "manifest.json.partial"), "interrupted seal");
+    for (const directory of [historical, orphan]) {
+      fs.utimesSync(directory, new Date("2026-10-20"), new Date("2026-10-20"));
+    }
+    const { runId } = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(runId, { status: "succeeded" });
+    expect((await runCleanup({ dryRun: true })).captures[historical]).toMatchObject({
+      outcome: "protected",
+    });
+    // A status label without recorded readiness cannot retire the only possible original.
+    await runCleanup({ yes: true });
+    expect(fs.existsSync(historical)).toBe(true);
+    recordUpdateRunVerification(runId, {
+      serviceRunning: true,
+      versionMatch: true,
+      settled: true,
+      coreReady: true,
+      pluginErrors: [],
+    });
+    const preview = await runCleanup({ dryRun: true });
+    expect(preview.captures[historical]).toMatchObject({
+      outcome: "protected",
+      reason: "superseded-unsealed-capture",
+    });
+    expect(preview.captures[orphan]).toMatchObject({
+      outcome: "protected",
+      reason: "orphan-update-capture",
+    });
+    // The older expired Doctor original retired above; the newest sealed copy stays.
+    expect(fs.existsSync(doctors[0]!)).toBe(false);
+    expect(preview.captures[doctors[1]!]).toMatchObject({
+      outcome: "protected",
+      reason: "retained-doctor-capture",
+    });
+    const sets = await inspectUpdateRecoveryBackups();
+    for (const directory of [historical, orphan]) {
+      expect(sets).toContainEqual(
+        expect.objectContaining({
+          directory,
+          status: "warning",
+          nextAction: `openclaw update cleanup --dry-run --include-unmanifested "${directory}"`,
+        }),
+      );
+      expect(fs.existsSync(directory)).toBe(true);
+    }
+    const selection = [historical, orphan];
+    const selected = await runCleanup({ dryRun: true, includeUnmanifested: selection });
+    for (const directory of selection) {
+      expect(selected.captures[directory]).toMatchObject({ outcome: "candidate" });
+      expect(fs.existsSync(directory)).toBe(true);
+    }
+    await runCleanup({ yes: true, includeUnmanifested: selection });
+    expect([historical, orphan].map((directory) => fs.existsSync(directory))).toEqual([
+      false,
+      false,
+    ]);
+    expect(fs.existsSync(doctors[1]!)).toBe(true);
+    expect(await inspectUpdateRecoveryBackups()).not.toContainEqual(
+      expect.objectContaining({ directory: historical }),
+    );
+    const referenced = writeCapture(root, randomUUID(), false);
+    fs.utimesSync(referenced, new Date("2026-10-20"), new Date("2026-10-20"));
+    const runtime = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
+    const pending = createRetainedUpdateRecovery({
+      runId: randomUUID(),
+      from: runtime,
+      to: runtime,
+    });
+    pending.checkpoint = retainedCheckpointBinding(pending);
+    pending.checkpoint.ref.manifestPath = path.join(referenced, "manifest.json");
+    storeRetainedUpdateRecovery(pending, {});
+    await runCleanup({ yes: true });
+    expect(fs.existsSync(referenced)).toBe(true);
+    await updateCleanupCommand({ yes: true, json: true, includeUnmanifested: [referenced] });
+    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "blocked" }),
+      2,
+    );
+    expect(fs.existsSync(referenced)).toBe(true);
+  }, "current");
+});

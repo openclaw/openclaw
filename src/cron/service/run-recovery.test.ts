@@ -19,6 +19,7 @@ import { recoverCronRuns } from "./run-recovery.js";
 import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
 const now = 1_800_000_000_000;
@@ -343,6 +344,48 @@ describe("worker-owned startup recovery", () => {
       ).toMatchObject({ status: "error" });
     },
   );
+
+  it("settles a recorded timeout receipt after restart without recording the outcome twice", async () => {
+    const entry = job("recorded-pending-timeout");
+    const store = await recoveryStore([entry]);
+    const receipt = await activateManual(store, entry);
+    await executeOpenClawStateWorker(store.context, {
+      type: "cron.finalizeRuns",
+      input: {
+        storeKey: store.storeKey,
+        snapshot: {
+          nowMs: now + 500,
+          outcomes: [
+            authorCronRunCompletion(entry, {
+              jobId: entry.id,
+              job: entry,
+              runReceipt: receipt,
+              executionPending: true,
+              status: "error" as const,
+              error: "cron: job execution timed out",
+              errorReason: "timeout" as const,
+              startedAt: now,
+              endedAt: now + 500,
+            }),
+          ],
+        },
+      },
+    });
+    const beforeJob = (await loadCronStore(store.storePath)).jobs[0];
+    const beforeHistory = await store.history();
+    expect(beforeHistory).toHaveLength(1);
+    const result = await store.recover();
+    expect(result.interruptedRuns).toEqual([]);
+    expect((await loadCronStore(store.storePath)).jobs[0]).toEqual(beforeJob);
+    expect(await store.history()).toEqual(beforeHistory);
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId),
+    ).toMatchObject({ status: "error" });
+    await store.recover();
+    expect(await store.history()).toEqual(beforeHistory);
+  });
 
   it("restores a recorded result and primary delivery before one-shot deletion", async () => {
     const entry = job("complete", {

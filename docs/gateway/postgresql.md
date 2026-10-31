@@ -342,8 +342,14 @@ the DSN itself in `openclaw.json`:
 Env, file, and exec [SecretRefs](/gateway/secrets/secretref-contract) are qualified.
 A store-backed SecretRef cannot bootstrap the database that holds that secret.
 The host resolves the connection before passing it to workers. Restart after
-changing the connection, prefix, or engine map; these are fixed for the process.
-An all-SQLite configuration does not resolve an unused PostgreSQL connection.
+changing the connection, its environment variable source, prefix, or engine map;
+these are fixed for the process. An all-SQLite configuration does not resolve an
+unused PostgreSQL connection.
+
+When the connection uses an env SecretRef or a whole-value `${NAME}` substitution,
+the Gateway withholds that environment variable from inherited host exec and
+sandbox environments, including custom variable names. Explicit command overrides
+and operator-configured sandbox environment values remain available.
 
 Offline model credential commands, including `models auth paste-api-key`, use the
 configured engine before the Gateway starts. Supply the same DSN SecretRef to

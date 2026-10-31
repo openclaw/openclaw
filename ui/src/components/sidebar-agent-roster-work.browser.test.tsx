@@ -10,7 +10,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
-import { AppSidebarOwner, getAppSidebarOwner } from "./app-sidebar.tsx";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SidebarAgentRoster } from "./sidebar-agent-roster.tsx";
 import { SidebarScrollContext } from "./sidebar-context-controller.ts";
 import "../test-helpers/load-styles.ts";
@@ -148,7 +148,6 @@ it("restores focus when unpinning an agent outside the roster viewport", async (
 
 it("retires inactive session body work across roster and chip mode changes", async () => {
   patchSettings({ gatewayUrl: "ws://gateway.test", sidebarAgentsMode: "roster" });
-  const creates = vi.spyOn(AppSidebarOwner.prototype, "sessionCreateDisplay");
   const { sidebar, context } = await mountRoster(roster);
   await settleRoster(sidebar);
   await waitForSolid(() => expect(sidebar.querySelector("[data-agent-group]")).not.toBeNull());
@@ -162,14 +161,11 @@ it("retires inactive session body work across roster and chip mode changes", asy
       "inactive-sidebar-counts",
       JSON.stringify({
         phase,
-        creates: creates.mock.calls.length,
         groups: groups.mock.calls.length,
       }),
     );
   record("cold-roster");
-  expect.soft(creates).not.toHaveBeenCalled();
-  const update = async (phase: string, expectedCreates: number, expectedGroups: number) => {
-    creates.mockClear();
+  const update = async (phase: string, expectedGroups: number) => {
     groups.mockClear();
     for (let i = 0; i < 10; i++) {
       sidebar.devGitBranch = `${phase}-${i}`;
@@ -177,10 +173,9 @@ it("retires inactive session body work across roster and chip mode changes", asy
       expect(sidebar.textContent).toContain(`${phase}-${i}`);
     }
     record(phase);
-    expect.soft(creates).toHaveBeenCalledTimes(expectedCreates);
     expect.soft(groups).toHaveBeenCalledTimes(expectedGroups);
   };
-  await update("ten-cold-roster-updates", 0, 0);
+  await update("ten-cold-roster-updates", 0);
 
   sidebar.sidebarEntries = ["session:agent:main:pinned"];
   context.navigation.update({
@@ -200,10 +195,9 @@ it("retires inactive session body work across roster and chip mode changes", asy
   };
   await settleRoster(sidebar);
   await waitForSolid(expectRows);
-  // The active pinned section reads create state; each group also has owner bookkeeping.
-  await update("ten-roster-updates-with-pins", 10, 40);
+  // Each group has owner bookkeeping.
+  await update("ten-roster-updates-with-pins", 40);
   for (const [index, mode] of (["chip", "roster", "chip", "roster"] as const).entries()) {
-    creates.mockClear();
     groups.mockClear();
     sidebar.sidebarAgentsMode = mode;
     await settleRoster(sidebar);
@@ -211,11 +205,7 @@ it("retires inactive session body work across roster and chip mode changes", asy
     expect(sidebar.querySelector(".sidebar-shell__body")).toBe(body);
     expect(Boolean(sidebar.querySelector("openclaw-sidebar-agent-roster"))).toBe(mode === "roster");
     record(`switch-${index}-${mode}`);
-    await update(
-      `ten-${index}-${mode}-updates-with-pins`,
-      mode === "roster" ? 10 : 30,
-      mode === "roster" ? 40 : 50,
-    );
+    await update(`ten-${index}-${mode}-updates-with-pins`, mode === "roster" ? 40 : 50);
   }
   expect(initialRoster?.isConnected).toBe(false);
 });

@@ -58,6 +58,7 @@ export type PluginDiagnosticCode =
   | "dashboard-declaration-invalid"
   | "explicit-config-plugin-selection"
   | "plugin-state-migration"
+  | "plugin-source-snapshot-invalid"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";

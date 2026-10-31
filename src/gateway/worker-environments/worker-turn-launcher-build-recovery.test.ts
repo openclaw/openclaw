@@ -390,7 +390,7 @@ async function createRefreshWaitHarness(fence = false) {
   const listeners = new Set<() => void>();
   let environment = worker.attachedEnvironment();
   let inFlight = true;
-  let reads = 0;
+  let claimStarted = false;
   const refresh: WorkerRuntimeRefreshInFlight = {
     settled: settled.promise,
     onProgress(listener) {
@@ -411,12 +411,16 @@ async function createRefreshWaitHarness(fence = false) {
   const environments: worker.WorkerTurnEnvironmentService = {
     ...worker.unusedEnvironments(),
     get: () => environment,
-    readRuntimeRefresh: () => (inFlight && (!fence || ++reads > 1) ? refresh : undefined),
+    readRuntimeRefresh: () => (inFlight && (!fence || claimStarted) ? refresh : undefined),
     acquireTurnCredential,
     acknowledgeCredentialDelivery: vi.fn(async () => true),
     startTunnel: async () => completedTunnel(launchTurn),
   };
-  const claimTurn = vi.spyOn(worker.placements, "claimTurn");
+  const claim = worker.placements.claimTurn.bind(worker.placements);
+  const claimTurn = vi.spyOn(worker.placements, "claimTurn").mockImplementation((...args) => {
+    claimStarted = true;
+    return claim(...args);
+  });
   const provider = worker.createWorkerSessionTurnPlacementProvider({
     placements: worker.placements,
     environments,
