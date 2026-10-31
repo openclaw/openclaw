@@ -15,6 +15,7 @@ import { migrateSessionColdNavigation } from "./state-migrations.cold-navigation
 import { mediaRowsNeedMigration } from "./state-migrations.media-persistence-database.js";
 import { MASKED_TRANSCRIPT_PROVIDER } from "./state-migrations.transcript-directives-transform.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
+import { resolveZstdCodec } from "./zstd-codec.js";
 
 function seedArchive(database: DatabaseSync, sessionId: string, withoutIndex = false) {
   const event = JSON.stringify({
@@ -24,7 +25,9 @@ function seedArchive(database: DatabaseSync, sessionId: string, withoutIndex = f
     message: {
       role: "assistant",
       provider: MASKED_TRANSCRIPT_PROVIDER,
-      content: [{ type: "text", text: "[[reply_to_current]] synthetic retained payload" }],
+      content: [
+        { type: "text", text: "[[reply_to_current]] synthetic retained payload".repeat(256) },
+      ],
     },
   });
   const records = [
@@ -131,6 +134,7 @@ it("resumes a backed-up pre-change archive migration after interruption without 
     const controller = new AbortController();
     const interruption = new Error("synthetic Doctor interruption");
     const backfill = navigation.backfillSessionColdNavigationInTransaction;
+    const compress = vi.spyOn(resolveZstdCodec(), "compress");
     const observed = vi
       .spyOn(navigation, "backfillSessionColdNavigationInTransaction")
       .mockImplementation((database, archive) => {
@@ -147,8 +151,10 @@ it("resumes a backed-up pre-change archive migration after interruption without 
           deadlineOwnedByCaller: true,
         }),
       ).rejects.toBe(interruption);
+      expect(compress).not.toHaveBeenCalled();
     } finally {
       observed.mockRestore();
+      compress.mockRestore();
     }
     const interrupted = inspect();
     expect(interrupted.events.map((event) => event.session_id)).toEqual(["archive-a"]);
