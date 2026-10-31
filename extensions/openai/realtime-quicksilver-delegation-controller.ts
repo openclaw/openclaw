@@ -28,6 +28,7 @@ import {
 import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 const WEBSOCKET_OPEN = 1;
+const DELEGATION_ACK_DELAY_MS = 1500;
 const CONSULT_FAILURE_TEXT =
   "The agent task failed. Tell the user it did not complete and offer to try again.";
 // Keep the launch note in one append; it does not establish consultation admission.
@@ -114,6 +115,7 @@ function projectWireEventType(
 
 /** Owns the provider's single active delegation and its once-consumed transcript context. */
 export class OpenAIQuicksilverDelegationController {
+  private acknowledgmentTimer: ReturnType<typeof setTimeout> | undefined;
   private activeDelegationId: string | undefined;
   private readonly completionClaimsAdopted: boolean;
   private consultController: AbortController | undefined;
@@ -274,6 +276,7 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     this.drainDisposition = disposition;
+    this.clearAcknowledgment();
     this.delegations.stop();
     this.revokeRequesterFinal();
     this.pendingDelegation = undefined;
@@ -310,6 +313,8 @@ export class OpenAIQuicksilverDelegationController {
     if (this.stopped || this.drainDisposition || this.options.signal.aborted || !input.trim()) {
       return;
     }
+    // A new request or control supersedes any unsaid filler for the previous input.
+    this.clearAcknowledgment();
     const handleInput = this.options.handleDelegationInput;
     if (handleInput) {
       const socket = this.options.getSocket();
@@ -457,6 +462,7 @@ export class OpenAIQuicksilverDelegationController {
     if (this.stopped) {
       return false;
     }
+    this.clearAcknowledgment();
     this.delegations.stop();
     this.flushTranscript();
     this.stopped = true;
@@ -476,9 +482,21 @@ export class OpenAIQuicksilverDelegationController {
     let failed = false;
     const runner = this.options.runAgentConsult;
     try {
-      // Host-classified sessions disable vendor filler. Receipt is launch-only, not run admission.
+      // Start work immediately; only fill silence if no answer or spoken update wins the race.
       if (this.options.handleDelegationInput) {
-        this.sendSessionContext(NATURAL_DELEGATION_ACK_MESSAGE, "speakable");
+        const socket = this.options.getSocket();
+        this.acknowledgmentTimer = setTimeout(() => {
+          this.acknowledgmentTimer = undefined;
+          if (signal.aborted || !socket) {
+            return;
+          }
+          try {
+            this.sendAppend(NATURAL_DELEGATION_ACK_MESSAGE, "speakable", undefined, socket);
+          } catch (error) {
+            this.fail(toErrorObject(error, "OpenAI GPT-Live acknowledgment failed"));
+          }
+        }, DELEGATION_ACK_DELAY_MS);
+        this.acknowledgmentTimer.unref();
       }
       const result = await runner({
         prompt: delegation.prompt,
@@ -511,6 +529,8 @@ export class OpenAIQuicksilverDelegationController {
       );
       failed = true;
       text = CONSULT_FAILURE_TEXT;
+    } finally {
+      this.clearAcknowledgment();
     }
     while (this.steeringPromise) {
       await this.steeringPromise;
@@ -565,6 +585,11 @@ export class OpenAIQuicksilverDelegationController {
     this.options.runAgentConsult.revokeRequesterFinal?.();
   }
 
+  private clearAcknowledgment(): void {
+    clearTimeout(this.acknowledgmentTimer);
+    this.acknowledgmentTimer = undefined;
+  }
+
   private sendAppend(
     text: string,
     channel: "speakable" | "commentary",
@@ -582,6 +607,9 @@ export class OpenAIQuicksilverDelegationController {
         socket.readyState !== WEBSOCKET_OPEN
       ) {
         return false;
+      }
+      if (channel === "speakable") {
+        this.clearAcknowledgment();
       }
       socket.send(
         JSON.stringify(

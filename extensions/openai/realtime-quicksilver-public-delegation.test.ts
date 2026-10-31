@@ -68,7 +68,7 @@ it("uses public transcript deltas for metadata-only delegations and returns plai
   const prompt = h.runAgentConsult.mock.calls[0]?.[0].prompt;
   expect(prompt).toContain("<input>Check the forecast.</input>");
   expect(prompt).toContain("assistant: I can help.");
-  expect(parseSent(h.socket)).toContainEqual(
+  expect(parseSent(h.socket)).not.toContainEqual(
     expect.objectContaining({ type: "session.commentary.append", delegation_id: null }),
   );
   await nextEventLoopTurn();

@@ -100,8 +100,115 @@ afterEach(async () => {
     controller.stop(new Error("test complete"));
   }
   controllers.clear();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+it.each(["success", "failure"])(
+  "skips filler when a %s arrives inside the fast-answer window",
+  async (outcome) => {
+    vi.useFakeTimers();
+    const result = deferred<Awaited<ReturnType<ConsultRunner>>>();
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => await result.promise);
+    const { controller, socket } = createDelegationHarness({
+      runAgentConsult,
+      handleDelegationInput: () => "consult",
+    });
+    delegate(controller, "fast", "Check the weather");
+    expect(runAgentConsult).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(socket.sent).toEqual([]);
+    if (outcome === "success") {
+      result.resolve({ text: "Sunny tomorrow." });
+    } else {
+      result.reject(new Error("consult unavailable"));
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readAppends(socket, "fast")).toHaveLength(1);
+    expect(JSON.stringify(parseSent(socket))).toContain(
+      outcome === "success" ? "Sunny tomorrow." : "did not complete",
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(socket.sent).toHaveLength(1);
+  },
+);
+
+it("requests one varied acknowledgment only while the answer is still pending", async () => {
+  vi.useFakeTimers();
+  const { controller, socket, result } = pendingHarness({
+    handleDelegationInput: () => "consult",
+  });
+  delegate(controller, "slow", "Check the weather");
+  await vi.advanceTimersByTimeAsync(1499);
+  expect(socket.sent).toEqual([]);
+  await vi.advanceTimersByTimeAsync(1);
+  const receipt = expectDefined(parseSent(socket)[0], "delayed acknowledgment");
+  expect(receipt).toMatchObject(contextAppend(expect.stringContaining("in your own words")));
+  const content = receipt.content as Array<{ text: string }>;
+  expect(content).toHaveLength(1);
+  expect(
+    Buffer.byteLength(expectDefined(content[0], "launch content").text, "utf8"),
+  ).toBeLessThanOrEqual(500);
+  expect(JSON.stringify(receipt)).toContain("may not be accepted yet");
+  expect(JSON.stringify(receipt)).toContain("avoid repeating recent acknowledgments");
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(socket.sent).toHaveLength(1);
+  result.resolve({ text: "Sunny tomorrow." });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(parseSent(socket)).toEqual([receipt, delegationAppend("slow", "Sunny tomorrow.")]);
+});
+
+it.each(["stop", "detach", "drain", "abort"] as const)(
+  "drops pending filler on %s even if the runner has not settled",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const { controller, socket, sessionController } = pendingHarness({
+      handleDelegationInput: () => "consult",
+    });
+    delegate(controller, "slow", "Check the weather");
+    await vi.advanceTimersByTimeAsync(1000);
+    if (boundary === "stop") {
+      controller.stop(new Error("call ended"));
+    } else if (boundary === "detach") {
+      controller.detach();
+    } else if (boundary === "drain") {
+      controller.beginTranscriptDrain("detach");
+    } else {
+      sessionController.abort();
+    }
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(socket.sent).toEqual([]);
+  },
+);
+
+it.each(["spoken-update", "requester-final", "status", "steering"] as const)(
+  "suppresses obsolete filler after %s",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const { controller, socket, runAgentConsult } = pendingHarness({
+      handleDelegationInput: (text, respond) => {
+        if (text !== "status") {
+          return "consult";
+        }
+        respond("The task is running.");
+        return "control";
+      },
+      steerAgentConsult: async () => ({ text: "" }),
+    });
+    delegate(controller, "slow", "Check the weather");
+    await vi.advanceTimersByTimeAsync(1000);
+    if (boundary === "spoken-update") {
+      controller.sendSessionContext("Here is the forecast.", "speakable");
+    } else if (boundary === "requester-final") {
+      appendFinal(runAgentConsult, 0, "Sunny tomorrow.");
+    } else {
+      delegate(controller, "follow-up", boundary === "status" ? "status" : "For tomorrow instead");
+    }
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(socket.sent).toHaveLength(boundary === "steering" ? 0 : 1);
+    expect(JSON.stringify(parseSent(socket))).not.toContain("launch acknowledgment");
+  },
+);
 
 it("targets the control delegation without consuming transcript context or cancelling the task", async () => {
   const { controller, socket, runAgentConsult, result } = pendingHarness({
@@ -118,17 +225,7 @@ it("targets the control delegation without consuming transcript context or cance
     },
   });
   delegate(controller, "task-A", "Original task");
-  const receipt = expectDefined(parseSent(socket)[0], "launch acknowledgment");
-  expect(receipt).toMatchObject(contextAppend(expect.stringContaining("in your own words")));
-  const content = receipt.content as Array<{ text: string }>;
-  expect(content).toHaveLength(1);
-  expect(
-    Buffer.byteLength(expectDefined(content[0], "launch content").text, "utf8"),
-  ).toBeLessThanOrEqual(500);
-  const receiptText = JSON.stringify(receipt);
-  expect(receiptText).not.toContain("Status:");
-  expect(receiptText).toContain("may not be accepted yet");
-  expect(receiptText).toContain("avoid repeating recent acknowledgments");
+  expect(socket.sent).toEqual([]);
   controller.handleEvent({ kind: "transcript-done", role: "user", text: "history only" });
   const beforeControl = socket.sent.length;
   delegate(controller, "control-C", "status");
@@ -142,7 +239,7 @@ it("targets the control delegation without consuming transcript context or cance
   await nextEventLoopTurn();
   delegate(controller, "late-cancel", "cancel");
   expect(runAgentConsult).toHaveBeenCalledOnce();
-  expect(socket.sent).toHaveLength(3);
+  expect(socket.sent).toHaveLength(2);
   delegate(controller, "task-B", "Another task");
   await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
   expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("history only");
@@ -423,14 +520,14 @@ it("drops pending receipts and late results when detached before settlement", as
   });
   delegate(controller, "active", "first task");
   delegate(controller, "pending", "next task");
-  expect(socket.sent).toHaveLength(1);
+  expect(socket.sent).toEqual([]);
   controller.detach();
   delegate(controller, "late", "late task");
   result.resolve({ text: "Late result" });
   await result.promise;
   await nextEventLoopTurn();
   expect(runAgentConsult).toHaveBeenCalledOnce();
-  expect(socket.sent).toHaveLength(1);
+  expect(socket.sent).toEqual([]);
 });
 
 it("returns a speakable failure for a delegated Unicode failure", async () => {
