@@ -49,6 +49,9 @@ export function isStateDatabaseAdmissionClosedError(error: unknown): boolean {
       readOwnErrorDataProperty(fields, "message");
     return (
       code === "STATE_DATABASE_READ_ADMISSION_INVALIDATED" ||
+      code === "PLUGIN_STATE_RUNTIME_INACTIVE" ||
+      (typeof message === "string" &&
+        /^Plugin "[^"\r\n]+" runtime is no longer active\.?$/.test(message)) ||
       (typeof message === "string" && message.includes("Shared-state worker is retiring"))
     );
   });

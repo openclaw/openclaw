@@ -36,11 +36,12 @@ export function createSyncKeyedStoreForPluginId<T>(
   options: OpenKeyedStoreOptions,
   warn = true,
   warningPluginId?: string,
+  assertActive?: () => void,
 ): Required<PluginStateSyncKeyedStore<T>> {
   requireBoundedOptions(options);
   return createSyncKeyedStore<T>(
     prepareKeyedStoreOptions(pluginId, options),
-    undefined,
+    assertActive,
     warn ? "PluginStateSyncKeyedStore" : undefined,
     warningPluginId,
   );
@@ -71,17 +72,21 @@ export function createSyncKeyedStore<T>(
     /** @deprecated Await openKeyedStoreV2().register(); final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     register(key, value, opts) {
       warnLegacyUse("register");
+      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
+      assertActive?.();
       pluginStateRegister({
         ...writeScope,
-        ...prepareRegisterParams(key, value, defaultTtlMs, opts),
+        ...params,
       });
     },
     /** @deprecated Await openKeyedStoreV2().registerIfAbsent(); final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     registerIfAbsent(key, value, opts) {
       warnLegacyUse("registerIfAbsent");
+      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
+      assertActive?.();
       return pluginStateRegisterIfAbsent({
         ...writeScope,
-        ...prepareRegisterParams(key, value, defaultTtlMs, opts),
+        ...params,
       });
     },
     /** @deprecated Use openKeyedStoreV2().observe() and compareAndApply(); final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
@@ -136,13 +141,17 @@ export function createSyncKeyedStore<T>(
     /** @deprecated Await openKeyedStoreV2().consume(); final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     consume(key) {
       warnLegacyUse("consume");
+      const normalizedKey = validateKey(key, "consume");
+      assertActive?.();
       // SAFETY: The consumed row retains this namespace's caller-selected JSON type.
-      return pluginStateConsume({ ...scope, key: validateKey(key, "consume") }) as T | undefined;
+      return pluginStateConsume({ ...scope, key: normalizedKey }) as T | undefined;
     },
     /** @deprecated Await openKeyedStoreV2().delete(); final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     delete(key) {
       warnLegacyUse("delete");
-      return pluginStateDelete({ ...scope, key: validateKey(key, "delete") });
+      const normalizedKey = validateKey(key, "delete");
+      assertActive?.();
+      return pluginStateDelete({ ...scope, key: normalizedKey });
     },
     entries() {
       warnLegacyUse("entries");
@@ -156,6 +165,7 @@ export function createSyncKeyedStore<T>(
     /** @deprecated Await openKeyedStoreV2().clear(); final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     clear() {
       warnLegacyUse("clear");
+      assertActive?.();
       pluginStateClear(scope);
     },
   };

@@ -1,5 +1,6 @@
 import { toUSVString } from "node:util";
 import { serialize } from "node:v8";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { assertSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type {
@@ -8,6 +9,7 @@ import type {
 } from "../config/sessions/session-entry-current.types.js";
 import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
 import { hasSqliteDatabaseSchemaAdmissionForIdentity } from "../infra/sqlite-database-admission.js";
+import { isStateDatabaseAdmissionClosedError } from "../infra/sqlite-error-diagnostics.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   type SqliteWorkerCommand,
@@ -47,6 +49,7 @@ import type {
   PluginStateOperationCommit,
   PluginStateOperationResult,
 } from "./plugin-state-operation-contract.js";
+import { isPluginStateRuntimeInactiveError } from "./plugin-state-operation-error.js";
 import {
   beginPluginStatePublication,
   recordPluginStateReadDependency,
@@ -90,6 +93,8 @@ type PluginStateCommand = SqliteWorkerCommand<PluginStateWorkerOperations>;
 async function execute<Key extends keyof PluginStateWorkerOperations>(
   ...args: Parameters<typeof executeAdmitted<Key>>
 ): Promise<PluginStateWorkerRequests[Key]["output"]> {
+  // Preserve runtime refusal when the shared host has already closed.
+  args[0].assertActive?.();
   return runPluginSharedStateWork(() => executeAdmitted(...args));
 }
 
@@ -125,6 +130,7 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
     capturedContext?.admission.databasePath ?? resolveOpenClawStateSqlitePath(env ?? process.env);
   const description = pluginStateWorkerOperations[command.type];
   let operationStarted = false;
+  let runtimeRefusal: unknown;
   let order: PluginStateCommandOrder | undefined;
   let publication: ReturnType<typeof beginPluginStatePublication> | undefined;
   try {
@@ -452,7 +458,17 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
     }
     const assertWriteCurrent = (request: SqliteWorkerAdmissionRequest) => {
       context.admission.assertCurrent();
-      assertAdmission?.();
+      try {
+        assertAdmission?.();
+      } catch (error) {
+        if (
+          isPluginStateRuntimeInactiveError(error) ||
+          isStateDatabaseAdmissionClosedError(error)
+        ) {
+          runtimeRefusal = error;
+        }
+        throw error;
+      }
       assertSessionEntriesCurrentAdmission(request, currentEntries);
     };
     const baseAdmission: SqliteWorkerAdmissionFactory =
@@ -499,6 +515,14 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
     }
     return result;
   } catch (error) {
+    // The worker's closed reply omits the host refusal. Retain only that known cause.
+    if (
+      runtimeRefusal &&
+      error instanceof PluginStateStoreError &&
+      extractErrorCode(error.cause) === "closed"
+    ) {
+      error.cause = runtimeRefusal;
+    }
     throw wrapPluginStateError(
       error,
       description.operation,

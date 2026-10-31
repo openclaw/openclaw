@@ -8,6 +8,8 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { resolveStateDir } from "../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { retryAsync } from "../infra/retry.js";
 import * as mutationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import type { OpenClawConfig, OpenClawPluginToolContext } from "../plugin-sdk/plugin-entry.js";
@@ -18,7 +20,9 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   importPluginStateEntriesForDoctorForTests,
 } from "../plugin-sdk/plugin-state-test-runtime.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
 import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
@@ -33,9 +37,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateWriter from "../state/openclaw-state-worker-store.js";
 import { createVisitorAccessPluginConfig } from "../test-utils/visitor-access-config.test-support.js";
 import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
 import { stateTest } from "./plugin-state-fixtures.test-support.js";
+import {
+  isPluginStateRuntimeInactiveError,
+  PluginStateRuntimeInactiveError,
+} from "./plugin-state-operation-error.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateKeyedStoreV2,
@@ -479,7 +488,7 @@ describe("plugin-state-store.runtime", () => {
   });
 
   it("binds keyed stores to local plugin ids and keeps resolveStateDir", async ({ state }) => {
-    const { addPlugin, runtime } = setup("discord", "config");
+    const { addPlugin, runtime } = setup("discord", "config", true);
 
     expect(runtime.resolveStateDir()).toBe(state.stateDir);
     const observation = observeHostDataSql();
@@ -518,6 +527,243 @@ describe("plugin-state-store.runtime", () => {
     });
     expect(syncStore.registerIfAbsent("k", { plugin: "discord" })).toBe(true);
     expect(syncStore.lookup("k")).toEqual({ plugin: "discord" });
+  });
+
+  it.for([
+    "register",
+    "registerIfAbsent",
+    "update",
+    "deleteIf",
+    "consume",
+    "delete",
+    "clear",
+  ] as const)(
+    "fences sync %s on a retained handle after its owner is revoked",
+    async (operation, { state: _state }) => {
+      const { record, registry, runtime } = setup("sync-owner", "config", true);
+      const store = runtime.openSyncKeyedStore<number>(keyedOptions);
+      store.register("retained", 1);
+      const snapshot = store.entries();
+      revokePluginRecord(registry.registry, record);
+      const mutations = {
+        register: () => store.register("denied", 2),
+        registerIfAbsent: () => store.registerIfAbsent("denied", 2),
+        update: () => store.update!("retained", () => 2),
+        deleteIf: () => store.deleteIf!("retained", () => true),
+        consume: () => store.consume("retained"),
+        delete: () => store.delete("retained"),
+        clear: () => store.clear(),
+      };
+      expect(mutations[operation]).toThrow(PluginStateRuntimeInactiveError);
+      expect(store.entries()).toEqual(snapshot);
+      expect(() => runtime.openSyncKeyedStore(keyedOptions)).toThrow(
+        'Plugin "sync-owner" runtime is no longer active',
+      );
+    },
+  );
+
+  it.for(["update", "deleteIf"] as const)(
+    "fences sync %s when its callback revokes its owner",
+    async (operation, { state: _state }) => {
+      const { record, registry, runtime } = setup("sync-owner", "config", true);
+      const store = runtime.openSyncKeyedStore<number>(keyedOptions);
+      store.register("retained", 1);
+      const snapshot = store.entries();
+      const revoke = () => {
+        revokePluginRecord(registry.registry, record);
+        return 2;
+      };
+      const mutations = {
+        update: () => store.update!("retained", revoke),
+        deleteIf: () => store.deleteIf!("retained", () => Boolean(revoke())),
+      };
+      expect(mutations[operation]).toThrow();
+      expect(store.entries()).toEqual(snapshot);
+    },
+  );
+
+  it("refuses a retired V2 runtime before capturing its operation source", async ({
+    state: _state,
+  }) => {
+    let current = true;
+    const assertRuntimeCurrent = () => {
+      if (!current) {
+        throw new Error('Plugin "state-owner" runtime is no longer active.');
+      }
+    };
+    const capture = vi.fn(() => {
+      assertRuntimeCurrent();
+      return undefined;
+    });
+    const runtime = createPluginStateRuntimeStores("state-owner", assertRuntimeCurrent, capture);
+    const store = runtime.openKeyedStoreV2<number>(keyedOptions);
+    await store.register("retained", 1);
+    expect(await store.lookup("retained")).toBe(1);
+    expect(capture).toHaveBeenCalledOnce();
+    current = false;
+    capture.mockClear();
+
+    expect(() => runtime.openKeyedStoreV2(keyedOptions)).toThrow(
+      expect.objectContaining({ code: "PLUGIN_STATE_RUNTIME_INACTIVE" }),
+    );
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it.for(["open", "commit"] as const)(
+    "identifies V2 runtime refusal at %s without classifying storage errors",
+    async (stage, { state: _state }) => {
+      const { record, registry, runtime } = setup("state-owner", "config", true);
+      const store = runtime.openKeyedStoreV2<number>(keyedOptions);
+      await store.register("retained", 1);
+      if (stage === "open") {
+        revokePluginRecord(registry.registry, record);
+      }
+      const admission =
+        stage === "commit"
+          ? probe.admission(mutationAdmission, (request, grant, admit) => {
+              if (request.stage === "commit") {
+                revokePluginRecord(registry.registry, record);
+              }
+              admit(request, grant);
+            })
+          : undefined;
+      try {
+        let failure: unknown;
+        try {
+          if (stage === "open") {
+            runtime.openKeyedStoreV2(keyedOptions);
+          } else {
+            await store.register("retained", 2);
+          }
+        } catch (error) {
+          failure = error;
+        }
+        expect(isPluginStateRuntimeInactiveError(failure), JSON.stringify(failure)).toBe(true);
+        if (stage === "commit") {
+          expect(failure).toMatchObject({ code: "PLUGIN_STATE_WRITE_FAILED" });
+        }
+        expect(
+          isPluginStateRuntimeInactiveError(
+            new Error('Plugin "state-owner" runtime is no longer active.'),
+          ),
+        ).toBe(false);
+        expect(
+          await createPluginStateKeyedStore<number>("state-owner", keyedOptions).lookup("retained"),
+        ).toBe(1);
+      } finally {
+        admission?.mockRestore();
+      }
+    },
+  );
+
+  it("preserves runtime refusal after shared-state close admission ends", async ({
+    state: _state,
+  }) => {
+    const { record, registry, runtime } = setup("state-owner", "config", true);
+    const store = runtime.openKeyedStoreV2<number>(keyedOptions);
+    await store.register("retained", 1);
+    const host = new LegacyPluginSdkResourceHost();
+    const scheduler = new GatewayScheduler();
+    host.bindScheduler(scheduler);
+    const instance = createOwnedTestInstance("state-driver");
+    const write = () => host.run(() => instance.run(() => store.register("denied", 2)));
+    try {
+      scheduler.beginClose();
+      await expect(write()).rejects.toMatchObject({
+        code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+      });
+      revokePluginRecord(registry.registry, record);
+      await expect(write()).rejects.toMatchObject({ code: "PLUGIN_STATE_RUNTIME_INACTIVE" });
+    } finally {
+      await host.close();
+      await scheduler.stop();
+    }
+    const canonical = createPluginStateKeyedStore<number>("state-owner", keyedOptions);
+    expect(await canonical.lookup("retained")).toBe(1);
+    expect(await canonical.lookup("denied")).toBeUndefined();
+  });
+
+  it.for(
+    (["v2", "retained"] as const).flatMap((kind) =>
+      (["entry", "commit"] as const).map((stage) => ({ kind, stage })),
+    ),
+  )(
+    "does not retry a refused $kind runtime write at $stage",
+    async ({ kind, stage }, { state: _state }) => {
+      const { record, registry, runtime } = setup("state-owner", "config", true);
+      const options =
+        kind === "v2" ? keyedOptions : { namespace: "runtime", retention: "retained" as const };
+      const store =
+        kind === "v2"
+          ? runtime.openKeyedStoreV2<number>(options)
+          : runtime.openKeyedStore<number>(options);
+      await store.register("retained", 1);
+      if (stage === "entry") {
+        revokePluginRecord(registry.registry, record);
+      }
+      const admission =
+        stage === "commit"
+          ? probe.admission(mutationAdmission, (request, grant, admit) => {
+              if (request.stage === "commit") {
+                revokePluginRecord(registry.registry, record);
+              }
+              admit(request, grant);
+            })
+          : undefined;
+      const write = vi.fn(() => store.register("denied", 2));
+      try {
+        await expect(
+          retryAsync(write, {
+            attempts: 3,
+            minDelayMs: 0,
+            maxDelayMs: 0,
+            jitter: 0,
+            shouldRetry: () => true,
+          }),
+        ).rejects.toThrow();
+        expect(write).toHaveBeenCalledOnce();
+      } finally {
+        admission?.mockRestore();
+      }
+      const canonical = createPluginStateKeyedStore<number>("state-owner", options);
+      expect(await canonical.lookup("retained")).toBe(1);
+      expect(await canonical.lookup("denied")).toBeUndefined();
+    },
+  );
+
+  it("refuses an occupied claim whose owner retires while an earlier write settles", async ({
+    state: _state,
+  }) => {
+    const { record, registry, runtime } = setup("state-owner", "config", true);
+    const store = runtime.openKeyedStoreV2<number>(keyedOptions);
+    const canonical = createPluginStateKeyedStore<number>("state-owner", keyedOptions);
+    expect(await store.registerIfAbsent("claim", 1)).toBe(true);
+    expect(await store.lookup("claim")).toBe(1);
+    const writes = vi.spyOn(stateWriter, "runOpenClawStateWorkerOperation");
+    try {
+      // While the owner is active, an occupied claim is answered without a writer request.
+      expect(await store.registerIfAbsent("claim", 2)).toBe(false);
+      expect(writes).not.toHaveBeenCalled();
+
+      const earlier = canonical.register("other", 3);
+      const claim = store.registerIfAbsent("claim", 4);
+      revokePluginRecord(registry.registry, record);
+      await earlier;
+      const outcome = await claim.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      expect(outcome).toMatchObject({
+        error: { cause: { code: "PLUGIN_STATE_RUNTIME_INACTIVE" } },
+      });
+      expect(
+        isPluginStateRuntimeInactiveError("error" in outcome ? outcome.error : undefined),
+      ).toBe(true);
+    } finally {
+      writes.mockRestore();
+    }
+    expect(await canonical.lookup("claim")).toBe(1);
+    expect(await canonical.lookup("other")).toBe(3);
   });
 
   it("fences retained operations and range reads when the owning plugin closes", async ({

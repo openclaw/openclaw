@@ -7,6 +7,7 @@ import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo
 import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -34,6 +35,7 @@ type ThreadBindingsGlobalState = {
   lastPersistedAtMs: number;
   mutationTail: Promise<void>;
   accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
+  runtimeByManager: WeakMap<ThreadBindingManager, PluginRuntime | null>;
 };
 
 // Plugin hooks can load this module through a separate runtime path while core
@@ -55,6 +57,7 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     lastPersistedAtMs: 0,
     mutationTail: Promise.resolve(),
     accountOperationTails: new WeakMap(),
+    runtimeByManager: new WeakMap(),
   };
 }
 
@@ -95,15 +98,19 @@ export function shouldDefaultPersist(): boolean {
   return !(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-export function openThreadBindingsStore() {
-  return getDiscordRuntime().state.openSyncKeyedStore<ThreadBindingRecord>({
+export function getThreadBindingRuntime(manager: ThreadBindingManager | undefined) {
+  return manager ? THREAD_BINDINGS_STATE.runtimeByManager.get(manager) : undefined;
+}
+
+export function openThreadBindingsStore(runtime?: PluginRuntime | null) {
+  return (runtime ?? getDiscordRuntime()).state.openSyncKeyedStore<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });
 }
 
-export function openThreadBindingsStoreAsync() {
-  return getDiscordRuntime().state.openKeyedStoreV2<ThreadBindingRecord>({
+export function openThreadBindingsStoreAsync(runtime?: PluginRuntime | null) {
+  return (runtime ?? getDiscordRuntime()).state.openKeyedStoreV2<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });

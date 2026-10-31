@@ -1,7 +1,10 @@
 import { capturePluginStateNativeBindingStore } from "../plugin-state/plugin-state-store.native-binding.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-export { PluginStateOperationInvalidatedError } from "../plugin-state/plugin-state-operation-error.js";
+export {
+  PluginStateOperationInvalidatedError,
+  isPluginStateRuntimeInactiveError,
+} from "../plugin-state/plugin-state-operation-error.js";
 
 export type {
   PluginStateOperation,
