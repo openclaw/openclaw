@@ -19,6 +19,8 @@ function seal({
 const targetSha = "a".repeat(40);
 const workflowSha = "b".repeat(40);
 const version = "2026.9.6";
+const requestUrl = (request: string | URL | Request) =>
+  typeof request === "string" ? request : request instanceof URL ? request.href : request.url;
 function fixture(npmDistTag = "latest", packageName = "@openclaw/example") {
   const payload = { entrypointsAdded: ["new-surface"], entrypointsRemoved: [], exports: [] };
   const digest = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -55,19 +57,20 @@ describe("sealed publication inputs", () => {
     { published: true, latest: "2026.9.7", decision: "superseded", route: "npm-readback" },
   ])("seals registry decision $decision without acknowledging the SDK evidence", async (row) => {
     const input = row.coreBeta ? fixture("beta", "openclaw") : fixture();
-    const fetchImpl = vi.fn(async () =>
-      row.bootstrap
-        ? new Response("{}", { status: 404 })
-        : Response.json({
-            versions: { "2026.9.5": {}, ...(row.published ? { [version]: {} } : {}) },
-            "dist-tags": { latest: row.latest, beta: row.latest },
-          }),
-    );
+    const fetchImpl = vi.fn(async (request: string | URL | Request) => {
+      if (row.bootstrap || requestUrl(request).endsWith(`/${version}`)) {
+        return new Response("{}", { status: 404 });
+      }
+      return Response.json({
+        versions: { "2026.9.5": {}, ...(row.published ? { [version]: {} } : {}) },
+        "dist-tags": { latest: row.latest, beta: row.latest },
+      });
+    });
     const sealed = await seal({
       ...input,
       fetchImpl,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(!row.bootstrap && !row.published ? 2 : 1);
     expect(sealed).toMatchObject({
       version: 1,
       targetSha,
@@ -123,6 +126,35 @@ describe("sealed publication inputs", () => {
     ).toThrow("roster");
   });
 
+  it("seals an exact published decision when abbreviated metadata is stale", async () => {
+    const input = fixture();
+    const fetchImpl = vi.fn(async (request: string | URL | Request) =>
+      requestUrl(request).endsWith(`/${version}`)
+        ? Response.json({
+            name: "@openclaw/example",
+            version,
+            dist: { integrity: "sha512-fixture" },
+          })
+        : Response.json({
+            versions: { "2026.9.5": {} },
+            "dist-tags": { latest: version, beta: version },
+          }),
+    );
+
+    const sealed = await seal({ ...input, fetchImpl });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sealed.npmDecisions).toMatchObject([
+      {
+        packageName: "@openclaw/example",
+        packageVersion: version,
+        decision: "already-published",
+        route: "npm-readback",
+        bootstrap: false,
+      },
+    ]);
+  });
+
   it.each([
     { mode: "sdk-bytes", error: "digest does not match" },
     { mode: "sdk-head", error: "head SHA does not match" },
@@ -140,8 +172,9 @@ describe("sealed publication inputs", () => {
     if (mode === "npm-source") {
       input.npmManifest.releaseSha = "d".repeat(40);
     }
-    const fetchImpl = async () =>
-      mode === "missing-core"
+    const fetchImpl = async (request: string | URL | Request) =>
+      mode === "missing-core" ||
+      (mode === "empty-history" && requestUrl(request).endsWith(`/${version}`))
         ? new Response("{}", { status: 404 })
         : Response.json({ versions: {}, "dist-tags": {} });
     await expect(seal({ ...input, fetchImpl })).rejects.toThrow(error);
