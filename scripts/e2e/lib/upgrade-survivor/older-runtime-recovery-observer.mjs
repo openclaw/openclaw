@@ -26,20 +26,32 @@ if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
         .get(),
     );
   const spawn = childProcess.spawn;
+  const appendFileSync = fs.appendFileSync;
+  fs.appendFileSync = function (file, data, options) {
+    const result = appendFileSync.call(this, file, data, options);
+    // The canonical refusal has committed before this diagnostic. Recovery may
+    // already be healthy, so no later native restart or inspection is required.
+    if (
+      file === params.logPath &&
+      typeof data === "string" &&
+      data.endsWith(
+        " Update notice changed or belongs to another handoff; it was not replaced.\n",
+      ) &&
+      fs.existsSync(spec.noticeReceipt) &&
+      !fs.existsSync(spec.preservedNotice)
+    ) {
+      let row;
+      try {
+        row = snapshot() ?? null;
+      } catch (error) {
+        row = { observerError: String(error) };
+      }
+      fs.writeFileSync(spec.preservedNotice, JSON.stringify(row));
+    }
+    return result;
+  };
   let observed = false;
   childProcess.spawn = function (command, args, options) {
-    if (
-      command === "systemctl" &&
-      args[0] === "--user" &&
-      args[1] === "show" &&
-      args[2] === params.serviceRecovery?.unit &&
-      args[3] ===
-        "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID,FragmentPath" &&
-      fs.existsSync(spec.noticeReceipt) &&
-      !fs.existsSync(spec.recoveryNotice)
-    ) {
-      fs.writeFileSync(spec.recoveryNotice, JSON.stringify(snapshot()));
-    }
     const child = spawn.call(this, command, args, options);
     if (
       !observed &&

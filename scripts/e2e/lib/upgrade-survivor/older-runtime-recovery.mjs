@@ -163,7 +163,7 @@ async function main() {
   };
   const specPath = path.join(artifacts, "older-runtime-observer.json");
   const noticeReceipt = path.join(artifacts, "concurrent-notice.json");
-  const recoveryNotice = path.join(artifacts, "pre-recovery-notice.json");
+  const preservedNotice = path.join(artifacts, "refused-notice.json");
   write(specPath, {
     root,
     candidateRoot,
@@ -172,7 +172,7 @@ async function main() {
     handoffId,
     notice,
     noticeReceipt,
-    recoveryNotice,
+    preservedNotice,
   });
   const anchor = path.join(
     path.dirname(root),
@@ -270,9 +270,9 @@ async function main() {
   assert.equal(concurrent.result.recovery.serviceRestartSafe, true);
   assert.equal(concurrent.result.after.version, baseline.version);
   assert.deepEqual(
-    read(recoveryNotice),
+    read(preservedNotice),
     concurrent.row,
-    "canonical handoff must preserve the unrelated notice before Gateway recovery",
+    "canonical handoff must preserve the unrelated notice when refusing its outcome write",
   );
   assert.deepEqual(JSON.parse(concurrent.row.payload_json), notice);
   phase = "verify-operator-state";

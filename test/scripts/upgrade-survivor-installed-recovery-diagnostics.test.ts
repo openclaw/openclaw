@@ -83,6 +83,76 @@ function capture(f: ReturnType<typeof fixture>) {
   return publish(f).report;
 }
 
+it("observes the refused notice without another service-manager command", () => {
+  const f = fixture();
+  const specPath = path.join(f.root, "observer.json");
+  const paramsPath = path.join(f.root, "handoff.json");
+  const helper = path.join(f.root, "helper.cjs");
+  const stateDatabasePath = path.join(f.state, "openclaw.sqlite");
+  const logPath = path.join(f.root, "helper.log");
+  const noticeReceipt = path.join(f.root, "notice-receipt.json");
+  const preservedNotice = path.join(f.root, "refused-notice.json");
+  const row = {
+    payload_json: JSON.stringify({ kind: "update", message: "unrelated" }),
+    updated_at_ms: 42,
+  };
+  writeJson(specPath, {
+    root: f.root,
+    runId: "run",
+    handoffId: "handoff",
+    noticeReceipt,
+    preservedNotice,
+  });
+  writeJson(paramsPath, {
+    updateLeaseKey: f.root,
+    runId: "run",
+    handoffId: "handoff",
+    action: "update",
+    commandArgv: [node, path.join(f.root, "openclaw.mjs"), "update"],
+    stateDatabasePath,
+    logPath,
+  });
+  fs.writeFileSync(
+    helper,
+    `
+    const assert = require('node:assert/strict');
+    const fs = require('node:fs');
+    const { DatabaseSync } = require('node:sqlite');
+    const spec = JSON.parse(fs.readFileSync(${JSON.stringify(specPath)}, 'utf8'));
+    const params = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+    const db = new DatabaseSync(params.stateDatabasePath);
+    db.exec('CREATE TABLE gateway_restart_sentinel (sentinel_key TEXT, payload_json TEXT, updated_at_ms INTEGER)');
+    const row = ${JSON.stringify(row)};
+    db.prepare('INSERT INTO gateway_restart_sentinel VALUES (?, ?, ?)').run('current', row.payload_json, row.updated_at_ms);
+    const refusal = '[fixture] Update notice changed or belongs to another handoff; it was not replaced.\\n';
+    fs.appendFileSync(params.logPath, refusal);
+    assert(!fs.existsSync(spec.preservedNotice));
+    fs.writeFileSync(spec.noticeReceipt, '{}');
+    fs.appendFileSync(params.logPath + '.other', refusal);
+    fs.appendFileSync(params.logPath, '[fixture] updater already verified recovery\\n');
+    assert(!fs.existsSync(spec.preservedNotice));
+    fs.appendFileSync(params.logPath, refusal, { mode: 0o600 });
+    assert.deepEqual(JSON.parse(fs.readFileSync(spec.preservedNotice, 'utf8')), row);
+    db.exec('DELETE FROM gateway_restart_sentinel');
+    fs.appendFileSync(params.logPath, refusal);
+    assert.deepEqual(JSON.parse(fs.readFileSync(spec.preservedNotice, 'utf8')), row);
+    db.close();
+  `,
+  );
+  const result = runProcess(
+    node,
+    ["--import", path.join(owner, "older-runtime-recovery-observer.mjs"), helper, paramsPath],
+    {
+      ...f.env,
+      OPENCLAW_SURVIVOR_OLDER_RUNTIME: specPath,
+    },
+    10_000,
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(readJson(preservedNotice)).toEqual(row);
+  expect(fs.readFileSync(logPath, "utf8")).toContain("updater already verified recovery");
+});
+
 it.each(["available", "unavailable", "published-failure"])(
   "exits a rejected older-runtime startup with private evidence (%s)",
   (mode) => {
