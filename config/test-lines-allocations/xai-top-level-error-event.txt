@@ -1,0 +1,2 @@
+# Exact top-level xAI SSE error recovery through the registered Gateway provider.
+18

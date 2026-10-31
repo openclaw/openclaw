@@ -34,8 +34,9 @@ const rejections = new Map<
     status?: number;
     code?: string;
     type?: string;
+    topLevelEvent?: boolean;
     message: string;
-    reason: "auth" | "billing" | "rate_limit";
+    reason: "auth" | "billing" | "rate_limit" | "server_error";
   }
 >([
   ...[400, 401, 403, 404, 410, 422].map(
@@ -44,6 +45,11 @@ const rejections = new Map<
   ["auth-code", { code: "credential_rejected", message: authError, reason: "auth" }],
   ["auth-type", { type: "upstream_error", message: authError, reason: "auth" }],
   ["auth-text", { message: authError, reason: "auth" }],
+  [
+    "provider-error-event",
+    { topLevelEvent: true, message: tokenGenerationError, reason: "server_error" },
+  ],
+  ["provider-auth-error-event", { topLevelEvent: true, message: authError, reason: "auth" }],
   [
     "billing",
     {
@@ -152,6 +158,18 @@ it(
         requests.push(payload.model);
         const rejection = rejections.get(scenario);
         if (payload.model === primaryModel && rejection) {
+          if (rejection.topLevelEvent) {
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.end(
+              encodeEvent({
+                type: "error",
+                code: null,
+                sequence_number: 2,
+                message: rejection.message,
+              }),
+            );
+            return;
+          }
           const error = {
             message: rejection.message,
             code: rejection.code,
@@ -362,7 +380,7 @@ it(
         const runEvents = events.filter((event) => event.runId === started.runId);
         check(requests[0]).toBe(primaryModel);
         check(requests.filter((requested) => requested === primaryModel)).toHaveLength(
-          rejection && rejection.reason !== "rate_limit" ? 1 : 2,
+          rejection && !["rate_limit", "server_error"].includes(rejection.reason) ? 1 : 2,
         );
         const terminal = runEvents
           .filter((event) => event.state === "final")
