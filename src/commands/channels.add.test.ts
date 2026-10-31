@@ -480,7 +480,10 @@ describe("channelsAddCommand", () => {
         });
       }
       expect(process.env.CHANNEL_SETUP_TOKEN).toBe("after-await");
-      expect(commitInstalls).toHaveBeenCalledWith(expect.objectContaining({ writeOptions }));
+      // The hosted flow adds a publication-time authority check to the same write ownership.
+      expect(commitInstalls).toHaveBeenCalledWith(
+        expect.objectContaining({ writeOptions: expect.objectContaining(writeOptions) }),
+      );
       expect(configMocks.writeConfigFile).toHaveBeenCalledOnce();
       expect(runtime.error).not.toHaveBeenCalled();
     },

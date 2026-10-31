@@ -68,3 +68,30 @@ it("does not publish credentials after setup authority is revoked", async () => 
   ).rejects.toThrow("setup cancelled");
   expect(await fs.readFile(state.configPath, "utf8")).not.toContain("cancelled-token");
 });
+
+it("does not publish config when setup authority ends while the commit is underway", async () => {
+  await state.writeConfig({});
+  let revoked = false;
+  await expect(
+    persistChannelPluginConfig({
+      cfg: { channels: { telegram: { botToken: "late-revoked-token" } } },
+      pluginInstalled: false,
+      runtime: createRuntimeEnv(),
+      // The commit's last await before publication stands in for a lock wait during revocation.
+      writeOptions: {
+        beforeCommit: async () => {
+          revoked = true;
+        },
+      },
+      setup: {
+        previousConfig: {},
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("Gateway caller authority is no longer active.");
+          }
+        },
+      },
+    }),
+  ).rejects.toThrow("Gateway caller authority is no longer active.");
+  expect(await fs.readFile(state.configPath, "utf8")).not.toContain("telegram");
+});

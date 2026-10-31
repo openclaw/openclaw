@@ -469,6 +469,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `main` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `per-channel-peer`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
+  - Channel credentials typed in during setup, `openclaw configure`, `openclaw agents add`, `openclaw channels add` or the Control UI chat are saved in the [shared secret store](/gateway/secrets/secret-store-and-egress), and config keeps a `store` SecretRef in their place.
 - Channel allowlists when you opt in during prompts. Discord, Matrix,
   Microsoft Teams, and Slack resolve names to IDs when possible; other channels
   accept their native IDs directly.

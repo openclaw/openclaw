@@ -244,7 +244,7 @@ export class SystemAgentChatEngine {
   }
 
   private enqueueTurn<T>(run: () => Promise<T>): Promise<T> {
-    const turn = this.turnQueue.then(run);
+    const turn = this.turnQueue.then(this.wizard.forTurn(run));
     this.turnQueue = turn.catch(() => undefined);
     return turn;
   }
