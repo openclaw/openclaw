@@ -1,7 +1,9 @@
 /** Durable per-agent voice-call records for Talk continuity and mutation evidence. */
+import fs from "node:fs/promises";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   appendTranscriptMessage,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
@@ -295,6 +297,17 @@ export function resolveClientVoiceRunBinding(runId?: string): ClientVoiceRunBind
   return runId ? voiceSessionByRunId.get(runId)?.binding : undefined;
 }
 
+async function agentDatabaseIsUsable(agentId: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(resolveOpenClawAgentSqlitePath({ agentId }));
+    // An empty placeholder is what recovery leaves behind when it displaces the
+    // database; treating it as usable would rebuild metadata recovery just dropped.
+    return stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 function appendVoiceTranscript(
   params: {
     agentId: string;
@@ -404,6 +417,16 @@ function appendVoiceTranscript(
                   message: appended.message,
                   messageId: appended.messageId,
                 });
+                // A voice-only session never runs an agent turn, so this append is the
+                // only place that records its interaction time. Skip the touch when the
+                // agent database was displaced or removed: recovery owns that state and
+                // reopening it here would recreate metadata it deliberately dropped.
+                if (await agentDatabaseIsUsable(normalized.agentId)) {
+                  await patchSessionEntryCore(transcriptTarget, () => ({
+                    lastInteractionAt: timestamp,
+                    updatedAt: timestamp,
+                  }));
+                }
               }
 
               if (!workerTranscript) {
