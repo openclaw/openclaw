@@ -1907,7 +1907,8 @@ jobs:
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.extension-browser.config.ts \
             --configLoader runner \
-            extensions/browser/chrome-extension/bootstrap.chromium.test.ts
+            extensions/browser/chrome-extension/bootstrap.chromium.test.ts \
+            extensions/browser/src/browser/pw-session-pending-navigation.chromium.test.ts
 
       - name: Test production Control UI deployment fixtures
         if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && steps.browser_chromium.outcome == 'success' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}

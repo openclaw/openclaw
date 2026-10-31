@@ -594,7 +594,7 @@ export class ExtensionRelayBridge {
       (candidate) =>
         candidate.autoAttach &&
         !candidate.detachedTabs.has(tabId) &&
-        (!sessionId || !candidate.sessions.has(sessionId)),
+        (!sessionId || !this.sessions.hasRootSession(candidate, sessionId)),
     );
   }
 
@@ -1171,7 +1171,7 @@ export class ExtensionRelayBridge {
             this.respondError(client, request, `Session not found: ${String(sessionId)}`, -32001);
             return;
           }
-          if (!session.parent && session.id === session.physical.rootSessionId) {
+          if (!session.parentSessionId) {
             client.detachedTabs.add(session.physical.tabId);
           }
           await this.sessions.detach(client, sessionId);

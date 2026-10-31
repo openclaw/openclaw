@@ -1,2 +1,2 @@
-# Isolate extension tab discovery from uninitialized page targets regression tests.
-562
+# Tab-discovery coverage, real Chromium regression and post-recovery inventory checks.
+705

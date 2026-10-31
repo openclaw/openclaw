@@ -470,18 +470,44 @@ it("resumes automatic recovery only for an explicitly reattached tab", async () 
       ? { type: "result", seq: message.seq, result: { targetId } }
       : replyFor(message),
   );
-  const { first, firstCdp } = await attachClients(bridge);
+  const { first, firstCdp, second, secondCdp } = await attachClients(bridge);
   await dispatch(firstCdp, 2, "Target.detachFromTarget", { sessionId: attachedSession(first) });
   await dispatch(firstCdp, 3, "Target.attachToTarget", { targetId, flatten: true });
   expect(response(first, 3)?.error).toBeUndefined();
   expect(attached(first)).toHaveLength(2);
+  // A recovered logical alias must suppress another root Page announcement.
+  for (const id of [4, 5]) {
+    deliver(handlers, { type: "tabs", tabs: defaultTabs() });
+    await flush();
+    await dispatch(firstCdp, id, "Target.getTargets");
+  }
+  await dispatch(firstCdp, 6, "Target.setAutoAttach", { autoAttach: true });
+  await dispatch(firstCdp, 9, "Target.attachToBrowserTarget");
+  await dispatch(firstCdp, 10, "Target.getTargets", {}, response(first, 9)?.result.sessionId);
+  await dispatch(secondCdp, 11, "Target.getTargets");
+  expect(attached(first)).toHaveLength(2);
+  expect(attached(second)).toHaveLength(1);
+  await dispatch(firstCdp, 7, "Runtime.evaluate", {}, response(first, 3)?.result.sessionId);
+  expect(response(first, 7)?.error).toBeUndefined();
+  // Repeated recovery must also suppress inventories between alias detach/attach.
+  await dispatch(firstCdp, 12, "Target.detachFromTarget", {
+    sessionId: response(first, 3)?.result.sessionId,
+  });
+  deliver(handlers, { type: "tabs", tabs: defaultTabs() });
+  await flush();
+  await dispatch(firstCdp, 13, "Target.getTargets");
+  expect(attached(first)).toHaveLength(2);
+  await dispatch(firstCdp, 14, "Target.attachToTarget", { targetId, flatten: true });
+  expect(response(first, 14)?.error).toBeUndefined();
+  await dispatch(firstCdp, 15, "Target.getTargets");
+  expect(attached(first)).toHaveLength(3);
   targetId = "replacement-target";
   deliver(handlers, { type: "detached", tabId: 1, reason: "target_closed" });
   await flush();
   deliver(handlers, { type: "tabs", tabs: [tab(1, "https://example.com/next", "Next")] });
   await flush();
-  expect(attached(first)).toHaveLength(3);
-  expect(attached(first)[2]?.params).toMatchObject({ targetInfo: { targetId } });
+  expect(attached(first)).toHaveLength(4);
+  expect(attached(first)[3]?.params).toMatchObject({ targetInfo: { targetId } });
 });
 
 it.each(["client close", "tab removal", "user cancellation"])(
