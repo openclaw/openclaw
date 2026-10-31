@@ -569,7 +569,11 @@ it.each(["child", "parent"] as const)(
       dirtyKey = undefined;
     });
     const exact = createSessionRowAncestorReads({
-      state: () => ({ cfg, context: projection.state.rowContext }),
+      state: () => ({
+        cfg,
+        context: projection.state.rowContext,
+        catalog: { prepareCurrent: async () => {} },
+      }),
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,

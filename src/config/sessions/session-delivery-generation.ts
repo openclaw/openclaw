@@ -2,13 +2,13 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { retainSqliteDatabaseAdmissionForPath } from "../../infra/sqlite-database-admission.js";
 import { hasPendingSqliteNativeExecution } from "../../infra/sqlite-native-observer.js";
 import {
   readSqliteNativeMutationRevision,
   registerSqliteSchemaMutationListener,
 } from "../../infra/sqlite-schema-facts.js";
 import {
-  assertDatabasePathIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
@@ -469,13 +469,18 @@ async function prepareSessionGenerationLease(
         },
       );
     }
+    const admission = source && retainSqliteDatabaseAdmissionForPath(source.path);
+    if (admission) {
+      releases.push(admission.release);
+    } else if (source?.identity.key.startsWith("file:")) {
+      throw new SessionDeliveryGenerationUnavailableError();
+    }
     const readCurrent = () => {
       assertActive();
-      if (!source) {
+      if (!source || (admission && !admission.isCurrent())) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
-      // External tool effects also use this guard, without entering a database writer.
-      assertDatabasePathIdentity(source.path, source.identity);
+      // Admission owns file identity; retained guards never poll its pathname.
       const entry = checkEntry(retained?.readCurrent());
       assertNativeCurrent(entry);
       return entry;

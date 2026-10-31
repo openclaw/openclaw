@@ -61,12 +61,11 @@ export function reattachTerminalSessionHosts(
       viewport.append(tab.host);
     }
   }
-  if (activeTab) {
+  if (activeTab && activeHostDetached) {
+    // ResizeObserver owns attached geometry; ordinary panel publications need no layout read.
     activeTab.controller.fit();
     // FitAddon skips unchanged dimensions; force dirty-row rendering to
     // repair a canvas that was detached while the panel was hidden.
-    if (activeHostDetached) {
-      forceTerminalRender(activeTab.controller);
-    }
+    forceTerminalRender(activeTab.controller);
   }
 }

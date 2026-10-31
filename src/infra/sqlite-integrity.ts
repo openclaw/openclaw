@@ -151,13 +151,14 @@ export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
   repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
+  runCheck = runSqliteIntegrityCheckSync,
 ): T {
   beforeResume?.();
   let step = operation.next();
   while (!step.done) {
     let failure: { error: unknown } | undefined;
     try {
-      runSqliteIntegrityCheckSync(step.value);
+      runCheck(step.value);
     } catch (error) {
       failure = { error };
     }

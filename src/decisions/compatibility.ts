@@ -5,17 +5,18 @@ import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-
 import {
   DecisionContractError,
   MAX_DECISION_V1_QUESTIONS,
-  validateDecisionBatch,
+  validateDecisionBatchShape,
   validateDecisionResult,
 } from "./validation.js";
 
 /** Malformed input throws; unsupported size or unrepresentable data returns undefined. */
 export function decisionBatchV1ToV2(batch: unknown): DecisionBatchV2 | undefined {
-  // Reject executable/proxy input before the legacy validator or any property access.
-  if (finiteJson(batch, { rejectProxies: true }) === "invalid") {
+  // Reject executable/proxy input before V1 shape checks or any property access.
+  const shape = finiteJson(batch, { rejectProxies: true });
+  if (shape === "invalid") {
     throw new DecisionContractError();
   }
-  if (!validateDecisionBatch(batch)) {
+  if (shape === "oversized" || !validateDecisionBatchShape(batch)) {
     return undefined;
   }
   const converted: DecisionBatchV2 = {

@@ -13,6 +13,12 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Retained session-generation and prepared entry-source guards keep the SQLite
+admission owner's lifetime and check its recorded generation without filesystem
+polling. Database retirement or a replacement observed at admission invalidates
+that generation. Source preparation and writer admission retain their physical
+identity checks; session publications and live caller authority still gate effects.
+
 Prepared agent-deletion checks observe native transaction state without refreshing
 the cached handle's idle deadline. Database acquisitions, active transactions, and
 retained borrows keep their existing idle protection; deletion checks retain their

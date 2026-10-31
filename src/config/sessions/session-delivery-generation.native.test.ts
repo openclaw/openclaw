@@ -9,6 +9,7 @@ import {
 import * as databaseIdentity from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -16,7 +17,10 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as nativeEntries from "./session-accessor.sqlite-entry-read.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import {
+  prepareSessionDeliveryGeneration,
+  prepareSessionGenerationFacts,
+} from "./session-delivery-generation.js";
 import {
   composeSessionSourceAssertion,
   prepareSessionSourceEffect,
@@ -46,6 +50,35 @@ async function fixture(initialSettings?: typeof settings) {
 }
 const generationError = (code = "UNAVAILABLE") =>
   expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` });
+
+it("checks retained delivery and source authority without polling and refuses database retirement", async () => {
+  const { database, scope, generation } = await fixture();
+  const delivery = await prepareSessionDeliveryGeneration({ ...scope, ...original });
+  const source = await generation.assertCurrent.prepareSessionSource!();
+  onTestFinished(async () => {
+    delivery.release();
+    await source.release?.();
+    vi.restoreAllMocks();
+  });
+  const identity = vi.spyOn(databaseIdentity, "assertDatabasePathIdentity");
+  const existing = vi.spyOn(databaseIdentity, "assertExistingDatabaseIdentity");
+  const candidates = vi.spyOn(storeCandidates, "isSessionStoreReadCandidateCurrent");
+  for (let check = 0; check < 10; check++) {
+    generation.assertCurrent();
+    delivery.assertCurrent();
+    source.assertCurrent();
+  }
+  expect([
+    identity.mock.calls.length,
+    existing.mock.calls.length,
+    candidates.mock.calls.length,
+  ]).toEqual([0, 0, 0]);
+  vi.restoreAllMocks();
+  await closeOpenClawAgentDatabaseByPathAsync(database.path, "main");
+  expect(generation.assertCurrent).toThrow(generationError());
+  expect(delivery.assertCurrent).toThrow(generationError());
+  expect(source.assertCurrent).toThrow();
+});
 
 it("writes under prepared generation and command-owner authority without synchronous probes or SQL", async () => {
   const { database, scope, generation } = await fixture(settings);

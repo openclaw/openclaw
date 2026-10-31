@@ -4,6 +4,7 @@ import {
   assertSqliteDatabaseHeader,
   type SqliteIntegrityDiagnostics,
 } from "../infra/sqlite-integrity.js";
+import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -70,11 +71,25 @@ export function admitAgentDatabaseStartupStructure(
   policy: AgentDatabaseStartupIntegrity | undefined,
   diagnostics?: SqliteIntegrityDiagnostics,
 ): boolean {
-  if (!policy || Atomics.load(new Int32Array(policy.valid), 0) !== 1) {
+  if (
+    diagnostics?.integrityGateReason !== "no-proof" &&
+    (!policy || Atomics.load(new Int32Array(policy.valid), 0) !== 1)
+  ) {
     return false;
   }
   assertSqliteDatabaseHeader(database, pathname);
-  assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
+  try {
+    assertOpenClawAgentCurrentRuntimeSchema(database, {
+      agentId,
+      pathname,
+      requireCanonicalIndexes: true,
+    });
+  } catch (error) {
+    if (isSqliteSchemaMismatchError(error)) {
+      return false;
+    }
+    throw error;
+  }
   if (diagnostics) {
     diagnostics.integrityGateMode = "deferred";
     diagnostics.integrityGateOutcome = "pending";

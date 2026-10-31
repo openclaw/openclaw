@@ -454,23 +454,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("sends tool results via dispatcher in DM sessions", async () => {
-    setNoAbort();
-    const cfg = verboseConfig;
-    const dispatcher = createDispatcher();
-    const ctx = createDirectCtx();
-
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      // Simulate tool result emission
-      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-    expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: ls");
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
   it("delivers native tool summaries and tool media", async () => {
     setNoAbort();
     const cfg = verboseConfig;

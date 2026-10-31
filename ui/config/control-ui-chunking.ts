@@ -209,6 +209,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/connect-command.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
+    case "ui/src/components/solid/tabs.tsx":
+    case "ui/src/lib/tabs.ts":
+    case "ui/src/lib/reactive/shadow-styles.ts":
+    case "ui/src/styles/tabs.css":
+      // Both tab renderers already load the owner, adapter, and generic styles together.
+      return "tabs-runtime";
     case "ui/src/components/solid/hub-page-header.tsx":
     case "ui/src/components/solid/settings-workspace.tsx":
     case "ui/src/components/solid/settings-select.tsx":

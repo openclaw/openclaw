@@ -193,7 +193,7 @@ function workTranscript() {
   ];
 }
 
-const workFixture: EngineScenario["fixtureOverrides"] = (sandbox, base) => ({
+const workFixture: NonNullable<EngineScenario["fixtureOverrides"]> = (sandbox, base) => ({
   ...fixture(sandbox, base),
   // Completed-work rollups belong to dashboard sessions; channel-shaped keys
   // intentionally retain their uncollapsed canonical transcript.
@@ -428,6 +428,8 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
     },
     {
       id: "chat-actions-reasoning-toggle",
+      diagnostic:
+        "Compound expand/collapse cycle includes driver and assertion gaps; use the single-action reasoning cases to attribute disclosure latency.",
       route: controlUiSessionPath(workSessionKey),
       fixtureOverrides: workFixture,
       expected:
@@ -489,6 +491,8 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
     },
     {
       id: "chat-actions-tool-toggle",
+      diagnostic:
+        "Compound expand/collapse cycle includes driver and assertion gaps; use the single-action tool cases to attribute disclosure latency.",
       route: controlUiSessionPath(workSessionKey),
       fixtureOverrides: workFixture,
       expected: "The first grouped tool disclosure opens and closes without sending a request.",
@@ -514,5 +518,77 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
       },
     },
   ];
+  for (const kind of ["reasoning", "tool"] as const) {
+    for (const length of ["short", "long"] as const) {
+      for (const action of ["expand", "collapse"] as const) {
+        const toggle = (page: Page) =>
+          kind === "reasoning"
+            ? page.locator(`${activePane} .chat-work-group > .chat-activity-group__summary`).last()
+            : page.locator(`${activePane} .chat-tool-row__toggle`).first();
+        const output = (page: Page) =>
+          kind === "reasoning"
+            ? page.locator(`${activePane} .chat-thinking`).filter({ hasText: reasoningText })
+            : bubble(page, "interaction-0-387").locator(".chat-tool-msg-body");
+        const activate = async (page: Page) => {
+          if (kind === "reasoning") {
+            await toggle(page).click();
+          } else {
+            await toggle(page).press("Space");
+          }
+        };
+        const scenario: EngineScenario = {
+          id: `chat-actions-${kind}-${action}-${length}`,
+          route: controlUiSessionPath(workSessionKey),
+          fixtureOverrides: (sandbox, base) => ({
+            ...workFixture(sandbox, base),
+            historyMessages: length === "short" ? workTranscript().slice(385) : workTranscript(),
+          }),
+          expected: `One ${action} of ${kind} in a ${length} transcript, without a request.`,
+          prepare: async (page) => {
+            if (kind === "reasoning") {
+              await preparePreviousMessages(page);
+              await toggle(page).scrollIntoViewIfNeeded();
+            } else {
+              await prepareToolRows(page);
+            }
+            if (
+              (await toggle(page).getAttribute("aria-expanded")) !== String(action === "collapse")
+            ) {
+              await activate(page);
+            }
+            await expectExpanded(toggle(page), action === "collapse");
+            await output(page).waitFor({ state: action === "collapse" ? "visible" : "hidden" });
+          },
+          run: async (page, gateway) => {
+            await activate(page);
+            await expectExpanded(toggle(page), action === "expand");
+            await output(page).waitFor({ state: action === "expand" ? "visible" : "hidden" });
+            await noRequests(gateway, "chat.send");
+            return {
+              disclosureToggles: 1,
+              transcriptMessages: length === "short" ? 15 : 400,
+            };
+          },
+        };
+        scenarios.push(scenario);
+        if (kind === "tool" && action === "expand") {
+          scenarios.push({
+            ...scenario,
+            id: `chat-actions-tool-reopen-${length}`,
+            expected: `Reopening loaded tool content in a ${length} transcript without a request.`,
+            prepare: async (page, gateway) => {
+              await scenario.prepare(page, gateway);
+              await activate(page);
+              await expectExpanded(toggle(page), true);
+              await output(page).waitFor({ state: "visible" });
+              await activate(page);
+              await expectExpanded(toggle(page), false);
+              await output(page).waitFor({ state: "hidden" });
+            },
+          });
+        }
+      }
+    }
+  }
   return scenarios.map((scenario) => Object.assign({}, scenario, { explicitOnly: true }));
 }

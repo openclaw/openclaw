@@ -46,6 +46,7 @@ const { values } = parseArgs({
     "aa-control": { type: "boolean", default: false },
     "update-reload": { type: "boolean", default: false },
     "asset-latency-ms": { type: "string", default: "0" },
+    "service-workers": { type: "string", default: "allow" },
     "warm-picker": { type: "boolean", default: false },
     "graph-counts": { type: "boolean", default: false },
   },
@@ -59,6 +60,10 @@ const rtts = values.smoke ? [100] : values.rtt.split(",").map(Number);
 const paneCounts = values.smoke ? [1] : values.panes.split(",").map(Number);
 const pairs = values.smoke ? 1 : Number(values.pairs);
 const assetLatencyMs = Number(values["asset-latency-ms"]);
+const serviceWorkers = values["service-workers"];
+if (serviceWorkers !== "allow" && serviceWorkers !== "block") {
+  throw new Error("Expected --service-workers allow or block");
+}
 if (
   !Number.isInteger(pairs) ||
   pairs < 1 ||
@@ -440,6 +445,7 @@ async function writeSummary() {
         trace: values.trace,
         updateReload: values["update-reload"],
         assetLatencyMs,
+        serviceWorkers,
         warmPicker: values["warm-picker"],
         host: { platform: os.platform(), arch: os.arch(), cpus: os.cpus().length },
         notes: [
@@ -512,6 +518,7 @@ try {
         paneCounts,
         updateReload: values["update-reload"],
         assetLatencyMs,
+        serviceWorkers,
         warmPicker: values["warm-picker"],
         planned: pairs * scenarios.length * rtts.length * paneCounts.length * servers.length,
         acceptance:
@@ -539,7 +546,10 @@ try {
               load: os.loadavg(),
             };
             samples.push(result);
-            const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+            const context = await browser.newContext({
+              viewport: { width: 1920, height: 1080 },
+              serviceWorkers,
+            });
             const page = await context.newPage();
             page.setDefaultTimeout(30_000);
             await page.addInitScript(installInteractionNavigationPreloadObserver);

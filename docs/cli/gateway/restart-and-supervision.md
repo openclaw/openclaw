@@ -122,7 +122,22 @@ update marker enables the five-minute startup watchdog after the managed process
 is observed running. This lets an older updater complete a slow first-hop startup
 without passing a new option. The watchdog includes migration, listener, and health
 phases; phase changes cannot extend its cap. Explicit readiness budgets supplied
-by newer update callers take precedence. Ordinary standalone restarts wait beyond the standard readiness budget only while the same running Gateway advances startup phases or acquires, renews, or completes an observed same-process migration, up to five minutes, then report `still-starting` (exit 2) with the last phase and `openclaw gateway status --deep` as the next step; startup without progress still fails at the standard budget (exit 1), while a newly observed migration lease gets one heartbeat interval plus polling grace before it is considered stalled, and its observed completion earns one fresh readiness window within the same cap. See [Restart recovery](/gateway/restart-recovery).
+by newer update callers take precedence.
+
+Ordinary standalone restarts renew their standard readiness window when the
+replacement acquires its listener, supplies its identity, reports a new `/startupz`
+phase through its own listener, or acquires, renews, or completes an observed
+same-process migration. Repeated startup phases and phases from another process
+do not renew the window. The wait remains capped at five minutes; explicit
+readiness deadlines still take precedence.
+
+A running Gateway whose readiness remains unverified is reported as `still-starting`
+(exit 2) when it still owns startup, with the last phase and
+`openclaw gateway status --deep` as the next step. A stopped replacement or a
+definite health or identity failure exits 1; verified readiness succeeds with exit 0.
+A newly observed migration lease gets one heartbeat interval plus polling grace
+before it is considered stalled, and its observed completion earns one fresh
+readiness window within the same cap. See [Restart recovery](/gateway/restart-recovery).
 
 On Windows, managed `gateway start` and `gateway restart` allow up to 90 minutes
 for cold startup, using three default update-step budgets for activation, loading,

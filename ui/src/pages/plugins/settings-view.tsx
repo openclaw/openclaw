@@ -3,7 +3,7 @@ import { Errored, For, Loading, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, sessionIconMask } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -231,7 +231,10 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                         : renderPluginStateStatus(state, "plugins-settings-row__status");
                     })()}
                     <span class="settings-row__chevron" aria-hidden="true">
-                      <Icon name="chevronRight" />
+                      <i
+                        class="session-css-icon"
+                        style={{ "mask-image": sessionIconMask("chevronRight") }}
+                      />
                     </span>
                   </div>
                   {renderPluginRowMessage(props.messages[pluginRowKey(plugin().id)])}
