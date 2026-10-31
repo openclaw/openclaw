@@ -79,6 +79,7 @@ import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
   refreshProviderAuthAfterLogin,
   refreshRunningGatewayAuthState,
+  refreshSavedAuthAfterRejectedSettings,
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
@@ -421,6 +422,11 @@ async function runProviderAuthMethod(
           }
           return next;
         },
+      }).catch(async (error: unknown) => {
+        if (persistedProfiles.length > 0) {
+          await refreshSavedAuthAfterRejectedSettings(login);
+        }
+        throw error;
       });
       if (defaultModel) {
         const warnings = await repairModelSelectionRuntimePlugins({
