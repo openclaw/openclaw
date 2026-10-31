@@ -673,6 +673,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner-execution-lifecycle.test.ts",
   "src/auto-reply/reply/agent-runner-execution-mcp-context.test.ts",
   "src/auto-reply/reply/agent-runner-execution-message-authority.test.ts",
+  "test/reply-authority.telegram-http.integration.test.ts",
   "src/auto-reply/reply/agent-runner-execution-message-tools.test.ts",
   "src/auto-reply/reply/agent-runner-execution-probes.test.ts",
   "src/auto-reply/reply/agent-runner-execution-progress.test.ts",

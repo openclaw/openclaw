@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { testing as externalAuthTesting } from "../../agents/auth-profiles/external-auth.test-support.js";
 import * as cli from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
@@ -81,12 +82,16 @@ function resolveCapability(token: string | undefined, key = sessionKey) {
   });
 }
 
-it.each(["failure", "policy-session", "untrusted-ingress", "fallback"] as const)(
+it.each(["failure", "policy-session", "untrusted-ingress", "fallback", "long-retry"] as const)(
   "scopes CLI source authority to trusted turns through %s settlement",
   async (outcome) => {
     const turn = channelTurn();
     const authorityKey = outcome === "policy-session" ? policySessionKey : sessionKey;
     const trusted = outcome !== "untrusted-ingress";
+    const startedAt = Date.now();
+    if (outcome === "long-retry") {
+      turn.followupRun.run.timeoutMs = 30 * 60_000;
+    }
     let embeddedToken: string | undefined;
     let admission: RunCliAgentParams["preparedRunAdmission"];
     let token: string | undefined;
@@ -108,6 +113,11 @@ it.each(["failure", "policy-session", "untrusted-ingress", "fallback"] as const)
     }
     state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
       token = run.messageActionTurnCapability;
+      if (outcome === "long-retry") {
+        // Retry/approval time can exceed one attempt's deadline without ending the run.
+        const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 41 * 60_000);
+        onTestFinished(() => clock.mockRestore());
+      }
       if (!trusted) {
         expect(token).toBeUndefined();
       } else {
@@ -148,3 +158,30 @@ it.each(["failure", "policy-session", "untrusted-ingress", "fallback"] as const)
     expect(resolveCapability(embeddedToken)).toBeUndefined();
   },
 );
+
+it("revokes channel authority on cancellation before the model promise settles", async () => {
+  const started = createDeferred();
+  const release = createDeferred();
+  const turn = channelTurn();
+  const controller = new AbortController();
+  let token: string | undefined;
+  state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+    token = run.messageActionTurnCapability;
+    started.resolve();
+    await release.promise;
+    return { payloads: [{ text: "done" }], meta: {} };
+  });
+  const pending = executeChannelTurn({
+    ...turn,
+    opts: { ...turn.opts, abortSignal: controller.signal },
+  });
+  try {
+    await awaitGateBeforeSettlement(started.promise, pending, "CLI candidate did not start");
+    expect(resolveCapability(token)).toBeDefined();
+    controller.abort();
+    expect(resolveCapability(token)).toBeUndefined();
+  } finally {
+    release.resolve();
+    await pending;
+  }
+});

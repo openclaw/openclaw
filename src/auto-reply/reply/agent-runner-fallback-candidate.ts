@@ -330,6 +330,15 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         const messageActionTurnCapability = turn.followupRun.run.scheduledAutomation
           ? params.scheduledMessageActionTurnCapability
           : mintReplyMessageActionTurnCapability(turn, params.runId);
+        const revokeMessageAuthority = () => {
+          if (!params.scheduledMessageActionTurnCapability) {
+            revokeMessageActionTurnCapability(messageActionTurnCapability);
+          }
+        };
+        params.runAbortSignal?.addEventListener("abort", revokeMessageAuthority, { once: true });
+        if (params.runAbortSignal?.aborted) {
+          revokeMessageAuthority();
+        }
         try {
           const common = {
             ...runOptions,
@@ -417,10 +426,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           );
           return result;
         } finally {
+          params.runAbortSignal?.removeEventListener("abort", revokeMessageAuthority);
+          revokeMessageAuthority();
           runStart.close();
-          if (!params.scheduledMessageActionTurnCapability) {
-            revokeMessageActionTurnCapability(messageActionTurnCapability);
-          }
         }
       },
     }),
