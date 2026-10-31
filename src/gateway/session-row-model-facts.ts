@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -13,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
+import { normalizeSessionSearchLiteral } from "../shared/session-search-text.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
 import type {
@@ -68,7 +68,7 @@ export function prepareSessionRowModelSearch(
   const lower = (value: string) => {
     let text = lowercaseFields.get(value);
     if (text === undefined) {
-      text = normalizeLowercaseStringOrEmpty(value);
+      text = normalizeSessionSearchLiteral(value);
       lowercaseFields.set(value, text);
     }
     return text;
@@ -252,8 +252,8 @@ export function prepareSessionRowModelSearch(
     }
     // Direct runtime registration is live within a retained registry generation.
     const matchesRuntime = (id: string) =>
-      normalizeLowercaseStringOrEmpty(id).includes(search) ||
-      normalizeLowercaseStringOrEmpty(normalizeOptionalAgentRuntimeId(id)).includes(search);
+      normalizeSessionSearchLiteral(id).includes(search) ||
+      normalizeSessionSearchLiteral(normalizeOptionalAgentRuntimeId(id)).includes(search);
     if (
       resolveRuntimeCliBackends("metadata").some((backend) => matchesRuntime(backend.id)) ||
       listRegisteredAgentHarnesses().some(({ harness }) => matchesRuntime(harness.id))

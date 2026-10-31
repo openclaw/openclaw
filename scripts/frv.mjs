@@ -76,7 +76,7 @@ const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
 const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
@@ -139,6 +139,7 @@ function parseArgs(argv) {
     dryRun: false,
     failedOnly: false,
     force: false,
+    noFollow: false,
     json: false,
     repository: DEFAULT_REPOSITORY,
     runId: "",
@@ -172,6 +173,8 @@ function parseArgs(argv) {
       options.intervalMs = positiveInteger(argv[++index], "--interval") * 1000;
     } else if (argument === "--once") {
       options.once = true;
+    } else if (argument === "--no-follow") {
+      options.noFollow = true;
     } else if (argument === "--force") {
       options.force = true;
     } else if (argument === "--failed") {
@@ -230,6 +233,9 @@ function parseArgs(argv) {
     }
   } else if (options.job !== undefined || options.child !== undefined) {
     throw new Error("--job and --child are valid only with rerun");
+  }
+  if (options.noFollow && !(command === "rerun" && options.job !== undefined)) {
+    throw new Error("--no-follow is valid only with rerun --job");
   }
   if (options.maxAttempts !== undefined && options.child === undefined) {
     throw new Error("--max-attempts is valid only with rerun --child");
@@ -1962,6 +1968,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       : validateOperationDeadline(options.operationDeadline);
   const ownedAttempts = new Map();
   const target = resolveRerunTarget(plan, options);
+  if (options.noFollow && target?.name === undefined) {
+    throw new Error("no-follow is valid only for a targeted job rerun");
+  }
   const runKeys = new Map(selectedChildren(plan).map((child) => [child.runId, child.key]));
   runKeys.set(String(rootRunId), "parent");
   const reported = new Map();
@@ -2206,6 +2215,21 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       }
       if (childRerun) {
         return { action: "reran-child", reruns, status };
+      }
+      if (options.noFollow) {
+        const receipt = reruns.at(-1);
+        const repositoryOption =
+          client.repository && client.repository !== DEFAULT_REPOSITORY
+            ? ` --repo ${client.repository}`
+            : "";
+        return {
+          action: "rerun-accepted",
+          continueCommand: `pnpm frv continue --failed --run ${rootRunId}${repositoryOption}`,
+          nextCommand: `pnpm frv watch --run ${rootRunId}${repositoryOption}`,
+          receipt: { parentRunId: String(rootRunId), ...receipt },
+          reruns,
+          status,
+        };
       }
       continue;
     }
@@ -3630,6 +3654,13 @@ function print(value, json) {
   for (const rerun of value.payloadReruns ?? []) {
     console.log(`plan: ${rerun.child} ${rerun.mode} ${rerun.producer ?? rerun.failed.join(", ")}`);
   }
+  if (value.receipt) {
+    console.log(
+      `accepted: child=${value.receipt.child} run=${value.receipt.runId} source-attempt=${value.receipt.sourceRunAttempt} attempt=${value.receipt.runAttempt} job=${JSON.stringify(value.receipt.jobName)} job-id=${value.receipt.jobId}`,
+    );
+    console.log(`next: ${value.nextCommand}`);
+    console.log(`continue: ${value.continueCommand}`);
+  }
   if (value.action) {
     console.log(`action: ${value.action}`);
   }
@@ -3711,6 +3742,7 @@ async function main() {
     child: options.child,
     dryRun: options.dryRun,
     job: options.job,
+    noFollow: options.noFollow,
     maxAttempts: options.maxAttempts,
   });
   print(result, options.json);

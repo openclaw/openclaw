@@ -52,12 +52,10 @@ it.each(["admission", "worker"] as const)(
           return captured(state.stateDir);
         },
       );
-      await expect(
-        preserveDoctorOriginalState({ ...captureDefaults(), env: state.env }),
-      ).rejects.toMatchObject({
-        message: expect.stringContaining("timed out after 600 s"),
-        refusal: { kind: "data-at-risk", reason: "unreadable-state" },
-      });
+      const result = await preserveDoctorOriginalState({ ...captureDefaults(), env: state.env });
+      expect(result.warnings.join("\n")).toContain("timed out after 600 s");
+      expect(result.warnings.join("\n")).toContain("verified backup");
+      expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
     });
   },
 );
@@ -121,9 +119,16 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
         runtime: { log, error: vi.fn(), exit: vi.fn() },
       });
 
-    // A failed capture cannot authorize repair or mark activation as backed up.
-    await expect(captureOriginal(null)).rejects.toThrow("State repair has not started");
+    // A nonfatal capture failure leaves the next start free to capture.
+    const unavailable = await captureOriginal(null);
     expect(fs.existsSync(marker)).toBe(false);
+    expect(unavailable.findings).toContainEqual(
+      expect.objectContaining({
+        category: "fix-now",
+        message: expect.stringContaining("Pre-repair recovery copy was unavailable"),
+        fixHint: expect.stringContaining("Check installation access and disk space"),
+      }),
+    );
 
     const capture = vi
       .spyOn(baselineCapture, "captureUpdateRecoveryBaseline")

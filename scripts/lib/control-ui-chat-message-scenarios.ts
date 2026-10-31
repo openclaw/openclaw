@@ -372,14 +372,14 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
       fixtureOverrides: (sandbox, base) => ({
         ...fixture(sandbox, base),
         sessionTranscripts: {
-          [forkKey]: { messages: [message("assistant", "Fork target ready.", 0)] },
+          [forkKey]: { messages: createEngineTranscript(398) },
         },
         methodResponses: {
           "sessions.fork": { sessionKey: forkKey, editorText: userText, editorAttachments: [] },
         },
       }),
       expected:
-        "Fork from the user message changes to the returned session and restores its prompt.",
+        "Fork preserves the preceding 398 messages in the returned session and restores the selected prompt.",
       prepare: async (page) => {
         await preparePreviousMessages(page);
         await bubble(page, userId).scrollIntoViewIfNeeded();
@@ -388,7 +388,8 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
         const menu = await contextMenu(page, bubble(page, userId));
         await menu.getByRole("menuitem", { name: "Fork from here", exact: true }).click();
         await gateway.waitForRequest("sessions.fork", { match: { sessionKey, entryId: userId } });
-        await page.locator(activePane).getByText("Fork target ready.", { exact: true }).waitFor();
+        await page.waitForURL((url) => url.pathname === controlUiSessionPath(forkKey));
+        await bubble(page, "interaction-0-397").waitFor({ state: "visible" });
         await page.waitForFunction(
           (text) =>
             document.querySelector<HTMLTextAreaElement>(

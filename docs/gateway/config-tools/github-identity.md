@@ -295,19 +295,32 @@ each paired with its observed `expectedTitle`/`expectedBody`. The observed head 
 be newer than `publication.headCommit`; editing metadata does not rewrite that
 historical receipt. Other receipt-backed actions still require the receipt head.
 Keep the attribution, publication marker and footer unchanged in the full body.
-Omitted fields stay unchanged. Guests can edit their own session's PR; no child or
-arbitrary PR selector is accepted. Edit never synchronizes, stages, commits or
+Omitted fields stay unchanged. Edit accepts no child-session selector. It never synchronizes, stages, commits or
 pushes workspace files, and never changes PR lifecycle state. Closed PRs are read-only.
 An unsuccessful later source publication does not hide the existing PR from edit.
+
+To edit an existing PR without importing its source, include `pullRequestUrl` with
+`action: "edit"`. Read first, then repeat the same URL with the observed
+`expectedHeadCommit` and field preconditions. Do not send `requestId` for an
+explicit URL. This target takes precedence over any PR already associated with
+the conversation and returns `pullRequest`, not a publication receipt.
+
+The Gateway verifies the current requester's linked authorship or authorized
+maintainer access, repository identity and private repository access. An
+inspection does not grant later authority. GitHub must permit the metadata write;
+source branch push permission and branch protection do not govern this operation.
+The conversation keeps its current workspace and PR association. After an
+uncertain response, read again with `action: "edit"` and the same URL before
+retrying, without the old write preconditions.
 
 Stale observed values are rejected. This is not atomic GitHub compare-and-swap:
 external edits or pushes can race the PATCH. A head change detected after dispatch
 can mean the metadata was applied but confirmation failed. After a lost response,
 the Gateway rereads the same PR; already-applied values need no second write.
-Before retrying uncertainty, read again with only `{ "action": "edit" }`, without
-reusing the previous write preconditions. Omitted action or `publish` still
-publishes workspace source; its title/body are creation-only and do not edit an
-existing PR.
+Before retrying uncertainty, read again with `action: "edit"` and the same
+`pullRequestUrl` when explicitly selected, without reusing the previous write
+preconditions. Omitted action or `publish` still publishes workspace source; its
+title/body are creation-only and do not edit an existing PR.
 
 Guests can mark their own current session's shared draft ready for review with
 `github_publish` and `action: "ready"`. First read its state with `action: "edit"`,
