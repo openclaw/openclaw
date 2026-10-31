@@ -251,6 +251,45 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun standalonePushToTalkStillListensWithARetainedTalkMute() =
+    runTest {
+      installSpeechRecognitionService()
+      val manager = createManager(scope = this)
+      withMain(cleanup = { manager.stopAllCapture() }) {
+        manager.setMicrophoneMuted(true)
+        val start = manager.beginPushToTalk(allowNewCapture = true)
+        assertTrue(manager.isMicrophoneMuted.value)
+        assertFalse(manager.isEnabled.value)
+        assertTrue("Standalone PTT is not the muted continuous call", manager.isListening.value)
+        manager.cancelPushToTalk(start.captureId)
+      }
+    }
+
+  @Test
+  fun microphoneMuteDuringPushToTalkStartupCannotReopenTheRecognizer() =
+    runBlocking {
+      withNativeTalk { proof, _ ->
+        val retirement = CompletableDeferred<Unit>()
+        proof.manager.audioRetirement.retire(cleanup = retirement)
+        val beginning = proof.scope.async { proof.manager.beginPushToTalk(allowNewCapture = true) }
+        awaitTalkWork(proof) { proof.manager.activePushToTalkCaptureId != null }
+        assertTrue(beginning.isActive)
+        assertTrue(proof.manager.audioRetirement.pending)
+        proof.manager.setMicrophoneMuted(true)
+        retirement.complete(Unit)
+        awaitTalkWork(proof) { beginning.isCompleted }
+        assertTrue(runCatching { beginning.await() }.isFailure)
+        shadowOf(Looper.getMainLooper()).idle()
+        proof.scheduler.runCurrent()
+        assertTrue(proof.manager.isMicrophoneMuted.value)
+        assertFalse(proof.manager.isListening.value)
+        assertNull(proof.manager.activePushToTalkCaptureId)
+        assertNull(readPrivateField(proof.manager, "pttRecognitionRung"))
+        assertNull(readPrivateField(proof.manager, "recognizer"))
+      }
+    }
+
+  @Test
   fun stopAllCaptureClearsPttWhenContinuousModeIsDisabled() {
     val manager = createManager()
     val finishingJob = Job()
@@ -1236,6 +1275,85 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun microphoneMutePreservesNativeSubmittedReplyAndDoesNotReopenRecognition() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val retired = currentRecognizer()
+        retired.triggerOnResults(recognitionResults("Keep working while muted"))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+        assertEquals(1, sends.size)
+        proof.manager.setMicrophoneMuted(true)
+        proof.scheduler.runCurrent()
+        retired.triggerOnResults(recognitionResults("Background conversation"))
+        completeRemoteSynthesis(proof.synthesizer)
+        awaitTalkWork(proof) { proof.player.playCalls == 1 }
+        assertTrue(proof.manager.isSpeaking.value)
+        assertTrue(proof.manager.isEnabled.value)
+        proof.player.finished.complete(Unit)
+        awaitTalkWork(proof) { !proof.manager.isSpeaking.value && !proof.manager.awaitingAgent.value }
+        assertTrue(proof.manager.isMicrophoneMuted.value)
+        assertFalse(proof.manager.isListening.value)
+        assertTrue(currentRecognizer().isDestroyed)
+        assertEquals(1, sends.size)
+        proof.manager.setMicrophoneMuted(false)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        assertFalse(currentRecognizer().isDestroyed)
+        assertEquals(1, sends.size)
+      }
+    }
+
+  @Test
+  fun microphoneMuteKeepsAnAwaitedNativeAgentRunAndPlaysItsFinalResponse() =
+    runBlocking {
+      withNativeTalk(chatAck = """{"runId":"native-talk-turn","status":"started"}""") { proof, sends ->
+        currentRecognizer().triggerOnResults(recognitionResults("Research while muted"))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { readPrivateField(proof.manager, "pendingRunId") == "native-talk-turn" }
+        proof.manager.setMicrophoneMuted(true)
+        proof.scheduler.runCurrent()
+        assertTrue(proof.manager.awaitingAgent.value)
+        assertFalse(proof.synthesizer.requested.isCompleted)
+        proof.manager.handleGatewayEvent("chat", chatFinalPayload(runId = "native-talk-turn", text = "Finished research"))
+        awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+        completeRemoteSynthesis(proof.synthesizer)
+        awaitTalkWork(proof) { proof.player.playCalls == 1 }
+        assertEquals(1, sends.size)
+        assertTrue(proof.manager.isMicrophoneMuted.value)
+        assertTrue(proof.manager.isSpeaking.value)
+        assertFalse(proof.manager.isListening.value)
+      }
+    }
+
+  @Test
+  fun microphoneMuteFinishesOnlyAlreadyRecognizedNativeSpeech() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val retired = currentRecognizer()
+        retired.triggerOnPartialResults(recognitionResults("Already spoken"))
+        proof.manager.setMicrophoneMuted(true)
+        awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+        assertTrue(retired.isDestroyed)
+        assertEquals(1, sends.size)
+        assertEquals(
+          "Already spoken",
+          sends
+            .single()
+            .getValue("message")
+            .jsonPrimitive.content,
+        )
+        proof.manager.setMicrophoneMuted(false)
+        proof.scheduler.runCurrent()
+        assertFalse("Unmute must not start a second capture during reply preparation", proof.manager.isListening.value)
+        assertTrue(retired.isDestroyed)
+        completeRemoteSynthesis(proof.synthesizer)
+        awaitTalkWork(proof) { proof.player.playCalls == 1 }
+        proof.player.finished.complete(Unit)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+      }
+    }
+
+  @Test
   fun mutingNativeReplyDoesNotStopCapture() =
     runBlocking {
       for (duringPreparation in listOf(true, false)) {
@@ -1372,6 +1490,7 @@ class TalkModeManagerTest {
   private suspend fun withNativeTalk(
     history: () -> String = { """{"messages":[{"role":"assistant","content":[{"type":"text","text":"Synthetic native reply"}]}]}""" },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
+    chatAck: String = """{"runId":"native-talk-turn","status":"ok"}""",
     block: suspend (RealtimePlaybackProof, ConcurrentLinkedQueue<JsonObject>) -> Unit,
   ) {
     installSpeechRecognitionService()
@@ -1392,7 +1511,7 @@ class TalkModeManagerTest {
 
           "chat.send" -> {
             sends.add(request.getValue("params").jsonObject)
-            """{"runId":"native-talk-turn","status":"ok"}"""
+            chatAck
           }
 
           "chat.history" -> {
@@ -2753,6 +2872,7 @@ class TalkModeManagerTest {
             while (!result.isCompleted) {
               proof.scheduler.runCurrent()
               if (!finalSent && proof.manager.awaitingAgent.value) {
+                proof.manager.setMicrophoneMuted(true)
                 socket.await().send(final)
                 finalSent = true
               }
@@ -2771,6 +2891,7 @@ class TalkModeManagerTest {
                 .jsonPrimitive.content,
             )
             assertFalse(proof.synthesizer.requested.isCompleted)
+            if (!early) assertTrue("Pending consult must finish without unmuting", proof.manager.isMicrophoneMuted.value)
           }
         }
       }
@@ -3379,6 +3500,114 @@ class TalkModeManagerTest {
             frames.offer(byteArrayOf())
             capture?.join(5_000)
             assertFalse("Capture worker must terminate", capture?.isAlive == true)
+            proof.drainCancelledCapture()
+          }
+        }
+      } finally {
+        org.robolectric.shadows.ShadowAudioRecord
+          .clearSource()
+      }
+    }
+
+  @Test
+  fun microphoneMuteSendsOnlySilenceAndRejectsPreToggleAudioAtSocketEnqueue() =
+    runBlocking {
+      val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+      val readStarted = java.util.concurrent.LinkedBlockingQueue<Int>()
+      val reads =
+        java.util.concurrent.atomic
+          .AtomicInteger()
+      val appends = ConcurrentLinkedQueue<ByteArray>()
+      val mutedAppend = CompletableDeferred<Unit>()
+      val resumedAppend = CompletableDeferred<Unit>()
+      val methods = ConcurrentLinkedQueue<String>()
+      org.robolectric.shadows.ShadowAudioRecord.setSourceProvider {
+        object : org.robolectric.shadows.ShadowAudioRecord.AudioRecordSource {
+          override fun readInByteArray(
+            bytes: ByteArray,
+            offset: Int,
+            size: Int,
+            blocking: Boolean,
+          ): Int {
+            readStarted.put(reads.incrementAndGet())
+            val frame = checkNotNull(frames.poll(5, TimeUnit.SECONDS)) { "Mute capture fixture is missing a frame" }
+            frame.copyInto(bytes, destinationOffset = offset)
+            return frame.size
+          }
+        }
+      }
+      try {
+        withStartedTalk(sessionKey = "selected-chat", interceptRequest = { request, _ ->
+          val method = request.getValue("method").jsonPrimitive.content
+          methods += method
+          if (method == "talk.session.appendAudio") {
+            val params = request.getValue("params").jsonObject
+            assertEquals("playback-relay", params.getValue("sessionId").jsonPrimitive.content)
+            val bytes = Base64.decode(params.getValue("audioBase64").jsonPrimitive.content, Base64.DEFAULT)
+            appends += bytes
+            if (bytes.contentEquals(byteArrayOf(0, 0))) mutedAppend.complete(Unit)
+            if (bytes.contentEquals(byteArrayOf(21, 22))) resumedAppend.complete(Unit)
+          }
+          false
+        }) { proof ->
+          fun awaitRead(number: Int) {
+            assertEquals(number, readStarted.poll(5, TimeUnit.SECONDS))
+          }
+          val transport = readPrivateField(proof.session, "writeLock") as kotlinx.coroutines.sync.Mutex
+          val lockOwner = Any()
+          transport.lock(lockOwner)
+          var held = true
+          var capture: Thread? = null
+          try {
+            frames.put(byteArrayOf(1, 2))
+            capture = Thread { proof.drainCancelledCapture() }.also { it.start() }
+            awaitRead(1)
+            awaitRead(2)
+            proof.drainCancelledCapture() // First frame waits behind the socket write lock.
+            proof.manager.setMicrophoneMuted(true)
+            proof.manager.setMicrophoneMuted(false)
+            transport.unlock(lockOwner)
+            held = false
+            frames.put(byteArrayOf(3, 4)) // This read also predates the toggles.
+            awaitRead(3)
+            proof.manager.setMicrophoneMuted(true)
+            frames.put(byteArrayOf(5, 6)) // Reject a read spanning the mute boundary.
+            awaitRead(4)
+            frames.put(byteArrayOf(7, 8)) // Muted input must become silence on the wire.
+            awaitRead(5)
+            proof.drainCancelledCapture()
+            withTimeout(5_000) { mutedAppend.await() }
+            assertEquals(1, appends.size)
+            assertArrayEquals(byteArrayOf(0, 0), appends.single())
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"ready"}""")
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"inputAudio"}""")
+            assertFalse(proof.manager.isListening.value)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"reply-turn"}""")
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"reply-turn"},"audioBase64":"AQACAA=="}""")
+            proof.scheduler.runCurrent()
+            assertTrue("Muting input must leave response playback active", proof.writes.isNotEmpty())
+            assertTrue(proof.manager.isEnabled.value)
+            assertEquals("selected-chat", readPrivateField(proof.manager, "realtimeSessionKey"))
+            assertFalse(methods.contains("talk.session.cancelOutput"))
+            assertFalse(methods.contains("talk.session.close"))
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"clear"}""")
+            proof.scheduler.runCurrent()
+            proof.manager.setMicrophoneMuted(false)
+            frames.put(byteArrayOf(9, 10)) // Never replay a read that began while muted.
+            awaitRead(6)
+            frames.put(byteArrayOf(21, 22))
+            awaitRead(7)
+            proof.drainCancelledCapture()
+            withTimeout(5_000) { resumedAppend.await() }
+            assertEquals(2, appends.size)
+            assertArrayEquals(byteArrayOf(21, 22), appends.last())
+            assertTrue(proof.manager.isListening.value)
+          } finally {
+            if (held) transport.unlock(lockOwner)
+            proof.manager.stopAllCapture()
+            frames.offer(byteArrayOf())
+            capture?.join(5_000)
+            assertFalse("Mute capture worker must terminate", capture?.isAlive == true)
             proof.drainCancelledCapture()
           }
         }

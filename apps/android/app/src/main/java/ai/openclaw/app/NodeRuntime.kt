@@ -2188,6 +2188,9 @@ class NodeRuntime internal constructor(
   val talkModeEnabled: StateFlow<Boolean>
     get() = talkMode.isEnabled
 
+  val talkMicrophoneMuted: StateFlow<Boolean>
+    get() = talkMode.isMicrophoneMuted
+
   val talkModeListening: StateFlow<Boolean>
     get() = talkMode.isListening
 
@@ -3570,6 +3573,8 @@ class NodeRuntime internal constructor(
       if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off,
       disposition = if (value) TalkSessionCloseDisposition.Detach else TalkSessionCloseDisposition.Abort,
     )
+
+  fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
