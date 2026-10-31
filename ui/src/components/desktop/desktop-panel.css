@@ -140,7 +140,7 @@ openclaw-desktop-panel {
     height: 32px;
     flex: 0 0 auto;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 0 6px;
     background: var(--bg);
     color: var(--text);
@@ -413,7 +413,7 @@ openclaw-desktop-panel {
   }
   .desktop-button {
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 5px 10px;
     background: transparent;
     color: var(--text);
@@ -582,7 +582,7 @@ openclaw-desktop-panel {
   .desktop-viewer-hint[data-fullscreen="true"] {
     padding: 7px 10px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
     font-size: 13px;
@@ -600,7 +600,7 @@ openclaw-desktop-panel {
     position: absolute;
     right: 12px;
     max-width: calc(50% - 225px);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
   }
   @container (max-width: 900px) {
     .desktop-takeover--fullscreen {
@@ -680,7 +680,7 @@ openclaw-desktop-panel {
     padding: 0;
     box-shadow: none;
     background: transparent;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
   }
   .desktop-connection-rail--mobile .desktop-rail__pill > :not(:first-child) {
     border-left-color: var(--border);
@@ -768,7 +768,7 @@ openclaw-desktop-panel {
   }
   .desktop-credentials__input {
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 7px 9px;
     background: var(--bg);
     color: var(--text);
@@ -780,7 +780,7 @@ openclaw-desktop-panel {
     gap: 10px;
     padding: 10px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
   }
   .desktop-environment__details {
     display: flex;
@@ -864,7 +864,7 @@ openclaw-desktop-panel {
     margin: 0 auto;
     padding: 5px;
     border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--bg) 84%, transparent);
     box-shadow: var(--overlay-shadow);
     backdrop-filter: blur(16px);
@@ -877,7 +877,7 @@ openclaw-desktop-panel {
     justify-content: center;
     gap: 5px;
     border: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     padding: 0 9px;
     background: transparent;
     color: var(--text);

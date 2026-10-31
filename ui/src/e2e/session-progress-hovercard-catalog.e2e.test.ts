@@ -64,8 +64,7 @@ suite.define(() => {
         expect(await part("title").textContent()).toBe("Catalog release review");
         expect(await part("created-age").textContent()).toBe("2h");
         expect(await part("context-text").allTextContents()).toEqual([
-          "openclaw",
-          "catalog-hovercard",
+          "openclaw / catalog-hovercard",
         ]);
         expect(await card.textContent()).not.toContain("/work/openclaw");
 

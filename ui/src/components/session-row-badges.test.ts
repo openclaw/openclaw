@@ -115,7 +115,10 @@ it("retains PR artwork when a receipt confirms the displayed count", () => {
   expect(badge(container, "pull-request")).toBe(original);
   setCount(2);
   flush();
-  expect(badge(container, "pull-request")?.textContent).toBe("2");
+  expect(badge(container, "pull-request")?.textContent).toBe("");
+  expect(badge(container, "pull-request")?.getAttribute("aria-label")).toBe(
+    "2 pull requests · #17 · Open",
+  );
 });
 
 it("keeps the two most urgent badges in reading order and caps counts", () => {

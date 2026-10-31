@@ -83,6 +83,7 @@ import {
   resolveReloginProfileIdentity,
   snapshotReloginAuthProfiles,
 } from "./auth-relogin-identity.js";
+import { isSharedGatewayForCliLogin, showModelsAuthScopeNote } from "./auth-scope-note.js";
 import {
   loadValidConfigSnapshotOrThrow,
   resolveModelsTargetAgent,
@@ -751,18 +752,21 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, true);
+  return runModelsAuthLoginFlow(opts, () => true);
 }
 
 export async function runModelsAuthLoginFlowForGateway(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, opts.isRemote === false);
+  return runModelsAuthLoginFlow(
+    opts,
+    (config) => opts.isRemote === false && isSharedGatewayForCliLogin(config),
+  );
 }
 
 async function runModelsAuthLoginFlow(
   opts: ModelsAuthLoginFlowOptions,
-  showScopeNote: boolean,
+  showScopeNote: (config: OpenClawConfig) => boolean | Promise<boolean>,
 ): Promise<ModelsAuthLoginFlowResult> {
   const requestedProviderId = opts.provider
     ? normalizeManualAuthProvider(opts.provider)
@@ -803,16 +807,8 @@ async function runModelsAuthLoginFlow(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
-  if (showScopeNote) {
-    await prompter.note(
-      [
-        "Scope: System / agent",
-        `Agent: ${context.agentId}`,
-        "Location: the machine running OpenClaw",
-        `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
-      ].join("\n"),
-      "Provider sign-in",
-    );
+  if (await showScopeNote(context.config)) {
+    await showModelsAuthScopeNote(prompter, context.agentId);
   }
   const selectedProvider =
     requestedProvider ??
@@ -967,10 +963,13 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlowCore({
-    ...opts,
-    runtime,
-    prompter: createClackPrompter(),
-  });
+  await runModelsAuthLoginFlow(
+    {
+      ...opts,
+      runtime,
+      prompter: createClackPrompter(),
+    },
+    isSharedGatewayForCliLogin,
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

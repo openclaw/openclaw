@@ -1,6 +1,7 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setActiveNodeContexts } from "../infra/active-node-context.js";
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
@@ -73,24 +74,36 @@ describe("buildSystemPromptParams", () => {
         ),
       );
       const configured = source === "invalid" ? path.join(temp, "missing") : configRoot;
-      const repo = buildParams({
+      const repo = await resolveSystemPromptRepoRoot({
         workspaceDir,
         cwd: source === "cwd" ? repoRoot : undefined,
         config:
           source === "configured" || source === "invalid"
             ? { agents: { defaults: { repoRoot: configured } } }
             : undefined,
-      }).repoRoot;
+      });
       expect(repo).toBe(
         source === "configured" ? configured : source === "absent" ? undefined : repoRoot,
       );
     },
   );
 
+  it("discovers repositories without synchronous filesystem work", async () => {
+    const workspaceDir = tempDirs.make("openclaw-async-repo-");
+    await fs.mkdir(path.join(workspaceDir, ".git"));
+    const stat = vi.spyOn(fsSync, "statSync");
+    try {
+      expect(await resolveSystemPromptRepoRoot({ workspaceDir })).toBe(workspaceDir);
+      expect(stat.mock.calls.filter(([file]) => String(file).startsWith(workspaceDir))).toEqual([]);
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
   it("does not rediscover the repository after preparation", async () => {
     const workspaceDir = tempDirs.make("openclaw-prepared-norepo-");
     const repoRoot = tempDirs.make("openclaw-late-repo-");
-    const preparedRepoRoot = resolveSystemPromptRepoRoot({ workspaceDir });
+    const preparedRepoRoot = await resolveSystemPromptRepoRoot({ workspaceDir });
     await fs.mkdir(path.join(repoRoot, ".git"));
     expect(buildParams({ preparedRepoRoot, workspaceDir, cwd: repoRoot }).repoRoot).toBeUndefined();
   });

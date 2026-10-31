@@ -59,9 +59,22 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     const httpReachableMock = vi
       .mocked(deps.chromeModule.isChromeReachable)
       .mockResolvedValueOnce(httpReady);
-    const wsReachableMock = vi
-      .mocked(deps.chromeModule.isChromeCdpReady)
-      .mockResolvedValueOnce(false);
+    const wsReachableMock = vi.mocked(deps.chromeModule.isChromeCdpReady);
+    const refused: typeof deps.chromeModule.isChromeCdpReady = async (...args) => {
+      await args[4]?.onDiagnostic?.({
+        ok: false,
+        code: "http_unreachable",
+        connectionRefused: true,
+        cdpUrl: "http://127.0.0.1:18800",
+        message: "connect ECONNREFUSED",
+        elapsedMs: 1,
+      });
+      return false;
+    };
+    wsReachableMock.mockImplementationOnce(refused);
+    if (httpReady) {
+      wsReachableMock.mockImplementationOnce(refused);
+    }
     const ctx = deps.createBrowserRouteContext({ getState: () => state });
     await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(error);
     expect(httpReachableMock).toHaveBeenCalled();

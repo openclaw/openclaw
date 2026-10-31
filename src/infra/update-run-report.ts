@@ -167,7 +167,9 @@ export function formatUpdateRunRecovery(
   }
   return code === "gateway-probe-failed"
     ? `recovery check failed (${code})`
-    : `not serving (${code})`;
+    : code === "stopped-free"
+      ? `not serving (${code})`
+      : `readiness unverified (${code})`;
 }
 
 function bounded(text: string, limit: number): string {

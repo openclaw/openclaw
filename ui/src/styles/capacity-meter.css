@@ -4,7 +4,7 @@
   width: 84px;
   height: 3px;
   overflow: hidden;
-  background: var(--bg-hover);
+  background: var(--surface-selected);
   border-radius: var(--radius-full);
 }
 

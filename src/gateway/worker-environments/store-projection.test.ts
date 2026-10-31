@@ -35,6 +35,7 @@ const environment: WorkerEnvironmentRecord = {
     consumedAtMs: null,
   },
   provisionOperationId: "provision",
+  resourceReceipt: null,
   nodeSetupId: "setup",
   nodeDeviceId: "node",
   sharedHost: false,

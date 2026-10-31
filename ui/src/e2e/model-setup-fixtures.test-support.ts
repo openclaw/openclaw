@@ -226,6 +226,11 @@ export async function returnToLocalModelSettings(
     providers: [{ provider, displayName: label, status: "static", profiles: [] }],
   });
   await gateway.emitGatewayEvent("config.changed", {});
+  await gateway.emitGatewayEvent("chat.metadata.changed", {
+    agentId: "main",
+    modelCatalogChanged: true,
+    authChanged: true,
+  });
   await page.setViewportSize({ height: 900, width: 1280 });
   await page.getByRole("button", { name: "Return to Models" }).click();
   await expectCount(page.locator("openclaw-modal-dialog"), 0);

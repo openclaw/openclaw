@@ -1,6 +1,7 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, For } from "solid-js";
 import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -61,7 +62,7 @@ const SESSION_GROUP_MODE_LABELS = {
 } as const satisfies Record<SessionsGroupBy, string>;
 
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
-  let searchInput!: HTMLInputElement;
+  const [searching, setSearching] = createSignal(false);
   let popover: PopoverHandle | undefined;
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
@@ -116,58 +117,24 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
       }}
     >
       <div class="sessions-filter-popover__panel">
-        <div class="data-table-search sessions-filter-popover__search">
-          <Icon name="search" />
-          <input
-            ref={(element) => (searchInput = element)}
-            type="text"
-            aria-label={t("sessionsView.searchPlaceholder")}
-            placeholder={t("sessionsView.searchPlaceholder")}
-            value={props.searchQuery}
-            onInput={(event) => props.onSearchChange(event.currentTarget.value)}
-            onKeyDown={(event: KeyboardEvent) => {
-              // SAFETY: This listener is bound directly to the search input.
-              const input = event.currentTarget as HTMLInputElement;
-              const document = input.ownerDocument;
-              if (
-                event.key !== "Escape" ||
-                event.defaultPrevented ||
-                event.isComposing ||
-                event.keyCode === 229 ||
-                event.altKey ||
-                event.ctrlKey ||
-                event.metaKey ||
-                event.shiftKey ||
-                document.activeElement !== input ||
-                !input.value ||
-                props.sessionMenu ||
-                hasModalSurface(document) ||
-                registryFor(document).stack.some(
-                  (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
-                ) ||
-                hasMenuSurface(document)
-              ) {
-                return;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-              props.onSearchChange("");
-            }}
-          />
-          <button
-            type="button"
-            class="sessions-filter-popover__clear"
-            aria-label={t("sessionsView.clearSearch")}
-            hidden={!props.searchQuery}
-            disabled={!props.searchQuery}
-            onClick={() => {
-              searchInput.focus({ preventScroll: true });
-              props.onSearchChange("");
-            }}
-          >
-            <Icon name="x" />
-          </button>
-        </div>
+        <HeaderSearch
+          title={t("sessionsView.filters")}
+          label={t("sessionsView.searchPlaceholder")}
+          closeLabel={t("sessionsView.clearSearch")}
+          class="sessions-filter-popover__search"
+          query={props.searchQuery}
+          open={searching() || Boolean(props.searchQuery)}
+          onOpenChange={setSearching}
+          onQueryChange={props.onSearchChange}
+          ownsEscape={() =>
+            !props.sessionMenu &&
+            !hasModalSurface(document) &&
+            !registryFor(document).stack.some(
+              (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
+            ) &&
+            !hasMenuSurface(document)
+          }
+        />
         <SettingsSegmented<SessionArchivedFilter>
           value={props.statusFilter}
           ariaLabel={t("sessionsView.sessionState")}

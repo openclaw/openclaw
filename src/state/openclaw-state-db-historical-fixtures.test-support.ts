@@ -90,3 +90,17 @@ export function markStateDatabaseVersion(database: DatabaseSync, version: number
     UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
   `);
 }
+
+/** Shared expected tail for historical fixtures; independent of production migration discovery. */
+export function expectedStateMigrationsFromV27(pathname: string) {
+  return [
+    "state-write-indexes-v27",
+    "github-publication-draft-v28",
+    "local-client-credentials-v29",
+    "automation-policy-fence-v30",
+    "local-workspace-manifests-v31",
+    "local-workspace-cas-v35",
+    "template-names-v36",
+    "worker-resource-receipts-v37",
+  ].map((kind) => ({ kind, path: pathname }));
+}

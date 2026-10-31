@@ -108,29 +108,18 @@ describe("session progress hovercard ownership", () => {
     },
   );
 
-  it("updates color and machine facts in a held hovercard", async () => {
+  it("updates location facts in a held hovercard", async () => {
     vi.useFakeTimers();
     const harness = mountHovercard("agent:research:main");
-    harness.updateRow({
-      color: "blue",
-      placementProviderId: "cloud-a",
-      placementProfileId: "standard",
-      placementMachine: { os: "linux", class: "small" },
-    });
+    harness.updateRow({ placementProviderId: "cloud-a", placementProfileId: "standard" });
     await harness.focus();
     await vi.advanceTimersByTimeAsync(0);
     const portal = getPortal();
-    expect(portal?.querySelector(".session-color-dot")?.getAttribute("style")).toContain("blue");
     expect(portal?.textContent).toContain("cloud-a · standard");
-    expect(portal?.textContent).toContain("small");
 
-    harness.updateRow({ color: "red" });
+    harness.updateRow({ placementProfileId: "large" });
     flush();
-    expect(portal?.querySelector(".session-color-dot")?.getAttribute("style")).toContain("red");
-    harness.updateRow({ placementMachine: { os: "windows", class: "medium" } });
-    flush();
-    expect(portal?.textContent).toContain("windows");
-    expect(portal?.textContent).toContain("medium");
+    expect(portal?.textContent).toContain("cloud-a · large");
     expect(getPortal()).toBe(portal);
   });
 

@@ -24,6 +24,7 @@ import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { prepareAgentPromptRepoRoot } from "../prompt-projects.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
@@ -198,7 +199,7 @@ export function composeCliPromptContext(prompt: string, context?: CliBackendProm
 export async function prepareCliSystemPrompt(
   params: Omit<
     Parameters<typeof import("./helpers.js").buildCliAgentSystemPrompt>[0],
-    "preparedModelRuntime" | "preparedGitCoauthorPrompt"
+    "preparedModelRuntime" | "preparedGitCoauthorPrompt" | "preparedRepoRoot"
   >,
 ): Promise<string> {
   const { buildCliAgentSystemPrompt } = await import("./helpers.js");
@@ -233,8 +234,15 @@ export async function prepareCliSystemPrompt(
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
+  const runtimeCwd = params.cwd?.trim() || params.workspaceDir;
   return buildCliAgentSystemPrompt({
     ...params,
+    preparedRepoRoot: await prepareAgentPromptRepoRoot({
+      sessionId: params.sessionId,
+      config: params.config,
+      workspaceDir: runtimeCwd,
+      cwd: runtimeCwd,
+    }),
     preparedModelRuntime,
     preparedGitCoauthorPrompt,
     preparedTtsPreferences,

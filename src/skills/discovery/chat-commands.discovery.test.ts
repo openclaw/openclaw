@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { createSkillCommandLoaders } from "../../auto-reply/reply/skill-command-loaders.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { registerNodeSkillWorkspace } from "../test-support/node-skill-workspace.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
   expandExplicitSkillReferences,
@@ -226,7 +228,9 @@ describe("skill command discovery through workspace loading", () => {
     },
   );
 
-  it("keeps a previewed Gateway project root Gateway-owned after session creation", async () => {
+  // The Gateway preview takes the same host routing from the registry; the commands.list
+  // owner proves that half in commands.project-skills.test.ts.
+  it("keeps a created session's registered project root Gateway-owned", async () => {
     const root = tempDirs.make("node-agent-created-project-");
     const gateway = path.join(root, "missing-gateway-workspace");
     const remote = path.join(root, "remote");
@@ -237,68 +241,50 @@ describe("skill command discovery through workspace loading", () => {
       { main: { workspace: gateway, skills: ["node-agent-skill", "gateway-project-skill"] } },
       { allowBundled: [] },
     );
-    const nodeExecutionRoots: Array<string | undefined> = [];
-    // The paired node reads only its own workspace and reports which execution root it was asked for.
-    const release = registerAgentWorkspaceAccess(gateway, {
-      bridge: bridge(),
-      loadSkills: async (request) => {
-        nodeExecutionRoots.push(request.executionWorkspaceDir);
-        return readWorkspaceSkillSources({
-          ...request,
-          executionWorkspaceDir: undefined,
-          sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
-        });
-      },
-    });
-    const sessionCommands = async (entry: Record<string, unknown>) =>
-      skillNames(
-        await commandLoaders({
-          workspaceDir: gateway,
-          cfg,
-          agentId: "main",
-          sessionEntry: { sessionId: "s", updatedAt: 0, ...entry },
-        }).loadSkillCommands!(),
-      ).toSorted();
-    try {
-      await withBundledDir(root, async () => {
-        const preview = await prepareSkillCommandsForAgents({
-          cfg,
-          agentIds: ["main"],
-          executionWorkspaceDir: project,
-          executionWorkspaceFileHost: "gateway",
-        });
-        expect(skillNames(preview)).toEqual(["gateway-project-skill", "node-agent-skill"]);
-        // sessions.create records a registered project as projectId plus its admitted spawnedCwd.
-        nodeExecutionRoots.length = 0;
-        expect(
-          await sessionCommands({ projectId: "registered-alpha", spawnedCwd: project }),
-        ).toEqual(["gateway-project-skill", "node-agent-skill"]);
-        expect(nodeExecutionRoots).toEqual([undefined]);
-        // A cwd without a registered project is node-owned: the node is asked, the Gateway never reads it.
-        nodeExecutionRoots.length = 0;
-        expect(await sessionCommands({ spawnedCwd: project })).toEqual(["node-agent-skill"]);
-        expect(nodeExecutionRoots).toEqual([project]);
-        // The agent-workspace pseudo-project is the node workspace itself.
-        nodeExecutionRoots.length = 0;
-        expect(await sessionCommands({ projectId: "workspace:main", spawnedCwd: project })).toEqual(
-          ["node-agent-skill"],
-        );
-        expect(nodeExecutionRoots).toEqual([project]);
-        // Managed worktrees keep their canonical Gateway source.
-        expect(
-          await sessionCommands({
-            worktree: {
-              id: "wt",
-              branch: "main",
-              repoRoot: project,
-              canonicalWorkspaceDir: project,
-            },
-          }),
-        ).toEqual(["gateway-project-skill", "node-agent-skill"]);
+    using node = registerNodeSkillWorkspace(gateway, remote);
+    const observe = async (load: () => Promise<readonly { skillName: string }[]>) => {
+      node.executionRoots.length = 0;
+      const skills = skillNames(await load()).toSorted();
+      return { skills, nodeRoots: [...node.executionRoots] };
+    };
+    // Reply-path loaders and the commands.list catalog resolve a session's root alike.
+    const sessionCommands = async (entry: Record<string, unknown>) => {
+      const sessionEntry: SessionEntry = { sessionId: "s", updatedAt: 0, ...entry };
+      const reply = await observe(() =>
+        commandLoaders({ workspaceDir: gateway, cfg, agentId: "main", sessionEntry })
+          .loadSkillCommands!(),
+      );
+      const catalog = await observe(() =>
+        prepareSkillCommandsForAgents({ cfg, agentIds: ["main"], sessionEntry }),
+      );
+      expect(catalog).toEqual(reply);
+      return reply;
+    };
+    const both = ["gateway-project-skill", "node-agent-skill"];
+    await withBundledDir(root, async () => {
+      // sessions.create records a registered project as projectId plus its admitted spawnedCwd.
+      expect(await sessionCommands({ projectId: "registered-alpha", spawnedCwd: project })).toEqual(
+        { skills: both, nodeRoots: [undefined] },
+      );
+      // A cwd without a registered project is node-owned: the node is asked, the Gateway never reads it.
+      expect(await sessionCommands({ spawnedCwd: project })).toEqual({
+        skills: ["node-agent-skill"],
+        nodeRoots: [project],
       });
-    } finally {
-      release();
-    }
+      // The agent-workspace pseudo-project is the node workspace itself.
+      expect(await sessionCommands({ projectId: "workspace:main", spawnedCwd: project })).toEqual({
+        skills: ["node-agent-skill"],
+        nodeRoots: [project],
+      });
+      // Managed worktrees keep their canonical Gateway source.
+      const worktree = {
+        id: "wt",
+        branch: "main",
+        repoRoot: project,
+        canonicalWorkspaceDir: project,
+      };
+      expect((await sessionCommands({ worktree })).skills).toEqual(both);
+    });
   });
 
   it("invokes a session's project skills through the reply-path loaders", async () => {
@@ -317,17 +303,18 @@ describe("skill command discovery through workspace loading", () => {
       },
       { allowBundled: [] },
     );
-    const sessionEntry = { sessionId: "project-session", updatedAt: 0, spawnedCwd: project };
-    await withBundledDir(root, async () => {
-      const agentOnly = await commandLoaders({ workspaceDir, cfg, agentId: "main" })
-        .loadSkillCommands!();
-      expect(skillNames(agentOnly)).toEqual(["agent-fixture"]);
-      const skillCommands = await commandLoaders({
+    const load = (spawnedCwd?: string) =>
+      commandLoaders({
         workspaceDir,
         cfg,
         agentId: "main",
-        sessionEntry,
+        sessionEntry: spawnedCwd
+          ? { sessionId: "project-session", updatedAt: 0, spawnedCwd }
+          : undefined,
       }).loadSkillCommands!();
+    await withBundledDir(root, async () => {
+      expect(skillNames(await load())).toEqual(["agent-fixture"]);
+      const skillCommands = await load(project);
       expect(skillNames(skillCommands)).toEqual([
         "agent-fixture",
         "project-agents-fixture",

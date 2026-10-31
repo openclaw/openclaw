@@ -1200,9 +1200,12 @@ captures through their sealed manifests; it never reads the captured payload:
   update, when a later update succeeded.
 - `candidate` / `unsealed-update-capture`: a capture that never sealed (the
   update reported `Original update capture failed`) from a finished update, when a
-  later update succeeded. Nothing can restore from an unsealed capture.
+  later update succeeded with recorded Gateway readiness verification. The
+  incomplete copy may still contain useful pre-failure bytes until then.
 - `protected` / `awaiting-later-completed-update`: the capture of the latest
   successful update, or of any update that finished after it.
+- `protected` / `awaiting-later-verified-update`: an unsealed capture without
+  a later successful update's recorded Gateway readiness verification.
 - `protected` / `unfinished-update-run` or `pending-update-recovery`: the update is
   still running, or its recorded rollback has not settled.
 - `candidate` / `never-activated-update-capture`: a capture from a failed update
@@ -1217,6 +1220,13 @@ captures through their sealed manifests; it never reads the captured payload:
   is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
+- `protected` / `superseded-unsealed-capture`: a marked historical incomplete
+  capture with no matching update run, including an unsealed standalone Doctor
+  attempt, superseded by a later successful update with recorded Gateway readiness
+  verification. The successor must have started after the capture was written,
+  and no update recovery may remain pending. Select its exact path with
+  `--include-unmanifested <path>` to preview or retire it. Missing run history
+  alone never establishes that the original is safe to retire.
 - `protected` / `orphan-update-capture`: a sealed update capture with no matching
   update run, outside the Doctor namespace. Its creation time appears in the
   detail. Only an explicit `--include-unmanifested <path>` can select it.
@@ -1227,8 +1237,15 @@ captures through their sealed manifests; it never reads the captured payload:
 
 Older `doctor-*` directories classified as `candidate` are also safe to delete by
 hand while OpenClaw is stopped. Keep the newest retained copies and never manually
-delete incomplete, unreadable, or active-recovery-referenced captures. Prefer cleanup
+delete protected incomplete, unreadable, or active-recovery-referenced captures. Prefer cleanup
 so the same protection checks run again under exclusive ownership.
+
+`openclaw update status` consumes this same capture inventory and directs retained
+sets to `openclaw update cleanup --dry-run`, including an exact per-path command
+when explicit orphan selection is required. Preview first; remove `--dry-run`
+to retire eligible sets after confirmation (or use `--yes`). Protected entries
+explain why they remain retained. The candidate CLI must contain this fix;
+upgrading does not change the older installed updater's cleanup behavior.
 
 Retiring a capture deletes its whole directory, including any `candidate` and
 `prepared` recovery generations inside it, under the same exclusive ownership as

@@ -23,6 +23,7 @@ import {
   commitPluginInstallRecordsWithConfig,
   getRetainedPluginInstallPublication,
 } from "./install-record-commit.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import type { PluginInstallTransaction } from "./install-transaction.js";
 import type { PluginInstallLogger } from "./install-types.js";
@@ -51,6 +52,9 @@ import {
 } from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { collectInstalledPluginSourceSnapshots } from "./plugin-source-snapshot-collection.js";
+import { preparePluginInstallSourceSnapshots } from "./plugin-source-snapshot-install.js";
+import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
@@ -234,6 +238,7 @@ async function persistPluginInstallOwned(
 ): Promise<OpenClawConfig> {
   let committed = false;
   let retainPublishedPayload = false;
+  let sourceSnapshotCandidates: Omit<PluginSourceSnapshotDescriptor, "installedRevision">[] = [];
   try {
     const installRecords = await tracePluginLifecyclePhaseAsync(
       "install records load",
@@ -452,6 +457,18 @@ async function persistPluginInstallOwned(
         );
       }
       next = withoutPluginInstallRecords(next);
+      await using snapshots = await preparePluginInstallSourceSnapshots({
+        installOwner: params.pluginId,
+        installRecord: nextInstallRecord,
+        manifests,
+        stateDir: resolveActivePluginInstallRoots(params.env).stateDir,
+        assertCurrent: async () => {
+          await lease.assertOwned();
+          params.beforePersistentApply?.();
+        },
+        assertCleanupOwned: lease.assertOwned,
+      });
+      sourceSnapshotCandidates = snapshots.sourceSnapshots.map((entry) => entry.descriptor);
       const enabled = new Set(enabledPluginIds);
       const source = params.deferRuntime
         ? await inspectPluginGenerationSourcesAsync(
@@ -475,6 +492,7 @@ async function persistPluginInstallOwned(
             commitPluginInstallRecordsWithConfig({
               previousInstallRecords: installRecords,
               nextInstallRecords,
+              sourceSnapshots: snapshots.sourceSnapshots,
               nextConfig: next,
               baseHash: params.snapshot.baseHash,
               beforePersistentEffect: params.beforePersistentEffect,
@@ -640,5 +658,9 @@ async function persistPluginInstallOwned(
     }
     // Enclosing batch operations reread the ledger after this isolated mutation.
     clearLoadInstalledPluginIndexInstallRecordsCache();
+    await collectInstalledPluginSourceSnapshots(
+      resolveActivePluginInstallRoots(params.env).stateDir,
+      sourceSnapshotCandidates,
+    );
   }
 }
