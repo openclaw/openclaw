@@ -6,7 +6,7 @@ type PositionedMarkdownNode = {
   children?: PositionedMarkdownNode[];
 };
 
-/** Returns parser-owned source spans for inline links, autolinks, and images. */
+/** Returns parser-owned source spans for links, images, and reference definitions. */
 export function findMarkdownLinkSourceSpans(markdown: string): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
   const tree: PositionedMarkdownNode = fromMarkdown(markdown);
@@ -17,7 +17,13 @@ export function findMarkdownLinkSourceSpans(markdown: string): Array<[number, nu
     if (!node) {
       continue;
     }
-    if (node.type === "link" || node.type === "image") {
+    if (
+      node.type === "link" ||
+      node.type === "image" ||
+      node.type === "linkReference" ||
+      node.type === "imageReference" ||
+      node.type === "definition"
+    ) {
       const start = node.position?.start?.offset;
       const end = node.position?.end?.offset;
       if (start !== undefined && end !== undefined) {
