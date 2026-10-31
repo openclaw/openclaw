@@ -207,6 +207,9 @@ should preserve the selected model and retry after application or restart finish
 Standalone CLI verification still tests saved configuration without requiring a
 running Gateway.
 
+For a complete client flow after a timeout or disconnect, see
+[config-write reconciliation](/gateway/protocol/rpc-talk-config-and-agents#reconcile-a-config-write-after-a-lost-response).
+
 While the Gateway is preparing authentication and request state, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
 `retryAfterMs`. Retry within your connection budget instead of treating it as

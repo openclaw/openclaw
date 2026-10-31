@@ -73,6 +73,82 @@ providers ignore barge-in and end the session on an explicit output stop.
 - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
   Each answered step uses the current `wizard.next` caller's authority through inference verification, including after progress replies. Device revocation still rejects the probe.
 
+### Reconcile a config write after a lost response
+
+A timeout or disconnected socket does not prove that `config.set`,
+`config.patch`, or `config.apply` failed before saving. Do not automatically replay
+the mutation. Reconnect to the same intended Gateway and reconcile its current
+saved and applied state through existing read and verification methods.
+
+`config.get` requires `operator.read`; config mutations and
+`openclaw.setup.verify` require `operator.admin`. Reconciliation does not bypass
+authentication, grant scopes, or authorize writing to a different Gateway.
+
+The revision fields have different purposes:
+
+| Field                           | Meaning                                                                                         | Safe comparison                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `config.get.hash`               | Opaque authored revision, including root-file bytes and captured include identities and content | A mutation acknowledgment's `hash`, or a later write's `baseHash` |
+| `config.get.configRevisionHash` | Resolved revision of the current valid saved source config; `null` for invalid config           | `appliedConfigHash` from the same Gateway                         |
+| `config.get.appliedConfigHash`  | Resolved source revision accepted by the active runtime; `null` when unknown                    | `configRevisionHash` from the same Gateway                        |
+
+Authored and resolved tokens use separate, installation-keyed HMAC domains. Never
+compare `hash` directly with either resolved token, compute replacement tokens
+from config text, or transfer tokens between Gateway installations. Equality with
+an acknowledged authored hash identifies the currently saved revision; it is not
+a history of intervening writes. A fresh `hash` used as `baseHash` supplies a
+compare-and-swap guard for newly reconciled intent, not permission to replay stale
+intent.
+
+Clients can classify a successful read as follows. These are **client-side
+classifications**, not additional RPC fields or operation statuses:
+
+| Classification  | Condition                                                                    | Meaning                                                                                        |
+| --------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `applied`       | Config exists and is valid, and both resolved tokens are non-null and equal  | The current saved resolved revision is accepted by the runtime                                 |
+| `unapplied`     | Config exists and is valid, and both resolved tokens are non-null but differ | The saved revision is not fully applied; this does not distinguish reload, restart, or failure |
+| `indeterminate` | Config is missing or invalid, or either resolved token is `null`             | Application cannot be confirmed                                                                |
+| `unsupported`   | An older Gateway omits the revision fields or a required verification method | This reconciliation contract cannot be established; do not treat absence as success            |
+
+For example, after losing the response to a patch selecting a primary model:
+
+1. Retain the intended Gateway, agent, and exact selected model identity. Establish
+   a fresh authenticated connection to that same Gateway. Bind the new
+   [hello snapshot](/gateway/protocol/handshake) to this connection and discard
+   the previous connection's readiness observations. Its `appliedConfigHash` is a
+   connection-time observation, not a live application receipt.
+2. Call `config.get` with `{}`. Confirm that the saved settings still express the
+   intended agent/model selection, then classify the resolved tokens above. If an
+   acknowledgment was received before another deadline expired, its authored
+   `hash` can additionally be compared with the read's authored `hash`. Without
+   that acknowledgment, matching settings establish current state, not which
+   request wrote it.
+3. While `unapplied`, repeat reads within a bounded application/reconnect budget;
+   reconnect after a restart. On `indeterminate`, `unsupported`, conflicting
+   saved settings, or budget exhaustion, preserve the selection and report that
+   application is unconfirmed. Do not silently downgrade verification or
+   automatically retry the mutation or initiate a restart.
+4. Once the intended saved state is `applied`, call `openclaw.setup.verify` for
+   the intended `agentId` (omit `modelTarget` for primary-model verification).
+   Require its payload's `ok: true` and compare the returned `modelRef` with the
+   exact selected model identity before reporting model readiness. An RPC success
+   envelope alone is insufficient: the payload can be
+   `{ ok: false, status: "unavailable", error }`.
+
+Gateway setup verification checks that the saved source matches the applied
+revision, reload/restart work is settled, and the same runtime object and applied
+hash remain current **before and after** the live inference check. If these
+conditions change, it returns `unavailable` rather than false readiness. Verification
+is a point-in-time result, not a lease preventing subsequent config changes.
+
+Neither revision equality nor setup verification proves that a particular
+timed-out mutation committed. The internal config-application receipt is
+process-local, not a durable queryable operation record. After a Gateway process
+replacement, these methods inspect the successor's current state; they do not
+recover the old receipt or distinguish a historical failure from supersession.
+`config.get` also returns redacted config content, not just metadata: retain or log
+only the fields needed for reconciliation.
+
 ## Agent and workspace helpers
 
 - `agent` accepts image attachments and offloads them by default when the selected model is text-only, using the same [image-understanding pipeline](/nodes/media-understanding) as `chat.send`. The configured image-understanding model receives the image, and the selected primary receives its description. The primary model, per-request model selection, and prompt/context overrides are preserved. Image-capable primaries continue receiving images inline. The shared attachment limits and per-attachment outcome markers still apply. If no image description can be produced, the request returns a clear error; configure `agents.defaults.imageModel` or an image-capable entry in `tools.media.models`, or repair the configured provider before retrying.
