@@ -126,13 +126,17 @@ suite.define(() => {
           expect(await position()).toBe(initialY);
 
           // Selecting a worker removes Gateway backups and may have no telemetry.
-          if (width <= 768) {
-            await page.locator(".systems-mobile-picker").selectOption("worker-one");
+          const picker = page.locator(".systems-mobile-picker");
+          if (await picker.isVisible()) {
+            await picker.selectOption("worker-one");
           } else {
-            await page
+            const worker = page
               .locator(".systems-sidebar")
-              .getByRole("button", { name: /Cloud worker/ })
-              .click();
+              .getByRole("button", { name: /Cloud worker/ });
+            if (!(await worker.isVisible())) {
+              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+            }
+            await worker.click();
           }
           await expect.poll(() => page.locator(".systems-backups").count()).toBe(0);
           expect(await position()).toBe(initialY);
