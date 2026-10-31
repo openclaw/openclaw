@@ -392,7 +392,7 @@ it("attributes worker receipts without retaining labels or treating unsized mess
 
 it.each([
   ["broadcastInternal", "gateway-prewarm.js"],
-  ["", "file:///workspace/src/gateway/server-broadcast.ts"],
+  ["", new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href],
 ])("attributes deep broadcast stacks under %s (%s)", async (name, url) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-broadcast-profile-"));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
