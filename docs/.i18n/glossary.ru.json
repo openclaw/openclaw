@@ -17,7 +17,7 @@
   },
   {
     "source": "Compaction",
-    "target": "Compaction"
+    "target": "Сжатие контекста"
   },
   {
     "source": "Cron",
@@ -29,7 +29,7 @@
   },
   {
     "source": "Gateway",
-    "target": "Gateway"
+    "target": "Шлюз"
   },
   {
     "source": "Heartbeat",
@@ -41,7 +41,7 @@
   },
   {
     "source": "Node",
-    "target": "Node"
+    "target": "Нода"
   },
   {
     "source": "OpenClaw",
@@ -53,11 +53,11 @@
   },
   {
     "source": "Plugin",
-    "target": "Plugin"
+    "target": "Плагин"
   },
   {
     "source": "Skills",
-    "target": "Skills"
+    "target": "Скиллы"
   },
   {
     "source": "Tailscale",
@@ -73,7 +73,7 @@
   },
   {
     "source": "Webhook",
-    "target": "Webhook"
+    "target": "Вебхук"
   },
   {
     "source": "Pull request review flow",
@@ -82,5 +82,921 @@
   {
     "source": "CI pipeline",
     "target": "CI-пайплайн"
+  },
+  {
+    "source": "Access control",
+    "target": "Управление доступом"
+  },
+  {
+    "source": "access control",
+    "target": "управление доступом"
+  },
+  {
+    "source": "Advanced setup",
+    "target": "Продвинутая настройка"
+  },
+  {
+    "source": "Agent",
+    "target": "Агент"
+  },
+  {
+    "source": "agent",
+    "target": "агент"
+  },
+  {
+    "source": "Agent coordination",
+    "target": "Координация агентов"
+  },
+  {
+    "source": "Agent runtime",
+    "target": "Среда выполнения агента"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Рабочее пространство агента"
+  },
+  {
+    "source": "Agents",
+    "target": "Агенты"
+  },
+  {
+    "source": "agents",
+    "target": "агенты"
+  },
+  {
+    "source": "Allowlist",
+    "target": "Список разрешённых"
+  },
+  {
+    "source": "allowlist",
+    "target": "список разрешённых"
+  },
+  {
+    "source": "Approval",
+    "target": "Подтверждение"
+  },
+  {
+    "source": "approval",
+    "target": "подтверждение"
+  },
+  {
+    "source": "Approvals",
+    "target": "Подтверждения"
+  },
+  {
+    "source": "approvals",
+    "target": "подтверждения"
+  },
+  {
+    "source": "Attachment",
+    "target": "Вложение"
+  },
+  {
+    "source": "attachment",
+    "target": "вложение"
+  },
+  {
+    "source": "Attachments",
+    "target": "Вложения"
+  },
+  {
+    "source": "Auto-compaction",
+    "target": "Автосжатие"
+  },
+  {
+    "source": "auto-compaction",
+    "target": "автосжатие"
+  },
+  {
+    "source": "Automation",
+    "target": "Автоматизация"
+  },
+  {
+    "source": "automation",
+    "target": "автоматизация"
+  },
+  {
+    "source": "Automations",
+    "target": "Автоматизации"
+  },
+  {
+    "source": "automations",
+    "target": "автоматизации"
+  },
+  {
+    "source": "Backup",
+    "target": "Резервная копия"
+  },
+  {
+    "source": "backup",
+    "target": "резервная копия"
+  },
+  {
+    "source": "Backups",
+    "target": "Резервные копии"
+  },
+  {
+    "source": "Building plugins",
+    "target": "Разработка плагинов"
+  },
+  {
+    "source": "Capabilities",
+    "target": "Возможности"
+  },
+  {
+    "source": "Changelog",
+    "target": "Список изменений"
+  },
+  {
+    "source": "Channel",
+    "target": "Канал"
+  },
+  {
+    "source": "channel",
+    "target": "канал"
+  },
+  {
+    "source": "Channels",
+    "target": "Каналы"
+  },
+  {
+    "source": "channels",
+    "target": "каналы"
+  },
+  {
+    "source": "CLI commands",
+    "target": "Команды CLI"
+  },
+  {
+    "source": "Codex runtime reference",
+    "target": "Справочник по среде Codex"
+  },
+  {
+    "source": "Community and meta",
+    "target": "Сообщество и мета"
+  },
+  {
+    "source": "compaction",
+    "target": "сжатие контекста"
+  },
+  {
+    "source": "Companion app",
+    "target": "Сопутствующее приложение"
+  },
+  {
+    "source": "Concepts and configuration",
+    "target": "Концепции и настройка"
+  },
+  {
+    "source": "Config",
+    "target": "Конфигурация"
+  },
+  {
+    "source": "Configuration",
+    "target": "Настройка"
+  },
+  {
+    "source": "configuration",
+    "target": "конфигурация"
+  },
+  {
+    "source": "Container",
+    "target": "Контейнер"
+  },
+  {
+    "source": "Containers",
+    "target": "Контейнеры"
+  },
+  {
+    "source": "Context",
+    "target": "Контекст"
+  },
+  {
+    "source": "context",
+    "target": "контекст"
+  },
+  {
+    "source": "Context window",
+    "target": "Окно контекста"
+  },
+  {
+    "source": "Contributing",
+    "target": "Участие в разработке"
+  },
+  {
+    "source": "cron",
+    "target": "cron"
+  },
+  {
+    "source": "Delivery",
+    "target": "Доставка"
+  },
+  {
+    "source": "delivery",
+    "target": "доставка"
+  },
+  {
+    "source": "Deployment",
+    "target": "Развёртывание"
+  },
+  {
+    "source": "deployment",
+    "target": "развёртывание"
+  },
+  {
+    "source": "Developer and self-hosted",
+    "target": "Для разработчиков и self-hosted"
+  },
+  {
+    "source": "Diagnostics",
+    "target": "Диагностика"
+  },
+  {
+    "source": "diagnostics",
+    "target": "диагностика"
+  },
+  {
+    "source": "dreaming",
+    "target": "dreaming"
+  },
+  {
+    "source": "Endpoint",
+    "target": "Эндпоинт"
+  },
+  {
+    "source": "endpoint",
+    "target": "эндпоинт"
+  },
+  {
+    "source": "Fallback",
+    "target": "Резервный вариант"
+  },
+  {
+    "source": "fallback",
+    "target": "резервный вариант"
+  },
+  {
+    "source": "FAQ",
+    "target": "Частые вопросы"
+  },
+  {
+    "source": "Firewall",
+    "target": "Межсетевой экран"
+  },
+  {
+    "source": "First steps",
+    "target": "Первые шаги"
+  },
+  {
+    "source": "Formatting",
+    "target": "Форматирование"
+  },
+  {
+    "source": "gateway",
+    "target": "шлюз"
+  },
+  {
+    "source": "Gateway & Ops",
+    "target": "Шлюз и эксплуатация"
+  },
+  {
+    "source": "Gateways",
+    "target": "Шлюзы"
+  },
+  {
+    "source": "Get started",
+    "target": "Начало работы"
+  },
+  {
+    "source": "Getting started",
+    "target": "Начало работы"
+  },
+  {
+    "source": "Glossary",
+    "target": "Глоссарий"
+  },
+  {
+    "source": "Health check",
+    "target": "Проверка работоспособности"
+  },
+  {
+    "source": "heartbeat",
+    "target": "heartbeat"
+  },
+  {
+    "source": "Help",
+    "target": "Помощь"
+  },
+  {
+    "source": "Hosting",
+    "target": "Хостинг"
+  },
+  {
+    "source": "Image",
+    "target": "Изображение"
+  },
+  {
+    "source": "image",
+    "target": "изображение"
+  },
+  {
+    "source": "Images",
+    "target": "Изображения"
+  },
+  {
+    "source": "Install",
+    "target": "Установка"
+  },
+  {
+    "source": "install",
+    "target": "установка"
+  },
+  {
+    "source": "Install overview",
+    "target": "Обзор установки"
+  },
+  {
+    "source": "Log",
+    "target": "Журнал"
+  },
+  {
+    "source": "log",
+    "target": "журнал"
+  },
+  {
+    "source": "Logs",
+    "target": "Журналы"
+  },
+  {
+    "source": "logs",
+    "target": "журналы"
+  },
+  {
+    "source": "Loopback",
+    "target": "Loopback"
+  },
+  {
+    "source": "macOS companion app",
+    "target": "Приложение для macOS"
+  },
+  {
+    "source": "Mainstream messaging",
+    "target": "Популярные мессенджеры"
+  },
+  {
+    "source": "Maintenance",
+    "target": "Обслуживание"
+  },
+  {
+    "source": "Markdown",
+    "target": "Markdown"
+  },
+  {
+    "source": "Maturity",
+    "target": "Зрелость"
+  },
+  {
+    "source": "Memory",
+    "target": "Память"
+  },
+  {
+    "source": "memory",
+    "target": "память"
+  },
+  {
+    "source": "Menu bar",
+    "target": "Строка меню"
+  },
+  {
+    "source": "Message",
+    "target": "Сообщение"
+  },
+  {
+    "source": "message",
+    "target": "сообщение"
+  },
+  {
+    "source": "Messages",
+    "target": "Сообщения"
+  },
+  {
+    "source": "Messages and delivery",
+    "target": "Сообщения и доставка"
+  },
+  {
+    "source": "migration",
+    "target": "миграция"
+  },
+  {
+    "source": "Migrations",
+    "target": "Миграции"
+  },
+  {
+    "source": "Model",
+    "target": "Модель"
+  },
+  {
+    "source": "model",
+    "target": "модель"
+  },
+  {
+    "source": "Models",
+    "target": "Модели"
+  },
+  {
+    "source": "models",
+    "target": "модели"
+  },
+  {
+    "source": "Multi-agent",
+    "target": "Мультиагентность"
+  },
+  {
+    "source": "node",
+    "target": "нода"
+  },
+  {
+    "source": "Nodes",
+    "target": "Ноды"
+  },
+  {
+    "source": "nodes",
+    "target": "ноды"
+  },
+  {
+    "source": "Nodes and media",
+    "target": "Ноды и медиа"
+  },
+  {
+    "source": "Operator",
+    "target": "Оператор"
+  },
+  {
+    "source": "operator",
+    "target": "оператор"
+  },
+  {
+    "source": "Overview",
+    "target": "Обзор"
+  },
+  {
+    "source": "Owner",
+    "target": "Владелец"
+  },
+  {
+    "source": "owner",
+    "target": "владелец"
+  },
+  {
+    "source": "Pairing",
+    "target": "Сопряжение"
+  },
+  {
+    "source": "pairing",
+    "target": "сопряжение"
+  },
+  {
+    "source": "Permission",
+    "target": "Разрешение"
+  },
+  {
+    "source": "permission",
+    "target": "разрешение"
+  },
+  {
+    "source": "Permissions",
+    "target": "Разрешения"
+  },
+  {
+    "source": "Plan",
+    "target": "План"
+  },
+  {
+    "source": "plan",
+    "target": "план"
+  },
+  {
+    "source": "Platforms",
+    "target": "Платформы"
+  },
+  {
+    "source": "Platforms overview",
+    "target": "Обзор платформ"
+  },
+  {
+    "source": "plugin",
+    "target": "плагин"
+  },
+  {
+    "source": "Plugin guides",
+    "target": "Руководства по плагинам"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "Устройство плагинов"
+  },
+  {
+    "source": "Plugin reference",
+    "target": "Справочник по плагинам"
+  },
+  {
+    "source": "Plugin SDK reference",
+    "target": "Справочник по SDK плагинов"
+  },
+  {
+    "source": "Plugins",
+    "target": "Плагины"
+  },
+  {
+    "source": "plugins",
+    "target": "плагины"
+  },
+  {
+    "source": "Project and contributing",
+    "target": "Проект и участие"
+  },
+  {
+    "source": "Prompt",
+    "target": "Промпт"
+  },
+  {
+    "source": "prompt",
+    "target": "промпт"
+  },
+  {
+    "source": "Prompts",
+    "target": "Промпты"
+  },
+  {
+    "source": "Provider",
+    "target": "Провайдер"
+  },
+  {
+    "source": "provider",
+    "target": "провайдер"
+  },
+  {
+    "source": "Providers",
+    "target": "Провайдеры"
+  },
+  {
+    "source": "Quick start",
+    "target": "Быстрый старт"
+  },
+  {
+    "source": "Quickstart",
+    "target": "Быстрый старт"
+  },
+  {
+    "source": "Rate limit",
+    "target": "Ограничение частоты"
+  },
+  {
+    "source": "rate limit",
+    "target": "ограничение частоты"
+  },
+  {
+    "source": "Reference",
+    "target": "Справочник"
+  },
+  {
+    "source": "Regional platforms",
+    "target": "Региональные платформы"
+  },
+  {
+    "source": "Release notes",
+    "target": "Заметки о выпусках"
+  },
+  {
+    "source": "Release process",
+    "target": "Процесс выпуска"
+  },
+  {
+    "source": "Releases",
+    "target": "Релизы"
+  },
+  {
+    "source": "Remote access",
+    "target": "Удалённый доступ"
+  },
+  {
+    "source": "remote access",
+    "target": "удалённый доступ"
+  },
+  {
+    "source": "Retry",
+    "target": "Повторная попытка"
+  },
+  {
+    "source": "retry",
+    "target": "повторная попытка"
+  },
+  {
+    "source": "Reverse proxy",
+    "target": "Обратный прокси"
+  },
+  {
+    "source": "reverse proxy",
+    "target": "обратный прокси"
+  },
+  {
+    "source": "Roadmap",
+    "target": "План развития"
+  },
+  {
+    "source": "RPC and API",
+    "target": "RPC и API"
+  },
+  {
+    "source": "Runtime",
+    "target": "Среда выполнения"
+  },
+  {
+    "source": "runtime",
+    "target": "среда выполнения"
+  },
+  {
+    "source": "Runtimes",
+    "target": "Среды выполнения"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Песочница"
+  },
+  {
+    "source": "sandbox",
+    "target": "песочница"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Изоляция в песочнице"
+  },
+  {
+    "source": "Schema",
+    "target": "Схема"
+  },
+  {
+    "source": "Schemas",
+    "target": "Схемы"
+  },
+  {
+    "source": "Schemas and formatting",
+    "target": "Схемы и форматирование"
+  },
+  {
+    "source": "Secret",
+    "target": "Секрет"
+  },
+  {
+    "source": "secret",
+    "target": "секрет"
+  },
+  {
+    "source": "Secrets",
+    "target": "Секреты"
+  },
+  {
+    "source": "secrets",
+    "target": "секреты"
+  },
+  {
+    "source": "Security",
+    "target": "Безопасность"
+  },
+  {
+    "source": "security",
+    "target": "безопасность"
+  },
+  {
+    "source": "Self-hosted",
+    "target": "Self-hosted"
+  },
+  {
+    "source": "Session",
+    "target": "Сессия"
+  },
+  {
+    "source": "session",
+    "target": "сессия"
+  },
+  {
+    "source": "Sessions",
+    "target": "Сессии"
+  },
+  {
+    "source": "sessions",
+    "target": "сессии"
+  },
+  {
+    "source": "Sessions and memory",
+    "target": "Сессии и память"
+  },
+  {
+    "source": "Setup",
+    "target": "Настройка"
+  },
+  {
+    "source": "setup",
+    "target": "настройка"
+  },
+  {
+    "source": "Setup guides and reference",
+    "target": "Руководства по настройке и справка"
+  },
+  {
+    "source": "Skill",
+    "target": "Скилл"
+  },
+  {
+    "source": "skill",
+    "target": "скилл"
+  },
+  {
+    "source": "skills",
+    "target": "скиллы"
+  },
+  {
+    "source": "Speech",
+    "target": "Речь"
+  },
+  {
+    "source": "speech",
+    "target": "речь"
+  },
+  {
+    "source": "Standing intent",
+    "target": "Постоянное намерение"
+  },
+  {
+    "source": "Standing order",
+    "target": "Постоянное распоряжение"
+  },
+  {
+    "source": "standing orders",
+    "target": "постоянные распоряжения"
+  },
+  {
+    "source": "Start here",
+    "target": "Начните здесь"
+  },
+  {
+    "source": "Streaming",
+    "target": "Потоковая передача"
+  },
+  {
+    "source": "streaming",
+    "target": "потоковая передача"
+  },
+  {
+    "source": "System prompt",
+    "target": "Системный промпт"
+  },
+  {
+    "source": "Technical reference",
+    "target": "Технический справочник"
+  },
+  {
+    "source": "Template",
+    "target": "Шаблон"
+  },
+  {
+    "source": "Templates",
+    "target": "Шаблоны"
+  },
+  {
+    "source": "Testing and CI",
+    "target": "Тестирование и CI"
+  },
+  {
+    "source": "Thread",
+    "target": "Тред"
+  },
+  {
+    "source": "thread",
+    "target": "тред"
+  },
+  {
+    "source": "Threads",
+    "target": "Треды"
+  },
+  {
+    "source": "Token",
+    "target": "Токен"
+  },
+  {
+    "source": "token",
+    "target": "токен"
+  },
+  {
+    "source": "Tokens",
+    "target": "Токены"
+  },
+  {
+    "source": "tokens",
+    "target": "токены"
+  },
+  {
+    "source": "Tool",
+    "target": "Инструмент"
+  },
+  {
+    "source": "tool",
+    "target": "инструмент"
+  },
+  {
+    "source": "Tools",
+    "target": "Инструменты"
+  },
+  {
+    "source": "tools",
+    "target": "инструменты"
+  },
+  {
+    "source": "Transcript",
+    "target": "Транскрипт"
+  },
+  {
+    "source": "transcript",
+    "target": "транскрипт"
+  },
+  {
+    "source": "Transcription",
+    "target": "Транскрипция"
+  },
+  {
+    "source": "transcription",
+    "target": "транскрипция"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Диагностика проблем"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "диагностика проблем"
+  },
+  {
+    "source": "Trust boundary",
+    "target": "Граница доверия"
+  },
+  {
+    "source": "Update",
+    "target": "Обновить"
+  },
+  {
+    "source": "Upgrade",
+    "target": "Обновление"
+  },
+  {
+    "source": "upgrade",
+    "target": "обновление"
+  },
+  {
+    "source": "Usage",
+    "target": "Использование"
+  },
+  {
+    "source": "usage",
+    "target": "использование"
+  },
+  {
+    "source": "Voice",
+    "target": "Голос"
+  },
+  {
+    "source": "voice",
+    "target": "голос"
+  },
+  {
+    "source": "Web interfaces",
+    "target": "Веб-интерфейсы"
+  },
+  {
+    "source": "webhook",
+    "target": "вебхук"
+  },
+  {
+    "source": "Webhooks",
+    "target": "Вебхуки"
+  },
+  {
+    "source": "webhooks",
+    "target": "вебхуки"
+  },
+  {
+    "source": "Workboard",
+    "target": "Воркборд"
+  },
+  {
+    "source": "workboard",
+    "target": "воркборд"
+  },
+  {
+    "source": "Workspace",
+    "target": "Рабочая область"
+  },
+  {
+    "source": "workspace",
+    "target": "рабочая область"
   }
 ]
