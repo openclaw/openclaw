@@ -10,12 +10,15 @@ import {
 import {
   readUpdateDoctorInput,
   readUpdatePostCoreInput,
+  readUpdatePluginCohortSettlementInput,
+  readUpdatePluginCohortCommitInput,
   type DecodedUpdateDoctorInput,
   type DecodedUpdatePostCoreInput,
 } from "../cli/update-cli/update-command-migrated-input.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
+  UpdatePluginCohortSettlementResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
 import { writePostCoreUpdateFailureFile } from "../cli/update-cli/update-command-post-core.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
@@ -27,6 +30,7 @@ import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-comman
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { withPluginCohortConfigCapture } from "../config/plugin-cohort-recovery.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
@@ -51,6 +55,10 @@ import {
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import {
+  commitReadyUpdatePluginCohort,
+  settleDelegatedUpdatePluginCohort,
+} from "./update-plugin-cohort-worker.js";
+import {
   POST_CORE_EXECUTOR_CAPABILITY,
   POST_CORE_MUTATION_PROTOCOL,
 } from "./update-post-core-capability.js";
@@ -71,9 +79,16 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
 import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
+let pluginCohortSettlementResult: UpdatePluginCohortSettlementResult | undefined;
+
 async function finalizeMigratedUpdate(): Promise<void> {
   // This executable bypasses CLI bootstrap but owns the same one-shot database work.
   installDatabaseProcessRole("cli-oneshot");
+  const settlePluginCohort = process.argv[2] === "--settle-plugin-cohort";
+  const commitPluginCohort = process.argv[2] === "--commit-plugin-cohort";
+  if (settlePluginCohort || commitPluginCohort) {
+    routeLogsToStderr();
+  }
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
@@ -89,6 +104,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
         mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
+        doctorRetirementOnly: true,
+        pluginCohortSettlement: true,
         gatewayRestartCompletion: true,
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -104,10 +121,28 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.argv[2] === "--doctor" ? "openclaw doctor --fix" : "openclaw update repair",
   );
   const chunks: Buffer[] = [];
+  let inputBytes = 0;
   for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    inputBytes += buffer.byteLength;
+    if ((settlePluginCohort || commitPluginCohort) && inputBytes > 1024 * 1024) {
+      throw new Error("Plugin cohort settlement input exceeds its storage limit.");
+    }
+    chunks.push(buffer);
   }
   const text = Buffer.concat(chunks).toString("utf8");
+  if (commitPluginCohort) {
+    pluginCohortSettlementResult = await commitReadyUpdatePluginCohort(
+      readUpdatePluginCohortCommitInput(JSON.parse(text)),
+    );
+    return;
+  }
+  if (settlePluginCohort) {
+    pluginCohortSettlementResult = await settleDelegatedUpdatePluginCohort(
+      readUpdatePluginCohortSettlementInput(JSON.parse(text)),
+    );
+    return;
+  }
   if (process.argv[2] === "--post-core") {
     return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
   }
@@ -346,41 +381,53 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       });
       assertCurrent();
       const doctorBudget = remaining();
-      await runDoctorHealthFlow(
+      await withPluginCohortConfigCapture(
         {
-          ...defaultRuntime,
-          exit: (code) => {
-            process.exitCode = code;
-          },
+          runId: input.runId,
+          installKey: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
+          env: process.env,
+          assertCurrent: fence.assertCurrent,
         },
-        {
-          repair: input.repair,
-          fullIntegrityCheck: input.fullIntegrityCheck,
-          nonInteractive: true,
-          ...(input.yes !== undefined ? { yes: input.yes } : {}),
-          ...(input.workspaceSuggestions !== undefined
-            ? { workspaceSuggestions: input.workspaceSuggestions }
-            : {}),
-        },
-        {
-          inputHash: input.configInputHash,
-          assertCurrent,
-          commandAuthority,
-          originalRecoveryCapture: {
-            runId: input.runId,
-            installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
-            ref: input.originalRecoveryCapture,
-          },
-          ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
-          ...(input.databasePluginOwners
-            ? { databasePluginOwners: input.databasePluginOwners }
-            : {}),
-          serviceInspectionDeadlineAtMs:
-            doctorBudget === undefined ? undefined : Date.now() + doctorBudget,
-          ...(input.postCoreSchemaRepair === true
-            ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
-            : {}),
-        },
+        () =>
+          runDoctorHealthFlow(
+            {
+              ...defaultRuntime,
+              exit: (code) => {
+                process.exitCode = code;
+              },
+            },
+            {
+              repair: input.repair,
+              fullIntegrityCheck: input.fullIntegrityCheck,
+              nonInteractive: true,
+              ...(input.yes !== undefined ? { yes: input.yes } : {}),
+              ...(input.workspaceSuggestions !== undefined
+                ? { workspaceSuggestions: input.workspaceSuggestions }
+                : {}),
+            },
+            {
+              inputHash: input.configInputHash,
+              retirementOnly: input.retirementOnly,
+              assertCurrent,
+              commandAuthority,
+              originalRecoveryCapture: {
+                runId: input.runId,
+                installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
+                ref: input.originalRecoveryCapture,
+              },
+              ...(input.databaseGenerations
+                ? { databaseGenerations: input.databaseGenerations }
+                : {}),
+              ...(input.databasePluginOwners
+                ? { databasePluginOwners: input.databasePluginOwners }
+                : {}),
+              serviceInspectionDeadlineAtMs:
+                doctorBudget === undefined ? undefined : Date.now() + doctorBudget,
+              ...(input.postCoreSchemaRepair === true
+                ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
+                : {}),
+            },
+          ),
       );
     },
   );
@@ -581,6 +628,9 @@ void (async () => {
     }
   }
   throwSqliteLifecycleErrors(errors, "Update finalization and resource cleanup failed.");
+  if (pluginCohortSettlementResult) {
+    process.stdout.write(JSON.stringify(pluginCohortSettlementResult));
+  }
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);
   process.exitCode = 1;

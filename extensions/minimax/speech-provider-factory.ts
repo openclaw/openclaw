@@ -232,10 +232,12 @@ export function buildMinimaxSpeechProvider({
         await import("openclaw/plugin-sdk/provider-auth");
       const apiKey = resolveSpeechProviderApiKey(
         config.apiKey,
-        await resolveProviderAuthProfileApiKey({
-          cfg: req.cfg,
-          provider: MINIMAX_PORTAL_PROVIDER_ID,
-        }),
+        config.apiKey
+          ? undefined
+          : await resolveProviderAuthProfileApiKey({
+              cfg: req.cfg,
+              provider: MINIMAX_PORTAL_PROVIDER_ID,
+            }),
         resolveMinimaxDirectTtsApiKey(),
       );
       if (!apiKey) {

@@ -10,11 +10,8 @@ import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-calle
 import { resolveConfigWidePluginManifestRegistry } from "../src/config/io.plugin-metadata.js";
 import { getRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  evaluateDecisionInRegistry,
-  inspectDecisionProviders,
-  prepareDecisionProviderReload,
-} from "../src/decisions/runtime.js";
+import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
+import { evaluateDecisionInRegistry } from "../src/decisions/runtime.js";
 import type { DecisionBatch } from "../src/decisions/types.js";
 import { validateDecisionResultV2 } from "../src/decisions/validation-v2.js";
 import { fetchWithRuntimeDispatcher } from "../src/infra/net/runtime-fetch.js";
@@ -164,7 +161,9 @@ async function runScenario(
     );
     expect(manifest.rootDir).toBe(fileURLToPath(new URL("../extensions/subq", import.meta.url)));
     expect(provider.source).toBe(manifest.source);
-    expect(inspectDecisionProviders(cfg, builder.registry)).toContainEqual(
+    expect(
+      builder.registry.decisionProviders.map((entry) => entry.host.inspect(cfg)),
+    ).toContainEqual(
       expect.objectContaining({ providerId: "subq", callable: true, credentialReady: true }),
     );
     const authority = createAdmittedRunOperatorAuthority({
@@ -284,7 +283,7 @@ async function runScenario(
         });
       }
     }
-    expect(inspectDecisionProviders(cfg, builder.registry)[0]).toMatchObject({
+    expect(builder.registry.decisionProviders[0]!.host.inspect(cfg)).toMatchObject({
       callable: change !== "secret-removed",
       credentialReady: change !== "secret-removed",
       activeRequests: 0,

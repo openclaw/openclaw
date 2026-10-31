@@ -8,7 +8,7 @@ function corners(circular: string, superelliptical: string, selectors: string) {
 }
 
 const CORNER_CASES = [
-  ...corners("10px", "12.5px", ".btn, .sidebar-recent-session, .nav-item"),
+  ...corners("10px", "12.5px", ".btn, .nav-item"),
   ...corners("16px", "12.5px", ".slash-menu, .chat-reply-context-menu"),
   ...corners(
     "14px",

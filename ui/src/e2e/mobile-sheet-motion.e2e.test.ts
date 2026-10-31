@@ -36,9 +36,23 @@ async function openPanels(page: Page) {
   await settle(page);
 }
 
-/** Waits past the longest sheet spring so geometry assertions see the resting state. */
+/** Waits for the real sheet motion and gesture-release override to finish. */
 async function settle(page: Page) {
-  await page.waitForTimeout(700);
+  await page.evaluate(async () => {
+    await Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+        .map((animation) => animation.finished.catch(() => undefined)),
+    );
+  });
+  await expect
+    .poll(() =>
+      page
+        .locator(".sidebar-region")
+        .evaluate((region) => region.style.getPropertyValue("--motion-sheet")),
+    )
+    .toBe("");
 }
 
 async function shellState(page: Page) {
@@ -47,7 +61,7 @@ async function shellState(page: Page) {
     const region = shell.parentElement!.getBoundingClientRect();
     return {
       hidden: shell.hasAttribute("hidden"),
-      display: style.display,
+      visibility: style.visibility,
       mode: shell.getAttribute("data-mode"),
       height: shell.getBoundingClientRect().height,
       top: shell.getBoundingClientRect().top,
@@ -56,6 +70,57 @@ async function shellState(page: Page) {
       easing: style.transitionTimingFunction,
     };
   });
+}
+
+/** Samples the actual spring timeline before browser round trips can outlast it. */
+async function sampleSheetTransition(
+  page: Page,
+  time: number,
+  action: () => Promise<void>,
+  inspect: (state: Awaited<ReturnType<typeof shellState>>) => void | Promise<void>,
+) {
+  const sample = await page.locator(".chat-mobile-host").evaluateHandle(
+    (shell, sampleTime) => ({
+      started: new Promise<CSSTransition[]>((resolve, reject) => {
+        const onTransition = (event: Event) => {
+          if (
+            !(event instanceof TransitionEvent) ||
+            event.target !== shell ||
+            event.propertyName !== "transform"
+          ) {
+            return;
+          }
+          shell.removeEventListener("transitionrun", onTransition);
+          const animations = shell
+            .getAnimations()
+            .filter((entry): entry is CSSTransition => entry instanceof CSSTransition);
+          if (!animations.some((entry) => entry.transitionProperty === "transform")) {
+            reject(new Error("Missing sheet transform transition"));
+            return;
+          }
+          for (const animation of animations) {
+            animation.pause();
+            animation.currentTime = sampleTime;
+          }
+          resolve(animations);
+        };
+        shell.addEventListener("transitionrun", onTransition);
+      }),
+    }),
+    time,
+  );
+  await action();
+  await sample.evaluate(({ started }) => started.then(() => undefined));
+  try {
+    await inspect(await shellState(page));
+  } finally {
+    await sample.evaluate(async ({ started }) => {
+      for (const animation of await started) {
+        animation.play();
+      }
+    });
+    await sample.dispose();
+  }
 }
 
 /** Drags the grabber by dy with paced moves, then pauses before lifting. */
@@ -116,27 +181,35 @@ suite.define(() => {
   it("presents and dismisses the Panels sheet with the sheet spring", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       await openSession(page);
-      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
       // The sheet enters from below the viewport instead of fading in place.
-      await page.waitForTimeout(40);
-      const entering = await shellState(page);
-      expect(entering.top).toBeGreaterThan(entering.regionBottom - entering.height + 20);
-      expect(entering.easing).toContain("linear(");
+      await sampleSheetTransition(
+        page,
+        40,
+        () => page.getByRole("button", { name: "Panels", exact: true }).first().click(),
+        (entering) => {
+          expect(entering.top).toBeGreaterThan(entering.regionBottom - entering.height + 20);
+          expect(entering.easing).toContain("linear(");
+        },
+      );
       await settle(page);
       const open = await shellState(page);
       expect(Math.abs(open.top + open.height - open.regionBottom)).toBeLessThan(1.5);
 
-      await page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click();
-      await page.waitForTimeout(60);
-      const leaving = await shellState(page);
-      // Hidden immediately for focus and accessibility, but still sliding out on screen.
-      expect(leaving.hidden).toBe(true);
-      expect(leaving.display).not.toBe("none");
-      expect(leaving.top).toBeGreaterThan(open.top + 10);
-      // The page it showed slides away with it instead of blanking first.
-      expect(await page.locator(".chat-panel-launcher-mobile").boundingBox()).not.toBeNull();
+      await sampleSheetTransition(
+        page,
+        60,
+        () => page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click(),
+        async (leaving) => {
+          // Hidden immediately for focus and accessibility, but still sliding out on screen.
+          expect(leaving.hidden).toBe(true);
+          expect(leaving.visibility).toBe("visible");
+          expect(leaving.top).toBeGreaterThan(open.top + 10);
+          // The page it showed slides away with it instead of blanking first.
+          expect(await page.locator(".chat-panel-launcher-mobile").boundingBox()).not.toBeNull();
+        },
+      );
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -171,13 +244,17 @@ suite.define(() => {
       expect(docked.mode).toBe("dock");
       expect(Math.abs(docked.height - dock.height)).toBeLessThan(2);
 
-      await flick(page, 150);
-      await page.waitForTimeout(60);
-      const dismissing = await shellState(page);
-      expect(dismissing.hidden).toBe(true);
-      expect(dismissing.display).not.toBe("none");
+      await sampleSheetTransition(
+        page,
+        60,
+        () => flick(page, 150),
+        (dismissing) => {
+          expect(dismissing.hidden).toBe(true);
+          expect(dismissing.visibility).toBe("visible");
+        },
+      );
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -213,7 +290,7 @@ suite.define(() => {
       // Pulled most of the way out, the same slow release dismisses.
       await dragGrabber(page, back.height - 40, { steps: 20, stepMs: 40 });
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -333,7 +410,7 @@ suite.define(() => {
       const open = await shellState(page);
       expect(Math.abs(open.top + open.height - open.regionBottom)).toBeLessThan(1.5);
       await page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click();
-      await expect.poll(async () => (await shellState(page)).display).toBe("none");
+      await expect.poll(async () => (await shellState(page)).visibility).toBe("hidden");
     });
   });
 });

@@ -204,23 +204,15 @@ export function resolveTtsDirectiveFacts(
       : providers;
 
     for (const [key, value] of values) {
+      const genericSpeakerOverrides: SpeechProviderOverrides | undefined = !policy.allowVoice
+        ? undefined
+        : key === "speakervoice" || key === "speaker_voice"
+          ? { speakerVoice: value, voice: value, voiceName: value }
+          : key === "speakervoiceid" || key === "speaker_voice_id"
+            ? { speakerVoiceId: value, voiceId: value }
+            : undefined;
       let handled = false;
       for (const provider of directiveProviders) {
-        const genericSpeakerOverrides = ((): SpeechProviderOverrides | undefined => {
-          if (!policy.allowVoice) {
-            return undefined;
-          }
-          switch (key) {
-            case "speakervoice":
-            case "speaker_voice":
-              return { speakerVoice: value, voice: value, voiceName: value };
-            case "speakervoiceid":
-            case "speaker_voice_id":
-              return { speakerVoiceId: value, voiceId: value };
-            default:
-              return undefined;
-          }
-        })();
         const parsed: SpeechDirectiveTokenParseResult | undefined = genericSpeakerOverrides
           ? { handled: true, overrides: genericSpeakerOverrides }
           : provider.parseDirectiveToken?.({

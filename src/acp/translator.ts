@@ -407,7 +407,27 @@ export class AcpGatewayAgent implements Agent {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
+    const hasExplicitRouting = Boolean(
+      meta.sessionKey ||
+      meta.sessionLabel ||
+      this.opts.defaultSessionKey ||
+      this.opts.defaultSessionLabel,
+    );
+    let fallbackKey = existingSession?.sessionKey ?? params.sessionId;
+    if (!existingSession && !hasExplicitRouting) {
+      // Resume needs the binding even when bounded replay history is incomplete.
+      const ledgerKey = await this.sessionUpdates.readLedgerSessionKey(params.sessionId);
+      if (ledgerKey) {
+        // Gateway owns canonicalization of the bridge alias into its agent namespace.
+        const resolved = await this.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
+          key: ledgerKey,
+        });
+        if (!resolved?.key) {
+          throw new Error(`Session key not found: ${ledgerKey}`);
+        }
+        fallbackKey = resolved.key;
+      }
+    }
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
       fallbackKey,

@@ -5,9 +5,14 @@ import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
+import { resolvePluginInstallTransactionRequest } from "../../plugins/install-transaction.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
+import { writeManagedNpmPlugin } from "../../plugins/test-helpers/managed-npm-plugin.js";
+import { beginUpdatePluginCohort } from "../../plugins/update-cohort-recovery.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -18,13 +23,187 @@ vi.mock("../../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
   runPostCorePluginConvergence: mocks.convergence,
 }));
 import { postCoreConvergenceResult } from "./update-cli-config.test-support.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import { convergePostCoreUpdatePlugins } from "./update-command-resume.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 function convergenceResult(config: OpenClawConfig) {
   return { ...postCoreConvergenceResult(), config };
 }
+
+it.each([
+  { owner: "shipped post-core parent", postCore: true, requiresCohort: false, retained: false },
+  { owner: "owning outer updater", postCore: false, requiresCohort: true, retained: false },
+  { owner: "retained post-core parent", postCore: true, requiresCohort: false, retained: true },
+])("keeps plugin publication bound to the $owner contract", async (scenario) => {
+  await withOpenClawTestState(
+    {
+      label: "updater-cohort-parent-contract",
+      env: { OPENCLAW_UPDATE_POST_CORE: scenario.postCore ? "1" : undefined },
+    },
+    async (state) => {
+      await prepareUpdate(state, { plugins: { enabled: false } });
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const installPath = writeManagedNpmPlugin({
+        stateDir: state.stateDir,
+        packageName: "@example/next",
+        pluginId: "next",
+        version: "1.0.0",
+      });
+      const next = {
+        next: {
+          source: "npm" as const,
+          spec: "@example/next@1.0.0",
+          version: "1.0.0",
+          installPath,
+        },
+      };
+      if (!scenario.requiresCohort) {
+        mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+          ...convergenceResult(cfg),
+          changes: ["Installed managed fixture next."],
+          installRecords: next,
+        }));
+      }
+      await withUpdateCommandExecutor(runId, async (executor) => {
+        const fence = await executor.enter(state.root);
+        if (scenario.retained) {
+          const runtime = {
+            root: state.root,
+            nodePath: process.execPath,
+            version: "2026.10.9",
+            buildId: "fixture",
+          };
+          await beginUpdatePluginCohort({
+            runId,
+            installKey: state.root,
+            from: runtime,
+            to: { ...runtime, version: "2026.10.10" },
+            env: state.env,
+            fence,
+          });
+        }
+        const beforeCalls = mocks.convergence.mock.calls.length;
+        const convergence = convergePostCoreUpdatePlugins({
+          root: state.root,
+          channel: "stable",
+          requestedChannel: null,
+          opts: { json: true, run: { runId, env: state.env, executorFence: fence } },
+          requiresCohort: scenario.requiresCohort,
+          timeoutMs: 1_000,
+          assertCurrent: fence.assertCurrent,
+        });
+        if (scenario.requiresCohort) {
+          await expect(convergence).rejects.toThrow(
+            "The outer updater did not retain the plugin cohort before activation",
+          );
+          expect(mocks.convergence.mock.calls).toHaveLength(beforeCalls);
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          ).toEqual({});
+          return;
+        }
+        await convergence;
+        expect(
+          await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+        ).toEqual(next);
+        const pair = loadPluginCohortRecovery(runId, { env: state.env });
+        if (scenario.retained) {
+          expect(pair?.cohort).toMatchObject({ disposition: "pending", settledPublications: 0 });
+          expect(pair?.cohort.publications).toContainEqual(
+            expect.objectContaining({ kind: "records" }),
+          );
+        } else {
+          expect(pair).toBeUndefined();
+        }
+      });
+    },
+  );
+});
+
+it("still requires the live executor for a shipped post-core parent", async () => {
+  await withOpenClawTestState(
+    { label: "updater-post-core-native-authority", env: { OPENCLAW_UPDATE_POST_CORE: "1" } },
+    async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
+      const original = await fs.readFile(state.configPath, "utf8");
+      await expect(
+        convergePostCoreUpdatePlugins({
+          root: state.root,
+          channel: "stable",
+          requestedChannel: null,
+          opts: { json: true },
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow("Plugin cohort convergence requires its live outer update executor");
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
+    },
+  );
+});
+
+it("retains published artifacts when install commit cleanup fails", async () => {
+  await withOpenClawTestState({ label: "updater-plugin-commit-cleanup" }, async (state) => {
+    const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+    const fence = { assertCurrent() {} };
+    const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+    const runtime = {
+      root: state.root,
+      nodePath: process.execPath,
+      version: "2026.10.9",
+      buildId: "fixture",
+    };
+    await beginUpdatePluginCohort({
+      runId,
+      installKey: state.root,
+      from: runtime,
+      to: { ...runtime, version: "2026.10.10" },
+      env: state.env,
+      fence,
+    });
+    const files = [state.path("published-first"), state.path("published-second")];
+    await Promise.all(files.map((file) => fs.writeFile(file, "published")));
+    const failure = new Error("first package commit cleanup failed");
+    const transactions = files.map((file, index) => ({
+      commit: async () => {
+        if (index === 0) {
+          throw failure;
+        }
+      },
+      rollback: vi.fn(() => fs.rm(file)),
+    }));
+    mocks.convergence.mockImplementationOnce(async (owner) => {
+      const sink = resolvePluginInstallTransactionRequest(owner)?.transactionSink;
+      if (!sink) {
+        throw new Error("Convergence lost its deferred transaction sink");
+      }
+      sink.push(...transactions);
+      return {
+        ...convergenceResult(owner.cfg),
+        installRecords: { first: { source: "archive" }, second: { source: "archive" } },
+      };
+    });
+    await expect(
+      updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configWriteOptions: {},
+        cohort: { runId, env: state.env, fence },
+      }),
+    ).rejects.toThrow("Plugin install transaction commit failed");
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })).toEqual({
+      first: { source: "archive" },
+      second: { source: "archive" },
+    });
+    expect(await Promise.all(files.map((file) => fs.readFile(file, "utf8")))).toEqual([
+      "published",
+      "published",
+    ]);
+    for (const transaction of transactions) {
+      expect(transaction.rollback).not.toHaveBeenCalled();
+    }
+  });
+});
 
 async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
   // Config-write custody uses a host control store outside the profile database.

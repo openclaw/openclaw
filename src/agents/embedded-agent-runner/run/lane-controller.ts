@@ -286,9 +286,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     return laneTaskTimeoutError;
   };
   const throwIfAborted = () => {
-    // Bind only this lane's admitted claim; queued children can inherit a closed parent.
-    assertPlacementCurrent?.();
     if (!abortSignal.aborted) {
+      // Cancellation retains its original reason even after cleanup closes the claim.
+      assertPlacementCurrent?.();
       return;
     }
     const reason = resolveLaneTimeoutError() ?? abortSignal.reason;
@@ -688,6 +688,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     laneTaskAbortController,
     noteLaneTaskProgress,
     setLaneTaskDeadline,
+    // Preparation has its own run budget; active auth uses execution time, without teardown grace.
+    getExecutionDeadline: (): CommandQueueTaskDeadline | undefined =>
+      !activeAttemptOwner
+        ? undefined
+        : laneTaskDeadline?.kind === "bounded"
+          ? {
+              kind: "bounded",
+              deadlineAtMs: laneTaskDeadline.deadlineAtMs - EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+            }
+          : laneTaskDeadline,
     createAttemptControls,
     throwIfAborted,
     assertCurrent,

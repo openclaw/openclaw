@@ -69,8 +69,6 @@ export type ChatProps = Omit<
   | "commentsDisabled"
   | "onAddToChat"
   | "onCompanionSelection"
-  | "onOpenSession"
-  | "onSend"
   | "onOpenSidebar"
 > &
   Omit<
@@ -328,7 +326,6 @@ export function createChatViewFrame(
               focusComposer,
             )
         : undefined,
-    onOpenSession: props.onSessionSelect,
     // Portaled menus can outlive a render; resolve focus from the current session owner.
     onFocusComposer: () => focusComposer(true),
   } satisfies Partial<ChatThreadProps>);

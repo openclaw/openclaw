@@ -1504,7 +1504,11 @@ async function inventoryReady(
       .getByText("Interaction 0000", { exact: true })
       .waitFor();
     await page.waitForFunction(
-      () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 25,
+      () =>
+        Number(
+          document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+            document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+        ) === 26,
     );
   } else {
     await gateway.waitForRequest("cron.list", { match: { offset: 0 } });
@@ -1512,11 +1516,14 @@ async function inventoryReady(
       .locator(".cron-table__row")
       .getByText("Warm automation 0000", { exact: true })
       .waitFor();
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(".cron-table__row").length === 50 &&
-        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true",
-    );
+    await page.waitForFunction(() => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === 50 &&
+        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true"
+      );
+    });
   }
 }
 
@@ -1547,10 +1554,14 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
   await page.locator(".data-table-pagination__info").getByText(/1000/).waitFor();
   await toggle.click();
   await filters.waitFor({ state: "hidden" });
-  // The owner sorts 1,000 rows, while the product deliberately renders at most 100 per page.
+  // The owner sorts 1,000 rows; the logical page has 100 even when its DOM is windowed.
   await page.locator(".data-table-pagination__size").selectOption("100");
   await page.waitForFunction(
-    () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 100,
+    () =>
+      Number(
+        document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+          document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+      ) === 101,
   );
   await frames(page);
 }
@@ -1565,15 +1576,28 @@ async function refreshSessions(page: Page, gateway: MockGatewayControls) {
   await frames(page);
 }
 
+// Inventory cardinality is independent of the number of materialized rows.
+// The fallback lets the same harness compare production bundles before windowing.
+export async function cronLoadedJobCount(page: Page) {
+  return page.evaluate(() => {
+    const size = document.querySelector(".cron-table__row")?.getAttribute("aria-setsize");
+    return size ? Number(size) : document.querySelectorAll(".cron-table__row").length;
+  });
+}
+
 async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
   for (let count = 100; count <= 500; count += 50) {
-    await more.click();
-    await page.waitForFunction(
-      (expected) => document.querySelectorAll(".cron-table__row").length === expected,
-      count,
-    );
+    // Measured rows can move the footer between pointer down and pointer up.
+    await more.press("Enter");
+    await page.waitForFunction((expected) => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === expected
+      );
+    }, count);
   }
 }
 
@@ -1938,7 +1962,10 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 actual native Workboard cards preserve cancelled/coalesced popover transitions, pending hover cancellation, placement and independent resource retirement. Requires --resource-counts; diagnostic waits are not CPU timing.",
     rowSelector: ".workboard-card",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
-    run: (page, gateway) => exerciseWorkboardResourceFixture(page, gateway, frames),
+    run: (page, gateway) =>
+      exerciseWorkboardResourceFixture(page, gateway, async (target) => {
+        await frames(target);
+      }),
   },
   {
     id: "workboard-events-cpu",
@@ -1950,7 +1977,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 closed cards receive eight actual viewport changes and eight native column scrolls with no diagnostic listeners; measure CPU without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page) => {
-      const evidence = await runWorkboardEventsCpu(page, frames);
+      const evidence = await runWorkboardEventsCpu(page, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -1965,7 +1994,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "Retire 1,000 actual cards, then mount 1,000 through real paginated responses inside the warm CPU interval; measure without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page, gateway) => {
-      const evidence = await runWorkboardRemountCpu(page, gateway, frames);
+      const evidence = await runWorkboardRemountCpu(page, gateway, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -2589,7 +2620,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       ) {
         throw new Error("Graph streaming lost content during finalization");
       }
-      await page.locator(`${activePane} .chat-send-btn--send`).waitFor();
+      // Empty mobile composers show voice input instead of the disabled Send button.
+      await page.locator(`${activePane} .chat-send-btn--send`).waitFor({ state: "attached" });
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor({ state: "detached" });
       return { deltas: 100, finalized: true };
     },
   },
@@ -2922,7 +2955,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await frames(page);
       if (
         (await search.inputValue()) !== cronQuery ||
-        (await page.locator(".cron-table__row").count()) !== 500 ||
+        (await cronLoadedJobCount(page)) !== 500 ||
         (await page.locator(".cron-table").getAttribute("aria-busy")) !== "true" ||
         (await gateway.getRequests("cron.list")).length - before !== 1
       ) {

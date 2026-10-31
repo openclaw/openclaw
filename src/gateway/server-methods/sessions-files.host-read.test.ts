@@ -138,7 +138,9 @@ it("downloads original binary bytes beyond preview limits with safe HTTP metadat
   const bytes = Buffer.alloc(8 * 1024 * 1024 + 17, 0xff);
   bytes.write("PK\x03\x04", "binary");
   fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
+  hoisted.loadSessionEntry.mockClear();
   const download = await fixture.files.ok("download", filename, undefined, connection);
+  expect(hoisted.loadSessionEntry).toHaveBeenCalledOnce();
   expect(download).toMatchObject({ filename, mimeType: "application/zip" });
   const fetched = await connection.fetch(download.url);
   expect(fetched.response.statusCode).toBe(200);

@@ -165,6 +165,11 @@ error; cancellation still stops it immediately. A single large file or a silent
 object lookup can still reach the idle timeout. Registration and other Git
 operations retain their existing execution deadlines.
 
+The `managed worktree preparation` log reports `errorClass` and `errorPhase`
+when preparation throws, including the innermost failed timed phase. Failures
+outside a timed phase use `unattributed`. The receipt omits error messages and
+command output.
+
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
 If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
@@ -178,6 +183,12 @@ Live owner leases protect active runs. If creation would require evicting an act
 Eviction preserves source repositories and Git storage needed by other managed checkouts, including objects borrowed through `git clone --shared`. Creation and snapshot restoration also hold source custody, so freeing their slot cannot purge the object donor they need.
 
 Lowering the setting applies the eviction policy to existing checkouts. Disk-space checks still apply independently: raising the count does not bypass the measured allocation and snapshot reserves. See [`worktreeMaxCount`](/gateway/config-runtime#worktreemaxcount).
+
+Creation hydrates only the selected commit's missing contents. It does not scan
+every promisor pack to classify missing objects; that proof belongs to snapshot
+removal, where lost locally authored data must preserve the checkout. Successful
+default-base hydration is already shared by commit while the Git worker remains
+active. Hydration failures are not cached.
 
 ## Filesystem acceleration
 
@@ -201,7 +212,11 @@ OpenClaw maintains one reusable source-only template per repository and destinat
 
 Sandboxed source-only sessions also reuse templates. Template creation, validation, and index refresh use the same isolated Git configuration as ordinary source-only materialization, so repository filters never run on the host. Their cache identity includes that checkout policy, preventing reuse of a template prepared with host filters.
 
+The Gateway keeps one prepared checkout per active repository and destination root. After a successful accelerated creation, the existing maintenance owner refills that slot asynchronously and serially, subject to normal disk admission. A matching ready slot is consumed once by moving its files and transferring its prepared index into the request's normal Git registration. The request does not clone the template again. Empty, unfinished, modified, or stale slots use the normal checkout path; a changed commit, template generation, or checkout policy cannot reuse the old slot. Setup scripts and included files still run through normal per-request preparation. Hourly cleanup releases slots idle for an hour, and interrupted preparation uses the existing template recovery path. No additional configuration is needed.
+
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
+
+The `checkout` phase includes its child phases; do not add it to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
@@ -297,7 +312,7 @@ Concurrent creations from the same source checkout share remote-default preparat
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout. Fetching missing objects for the size estimate uses the same five-minute budget. Remote-default discovery has a 30-second budget and its fetch has a 60-second budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
-Background Git maintenance, pack-index repair, and removal snapshots use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects. If a required snapshot object is missing, ordinary removal preserves the checkout and reports the failure. Fetch or repair the missing objects in the source repository, then retry removal.
+Background Git maintenance and pack-index repair use only locally available objects. Removal snapshots inspect objects offline, then fetch missing promised blobs from the clone's configured promisor remote in one batch under the removal operation's authority and five-minute fetch budget. The snapshot validates those objects locally before recording the capture or removing the checkout. Missing non-promisor objects, failed fetches, or lost removal authority preserve the checkout; restore remote access or repair the repository before retrying cleanup.
 
 Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
 

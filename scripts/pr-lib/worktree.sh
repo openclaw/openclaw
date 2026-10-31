@@ -308,6 +308,16 @@ recover_review_transition() {
   rm -f "$journal"
 }
 
+review_transition_recover() {
+  local pr="$1" plan="$2" seal="$3"
+  # Containment-only entry must not replay the transition we are repairing.
+  enter_worktree "$pr" false true || return 1
+  mark_pr_operation_side_effects_started || return 1
+  node "$(dirname "${BASH_SOURCE[0]}")/review-transition-recovery.mjs" \
+    "$pr" "$plan" "$seal" "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID"
+}
+
 checkout_pr_worktree_target() {
   local pr="$1"
   local target_ref="$2"

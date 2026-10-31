@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
@@ -68,14 +69,33 @@ export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element
 
 type Section = {
   id: string;
-  label: string;
-  description: string;
   node: JsonSchema;
-  nodeValue: unknown;
-  path: Array<string | number>;
+  path: string[];
 };
 
 function ConfigSection(props: { section: Section; form: ConfigFormProps }): SolidJSX.Element {
+  const hints = createMemo(() => props.form.uiHints);
+  const meta = createMemo(() => {
+    getLocale();
+    const { path, node } = props.section;
+    const key = path.at(-1)!;
+    const hint = localizedHintForPath(path, hints());
+    const sectionMeta = path.length === 1 ? SECTION_META[key] : undefined;
+    return {
+      label:
+        sectionMeta?.label ??
+        hint?.label ??
+        (path.length === 1
+          ? key.charAt(0).toUpperCase() + key.slice(1)
+          : (node.title ?? humanize(key))),
+      description: sectionMeta?.description ?? hint?.help ?? node.description ?? "",
+    };
+  });
+  const value = () =>
+    props.section.path.reduce<unknown>(
+      (current, key) => asNullableRecord(current)?.[key],
+      props.form.value,
+    );
   const [docsTrigger, setDocsTrigger] = createSignal<HTMLButtonElement>();
   let docsPopover!: PopoverHandle;
   const docsUrl = () =>
@@ -90,7 +110,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
   return (
     <section class="settings-section" id={props.section.id}>
       <div class="settings-section__header">
-        <h2 class="settings-section__heading">{props.section.label}</h2>
+        <h2 class="settings-section__heading">{meta().label}</h2>
         <Show when={props.form.sectionActions || docsUrl()}>
           <div class="settings-section__actions">
             {props.form.sectionActions}
@@ -98,14 +118,14 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               {(url) => (
                 <span class="settings-section__docs">
                   <openclaw-tooltip
-                    prop:content={t("configForm.sectionHelp", { section: props.section.label })}
+                    prop:content={t("configForm.sectionHelp", { section: meta().label })}
                   >
                     <button
                       ref={setDocsTrigger}
                       id={docsTriggerId()}
                       type="button"
                       class="settings-section__help-button"
-                      aria-label={t("configForm.sectionHelp", { section: props.section.label })}
+                      aria-label={t("configForm.sectionHelp", { section: meta().label })}
                       aria-controls={`settings-section-help-popover-${props.section.id}`}
                       aria-haspopup="dialog"
                       onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
@@ -120,14 +140,14 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
                       <Popover
                         ref={(handle) => (docsPopover = handle)}
                         id={`settings-section-help-popover-${props.section.id}`}
-                        label={t("configForm.sectionHelp", { section: props.section.label })}
+                        label={t("configForm.sectionHelp", { section: meta().label })}
                         class="settings-section__help-popover"
                         anchor={trigger()}
                         placement="bottom-end"
                       >
                         <div class="settings-section__help-panel">
-                          <Show when={props.section.description}>
-                            <p>{props.section.description}</p>
+                          <Show when={meta().description}>
+                            <p>{meta().description}</p>
                           </Show>
                           <LearnMoreLink url={url()} />
                         </div>
@@ -140,13 +160,13 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
           </div>
         </Show>
       </div>
-      <Show when={props.section.description}>
-        <p class="settings-section__desc">{props.section.description}</p>
+      <Show when={meta().description}>
+        <p class="settings-section__desc">{meta().description}</p>
       </Show>
       <ConfigTierGroups
         schema={props.section.node}
         path={props.section.path}
-        hints={props.form.uiHints}
+        hints={hints()}
         revealAdvanced={revealAdvanced()}
         onShowAdvanced={props.form.onShowAdvanced}
         onHideAdvanced={
@@ -161,7 +181,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
           <ConfigNode
             params={{
               schema: node(),
-              value: props.section.nodeValue,
+              value: value(),
               path: props.section.path,
               hints: props.form.uiHints,
               rawAvailable: props.form.rawAvailable ?? true,
@@ -185,80 +205,74 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
 }
 
 export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
+  const schemaInput = createMemo(() => props.schema);
+  const hints = createMemo(() => props.uiHints);
+  const selectedSection = createMemo(() => props.activeSection);
+  const selectedSubsection = createMemo(() => props.activeSubsection);
+  const query = createMemo(() => props.searchQuery);
+  const searchValue = createMemo(() => props.value);
   const sections = createMemo((): Section[] => {
-    getLocale();
-    const schema = props.schema;
+    const schema = schemaInput();
     if (!schema || schemaType(schema) !== "object" || !schema.properties) {
       return [];
     }
-    const value = props.value ?? {};
-    const uiHints = props.uiHints;
-    const activeSection = props.activeSection;
-    const searchQuery = props.searchQuery;
+    const uiHints = hints();
+    const activeSection = selectedSection();
+    const activeSubsection = selectedSubsection();
     const entries = Object.entries(schema.properties)
       .toSorted(([a], [b]) => {
         const order =
           (hintForPath([a], uiHints)?.order ?? 50) - (hintForPath([b], uiHints)?.order ?? 50);
         return order || a.localeCompare(b);
       })
-      .filter(
-        ([key, node]) =>
-          (!activeSection || key === activeSection) &&
-          (!searchQuery ||
-            matchesConfigSectionSearch({
-              key,
-              schema: node,
-              value: value[key],
-              hints: uiHints,
-              query: searchQuery,
-              label: SECTION_META[key]?.label,
-              description: SECTION_META[key]?.description,
-            })),
-      );
+      .filter(([key]) => !activeSection || key === activeSection);
     const active = entries[0];
     if (
-      props.activeSection &&
-      props.activeSubsection &&
+      activeSection &&
+      activeSubsection &&
       entries.length === 1 &&
       active &&
       schemaType(active[1]) === "object"
     ) {
-      const node = active[1].properties?.[props.activeSubsection];
+      const node = active[1].properties?.[activeSubsection];
       if (node) {
-        const path = [props.activeSection, props.activeSubsection];
-        const hint = localizedHintForPath(path, props.uiHints);
-        const sectionValue = value[props.activeSection];
-        let nodeValue: unknown;
-        if (sectionValue && typeof sectionValue === "object") {
-          // SAFETY: The value is a non-null object; absent subsection keys yield undefined.
-          nodeValue = (sectionValue as Record<string, unknown>)[props.activeSubsection];
-        }
+        const path = [activeSection, activeSubsection];
         return [
           {
             id: `config-section-${path.join("-")}`,
-            label: hint?.label ?? node.title ?? humanize(props.activeSubsection),
-            description: hint?.help ?? node.description ?? "",
             node,
             path,
-            nodeValue,
           },
         ];
       }
     }
-    return entries.map(([key, node]) => {
-      const hint = localizedHintForPath([key], uiHints);
-      const meta = SECTION_META[key] ?? {
-        label: hint?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
-        description: hint?.help ?? node.description ?? "",
-      };
-      return {
-        id: `config-section-${key}`,
-        label: meta.label,
-        description: meta.description,
-        node,
-        nodeValue: value[key],
-        path: [key],
-      };
+    return entries.map(([key, node]) => ({
+      id: `config-section-${key}`,
+      node,
+      path: [key],
+    }));
+  });
+  const visibleSections = createMemo(() => {
+    const all = sections();
+    const searchQuery = query();
+    if (!searchQuery) {
+      return all;
+    }
+    getLocale();
+    const schema = schemaInput();
+    const uiHints = hints();
+    const value = searchValue();
+    return all.filter((section) => {
+      const key = section.path[0]!;
+      return matchesConfigSectionSearch({
+        key,
+        schema: schema!.properties![key]!,
+        value: value?.[key],
+        hints: uiHints,
+        query: searchQuery,
+        label: SECTION_META[key]?.label,
+        description: SECTION_META[key]?.description,
+      });
     });
   });
   return (
@@ -271,7 +285,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
         fallback={<div class="callout danger">{t("configForm.unsupportedSchema")}</div>}
       >
         <Show
-          when={sections().length > 0}
+          when={visibleSections().length > 0}
           fallback={
             <Show when={!props.embedded || props.searchQuery}>
               <SettingsPage>
@@ -287,7 +301,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
           }
         >
           <SettingsPage>
-            <For each={sections()} keyed={(section) => section.id}>
+            <For each={visibleSections()} keyed={(section) => section.id}>
               {(section) => <ConfigSection section={section()} form={props} />}
             </For>
           </SettingsPage>

@@ -140,7 +140,7 @@ function authorizeWrite(mode, options) {
     repository: REPOSITORY,
     workflowRef: options["workflow-ref"],
     workflowFullRef: options["workflow-full-ref"],
-    workflowSha: options["tooling-sha"],
+    workflowSha: mode === "publish" ? options["builder-sha"] : options["tooling-sha"],
     runId: process.env.GITHUB_RUN_ID,
     runAttempt: process.env.GITHUB_RUN_ATTEMPT,
     workflowPath:
@@ -1324,6 +1324,7 @@ function main(args = process.argv.slice(2)) {
         "tag",
         "source-sha",
         "tooling-sha",
+        "builder-sha",
         "workflow-ref",
         "workflow-full-ref",
         "release-publish-run-id",
@@ -1379,6 +1380,7 @@ function main(args = process.argv.slice(2)) {
   if (mode === "publish") {
     assert(
       SHA.test(values["tooling-sha"]) &&
+        SHA.test(values["builder-sha"]) &&
         Boolean(values.assets) === Boolean(values.signature) &&
         ["true", "false"].includes(values["desktop-test"]) &&
         (values.windows === undefined || ["true", "false"].includes(values.windows)),

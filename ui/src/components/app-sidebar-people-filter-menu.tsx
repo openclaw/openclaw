@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
@@ -9,7 +9,7 @@ import type { SidebarMenus } from "./sidebar-menus.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 const SORT_OPTIONS = [
   { value: "presence", labelKey: "presence.filters.presence" },

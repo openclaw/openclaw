@@ -260,6 +260,8 @@ export class NewSessionDraftPersistence {
       this.submittedMutation !== this.mutation
     ) {
       this.noteUserMutation();
+      // Discrete choices can be followed immediately by reload; do not debounce them.
+      this.persistNow();
     }
   }
 

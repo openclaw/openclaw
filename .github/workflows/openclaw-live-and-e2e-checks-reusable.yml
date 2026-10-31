@@ -3692,21 +3692,13 @@ jobs:
             local digest="$4"
             local run_id="$5"
             local run_attempt="$6"
-            bash .release-harness/scripts/docker/shared-image-artifact.sh \
-              verify-upload "$label" "$id" "$name" "$digest" "$run_id" "$run_attempt"
-            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" |
-              jq -er \
-                --arg id "$id" \
-                --arg name "$name" \
-                --arg digest "sha256:${digest}" \
-                --arg run_id "$run_id" \
-                'select(
-                  (.id | tostring) == $id and
-                  .name == $name and
-                  .digest == $digest and
-                  .expired == false and
-                  (.workflow_run.id | tostring) == $run_id
-                ) | .expires_at'
+            local artifact_json
+            # Bash clears errexit inside this substitution; preserve verifier failures explicitly.
+            artifact_json="$(
+              bash .release-harness/scripts/docker/shared-image-artifact.sh \
+                verify-upload "$label" "$id" "$name" "$digest" "$run_id" "$run_attempt" --json
+            )" || return
+            jq -er '.expires_at' <<< "$artifact_json"
           }
           package_expiry="$(
             artifact_expiry \
@@ -4165,14 +4157,6 @@ jobs:
             bash .release-harness/scripts/docker/shared-image-artifact.sh \
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
-      - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile)
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -4314,13 +4298,6 @@ jobs:
         env: *live_test_image_load_env
         shell: bash
         run: *live_test_image_load_run
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
 
       - name: Normalize provider allowlist
         shell: bash
@@ -4559,8 +4536,9 @@ jobs:
             # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4.1-flash
             # returns 400 "requires Global regions", and upstream metadata deprecated the V4 Flash
             # routes. Restore dynamic selection (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the
-            # workspace enables Global.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # workspace enables Global. Release-workspace discovery stopped listing glm-5.3 on
+            # 2026-10-18, so the smoke pins glm-5.2.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable

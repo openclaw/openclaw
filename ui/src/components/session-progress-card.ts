@@ -68,7 +68,7 @@ function isProgressCardStaleForRun(card: ProgressCard, startedAt?: number): bool
 }
 
 /** A session outcome only describes a plan written during that same run. */
-export function progressCardRunOutcome(
+function progressCardRunOutcome(
   card: ProgressCard | null | undefined,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,

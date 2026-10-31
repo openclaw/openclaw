@@ -1,12 +1,14 @@
 import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "@openclaw/gateway-protocol/frame-guards";
 import {
   GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
-import { toStringifiedError } from "@openclaw/normalization-core";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
+  GatewayPayloadLimitError,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
@@ -54,6 +56,7 @@ type GatewayPendingRequestsOptions = {
 
 /** Owns request deadlines, correlation, settlement, and generation-scoped IDs. */
 export class GatewayPendingRequests {
+  maxPayloadBytes: number | undefined = MAX_PREAUTH_PAYLOAD_BYTES;
   private pending = new Map<string, GatewayPendingRequest>();
   private requestSequence = 0;
   private bootstrapPause:
@@ -265,6 +268,11 @@ export class GatewayPendingRequests {
             return;
           }
           try {
+            const limit = this.maxPayloadBytes;
+            const bytes = new TextEncoder().encode(frame).byteLength;
+            if (limit !== undefined && bytes > limit) {
+              throw new GatewayPayloadLimitError(bytes, limit);
+            }
             inFlight = true;
             sender.send(frame);
             if (this.pending.get(id) !== pending) {
@@ -396,6 +404,7 @@ export class GatewayPendingRequests {
   }
 
   flush(error: Error): void {
+    this.maxPayloadBytes = MAX_PREAUTH_PAYLOAD_BYTES;
     clearTimeout(this.bootstrapPause?.timer);
     this.bootstrapPause = undefined;
     const retired = this.pending;

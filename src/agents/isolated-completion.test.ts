@@ -65,6 +65,7 @@ function cliComplete(overrides: Parameters<typeof complete>[0] = {}) {
 const cliOwner = { kind: "cli", id: "claude-cli" };
 const runtimeLease = () => ({
   snapshot: preparedModelRuntime,
+  run: <T>(run: () => T): T => run(),
   [Symbol.asyncDispose]: releaseRuntimeLease,
 });
 const admittedFixture = () => ({

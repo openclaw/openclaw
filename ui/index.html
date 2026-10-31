@@ -339,6 +339,7 @@
         position: relative;
         container-type: inline-size;
         min-width: 0;
+        min-height: 0;
         height: 100%;
         background: var(--bg-content, var(--boot-content-bg));
       }
@@ -563,8 +564,105 @@
 
       @media (max-width: 900px) {
         :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
-          .loading-skeleton:has(#openclaw-boot-composer:focus) {
+          .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
           padding-bottom: 6px;
+        }
+      }
+
+      @media (max-width: 900px),
+        (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        /* Merged web chrome uses the mobile composer; native shells retain its base gap. */
+        html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
+          padding-bottom: 10px;
+        }
+      }
+
+      @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer) {
+          /* Measure available width outside the border, like the live composer. */
+          container-name: chat-composer;
+          container-type: inline-size;
+          padding-inline: 16px;
+        }
+
+        @container chat-composer (max-width: 560px) {
+          html[data-openclaw-boot-chat]:not(
+              .openclaw-native-macos,
+              .openclaw-native-nav,
+              .openclaw-native-web-chrome
+            )
+            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+            .loading-skeleton:has(#openclaw-boot-composer:focus)
+            > .loading-skeleton__messages:not(.loading-skeleton__content) {
+            /* Decorative messages yield space to the focused composer in a short pane. */
+            min-height: 0;
+            overflow: hidden;
+          }
+
+          html[data-openclaw-boot-chat]:not(
+              .openclaw-native-macos,
+              .openclaw-native-nav,
+              .openclaw-native-web-chrome
+            )
+            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+            .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
+            .loading-skeleton__composer:has(> #openclaw-boot-composer) {
+            /* The live landscape frame keeps its cap when pane height is scarce. */
+            max-height: min(36vh, 164px);
+            padding: 6px 0 48px;
+            overflow-x: hidden;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+          }
+
+          html[data-openclaw-boot-chat]:not(
+              .openclaw-native-macos,
+              .openclaw-native-nav,
+              .openclaw-native-web-chrome
+            )
+            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+            .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
+            .loading-skeleton__composer
+            > #openclaw-boot-composer {
+            min-height: 48px;
+            max-height: 56px;
+            padding: 6px 14px;
+            overflow-y: auto;
+          }
+        }
+
+        @container chat-composer (width > 560px) {
+          html[data-openclaw-boot-chat]:not(
+              .openclaw-native-macos,
+              .openclaw-native-nav,
+              .openclaw-native-web-chrome
+            )
+            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+            .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
+            .loading-skeleton__composer:has(> #openclaw-boot-composer) {
+            /* Reserve the live row and footer outside the editor's scrollport. */
+            min-height: 112px;
+            padding: 6px 0 48px;
+          }
+
+          html[data-openclaw-boot-chat]:not(
+              .openclaw-native-macos,
+              .openclaw-native-nav,
+              .openclaw-native-web-chrome
+            )
+            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+            .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
+            .loading-skeleton__composer
+            > #openclaw-boot-composer {
+            min-height: 48px;
+            max-height: 56px;
+            padding: 10px 12px;
+            overflow-y: auto;
+          }
         }
       }
 
@@ -584,7 +682,10 @@
           border-radius: 20px;
         }
 
-        #openclaw-boot-composer:focus {
+        /* Recovery controls must not move between pointer down and click when
+           the editor loses focus. Keep its editing space while recovery is shown. */
+        #openclaw-boot-composer:focus,
+        .loading-skeleton:has(.loading-skeleton__content) #openclaw-boot-composer {
           min-height: 90px;
           max-height: 192px;
           padding: 12px 14px 54px;

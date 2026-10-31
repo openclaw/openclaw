@@ -302,6 +302,20 @@ it.each([
   },
 );
 
+it("hosts a managed-worktree session's review in its recorded canonical workspace", async () => {
+  const canonicalWorkspaceDir = path.join(state.workspaceDir, "canonical");
+  const worktreeCandidate = await createExperienceReviewCandidate(
+    "worktree-review",
+    [{ role: "user", content: prompt, timestamp: 1 }],
+    { workspaceDir: state.workspaceDir, modelId: "gpt-test", canonicalWorkspaceDir },
+  );
+  const prepared = await experienceReview.prepareSkillExperienceReviewCandidate(
+    worktreeCandidate,
+    worktreeCandidate.config,
+  );
+  expect(prepared?.ctx.workspaceDir).toBe(canonicalWorkspaceDir);
+});
+
 it.each(["off", "tool-policy"] as const)(
   "admits a due review under the current config, so %s refuses it",
   async (restriction) => {

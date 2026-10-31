@@ -1,9 +1,15 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { expect, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import {
+  createGitRuntimeTransaction,
+  prepareGitRuntimePromotion,
+} from "../infra/update-runner-git-runtime.js";
 import { updateGitCheckout } from "../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { ExitError } from "../runtime.js";
@@ -170,27 +176,106 @@ export const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): Up
   ...overrides,
 });
 
-export const mockGitUpdateAfterMutation = (
+export async function retainFixtureGitRuntime(
+  gitRoot: string,
+  onTransaction: NonNullable<Parameters<typeof updateGitCheckout>[0]["opts"]["onTransaction"]>,
+) {
+  const root = await fs.realpath(gitRoot);
+  const originalManifest = await fs.readFile(path.join(root, "package.json"));
+  const originalRuntime = await fs.stat(path.join(root, "dist")).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  const artifacts = path.join(root, ".artifacts");
+  await fs.mkdir(artifacts, { recursive: true });
+  const scope = await fs.mkdtemp(path.join(artifacts, "update-runtime-fixture-"));
+  const candidate = path.join(scope, "candidate");
+  await fs.mkdir(candidate);
+  try {
+    if (originalRuntime) {
+      await fs.cp(path.join(root, "dist"), path.join(candidate, "dist"), { recursive: true });
+    } else {
+      await fs.mkdir(path.join(candidate, "dist"));
+      await fs.writeFile(path.join(candidate, "dist", "index.js"), "export {};\n");
+    }
+    const promotion = await prepareGitRuntimePromotion(
+      root,
+      candidate,
+      async () => ({ code: 0, stdout: "dist/\0", stderr: "" }),
+      5_000,
+      scope,
+    );
+    await promotion.activate();
+    await onTransaction(
+      createGitRuntimeTransaction({
+        root,
+        promotion,
+        assertRollbackSafe: async () => {
+          expect(await fs.realpath(gitRoot)).toBe(root);
+          expect(await fs.readFile(path.join(root, "package.json"))).toEqual(originalManifest);
+        },
+        restoreRuntime: async (assertCurrent) => {
+          await promotion.restore(assertCurrent);
+          if (originalRuntime) {
+            expect(await fs.stat(path.join(root, "dist"))).toMatchObject({
+              dev: originalRuntime.dev,
+              ino: originalRuntime.ino,
+            });
+          } else {
+            await expect(fs.stat(path.join(root, "dist"))).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+          }
+          return {
+            name: "git-runtime-rollback",
+            command: "restore retained fixture runtime",
+            cwd: root,
+            durationMs: 0,
+            exitCode: 0,
+            activePackageRoot: root,
+          };
+        },
+      }),
+    );
+  } finally {
+    await fs.rm(scope, { recursive: true, force: true });
+  }
+}
+
+export function createGitUpdateAfterMutationFixture(
   result = makeOkUpdateResult({ mode: "git" }),
   reinspect = false,
-) => {
+) {
   const mutationAdmitted = vi.fn();
-  vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
-    await opts.inspectGitTarget({});
+  const run: typeof updateGitCheckout = async ({ opts, gitRoot }) => {
+    const target = { version: result.after?.version ?? undefined };
+    await opts.inspectGitTarget(target);
     await opts.prepareGitExposure?.(
       expectDefined(result.root, "candidate checkout"),
       expectDefined(result.after?.sha ?? undefined, "candidate commit"),
       undefined,
     );
-    if (result.root) {
-      await opts.validateCandidate(result.root);
-    }
+    await opts.validateCandidate(result.root ?? gitRoot);
     await expectDefined(opts.beforeGitMutation, "Git mutation admission")({});
     mutationAdmitted();
+    if (opts.onTransaction) {
+      await retainFixtureGitRuntime(gitRoot, opts.onTransaction);
+    }
     if (reinspect) {
-      await opts.inspectGitTarget({});
+      await opts.inspectGitTarget(target);
     }
     return result;
-  });
-  return mutationAdmitted;
+  };
+  return { run, mutationAdmitted };
+}
+
+export const mockGitUpdateAfterMutation = (
+  result = makeOkUpdateResult({ mode: "git" }),
+  reinspect = false,
+) => {
+  const fixture = createGitUpdateAfterMutationFixture(result, reinspect);
+  vi.mocked(updateGitCheckout).mockImplementationOnce(fixture.run);
+  return fixture.mutationAdmitted;
 };

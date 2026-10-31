@@ -220,6 +220,9 @@ export function loadPluginManifest(
   if (!configSchema) {
     return fail("plugin manifest requires configSchema");
   }
+  if (raw.generationOverlap !== undefined && typeof raw.generationOverlap !== "boolean") {
+    return fail("plugin manifest generationOverlap must be a boolean");
+  }
   const backupResources = parseManifestBackupResources(raw.backupResources);
   if (!backupResources.ok) {
     return cacheResult({
@@ -395,6 +398,7 @@ export function loadPluginManifest(
       : {}),
     ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
     ...(raw.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(raw.generationOverlap !== undefined ? { generationOverlap: raw.generationOverlap } : {}),
     ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
     ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),

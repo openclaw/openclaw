@@ -66,7 +66,6 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
       timeoutMs: operationTimeoutMs,
       label: "Google music generation",
     });
-    let generated: { tracks: GeneratedMusicAsset[]; lyrics: string[] } | undefined;
     // Lyria promises audio for successful Clip responses, but has returned
     // unblocked text-only payloads transiently. Never retry explicit stops.
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -137,29 +136,24 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
           );
         }
       }
-      generated = { tracks, lyrics };
-      if (generated.tracks.length > 0) {
-        break;
+      if (tracks.length > 0) {
+        return {
+          tracks,
+          ...(lyrics.length > 0 ? { lyrics } : {}),
+          model,
+          metadata: {
+            inputImageCount: req.inputImages?.length ?? 0,
+            instrumental: req.instrumental === true,
+            ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
+            ...(req.format ? { requestedFormat: req.format } : {}),
+          },
+        };
       }
       const terminalReason = resolveTerminalNoAudioReason(response);
       if (terminalReason) {
         throw new Error(`Google music generation returned no audio: ${terminalReason}`);
       }
     }
-    if (!generated || generated.tracks.length === 0) {
-      throw new Error("Google music generation response missing audio data");
-    }
-    const { tracks, lyrics } = generated;
-    return {
-      tracks,
-      ...(lyrics.length > 0 ? { lyrics } : {}),
-      model,
-      metadata: {
-        inputImageCount: req.inputImages?.length ?? 0,
-        instrumental: req.instrumental === true,
-        ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
-        ...(req.format ? { requestedFormat: req.format } : {}),
-      },
-    };
+    throw new Error("Google music generation response missing audio data");
   },
 };

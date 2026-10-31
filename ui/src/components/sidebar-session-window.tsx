@@ -17,7 +17,7 @@ export function createSidebarSessionWindow(
 ) {
   const scroll = useContext(SidebarScrollContext);
   let list: HTMLDivElement;
-  const [rowFloor, setRowFloor] = createSignal(30);
+  const [rowFloor, setRowFloor] = createSignal(32);
   const [focusedKey, setFocusedKey] = createSignal<string>();
   const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>({
     items: [],
@@ -36,7 +36,7 @@ export function createSidebarSessionWindow(
     const preview =
       host().sessionsShowPreview &&
       Boolean(row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation);
-    const ownHeight = Math.max(preview ? 50 : 30, rowFloor());
+    const ownHeight = Math.max(preview ? 44 : 32, rowFloor());
     if (!host().isSessionChildrenExpanded(row)) {
       return { height: ownHeight, signature: [preview] };
     }
@@ -50,11 +50,9 @@ export function createSidebarSessionWindow(
     return {
       height:
         ownHeight +
-        2 +
         children.reduce((height, child) => height + child.height, 0) +
-        Math.max(0, children.length - 1) * 2 +
-        (children.length < row.children.length ? 30 : 0) +
-        (row.loadingChildren && children.length === 0 ? 30 : 0),
+        (children.length < row.children.length ? 28 : 0) +
+        (row.loadingChildren && children.length === 0 ? 32 : 0),
       signature: [preview, children.map((child) => child.signature), row.loadingChildren, errors],
     };
   };
@@ -132,10 +130,10 @@ export function createSidebarSessionWindow(
       const known = measured.get(input.row.key);
       const height = known?.signature === input.signature ? known.height : input.height;
       const item = { row: input.row, index, top, height };
-      top += height + 2;
+      top += height;
       return item;
     });
-    totalHeight = Math.max(0, top - 2);
+    totalHeight = top;
     const next = anchor && positions.find((item) => item.row.key === anchor.row.key);
     if (scroller && next && next.top !== anchor?.top) {
       scroller.scrollTop = margin + next.top + offset;
@@ -152,7 +150,7 @@ export function createSidebarSessionWindow(
       const style = getComputedStyle(scroller);
       // Unstyled hosts retain the estimate until CSS supplies the row minimum.
       const nextRowFloor =
-        Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor")) || 30;
+        Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor")) || 32;
       const nextLayout = [
         scroller.clientWidth,
         style.getPropertyValue("--control-ui-text-scale"),
@@ -252,8 +250,8 @@ export function createSidebarSessionWindow(
       0,
       inputs().reduce((height, input) => {
         const known = measured.get(input.row.key);
-        return height + (known?.signature === input.signature ? known.height : input.height) + 2;
-      }, -2),
+        return height + (known?.signature === input.signature ? known.height : input.height);
+      }, 0),
     );
   });
   return {

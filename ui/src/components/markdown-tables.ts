@@ -2,6 +2,7 @@ import type { MarkdownIt } from "markdown-it";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
@@ -53,18 +54,20 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
     .join("\n");
 }
 
-function syncTableOverflow(shell: HTMLElement): void {
+function measureTableOverflow(shell: HTMLElement): (() => void) | undefined {
   const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
   if (!viewport) {
-    return;
+    return undefined;
   }
   const { scrollWidth, clientWidth, scrollLeft } = viewport;
   const overflows = scrollWidth - clientWidth > 1;
-  shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
-  shell.classList.toggle(
-    "markdown-table--can-scroll-right",
-    overflows && scrollLeft + clientWidth < scrollWidth - 1,
-  );
+  return () => {
+    shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
+    shell.classList.toggle(
+      "markdown-table--can-scroll-right",
+      overflows && scrollLeft + clientWidth < scrollWidth - 1,
+    );
+  };
 }
 
 function enhanceTableShell(shell: HTMLElement): void {
@@ -92,14 +95,25 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedNodes = new Set<HTMLElement>();
+    const pendingOverflow = new Set<HTMLElement>();
     const resizeObserver = new ResizeObserver((entries) => {
       const shells = new Set(
         entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
       );
       for (const shell of shells) {
         if (shell) {
-          syncTableOverflow(shell);
+          pendingOverflow.add(shell);
         }
+      }
+      if (pendingOverflow.size) {
+        // Even reading a masked scrollport can force WebKit layout mid-delivery.
+        scheduleLayout(pendingOverflow, () => {
+          const updates = [...pendingOverflow].map((shell) =>
+            owner.contains(shell) ? measureTableOverflow(shell) : undefined,
+          );
+          pendingOverflow.clear();
+          return () => updates.forEach((update) => update?.());
+        });
       }
     });
     const syncTables = (shells: Iterable<HTMLElement>) => {
@@ -179,7 +193,8 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         }
         const shell = viewport.closest<HTMLElement>(tableShellSelector);
         if (shell) {
-          syncTableOverflow(shell);
+          pendingOverflow.delete(shell);
+          measureTableOverflow(shell)?.();
         }
       },
       { capture: true, passive: true },
@@ -189,6 +204,8 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         stopScroll();
         mutationObserver.disconnect();
         resizeObserver.disconnect();
+        cancelLayout(pendingOverflow);
+        pendingOverflow.clear();
       },
     };
     tableOwnerStates.set(owner, state);

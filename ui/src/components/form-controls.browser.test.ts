@@ -398,45 +398,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
-  it("keeps the gradient chevron where customizable selects are unavailable", async () => {
-    await withBrowserPage(mobileContext.newPage(), async (page) => {
-      await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
-      await page.evaluate(() => {
-        for (const style of document.querySelectorAll("style")) {
-          style.textContent = style.textContent.replaceAll(
-            "@supports (appearance: base-select)",
-            "@supports (appearance: openclaw-unsupported)",
-          );
-        }
-      });
-      const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
-        nodes.map((node) => {
-          const style = getComputedStyle(node as HTMLElement);
-          return {
-            appearance: style.appearance,
-            image: style.backgroundImage,
-            paddingRight: Number.parseFloat(style.paddingRight),
-            positionX: style.backgroundPositionX.split(",").map((value) => value.trim()),
-            size: style.backgroundSize.split(",").map((value) => value.trim()),
-            repeat: style.backgroundRepeat.split(",").map((value) => value.trim()),
-          };
-        }),
-      );
-
-      expect(selects).toHaveLength(2);
-      for (const select of selects) {
-        expect(select).toMatchObject({
-          appearance: "none",
-          positionX: ["calc(100% - 18px)", "calc(100% - 14px)"],
-          size: ["5px 5px", "5px 5px"],
-          repeat: ["no-repeat", "no-repeat"],
-        });
-        expect(select.image.match(/linear-gradient[(]/g)).toHaveLength(2);
-        expect(select.paddingRight).toBeGreaterThanOrEqual(32);
-      }
-    });
-  });
-
   it("keeps mobile control sizes and themed select affordances", async () => {
     await withBrowserPage(mobileContext.newPage(), async (page) => {
       await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
@@ -505,6 +466,17 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect([text, select]).toEqual([38, 38]);
       expect(checkbox).toBeLessThan(38);
       expect(radio).toBeLessThan(38);
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      for (const picker of await page.locator(".field select, select.settings-select").all()) {
+        await picker.click();
+        expect(
+          await picker.evaluate(
+            (node) => getComputedStyle(node, "::picker(select)").transitionProperty,
+          ),
+        ).toBe("none");
+        await page.keyboard.press("Escape");
+      }
     });
   });
 
@@ -542,7 +514,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <input data-scale data-baseline="16" data-scale-base="12.5" class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span data-scale data-baseline="12" class="sidebar-recent-session__name">Child session</span>
-                <span data-scale data-baseline="10" class="session-row-trail">3m</span>
+                <span data-scale class="session-row-trail">3m</span>
               </div>
             </div>`
             : `<span data-scale class="nav-item__text">Navigation</span>

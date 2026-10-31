@@ -216,9 +216,13 @@ export function createCrabboxWorkerProvider(
       ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
       : CRABBOX_WARMUP_TIMEOUT_MS;
     const protectedSetup = Object.keys(parsed.setupSecrets ?? {}).length > 0;
-    const project = parsed.warmImage || protectedSetup ? options?.project : undefined;
+    const project = supportsCrabboxProjectPreparation(profile, options?.machineClass, options?.os)
+      ? options?.project
+      : undefined;
     if (options?.project?.preparation && !project) {
-      throw new WorkerProviderError("Crabbox prepared workers require warm images");
+      throw new WorkerProviderError(
+        "Crabbox prepared workers require warm images, protected setup, or a configured Linux Sandbox disk",
+      );
     }
     const preparationSignal = AbortSignal.any([
       providerAbort.signal,

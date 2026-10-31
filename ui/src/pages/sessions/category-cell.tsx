@@ -1,9 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
+registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
 
 type CategoryCellProps = {

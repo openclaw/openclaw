@@ -640,7 +640,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     readPreparedSpawnedBy,
     describe,
     ...rowRelations.createSessionRowAncestorReads({
-      state: () => ({ cfg, context: metadata.current }),
+      state: () => ({ cfg, context: metadata.current, catalog }),
       referenced,
       lookup,
       prepareExactRows,

@@ -286,6 +286,10 @@ export type OpenClawPluginApi = {
       shareMaxAgeMs?: number;
     },
   ) => void;
+  /** Register repository preparation policy, selected by gateway.repositoryIntegration. */
+  registerRepositoryIntegration: (
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
+  ) => void;
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */
   registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
   /** Register a sandboxed board widget source kind owned by this plugin. */
@@ -382,8 +386,8 @@ export type OpenClawPluginApi = {
   /** Register a versioned typed decision executor declared in the manifest. */
   registerDecisionProvider: (
     provider:
-      | import("../decisions/types.js").DecisionProviderV1
-      | import("../decisions/types-v2.js").DecisionProviderV2,
+      | import("../decisions/provider-types.js").DecisionProviderV1
+      | import("../decisions/provider-types.js").DecisionProviderV2,
   ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (

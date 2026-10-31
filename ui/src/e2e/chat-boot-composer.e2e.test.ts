@@ -5,6 +5,13 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI boot composer" });
 const sessionKey = "agent:main:boot-composer";
 const viewport = { width: 1280, height: 800 };
+const landscapeViewport = { width: 932, height: 430 };
+const phoneOptions = {
+  isMobile: true,
+  hasTouch: true,
+  userAgent:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+};
 
 function bootGateway(page: Parameters<typeof installMockGateway>[0], heldMethods: string[]) {
   return installMockGateway(page, {
@@ -28,9 +35,25 @@ suite.define(() => {
       // Like the chat composer, it takes focus only from the operator; nothing covers it.
       expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
       await boot.click();
-      const status = await page.locator(".connect-splash__status").boundingBox();
-      const frame = await page.locator(".loading-skeleton__composer").boundingBox();
-      expect(status!.y + status!.height).toBeLessThanOrEqual(frame!.y);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const status = document
+              .querySelector(".connect-splash__status")
+              ?.getBoundingClientRect();
+            const frame = document
+              .querySelector(".loading-skeleton__composer")
+              ?.getBoundingClientRect();
+            return Boolean(
+              status &&
+              frame &&
+              status.height > 0 &&
+              frame.height > 0 &&
+              status.bottom <= frame.top,
+            );
+          }),
+        )
+        .toBe(true);
       await page.keyboard.type("Ship the boot ");
 
       // The Gateway admits the browser; the same element moves into the shell's route frame.
@@ -58,20 +81,13 @@ suite.define(() => {
   });
 
   it.each([
-    { name: "desktop", options: { viewport } },
-    {
-      name: "phone",
-      options: {
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
-        hasTouch: true,
-        userAgent:
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
-      },
-    },
+    { name: "desktop", options: { viewport, isMobile: false } },
+    { name: "phone", options: { ...phoneOptions, viewport: { width: 390, height: 844 } } },
+    { name: "phone landscape", options: { ...phoneOptions, viewport: landscapeViewport } },
+    { name: "small phone", options: { ...phoneOptions, viewport: { width: 568, height: 320 } } },
   ])(
     "keeps an unsent draft, its focus and its frame still when the session opens ($name)",
-    async ({ name, options }) => {
+    async ({ options }) => {
       await suite.withPage(options, async ({ page }) => {
         const gateway = await bootGateway(page, ["connect"]);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
@@ -81,16 +97,18 @@ suite.define(() => {
         await boot.waitFor({ state: "visible" });
         // Like the chat composer, it takes focus only from the operator.
         expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
-        if (name === "phone") {
+        if (options.isMobile) {
           await boot.tap();
         } else {
           await boot.click();
         }
-        const text = "Draft, not yet sent, long enough to wrap onto another line of the composer";
+        const text =
+          options.isMobile && options.viewport.width > options.viewport.height
+            ? "First line\nSecond line\nThird line\nFourth line"
+            : "Draft, not yet sent, long enough to wrap onto another line of the composer";
         await page.keyboard.type(text);
-        await page.keyboard.press(name === "phone" ? "Enter" : "Shift+Enter");
+        await page.keyboard.press(options.isMobile ? "Enter" : "Shift+Enter");
         await page.keyboard.type("second line");
-        // The caret moves into the draft; the handoff must keep it there.
         for (let index = 0; index < "line".length; index += 1) {
           await page.keyboard.press("ArrowLeft");
         }
@@ -105,13 +123,15 @@ suite.define(() => {
               box.y,
               box.width,
               box.height,
-              origin.x + Number.parseFloat(style.paddingLeft),
-              origin.y + Number.parseFloat(style.paddingTop),
+              origin.x + Number.parseFloat(style.paddingLeft) - editor.scrollLeft,
+              origin.y + Number.parseFloat(style.paddingTop) - editor.scrollTop,
+              editor.scrollTop,
             ].map(Math.round);
           });
-        const before = await geometry(".loading-skeleton__composer");
-        // Record every animation frame through the handoff: each one must show one
-        // composer, at one size, holding the whole draft.
+        // Module startup moves the editor out of the static frame first.
+        await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
+        const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
+        // Every frame keeps one stationary composer, its visible draft and scroll position.
         await page.evaluate(() => {
           const frames: string[] = [];
           Reflect.set(window, "__bootComposerFrames", frames);
@@ -125,7 +145,7 @@ suite.define(() => {
             frames.push(
               editors.length === 1 && box
                 ? JSON.stringify([
-                    ...[box.x, box.y, box.width, box.height].map(Math.round),
+                    ...[box.x, box.y, box.width, box.height, editor!.scrollTop].map(Math.round),
                     editor!.value.length,
                   ])
                 : `editors:${editors.length}`,
@@ -141,7 +161,6 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const draft = `${text}\nsecond line`;
         await expect.poll(() => composer.inputValue()).toBe(draft);
-        // The chat composer takes the same frame and text origin: nothing jumps.
         expect(await geometry(".agent-chat__input")).toEqual(before);
         await page.waitForFunction(
           () => (Reflect.get(window, "__bootComposerFrames") as string[]).length >= 90,
@@ -150,7 +169,7 @@ suite.define(() => {
           (await page.evaluate(() => Reflect.get(window, "__bootComposerFrames"))) as string[],
         );
         expect([...frames]).toEqual([
-          JSON.stringify([...before.slice(0, 4), text.length + "\nsecond line".length]),
+          JSON.stringify([...before.slice(0, 4), before[6], draft.length]),
         ]);
         expect(await composer.evaluate((el) => el === document.activeElement)).toBe(true);
         await page.keyboard.type("!");
@@ -171,12 +190,43 @@ suite.define(() => {
         waitUntil: "domcontentloaded",
       });
       await page.locator("#openclaw-boot-composer").click();
+      const original = await page.locator("#openclaw-boot-composer").elementHandle();
       await page.keyboard.type("Send this only if the session opens");
       await page.keyboard.press("Enter");
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
       const missing = page.locator(".session-route-not-found");
       await missing.waitFor({ state: "visible" });
+      const retained = page.locator("#openclaw-boot-composer");
+      await retained.waitFor({ state: "visible" });
+      expect(
+        await retained.evaluate((element) => {
+          const frame = element.closest(".lazy-view-state--route")!.getBoundingClientRect();
+          const outlet = element.closest("openclaw-router-outlet")!.getBoundingClientRect();
+          return Math.abs(frame.width - outlet.width) < 1;
+        }),
+      ).toBe(true);
+      expect(await original?.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await retained.inputValue()).toBe("Send this only if the session opens");
+      // A resolved route must not leave a loading animation intercepting the editor.
+      expect(
+        await retained.evaluate(async (element) => {
+          let intercepted = 0;
+          for (let frame = 0; frame < 120; frame += 1) {
+            await new Promise(requestAnimationFrame);
+            const box = element.getBoundingClientRect();
+            if (
+              document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) !== element
+            ) {
+              intercepted += 1;
+            }
+          }
+          return intercepted;
+        }),
+      ).toBe(0);
+      await retained.fill("");
+      expect(await retained.inputValue()).toBe("");
+      await retained.fill("Still only for the original session");
       await missing.getByRole("button", { name: "Go to main session" }).click();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });

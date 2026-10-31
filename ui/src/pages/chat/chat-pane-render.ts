@@ -18,6 +18,7 @@ import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
+import { chatHistoryOlderSelector } from "./chat-history-request.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -164,20 +165,21 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const multiIdentity = this.hasMultipleIdentities();
     const catalogReason = this.catalogComposerReason(catalogKey);
     const catalogDisabledReason = catalogReason?.text ?? null;
-    const { closePanelSlot, openPanelSlot, sessionWorkspace } = createChatPaneRails({
-      state,
-      sidebarLayout,
-      presentation: this.sessionPresentation,
-      visibleLayout: this.usesMobileHost ? this.presentSidebarLayout(sidebarLayout) : undefined,
-      presentationId: this.presentationId,
-      sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
-      paneLabel: this.paneLabel,
-      presented: this.presented,
-      gatewaySnapshot,
-      setObserverVisibility: this.setSessionObserverVisibility,
-      updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
-      onOpenPanel: this.onSidebarPanelOpened,
-    });
+    const { closePanelSlot, openPanelSlot, onFindWorkspaceFile, sessionWorkspace } =
+      createChatPaneRails({
+        state,
+        sidebarLayout,
+        presentation: this.sessionPresentation,
+        visibleLayout: this.usesMobileHost ? this.presentSidebarLayout(sidebarLayout) : undefined,
+        presentationId: this.presentationId,
+        sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
+        paneLabel: this.paneLabel,
+        presented: this.presented,
+        gatewaySnapshot,
+        setObserverVisibility: this.setSessionObserverVisibility,
+        updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+        onOpenPanel: this.onSidebarPanelOpened,
+      });
     const gatewayScope = gatewayPresentationScope(this.context.gateway);
     const selfUser = resolveCurrentSelfUser({
       snapshotUser:
@@ -202,7 +204,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const historyHasMore = catalogKey
       ? Boolean(this.history.catalogCursor)
-      : state.chatHistoryPagination.hasMore;
+      : chatHistoryOlderSelector(state) !== null;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       state,
@@ -502,13 +504,13 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : undefined,
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
-      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
-      onModelSetup: () => this.context.navigate("model-setup"),
       error: providerPaused ? null : state.lastError,
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
-        catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
+        catalogKey || providerPaused || selectedSessionArchived
+          ? null
+          : (state.chatRunError ?? placementComposer.runError),
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
@@ -532,7 +534,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       contextGateway: this.context.gateway,
       onOpenContext: this.openContextPanel,
-      operatorAuth: state.hello?.auth ?? null,
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
@@ -554,6 +555,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
       onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
+      onFindWorkspaceFile: state.connected && !catalog ? onFindWorkspaceFile : undefined,
       onOpenManagedArtifact: (href) => openSessionWorkspaceManagedArtifact(state, href),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),

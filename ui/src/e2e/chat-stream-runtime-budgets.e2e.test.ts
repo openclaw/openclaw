@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import {
   evaluateControlUiContext,
@@ -12,7 +13,10 @@ import {
   requireString,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -503,6 +507,12 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // Missing Resource Timing entries must not prevent menu readiness.
+      await page.addInitScript(() => performance.setResourceTimingBufferSize(0));
+      const heldMenu = await holdModuleResponse(
+        page,
+        /\/board-widget-menu[^/]*\.(?:js|tsx)(?:\?.*)?$/u,
+      );
       const gateway = await installMockGateway(page, {
         deferredMethods: ["models.list"],
         heldMethods: ["sessions.describe"],
@@ -549,6 +559,23 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      // Exercise the lazy menus and observe rendered readiness, independent of
+      // resource timing entries or whether their modules were already evaluated.
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      await pane.locator(".chat-header-session-menu__trigger").click();
+      await heldMenu.request;
+      const sessionMenu = pane.locator("openclaw-chat-header-session-menu");
+      expect(await sessionMenu.getByRole("menuitem", { name: "Advanced" }).count()).toBe(0);
+      heldMenu.release();
+      await sessionMenu.getByRole("menuitem", { name: "Advanced" }).waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.getByRole("button", { name: "Add attachment", exact: true }).click();
+      await pane
+        .locator(".agent-chat__capability-menu .oc-menu-item:not([disabled])")
+        .first()
+        .waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.evaluate((element: ChatPaneElement) => element.updateComplete);
       await waitForChatScrollIdle(page);
       await installRenderProbe(page);
       await resetRenderProbe(page);

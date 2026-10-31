@@ -68,10 +68,15 @@ result on stdout.
 ## PostgreSQL stores
 
 `openclaw backup create` routes each managed database through its physical engine,
-including activated plugins' declared backup resources. If any selected store
-uses PostgreSQL, stop the Gateway through its service owner first. A running
-Gateway causes a refusal: “stop through the service owner, then rerun.” Backup
-never stops it automatically. The requirement also applies to `create --to`.
+including activated plugins' declared backup resources. It runs while the
+Gateway serves requests, including `create --to`. Each PostgreSQL store is
+exported from one `REPEATABLE READ READ ONLY` snapshot, the same per-store
+consistency as the live SQLite snapshots in the archive; separate stores are
+captured one after another, not at one shared instant. Rows committed after a
+store's snapshot belong to the next backup. With the Gateway stopped, the command
+holds offline custody instead. Restore, Git backups, and generic local snapshots
+that select PostgreSQL still require the Gateway stopped and refuse while it is
+running: “stop through the service owner, then rerun.”
 
 Mixed-engine installations use the same commands and archive format. Each
 store's physical engine and selected shared connection determine its capture;
@@ -106,10 +111,19 @@ restore and update-recovery behavior.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and unsafe symbolic links, confirms every manifest-declared payload exists, and validates the root SQLite snapshot and agent snapshots listed in the manifest or captured durable registry. It rejects sidecars for those snapshots and checks their integrity and database roles, including each agent's identity. For each producer-declared PostgreSQL store, including plugins and retained Matrix roots, it verifies the capture manifest hash, export artifacts, and both captured anchors. Restore then rehydrates each store through its provider. Other files, including ordinary plugin files, remain opaque. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - Full archives include the active config and its required `$include` files, including dependencies outside the state directory. They preserve authored bytes, comments, and environment placeholders; resolved secrets are not written into the config copy. These additional files may contain sensitive data, so protect the archive accordingly.
+- A symlinked active config is supported: full archives preserve the link and separately capture its resolved file and required `$include` files. Changes to the link or captured files during capture fail creation.
 - AppleDouble metadata named `._*.sqlite`, such as `._cron.sqlite`, is excluded from state and agent database roots only when its file signature confirms the format. Real SQLite files and hardlink aliases with these names follow the same ownership rules as other databases.
 - Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
 - `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
+- Existing FIFOs and other unsupported special files are skipped. If a regular source becomes a FIFO during capture, backup fails rather than waiting for a writer; rerun after the workspace stops changing.
+
+Verification normally reads and decompresses the archive once, retaining database
+candidates in private temporary storage for the same integrity and ownership
+checks. A trailing manifest or a database discovered through the archived agent
+registry does not require another pass. If temporary storage cannot retain a
+candidate, verification can reread the archive to extract only the required
+artifacts. The archive format and compression settings are unchanged.
 
 Archive members live beneath a timestamped root and `payload/`, with source paths
 encoded below it. Counting entries beginning `.openclaw/agents/` therefore returns
@@ -738,9 +752,10 @@ agent databases nested inside an excluded checkout remain included.
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.
 
-OpenClaw first plans resources from configuration. It captures the root SQLite
-database online, then derives registered-agent ownership from that
-private snapshot for database discovery and archive traversal. Paths are resolved before comparison: config, credentials, workspaces, and agents
+OpenClaw first plans resources from configuration. It captures the shared
+database through its physical engine, then derives registered-agent ownership
+from that private SQLite snapshot or PostgreSQL export for database discovery
+and archive traversal. Paths are resolved before comparison: config, credentials, workspaces, and agents
 already covered by another included root are not duplicated as top-level
 sources. A custom agent root becomes a distinct `agent` asset only when no
 existing asset covers it; the manifest still records its agent id and root when
@@ -836,7 +851,7 @@ The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symli
 
 Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
 
-Symbolic links are archived as link entries, including absolute and dangling targets. Windows target separators are stored as forward slashes to match tar's reader; POSIX target text, including literal backslashes, is preserved. Creation never follows a link to copy its target. Targets outside the state directory, including separately backed-up config, credentials, or workspace targets, are recorded in the manifest and JSON result's `externalSymbolicLinks` list and reported in the text summary. Restore recreates the links after extracting the file content; it never writes through a restored link. Verification rejects archive entries nested beneath a symbolic link.
+Symbolic links are archived as link entries, including absolute and dangling targets. Windows target separators are stored as forward slashes to match tar's reader; POSIX target text, including literal backslashes, is preserved. Ordinary link targets are not copied through the link; explicitly selected config and credentials targets are captured separately. Targets outside the state directory, including separately backed-up config, credentials, or workspace targets, are recorded in the manifest and JSON result's `externalSymbolicLinks` list and reported in the text summary. Restore recreates the links after extracting the file content; it never writes through a restored link. Verification rejects archive entries nested beneath a symbolic link.
 
 Absolute links retain their original location after restore, including links to separately backed-up config or credentials. They are no longer rewritten to relative targets. Review these links before activating a restored tree on another host or at another path. Older releases, including v2026.9.4, reject archives with absolute or escaping link targets; use the current release to restore those archives. Existing archives remain readable.
 
@@ -864,7 +879,7 @@ Local edits inside a managed `dev/` checkout are developer source, not OpenClaw 
 
 `openclaw backup` bypasses the normal config preflight so it can still help during recovery. State archives require resolved agent and plugin ownership. If discovery fails, `backup create` reports the underlying error and refuses to publish an archive. `--no-include-workspace` excludes workspace files; it does not bypass ownership discovery.
 
-Discovery reads shared state through an online SQLite snapshot so concurrent writers do not make a valid config appear invalid. If the state cannot be read, resolve the reported error and retry backup.
+For SQLite state, discovery reads an online snapshot so concurrent writers do not make a valid config appear invalid. PostgreSQL state uses the configured engine through a discovery worker. If the state cannot be read, resolve the reported error and retry backup.
 
 Local `--only-config` still works when the config is malformed or state discovery fails. It saves the active JSON config file alone, without parsing it or including its dependencies. Uploading it with `--to` additionally requires readable storage configuration.
 

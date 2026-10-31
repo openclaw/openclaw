@@ -1376,6 +1376,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-message-actions"].exists)
         assistant.press(forDuration: 0.8)
         XCTAssertTrue(assistant.exists)
         XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
@@ -2165,7 +2166,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func agentIdentity(in app: XCUIApplication) -> XCUIElement {
-        app.otherElements.matching(identifier: "chat-agent-identity").firstMatch
+        app.buttons.matching(identifier: "chat-agent-identity").firstMatch
     }
 
     private func readinessMarker(in app: XCUIApplication) -> XCUIElement {

@@ -443,6 +443,7 @@ Key toggles:
 | `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`                    |
 | `vault.renderMode`                         | `native` (default), `obsidian`                 | `obsidian` writes Obsidian-friendly pages instead of native output                         |
 | `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                               |
+| `bridge.ownership`                         | `sandboxed-only` (default), `owner`            | scope bridge-page reads only for sandboxed callers, or for every caller                    |
 | `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                                          |
 | `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                                     |
 | `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                                      |
@@ -457,6 +458,24 @@ The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is
 set, default wiki vaults use that directory instead. Explicit `vault.path`
 values keep their configured location, and `~/` still expands against the home
 directory.
+
+### Bridge page visibility in a shared vault
+
+For agents that share one global wiki but should retrieve only their own imported
+memory notes, set `bridge.ownership` to `owner`. `wiki_search` and `wiki_get`
+then apply the existing sandbox ownership filter to non-sandboxed callers too.
+Bridge pages without ownership metadata are hidden. Native wiki pages remain
+shared, including aggregate pages that may mention other agents' material.
+
+The default, `sandboxed-only`, preserves today's behavior: non-sandboxed callers
+can read every bridge page, while sandboxed callers see only their own. Neither
+setting widens sandboxed reads. CLI reads use the configured default agent unless
+`--agent` is passed; a caller without a resolved agent cannot read bridge pages
+in `owner` mode.
+
+This setting filters wiki query results, not filesystem access or compiled prompt
+digests. Use per-agent vaults when the whole wiki, including native pages and
+digests, should be separate.
 
 ### Per-agent vaults
 

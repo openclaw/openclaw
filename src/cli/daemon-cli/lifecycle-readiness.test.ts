@@ -190,6 +190,14 @@ describe("Gateway service readiness", () => {
 
   it.each([
     {
+      outcome: "stopped-free",
+      reason: /service stayed stopped/,
+      json: true,
+      updateMarker: undefined,
+      code: 1,
+      result: "restart-health-failed",
+    },
+    {
       outcome: "channel-errors",
       reason: /channel health checks failed/,
       json: true,
@@ -236,11 +244,11 @@ describe("Gateway service readiness", () => {
       waitForGatewayHealthyRestart.mockResolvedValue({
         healthy: false,
         staleGatewayPids: [],
-        runtime: { status: "running", pid: 4242 },
+        runtime: { status: outcome === "stopped-free" ? "stopped" : "running", pid: 4242 },
         portUsage: {
           port: 18789,
-          status: reason ? "busy" : "free",
-          listeners: reason ? [{ pid: 4242 }] : [],
+          status: reason && outcome !== "stopped-free" ? "busy" : "free",
+          listeners: reason && outcome !== "stopped-free" ? [{ pid: 4242 }] : [],
           hints: [],
         },
         waitOutcome: outcome,

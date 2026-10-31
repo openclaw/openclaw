@@ -214,7 +214,8 @@ index maintenance. Callers retain filters, limits, chronology, snippets' display
 bounds, and scoring policy. The adapter's existing capability labels remain
 diagnostic metadata. SQLite retains its L2 candidate selection and cosine
 reranking, with the memory owner's exact fallback when native vectors are
-unavailable. PostgreSQL uses native full-text and exact vector retrieval.
+unavailable. PostgreSQL uses native full-text search and can preselect vector
+candidates with binary sketches before exact cosine reranking.
 `fullText.rank(index, query, { postgres: { normalization: 0 } })` selects
 unnormalized cover density; omitting the option retains document-length
 normalization (`2`). SQLite ignores PostgreSQL rank options. Feature owners

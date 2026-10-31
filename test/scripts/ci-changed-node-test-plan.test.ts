@@ -17,6 +17,7 @@ import {
   isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   CI_PROOF_TEST_FILES,
   PR_PROTECTED_RUNTIME_TEST_FILES,
@@ -51,6 +52,26 @@ import {
   fullOwnerPlan,
   writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
+
+it.each([
+  [".github/workflows/pr-tooling-darwin.yml"],
+  ["scripts/lib/ci-node-test-plan.mts"],
+  ["test/vitest/vitest.tooling.config.ts"],
+  ["test/non-isolated-runner.ts"],
+])("selects Darwin admission guards for %s", (file) => {
+  const targets = resolvePolicyTestTargets([file]);
+  const closureGuard = "test/scripts/pr-wrapper-source-closure.test.ts";
+  expect(targets).toContain(closureGuard);
+  expect(
+    isRuntimeTestFileIncluded(closureGuard, {
+      changedPaths: [file],
+      includePrExemptRuntimeTests: false,
+    }),
+  ).toBe(true);
+  if (!file.startsWith("scripts/lib/ci-")) {
+    expect(targets).toContain("test/scripts/ci-workflow-cost.test.ts");
+  }
+});
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -149,7 +170,13 @@ it.each([
 ] as const)(
   "selects real-Gateway tests through their source, fixture, and protocol owners: %s",
   (file, expected) => {
-    expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
+    try {
+      expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+      expect(timings).not.toHaveBeenCalled();
+    } finally {
+      timings.mockRestore();
+    }
   },
 );
 
@@ -463,6 +490,8 @@ describe("CI changed Node test plan", () => {
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-merge-admission.test.ts",
         "test/scripts/pr-merge-outcome.test.ts",
+        "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+        "test/scripts/pr-merge-prior-ci.test.ts",
         "test/scripts/pr-merge-receipt.test.ts",
         "test/scripts/pr-merge-recovery.test.ts",
         "test/scripts/pr-merge-rest.test.ts",
@@ -473,6 +502,8 @@ describe("CI changed Node test plan", () => {
       const selected = createChangedNodeTestShards(targets, {
         runnerBackend,
         includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        selectionMode: "aggressive",
       });
       expect(before).not.toBeNull();
       expect(selected).not.toBeNull();
@@ -509,6 +540,69 @@ describe("CI changed Node test plan", () => {
           "planConcurrency",
           "pretestBuildMode",
         ]);
+      }
+    },
+  );
+
+  it.each(["blacksmith", "github", "hybrid"])(
+    "selects prior-CI shell fixtures from their owner without enabling unrelated tooling (%s)",
+    (runnerBackend) => {
+      const targets = [
+        "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+        "test/scripts/pr-merge-prior-ci.test.ts",
+      ];
+      const changedPaths = ["scripts/pr-lib/merge-prior-ci.mjs"];
+      const options = {
+        runnerBackend,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        selectionMode: "aggressive" as const,
+      };
+      const watched = resolvePolicyTestTargets(changedPaths);
+      const before = createChangedNodeTestShards(targets, { runnerBackend });
+      // Use the real resolver-to-packer handoff; shell fixtures do not import their owner.
+      const selected = expectDefined(
+        createChangedNodeTestShards(changedPaths, options),
+        "prior-CI owner shard plan",
+      );
+      const envScratch = argvTempDirs.make("prior-ci-owner-env-");
+      const files = selectedFiles(selected);
+      expect(files).not.toContain("test/scripts/ci-workflow-planning.test.ts");
+      for (const target of targets) {
+        expect(watched).toContain(target);
+        expect(isRuntimeTestFileIncluded(target, { ...options, changedPaths })).toBe(true);
+        expect(files.filter((file) => file === target)).toHaveLength(1);
+        const original = targetOwner(before, target);
+        const current = targetOwner(selected, target);
+        expectSameFields(current.owner, original.owner, [
+          "configs",
+          "env",
+          "requiresDist",
+          "pretestBuildMode",
+        ]);
+        expect(current.group?.fallbackMaxWorkers).toBe(original.group?.fallbackMaxWorkers);
+        expect(current.group?.minTotalMemoryBytes).toBe(original.group?.minTotalMemoryBytes);
+        expect(buildChildEnv(current.entry, current.job.env ?? {}, envScratch, 0)).toEqual({
+          ...buildChildEnv(original.entry, original.job.env ?? {}, envScratch, 0),
+          ...(current.group ? { OPENCLAW_VITEST_SHARD_NAME: current.group.shard_name } : {}),
+        });
+        expectSameFields(current.job, original.job, [
+          "runner",
+          "requiresDist",
+          "planConcurrency",
+          "pretestBuildMode",
+        ]);
+      }
+      for (const unrelated of [[], ["src/media/new.ts"]]) {
+        const unrelatedWatch = resolvePolicyTestTargets(unrelated);
+        const unrelatedFiles = selectedFiles(createChangedNodeTestShards(unrelated, options));
+        for (const target of targets) {
+          expect(unrelatedWatch).not.toContain(target);
+          expect(isRuntimeTestFileIncluded(target, { ...options, changedPaths: unrelated })).toBe(
+            false,
+          );
+          expect(unrelatedFiles).not.toContain(target);
+        }
       }
     },
   );

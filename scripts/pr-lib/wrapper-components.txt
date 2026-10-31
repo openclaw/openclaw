@@ -4,6 +4,7 @@ cli-parent-lifetime.mjs
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+gateway-run-argv.mjs
 gateway-prewarm.mjs
 gateway-shutdown-budget.mjs
 worker-heap-flag.mjs
@@ -20,6 +21,7 @@ packages/acp-core/src/structured-auth-redaction.ts
 packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
+packages/agent-core/src/harness/session/background-result-placement.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
 packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
@@ -35,6 +37,7 @@ packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-exec-app
 packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-gateway-tool.js
 packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
+packages/gateway-protocol/src/payload-limits.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
@@ -105,6 +108,7 @@ packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
 packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
+packages/model-catalog-core/src/decision-answer-capabilities.ts
 packages/model-catalog-core/src/index.ts
 packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/model-catalog-core/src/model-catalog-pricing.ts
@@ -234,6 +238,7 @@ scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/test-selector-source-facts.worker.mts
 scripts/lib/test-source-term-matcher.mts
+scripts/lib/test-target-chunks.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsgo-core-test-shards.mts
 scripts/lib/tsx-cli-shim.mjs
@@ -362,6 +367,7 @@ src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout-inputs.ts
 src/agents/worktrees/checkout-materialize.ts
 src/agents/worktrees/checkout-policy-key.ts
+src/agents/worktrees/checkout-pool.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
 src/agents/worktrees/eviction.runtime.ts
@@ -375,6 +381,7 @@ src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
 src/agents/worktrees/name.ts
+src/agents/worktrees/object-hydration.ts
 src/agents/worktrees/owner.ts
 src/agents/worktrees/pending-slots.ts
 src/agents/worktrees/pending-slots.worker.ts
@@ -642,6 +649,7 @@ src/config/io.ts
 src/config/io.types.ts
 src/config/io.warnings.ts
 src/config/io.write-errors.ts
+src/config/io.write-preflight.ts
 src/config/io.write-prepare.ts
 src/config/io.write-safety.ts
 src/config/io.write-values.ts
@@ -677,6 +685,8 @@ src/config/patch-replace-paths.ts
 src/config/paths.ts
 src/config/plugin-auto-enable.channels.ts
 src/config/plugin-auto-enable.materialize.ts
+src/config/plugin-cohort-publication.ts
+src/config/plugin-cohort-recovery.ts
 src/config/plugin-install-record-map.ts
 src/config/plugins-allowlist.ts
 src/config/provider-policy.ts
@@ -687,6 +697,7 @@ src/config/redact-sentinel.ts
 src/config/redact-snapshot.raw.ts
 src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
+src/config/repository-branch-prefix.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-config-publication.ts
@@ -786,6 +797,7 @@ src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
+src/config/sessions/transcript-payload-navigation.ts
 src/config/sessions/transcript-payload-read.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
@@ -965,6 +977,7 @@ src/infra/current-machine-identity.ts
 src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
+src/infra/deferred-plugin-migrations.cohort.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/deferred-plugin-session-transcript-read.worker.ts
 src/infra/delivery-queue-cache.ts
@@ -1130,6 +1143,7 @@ src/infra/package-update-integrity-hasher.ts
 src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
 src/infra/package-update-publication-tree.ts
+src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
@@ -1177,6 +1191,7 @@ src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-context.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
+src/infra/sqlite-database-admission-delta.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
@@ -1315,7 +1330,9 @@ src/infra/tmp-openclaw-dir.ts
 src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
+src/infra/update-database-path.ts
 src/infra/update-doctor-config-schema.ts
+src/infra/update-doctor-config.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
 src/infra/update-doctor-result.ts
@@ -1324,6 +1341,7 @@ src/infra/update-failure-facts-format.ts
 src/infra/update-failure-facts.ts
 src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
+src/infra/update-failure-result.ts
 src/infra/update-immutable-install-schema.ts
 src/infra/update-immutable-protection-schema.ts
 src/infra/update-maintenance.ts
@@ -1346,14 +1364,35 @@ src/infra/update-managed-service-handoff-scope.ts
 src/infra/update-managed-service-handoff-source-inspection.ts
 src/infra/update-managed-service-handoff-store-repair.ts
 src/infra/update-managed-service-handoff-temp-root.ts
+src/infra/update-plugin-cohort-context.ts
+src/infra/update-plugin-cohort-records.ts
+src/infra/update-plugin-cohort-schema.ts
 src/infra/update-preflight-details.ts
 src/infra/update-recovery-receipt-schema.ts
 src/infra/update-recovery.ts
 src/infra/update-rehearsal-paths.ts
+src/infra/update-result-claim.ts
+src/infra/update-result-payload.ts
+src/infra/update-run-activation.ts
+src/infra/update-run-admission.ts
+src/infra/update-run-codec.ts
+src/infra/update-run-legacy-expiry.ts
 src/infra/update-run-limits.ts
 src/infra/update-run-driver-schema.ts
+src/infra/update-run-read-admission.ts
+src/infra/update-run-read.kernel.ts
+src/infra/update-run-record.ts
+src/infra/update-run-recovery-keys.ts
+src/infra/update-run-recovery-native-schema.ts
+src/infra/update-run-recovery-package-schema.ts
+src/infra/update-run-recovery-schema.ts
+src/infra/update-run-recovery-store.ts
 src/infra/update-run-schema.ts
+src/infra/update-run-step-key.ts
+src/infra/update-run-step.ts
 src/infra/update-run-timeouts.ts
+src/infra/update-run-verification.ts
+src/infra/update-run-write.ts
 src/infra/update-runtime-path-index.ts
 src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
@@ -1606,6 +1645,7 @@ src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-capture.ts
 src/plugins/plugin-generation-file-capture.ts
+src/plugins/plugin-generation-metrics.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
@@ -1674,6 +1714,7 @@ src/plugins/plugin-scope.ts
 src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
+src/plugins/plugin-shared-state-admission.ts
 src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission-context.ts
 src/plugins/plugin-source-admission.types.ts
@@ -1732,7 +1773,10 @@ src/plugins/setup-presentation-url.ts
 src/plugins/slots.ts
 src/plugins/status-dependencies-core.ts
 src/plugins/toggle-config.ts
+src/plugins/update-cohort-artifacts.ts
+src/plugins/update-cohort-protected-artifacts.ts
 src/plugins/web-search-install-catalog.ts
+src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
@@ -1746,6 +1790,8 @@ src/process/exec.ts
 src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
+src/process/linux-exec-cgroup-device.ts
+src/process/linux-exec-cgroup.ts
 src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
@@ -1891,6 +1937,7 @@ src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-preparation-context.ts
+src/state/agent-database-startup-integrity.ts
 src/state/agent-database-startup-observation.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
@@ -1917,6 +1964,7 @@ src/state/openclaw-agent-board-schema.ts
 src/state/openclaw-agent-canonical-validation-migration.ts
 src/state/openclaw-agent-canonical-validation-receipt.ts
 src/state/openclaw-agent-canonical-validation-schema.ts
+src/state/openclaw-agent-cold-navigation-schema.ts
 src/state/openclaw-agent-cold-archive-chunks-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
@@ -2569,6 +2617,7 @@ src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
 src/config/sessions/session-actor-storage-acquisition.ts
 src/config/sessions/session-actor-storage-binding.ts
+src/config/sessions/session-background-result-dependencies.ts
 src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
 src/config/sessions/session-entry-lineage.ts

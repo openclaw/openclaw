@@ -1,0 +1,2 @@
+# Fresh/resumed callback inheritance matrix; preserves global restrictions and explicit overrides.
+35

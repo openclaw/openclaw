@@ -1,10 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,7 +12,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       typeof import("./missing-configured-plugin-install.js").repairMissingConfiguredPluginInstalls
     >(),
-  relinkPeers: vi.fn(),
+  repairHostLinks:
+    vi.fn<typeof import("../../../plugins/plugin-peer-link.js").repairInstalledOpenClawHostLinks>(),
   smokeCheck: vi.fn(),
 }));
 
@@ -30,7 +29,7 @@ vi.mock("../../../plugins/plugin-peer-link.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../plugins/plugin-peer-link.js")>();
   return {
     ...actual,
-    relinkOpenClawPeerDependenciesInManagedNpmRoot: mocks.relinkPeers,
+    repairInstalledOpenClawHostLinks: mocks.repairHostLinks,
   };
 });
 vi.mock("../../../plugins/installed-plugin-npm-roots.js", async (importOriginal) => {
@@ -83,7 +82,7 @@ function writeJson(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value), "utf8");
 }
 
-const peerResult = { checked: 0, attempted: 0, repaired: 0, skipped: 0 };
+const peerResult = { managedRepaired: 0, registeredRepaired: 0 };
 
 function configured(...ids: string[]): OpenClawConfig {
   return { plugins: { entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])) } };
@@ -108,12 +107,10 @@ function reportPackageReadFailure(
   packageDir: string,
   error = new Error("EACCES: permission denied"),
 ) {
-  mocks.relinkPeers.mockImplementation(
-    async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
-      params.onPackageReadError?.(error, packageDir);
-      return { ...peerResult, skipped: 1 };
-    },
-  );
+  mocks.repairHostLinks.mockImplementation(async ({ onPackageReadError }) => {
+    onPackageReadError?.(error, packageDir, "managed npm");
+    return peerResult;
+  });
 }
 
 function smokeResult(failure: PluginPayloadSmokeFailure) {
@@ -129,7 +126,7 @@ describe("runPostCorePluginConvergence", () => {
     mocks.managedRoots.mockImplementation(({ npmRoot }: { npmRoot: string }) => [npmRoot]);
     mocks.repairBundled.mockReturnValue(null);
     mockRepairs();
-    mocks.relinkPeers.mockResolvedValue(peerResult);
+    mocks.repairHostLinks.mockResolvedValue(peerResult);
     mocks.smokeCheck.mockResolvedValue({ checked: [], failures: [] });
   });
 
@@ -147,40 +144,24 @@ describe("runPostCorePluginConvergence", () => {
   }
 
   it.each(["authority", "filesystem"] as const)(
-    "joins admitted peer repairs before reporting a %s failure",
+    "preserves the %s repair failure policy",
     async (kind) => {
-      const firstStarted = createDeferred();
-      const secondStarted = createDeferred();
-      const releaseSibling = createDeferred();
       const refusal = new Error("one-shot peer repair refusal");
       const laterWrite = vi.fn();
       let refuse = false;
-      let completed = false;
-      let siblingSettled = false;
-      mocks.managedRoots.mockReturnValue(["first-root", "second-root"]);
-      mocks.relinkPeers.mockImplementation(
-        async (params: { npmRoot: string; beforePersistentApply?: () => void }) => {
-          if (params.npmRoot === "first-root") {
-            await secondStarted.promise;
-            refuse = kind === "authority";
-            try {
-              params.beforePersistentApply?.();
-              throw refusal;
-            } finally {
-              firstStarted.resolve();
-            }
-          }
-          secondStarted.resolve();
-          try {
-            await releaseSibling.promise;
-            params.beforePersistentApply?.();
-            laterWrite();
-            return { checked: 1, attempted: 1, repaired: 1, skipped: 0 };
-          } finally {
-            siblingSettled = true;
-          }
-        },
-      );
+      mocks.repairHostLinks.mockImplementation(async ({ beforePersistentApply }) => {
+        if (kind === "filesystem") {
+          throw refusal;
+        }
+        refuse = true;
+        try {
+          beforePersistentApply?.();
+        } catch {}
+        // A sibling must still be fenced after the raw one-shot guard resets.
+        beforePersistentApply?.();
+        laterWrite();
+        return peerResult;
+      });
       const operation = runPostCorePluginConvergence({
         cfg: { plugins: { enabled: false } },
         env: {},
@@ -190,34 +171,15 @@ describe("runPostCorePluginConvergence", () => {
             throw refusal;
           }
         },
-      })
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        )
-        .finally(() => {
-          completed = true;
-        });
-      try {
-        await firstStarted.promise;
-        await nextImmediate();
-        expect(completed).toBe(false);
-        expect(mocks.smokeCheck).not.toHaveBeenCalled();
-      } finally {
-        releaseSibling.resolve();
-        await operation;
-      }
-      const result = await operation;
-      expect(siblingSettled).toBe(true);
+      });
       if (kind === "authority") {
-        expect("error" in result ? result.error : undefined).toBe(refusal);
+        await expect(operation).rejects.toBe(refusal);
         expect(laterWrite).not.toHaveBeenCalled();
         expect(mocks.smokeCheck).not.toHaveBeenCalled();
       } else {
-        expect(result).toHaveProperty("value.warnings", [
+        await expect(operation).resolves.toHaveProperty("warnings", [
           expect.objectContaining({ message: expect.stringContaining(refusal.message) }),
         ]);
-        expect(laterWrite).toHaveBeenCalledOnce();
         expect(mocks.smokeCheck).toHaveBeenCalledOnce();
       }
     },
@@ -294,7 +256,7 @@ describe("runPostCorePluginConvergence", () => {
       "../../../plugins/plugin-peer-link.js",
     );
     mocks.managedRoots.mockImplementation(roots.listManagedPluginNpmRootsForInstallRecords);
-    mocks.relinkPeers.mockImplementation(peers.relinkOpenClawPeerDependenciesInManagedNpmRoot);
+    mocks.repairHostLinks.mockImplementation(peers.repairInstalledOpenClawHostLinks);
     const payload = await vi.importActual<
       typeof import("../../../plugins/payload-verification.js")
     >("../../../plugins/payload-verification.js");

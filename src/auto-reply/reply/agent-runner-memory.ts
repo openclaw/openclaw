@@ -15,8 +15,6 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { emitInternalRunUsageDiagnostic } from "../../agents/internal-run-usage.js";
 import { resolveModelCallUrgency } from "../../agents/run-trigger.js";
-import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
@@ -54,6 +52,7 @@ import {
   followupUsesCliRuntime,
   resolveFollowupAgentRuntimeId,
   resolveFollowupContextTokens,
+  resolveMemoryFlushSandbox,
 } from "./agent-runner-memory-runtime.js";
 import {
   estimatePromptTokensFromSessionTranscript,
@@ -545,20 +544,8 @@ export async function runMemoryFlushIfNeeded(
     abortSignal?.throwIfAborted();
     params.followupRun.operatorAuthority?.assertCurrent();
   };
-  const memoryFlushWritable =
-    !params.sessionKey ||
-    (await withSandboxRuntimeStatusInWorker(
-      {
-        cfg: params.cfg,
-        agentId: params.followupRun.run.agentId,
-        sessionKey: params.sessionKey,
-        classificationSessionKey: params.runtimePolicySessionKey,
-      },
-      { env: process.env, cwd: process.cwd(), assertCurrent: assertMemoryFlushCurrent },
-      async ({ sandboxed, workspaceAccess: access, classificationAgentId: agentId }) =>
-        !sandboxed ||
-        (access ?? resolveSandboxConfigForAgent(params.cfg, agentId).workspaceAccess) === "rw",
-    ));
+  const { writable: memoryFlushWritable, toolPolicy: sandboxToolPolicy } =
+    await resolveMemoryFlushSandbox(params, assertMemoryFlushCurrent);
 
   let entry =
     params.sessionEntry ??
@@ -737,6 +724,7 @@ export async function runMemoryFlushIfNeeded(
       sessionEntry: entry,
       flushRunId,
       resolution: memoryFlushResolution,
+      sandboxToolPolicy,
       abortSignal,
       assertCurrent: assertMemoryFlushCurrent,
       recordPersistenceToolSuccess: () => {
@@ -948,7 +936,7 @@ export async function runMemoryFlushIfNeeded(
     return { sessionEntry: entry, outcome: "completed" };
   } catch (error) {
     if (error instanceof MemoryFlushToolsUnavailableError) {
-      memoryFlushLog.warn(error.message);
+      memoryFlushLog.debug(error.message);
       return { sessionEntry: entry, outcome: "skipped" };
     }
     return await recordFailure(error);

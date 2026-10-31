@@ -3,6 +3,7 @@
  * This handler is called before built-in command handlers.
  */
 
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -17,6 +18,9 @@ import { createPluginRequesterModels } from "../../plugins/requester-models.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+
+const CONSUMED_PLUGIN_COMMAND = Object.freeze({ kind: "non-plugin" as const });
 
 /**
  * Handle plugin-registered commands.
@@ -32,6 +36,10 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
   const planned = (params.opts as PluginCommandExecutionReplyOptions | undefined)?.[
     PLUGIN_COMMAND_DISPATCH
   ];
+  if (planned === CONSUMED_PLUGIN_COMMAND) {
+    // The turn's plugin command already ran and continued; it still owns this command body.
+    return { shouldContinue: true };
+  }
   if (planned?.kind === "non-plugin") {
     return null;
   }
@@ -138,7 +146,22 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
           execute,
         )
       : await execute();
-  const { continueAgent, ...reply } = result;
+  const { continueAgent, suppressReply, ...reply } = result;
+  if (continueAgent === true && params.opts) {
+    // This turn's plugin command already ran; later command passes of the turn must not run it again.
+    Object.assign(params.opts, { [PLUGIN_COMMAND_DISPATCH]: CONSUMED_PLUGIN_COMMAND });
+  }
+  if (suppressReply === true) {
+    // The handler already delivered its own response; a turn that requires a result still records it missing.
+    const runState = resolveReplyOperationRunState(params.opts);
+    if (runState && continueAgent !== true && runState.replyCompletion?.outcome !== "blocked") {
+      runState.replyCompletion = resolveReplyCompletion(
+        runState.replyCompletion?.expectation ?? "optional",
+        "silent",
+      );
+    }
+    return { shouldContinue: continueAgent === true, reply: undefined };
+  }
 
   return {
     shouldContinue: continueAgent === true,

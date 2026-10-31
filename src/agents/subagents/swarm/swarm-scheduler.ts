@@ -480,23 +480,3 @@ export function holdQueuedSwarmRun(runId: string) {
     },
   };
 }
-
-const testing = {
-  reset() {
-    for (const location of runLocations.values()) {
-      location.item?.removeAbortListener?.();
-    }
-    lanes.clear();
-    runLocations.clear();
-    reservationRevision++;
-    notifyGatewayWorkMetricsChanged();
-    pendingRemovals.clear();
-    pendingLaunches.clear();
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.swarmSchedulerTestApi")] = {
-    testing,
-  };
-}

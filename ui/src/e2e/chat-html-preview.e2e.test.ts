@@ -1,5 +1,7 @@
 // Uses the real isolated sandbox listener with deterministic Gateway file data.
+import { writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -8,6 +10,7 @@ import {
   closeHttpServer,
   listenLoopback,
 } from "../../../test/helpers/gateway-integration-fixtures.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
@@ -324,6 +327,124 @@ suite.define(() => {
             expect(await gateway.getRequests("canvas.document.view")).toEqual([]);
             expect(await gateway.getRequests("wake")).toEqual([]);
             expect(await gateway.getRequests("chat.send")).toEqual([]);
+          },
+        );
+      });
+    });
+
+    it(`retains in-page navigation outside the resource CSP subset with ${mode}`, async (test) => {
+      const policy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'";
+      const report = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}">
+<style>body{font:16px system-ui;padding:20px}section{margin-top:1800px;padding-bottom:1200px}</style>
+</head><body><h1>Review notes</h1><a href="#details">Read details</a>
+<input aria-label="Local note"><script>document.documentElement.dataset.ran="yes"</script>
+<section><h2 id="details">Details</h2><p>The selected report stays open.</p></section></body></html>`;
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR ? suite.artifactDir : undefined;
+      const viewport = { width: 1440, height: 1000 };
+      await withSandbox(test, async (sandboxPort) => {
+        await suite.withPage(
+          {
+            viewport,
+            permissions: ["local-network-access"],
+            ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+          },
+          async ({ page }) => {
+            const gateway = await installMockGateway(page, {
+              workspace: "/workspace",
+              featureMethods: [
+                ...defaultControlUiFeatureMethods,
+                "canvas.document.preview",
+                "sessions.files.preview",
+              ],
+              historyMessages: [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Open [report](page.html)." }],
+                },
+              ],
+              methodResponses: {
+                "sessions.files.get": fileResponse(report),
+                "canvas.document.preview": {
+                  html: report,
+                  sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+                  sandboxPort,
+                  sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+                },
+                "sessions.files.preview": { status: "unsupported", html: report, omitted: 0 },
+              },
+            });
+            await page.route(`${suite.server.baseUrl}chat`, (route) =>
+              fulfillWithControlUiCsp(route, "Content-Security-Policy"),
+            );
+            await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
+              route.fulfill({
+                json: { ...createControlUiMockBootstrapConfig(), embedSandbox: mode },
+              }),
+            );
+            await page.goto(`${suite.server.baseUrl}chat`);
+            await gateway.waitForRequest("sessions.messages.subscribe");
+            await page.locator('a.markdown-file-link[data-file-path="page.html"]').click();
+            const panel = page.locator("openclaw-chat-detail-panel:visible");
+            const outer = panel.locator(".chat-html-preview__frame");
+            const document = outer.contentFrame().frameLocator("iframe");
+            const heading = document.getByRole("heading", { name: "Review notes", exact: true });
+            await heading.waitFor();
+            await panel.getByRole("status").filter({ hasText: "Use Source or Download" }).waitFor();
+            expect(
+              await document
+                .locator('meta[http-equiv="Content-Security-Policy"]')
+                .getAttribute("content"),
+            ).toBe(policy);
+            expect(await document.locator("html").getAttribute("data-ran")).toBeNull();
+            expect(await outer.contentFrame().locator("iframe").getAttribute("sandbox")).toBe(
+              mode === "strict" ? "" : "allow-scripts allow-forms",
+            );
+            expect(
+              await heading.evaluate(() => {
+                try {
+                  void localStorage.length;
+                  return false;
+                } catch {
+                  return true;
+                }
+              }),
+            ).toBe(true);
+            await document.getByRole("textbox", { name: "Local note" }).fill("Retain this report");
+            const originalHeading = await heading.elementHandle();
+            const capture = async (name: string) => {
+              if (artifactDir) {
+                const frame = await takeControlUiScreenshotFrame(page, panel, [outer], {
+                  animations: "disabled",
+                });
+                await writeFile(join(artifactDir, `${mode}-${name}.png`), frame.png);
+              }
+            };
+            await capture("before-click");
+            await document.getByRole("link", { name: "Read details", exact: true }).click();
+            await expect
+              .poll(() =>
+                document.locator("#details").evaluate((target) => {
+                  const bounds = target.getBoundingClientRect();
+                  return window.scrollY > 0 && bounds.top >= -1 && bounds.top < window.innerHeight;
+                }),
+              )
+              .toBe(true);
+            expect(
+              await heading.evaluate((element, original) => element === original, originalHeading),
+            ).toBe(true);
+            expect(await document.getByRole("textbox", { name: "Local note" }).inputValue()).toBe(
+              "Retain this report",
+            );
+            await capture("after-click");
+            expect(await gateway.getRequests("canvas.document.preview")).toHaveLength(1);
+            expect(await gateway.getRequests("sessions.files.assets")).toEqual([]);
+          },
+          async ({ page, context }) => {
+            const video = page.video();
+            await suite.closeBrowserContext(context);
+            if (artifactDir) {
+              await video?.saveAs(join(artifactDir, `${mode}-fragment.webm`));
+            }
           },
         );
       });

@@ -225,7 +225,37 @@ describe("google video generation provider", () => {
     }
   });
 
-  it("submits generation and returns inline video bytes", async () => {
+  it.each<[Partial<VideoGenerationRequest>, { aspectRatio?: string; resolution?: string }]>([
+    [
+      { aspectRatio: " 16:9 ", resolution: "720P", size: "720x1920" },
+      { aspectRatio: "16:9", resolution: "720p" },
+    ],
+    [{ size: " 1920x1080 " }, { aspectRatio: "16:9", resolution: "1080p" }],
+    [{ size: "720x1280" }, { aspectRatio: "9:16", resolution: "720p" }],
+    [
+      { aspectRatio: "9:16", size: "1919x1080" },
+      { aspectRatio: "9:16", resolution: "720p" },
+    ],
+    [
+      { resolution: "1080P", size: "1279x720" },
+      { aspectRatio: "16:9", resolution: "1080p" },
+    ],
+    [
+      { resolution: "720p", size: "1920x1080" },
+      { aspectRatio: "16:9", resolution: "1080p" },
+    ],
+    [
+      { resolution: " 1080P ", size: "720x1280" },
+      { aspectRatio: "9:16", resolution: "720p" },
+    ],
+    [{ size: "0x0" }, { aspectRatio: "16:9" }],
+    [
+      { aspectRatio: "4:3", size: "1280x1280" },
+      { aspectRatio: "16:9", resolution: "720p" },
+    ],
+    [{ size: "1280X720" }, {}],
+    [{}, {}],
+  ])("submits geometry %j and returns inline video bytes", async (geometry, expectedGeometry) => {
     mockGoogleApiKeyAuth();
     const videoBytes = Buffer.from([0xfb, 0xff, 0x6d, 0x70, 0x34]);
     generateVideosMock.mockResolvedValue(
@@ -238,8 +268,7 @@ describe("google video generation provider", () => {
       ),
     );
     const result = await generateVideo({
-      aspectRatio: "16:9",
-      resolution: "720P",
+      ...geometry,
       durationSeconds: 3,
       audio: true,
     });
@@ -250,8 +279,9 @@ describe("google video generation provider", () => {
     expect(request.prompt).toBe("A tiny robot watering a windowsill garden");
     const config = recordField(request.config, "config");
     expect(config.durationSeconds).toBe(4);
-    expect(config.aspectRatio).toBe("16:9");
-    expect(config.resolution).toBe("720p");
+    expect(config.aspectRatio).toBe(expectedGeometry.aspectRatio);
+    expect(config.resolution).toBe(expectedGeometry.resolution);
+    expect(config).toStrictEqual({ durationSeconds: 4, ...expectedGeometry });
     expect(config).not.toHaveProperty("generateAudio");
     expect(config).not.toHaveProperty("numberOfVideos");
     expect(result.videos).toHaveLength(1);
@@ -609,7 +639,10 @@ describe("google video generation provider", () => {
     },
   );
 
-  it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {
+  it.each<[string | undefined, { aspectRatio?: string; resolution?: string }]>([
+    [undefined, {}],
+    ["720x1920", { aspectRatio: "9:16", resolution: "1080p" }],
+  ])("falls back to REST predictLongRunning with geometry from size %j", async (size, geometry) => {
     mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const fetchMock = vi
@@ -620,6 +653,7 @@ describe("google video generation provider", () => {
     const result = await generateVideo({
       model: "google/models/veo-3.1-fast-generate-preview",
       durationSeconds: 3,
+      size,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -628,7 +662,7 @@ describe("google video generation provider", () => {
     );
     expect(parseFetchJsonBody(fetchMock, 0)).toEqual({
       instances: [{ prompt: "A tiny robot watering a windowsill garden" }],
-      parameters: { durationSeconds: 4 },
+      parameters: { durationSeconds: 4, ...geometry },
     });
     expect(fetchInputUrl(fetchMock, 1)).toBe(
       "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media&key=google-key",

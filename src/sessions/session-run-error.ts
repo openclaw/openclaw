@@ -13,6 +13,7 @@ import type { CustomMessageReportAppend } from "../config/sessions/session-acces
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -42,6 +43,9 @@ export async function recordGatewaySessionRunFailure(
         ? STATE_CONTENTION_SUMMARY
         : (renderAssistantRequestFailureCopy({ storageFailure }) ??
           renderCodexAppServerFailureCopy(sanitized) ??
+          (isProviderRefusalNoticeText(sanitized)
+            ? `Your request couldn't be completed: ${sanitized}`
+            : undefined) ??
           (isHostMissingReplyNoticeText(sanitized) ? sanitized : undefined) ??
           renderRecordedAssistantFailureCopy(
             { errorMessage: sanitized },

@@ -6,6 +6,7 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
+import type { ContextCompactProps } from "./chat-context-compact.tsx";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 
@@ -67,4 +68,5 @@ export type ContextNoticeProps = {
   gateway?: ApplicationGateway;
   agentId?: string;
   onOpenContext?: () => void;
-};
+  connected?: boolean;
+} & Pick<ContextCompactProps, "onCompact" | "compactionStatus" | "runActive">;

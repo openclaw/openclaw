@@ -14,6 +14,14 @@ import {
   type ShellChainOperator,
 } from "./exec-approvals-analysis.js";
 import {
+  findUnanalyzableRisk,
+  hasBlockingRisk,
+  NON_REUSABLE_RISKS,
+  riskInsideStep,
+  shellWrapperPreludeReasons,
+  stepReasons,
+} from "./exec-authorization-risks.js";
+import {
   extractBindableShellWrapperInlineCommand,
   normalizeExecutableToken,
 } from "./exec-wrapper-resolution.js";
@@ -82,41 +90,10 @@ type PlanningContext = {
   platform?: NodeJS.Platform;
 };
 
-const PROMPT_ONLY_RISKS = new Set<CommandRisk["kind"]>([
-  "eval",
-  "source",
-  "alias",
-  "shell-wrapper-through-carrier",
-  "command-carrier",
-]);
-const NON_REUSABLE_RISKS = new Set<CommandRisk["kind"]>(["inline-eval"]);
-
-const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
-  "command-substitution",
-  "dynamic-executable",
-  "line-continuation",
-  "heredoc",
-  "here-string",
-  "process-substitution",
-  "redirect",
-  "syntax-error",
-  "function-definition",
-]);
-
 const POWERSHELL_NAMES = new Set(["powershell", "pwsh"]);
 const WINDOWS_CMD_NAMES = new Set(["cmd", "cmd.exe"]);
 const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
 const SHELL_WRAPPER_PRELUDE_REASON = "shell-env-assignment";
-const UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES = new Set<CommandExplanation["shapes"][number]>([
-  "background",
-  "if",
-  "for",
-  "while",
-  "case",
-  "subshell",
-  "group",
-]);
-
 function normalizePlanningPlatform(platform?: string | null): NodeJS.Platform | undefined {
   switch (platform) {
     case "aix":
@@ -174,80 +151,6 @@ const AUTHORIZATION_OPERATOR_BY_KIND: Record<CommandOperator["kind"], Authorizat
   background: "&",
 };
 
-function riskInsideStep(risk: CommandRisk, step: CommandStep): boolean {
-  return risk.span.startIndex >= step.span.startIndex && risk.span.endIndex <= step.span.endIndex;
-}
-
-function riskBeforeStepExecutable(risk: CommandRisk, step: CommandStep): boolean {
-  return riskInsideStep(risk, step) && risk.span.endIndex <= step.executableSpan.startIndex;
-}
-
-function stepReasons(
-  step: CommandStep,
-  risks: readonly CommandRisk[],
-  kinds: ReadonlySet<CommandRisk["kind"]> = PROMPT_ONLY_RISKS,
-): string[] {
-  const reasons: string[] = [];
-  for (const risk of risks) {
-    if (kinds.has(risk.kind) && riskInsideStep(risk, step)) {
-      reasons.push(risk.kind);
-    }
-  }
-  return uniqueStrings(reasons);
-}
-
-function isShellExpansionDynamicArgument(risk: CommandRisk): boolean {
-  return (
-    risk.kind === "dynamic-argument" &&
-    /(?:\$[A-Za-z0-9_@*?#$!-]|\$\{|`|\$\(|[<>]\()/u.test(risk.text)
-  );
-}
-
-function riskInsidePromptOnlyStep(risk: CommandRisk, explanation: CommandExplanation): boolean {
-  return [...explanation.topLevelCommands, ...explanation.nestedCommands].some(
-    (step) => riskInsideStep(risk, step) && stepReasons(step, explanation.risks).length > 0,
-  );
-}
-
-function findUnanalyzableRisk(explanation: CommandExplanation): CommandRisk | null {
-  return explanation.risks.find((entry) => UNANALYZABLE_RISKS.has(entry.kind)) ?? null;
-}
-
-function hasBlockingRisk(
-  explanation: CommandExplanation,
-): CommandRisk["kind"] | CommandExplanation["shapes"][number] | null {
-  const risk = findUnanalyzableRisk(explanation);
-  if (risk) {
-    return risk.kind;
-  }
-  const unsupportedShape = explanation.shapes.find((shape) =>
-    UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES.has(shape),
-  );
-  if (unsupportedShape) {
-    return unsupportedShape;
-  }
-  const dynamicArgument = explanation.risks.find(
-    (entry) =>
-      isShellExpansionDynamicArgument(entry) && !riskInsidePromptOnlyStep(entry, explanation),
-  );
-  if (dynamicArgument) {
-    return dynamicArgument.kind;
-  }
-  return null;
-}
-
-function shellWrapperPreludeReasons(params: {
-  step: CommandStep;
-  risks: readonly CommandRisk[];
-}): string[] {
-  const reasons = params.risks
-    .filter(
-      (risk) => UNANALYZABLE_RISKS.has(risk.kind) && riskBeforeStepExecutable(risk, params.step),
-    )
-    .map((risk) => risk.kind);
-  return uniqueStrings(reasons);
-}
-
 export function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
 }
@@ -298,7 +201,7 @@ function wrapperPrefixForStep(step: CommandStep): string {
 }
 
 function hasCommandPrelude(step: CommandStep): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/u.test(wrapperPrefixForStep(step).trimStart());
+  return /^[A-Za-z_][A-Za-z0-9_]*\+?=/u.test(wrapperPrefixForStep(step).trimStart());
 }
 
 function positionalCarrierSteps(params: {
@@ -772,4 +675,3 @@ export async function planExecAuthorization(params: {
     operators: [],
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
