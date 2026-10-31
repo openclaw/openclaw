@@ -79,6 +79,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/sandbox-host.ts":
+    case "ui/src/lib/widget-sandbox-host.ts":
+    case "ui/src/lib/reactive/window-message.ts":
+      // Shared sandbox transport helpers otherwise add a separate HTTP wave to Board.
+      return "widget-sandbox-runtime";
     case "ui/src/components/modal-dialog.tsx":
     case "ui/src/components/solid/modal-dialog.tsx":
     case "ui/src/components/solid/modal-dialog.css":
