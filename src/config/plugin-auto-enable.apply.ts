@@ -2,13 +2,9 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { withPluginSetupPreparation } from "../plugins/plugin-setup-module.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
-import {
-  preparePluginAutoEnableSetup,
-  resolvePluginAutoEnableManifestRegistry,
-} from "./plugin-auto-enable.shared.js";
+import { resolvePluginAutoEnableManifestRegistry } from "./plugin-auto-enable.shared.js";
 import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
@@ -129,15 +125,4 @@ export function applyPluginAutoEnable(
     scheduleSameTurnApplyCacheClear();
   }
   return result;
-}
-
-/** Prepare setup probes before applying the same synchronous activation policy. */
-export async function applyPluginAutoEnableAsync(
-  params: Parameters<typeof applyPluginAutoEnable>[0],
-): Promise<PluginAutoEnableResult> {
-  return withPluginSetupPreparation({}, async ({ assertCurrent }) => {
-    await preparePluginAutoEnableSetup({ ...params, config: params.config ?? {}, assertCurrent });
-    assertCurrent();
-    return applyPluginAutoEnable(params);
-  });
 }

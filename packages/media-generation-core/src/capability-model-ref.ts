@@ -22,6 +22,43 @@ function normalizeProviderForMatch(
   return normalized && normalizeProviderId ? normalizeProviderId(normalized) : normalized;
 }
 
+/** Orders configured provider defaults, keeping the preferred provider and aliases first. */
+export function buildCapabilityProviderDefaultRefs(params: {
+  providers: readonly CapabilityModelProviderCandidate[];
+  preferredProvider: string;
+  normalizeProviderId?: ProviderIdNormalizer;
+}): string[] {
+  const defaults = new Map<string, { ref: string; aliases: readonly string[] }>();
+  for (const provider of params.providers) {
+    const providerId = normalizeOptionalString(provider.id);
+    const modelId = normalizeOptionalString(provider.defaultModel);
+    if (!providerId || !modelId || defaults.has(providerId)) {
+      continue;
+    }
+    defaults.set(providerId, {
+      ref: `${providerId}/${modelId}`,
+      aliases: provider.aliases ?? [],
+    });
+  }
+
+  const preferred = normalizeProviderForMatch(params.preferredProvider, params.normalizeProviderId);
+  const prioritized: string[] = [];
+  const remaining: string[] = [];
+  // Preserve the original default string sort's UTF-16 ordering.
+  for (const [providerId, entry] of [...defaults].toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  )) {
+    const matchesPreferred =
+      preferred !== undefined &&
+      (normalizeProviderForMatch(providerId, params.normalizeProviderId) === preferred ||
+        entry.aliases.some(
+          (alias) => normalizeProviderForMatch(alias, params.normalizeProviderId) === preferred,
+        ));
+    (matchesPreferred ? prioritized : remaining).push(entry.ref);
+  }
+  return [...prioritized, ...remaining];
+}
+
 /** Finds a provider by id or alias using the caller's provider-id normalization rules. */
 export function findCapabilityProviderById<T extends CapabilityModelProviderCandidate>(params: {
   providers: readonly T[];
