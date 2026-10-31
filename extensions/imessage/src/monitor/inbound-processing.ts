@@ -396,6 +396,10 @@ export async function resolveIMessageInboundDecision(params: {
   }
   if (!isGroup) {
     echoScope.push(`${params.accountId}:imessage:${sender}`);
+    const directChatScope = formatIMessageChatTarget(chatId);
+    if (directChatScope) {
+      echoScope.push(`${params.accountId}:${directChatScope}`);
+    }
   }
   if (chatGuid) {
     echoScope.push(`${params.accountId}:chat_guid:${chatGuid}`);
