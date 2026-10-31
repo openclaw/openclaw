@@ -212,14 +212,14 @@ Final removal checks and landing: [PR #189259](https://github.com/openclaw/openc
 
 Additional source-only closure (runtime remains pending unless stated):
 
-| Owner scope                                    | Completed reading                                | Decision                                                                                                                                                                                                |
-| ---------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| iOS                                            | 135 Swift/support files, 1,416 declaration sites | Retain 1,370; qualify 39 proof repairs, six consolidations, one obsolete typography-scanner declaration and one shipping migration-test helper. No native removal applied.                              |
-| Android                                        | 47 suites, 370 declaration sites                 | Retain 362; qualify six proof repairs and two consolidations, preserving TLS admission, camera transfer identity and notification burst timing. The remaining 277 declaration files are inventory only. |
-| Voice-call, complete plugin                    | 64 suites, 523 declaration sites                 | Retain 522; repair the pending-state oracle separately. All nine local supports remain live. Three fixture-only assertions can go while preserving actual streamed error and signed webhook results.    |
-| Nostr                                          | 14 suites, 112 direct/registered declarations    | Retain all declarations and four live supports. Inline the sole used sanitizer fixture row; four other rows and all row labels are obsolete since `07c8b8dda4d`.                                        |
-| Diagnostics Prometheus                         | Seven suites, 55 declarations                    | Retain all declarations, three supports and two documented benchmark workloads; host admission, exporter authorization and store contracts differ.                                                      |
-| Reply admission/payload and memory/readmission | 40 suites, 220 declaration sites                 | Retain 219; qualify one setup-failure declaration absorbed by the existing shared null-context row. Exact cumulative reply coverage: 286 of 429 suites, with 143 unread.                                |
+| Owner scope                                    | Completed reading                                | Decision                                                                                                                                                                                                                          |
+| ---------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS                                            | 135 Swift/support files, 1,416 declaration sites | Retain 1,370; qualify 39 proof repairs, six consolidations, one obsolete typography-scanner declaration and one shipping migration-test helper. No native removal applied.                                                        |
+| Android                                        | 81 suites, 766 declaration sites                 | Retain 746; qualify 16 proof repairs and four consolidations. Preserve TLS admission, camera transfer identity, notification burst timing and initial Wear tap positions. The remaining 243 declaration files are inventory only. |
+| Voice-call, complete plugin                    | 64 suites, 523 declaration sites                 | Retain 522; repair the pending-state oracle separately. All nine local supports remain live. Three fixture-only assertions can go while preserving actual streamed error and signed webhook results.                              |
+| Nostr                                          | 14 suites, 112 direct/registered declarations    | Retain all declarations and four live supports. Inline the sole used sanitizer fixture row; four other rows and all row labels are obsolete since `07c8b8dda4d`.                                                                  |
+| Diagnostics Prometheus                         | Seven suites, 55 declarations                    | Retain all declarations, three supports and two documented benchmark workloads; host admission, exporter authorization and store contracts differ.                                                                                |
+| Reply admission/payload and memory/readmission | 40 suites, 220 declaration sites                 | Retain 219; qualify one setup-failure declaration absorbed by the existing shared null-context row. Exact cumulative reply coverage: 286 of 429 suites, with 143 unread.                                                          |
 
 IMAP and A2A: all 13 suites retain 103 declarations; protocol fixtures, controlled
 storage and packaged-service/Gateway proof protect different boundaries. All local
@@ -250,11 +250,21 @@ Additional source-only closure (no new runtime proof):
 
 | Owner scope                                      | Suites / declaration sites | Decision                                                                                                                                                                                                                |
 | ------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reply ACP, control ownership and inbound context | 49 / 373                   | Retain 367; qualify four proof repairs and two control-owner row consolidations. Exact cumulative reply coverage is 335 of 429 suites; 94 remain unread. Active-goal replacement needs fragment-boundary qualification. |
+| Reply ACP, control ownership and inbound context | 49 / 373                   | Retain 367; qualify four proof repairs and two control-owner row consolidations. Exact cumulative reply coverage is 375 of 429 suites; 54 remain unread. Active-goal replacement needs fragment-boundary qualification. |
 | MXC                                              | 13 / 64                    | Retain 61; expose three silent symlink setup refusals. All local support and shipped launcher assets remain live.                                                                                                       |
 | DeepInfra                                        | 17 / 78                    | Retain 77; qualify one mocked request-policy declaration against the existing real POST, CONNECT proxy and blocked-I/O keepers. All local support remains live.                                                         |
 | MiniMax                                          | 13 / 75                    | Retain 74; isolate Token Plan live-test auth state so saved portal credentials cannot hide broken environment fallback. No supported removal.                                                                           |
 | Perplexity, DeepSeek, Mistral, Hugging Face      | 17 / 69                    | Retain all declarations: real transport, cache identity, discovery, onboarding, transcript framing and live-wire contracts differ. Local owners/support and static routes read; transitive frameworks remain bounded.   |
+
+DeepInfra request-policy batch starts at `c6646642e6c`. Qualify removal of the
+mock-call replay against unchanged real HTTP, CONNECT proxy and blocked-I/O
+keepers. The instant-completion mock protects no separate polling policy.
+Baseline and keeper fault detection are pending; production behavior stays unchanged.
+
+Further provider source review: Bedrock, OpenCode, GitHub Copilot, LM Studio, Kimi
+Coding and Moonshot total 70 suites / 436 declarations. Retain 435; repair one
+Moonshot live auth-drift path that currently returns success before assertions.
+No runtime proof or additional removal is claimed for these source-only lanes.
 
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
