@@ -145,6 +145,34 @@ export function registerBackupCommand(program: Command) {
     .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
     .option("--json", "Output JSON", false);
 
+  addGatewayClientOptions(
+    backup
+      .command("status")
+      .description("Show backup ledger targets, schedules, and storage locations via the Gateway")
+      .option("--json", "Output JSON", false)
+      .addHelpText(
+        "after",
+        () =>
+          `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+            [
+              "openclaw backup status --json",
+              "Show newest attempt/success per kind/target/namespace, schedules, and locations.",
+            ],
+            [
+              "openclaw backup status --url ws://127.0.0.1:18789 --token $TOKEN --json",
+              "Target an explicit Gateway.",
+            ],
+          ])}\n\n${theme.muted(
+            "Backed by backup.status (operator.read). Prefer this over gateway call backup.status.",
+          )}`,
+      )
+      .action(
+        backupAction(
+          async () => (await import("../../commands/backup-status.js")).backupStatusCommand,
+        ),
+      ),
+  );
+
   backup
     .command("record")
     .description("Record an external backup job outcome")

@@ -73,7 +73,7 @@ async function recordBackupRunOutcomeWithOwner(
     method: "backup.recordOutcome",
     params: { outcome },
     target: "backup outcome ledger",
-    recoveryCommand: "openclaw gateway call backup.status",
+    recoveryCommand: "openclaw backup status",
     // Config loading must not recreate a database removed while ownership was acquired.
     assertTargetCurrent: () => {
       if (!existsSync(databasePath)) {
