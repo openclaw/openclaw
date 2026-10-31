@@ -39,8 +39,9 @@ vi.mock("../client-bootstrap.js", async (importOriginal) => ({
 
 it.each([
   {
-    name: "ordinary final",
-    text: "The final answer.",
+    name: "ordinary final with mixed reasoning text",
+    text: "Answer<think>old</think><think>unfinished",
+    expectedText: "Answer",
     eventCount: 1,
     threadId: undefined,
     priorBlock: false,
@@ -61,7 +62,7 @@ it.each([
   },
 ])(
   "recovers $name after an uncertain HTTP timeout using its saved transactions",
-  async ({ text, eventCount, threadId, priorBlock }) => {
+  async ({ text, expectedText, eventCount, threadId, priorBlock }) => {
     const state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-matrix-final-recovery-",
@@ -194,6 +195,9 @@ it.each([
           expect(attempts).toHaveLength(timeoutAt);
           const initialAttempts = attempts.slice(blockCount);
           expect(initialAttempts[0]?.path).toContain("/oc_");
+          if (expectedText !== undefined) {
+            expect(initialAttempts.map((attempt) => attempt.content.body)).toEqual([expectedText]);
+          }
           for (const attempt of initialAttempts) {
             if (priorBlock) {
               expect(attempt.content).not.toHaveProperty("m.relates_to");
@@ -204,9 +208,15 @@ it.each([
               ...(threadId ? { rel_type: "m.thread", event_id: threadId } : {}),
             });
           }
-          expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toMatchObject([
+          const queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+          expect(queued).toMatchObject([
             { channel: "matrix", recoveryState: "unknown_after_send" },
           ]);
+          if (expectedText !== undefined) {
+            expect(queued[0]?.preparedBatch).toMatchObject({
+              entries: [{ status: "accepted", payload: { text: expectedText } }],
+            });
+          }
           const drain = () =>
             drainPendingDeliveries({
               cfg,

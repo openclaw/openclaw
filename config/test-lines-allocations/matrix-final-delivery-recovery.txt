@@ -1,3 +1,4 @@
-239
+249
 # Real Matrix HTTP timeout and durable transaction-replay regressions for final
 # replies, partial threaded delivery, and a previously consumed first-reply slot.
+# Mixed reasoning text stays sanitized in persisted and replayed final messages.
