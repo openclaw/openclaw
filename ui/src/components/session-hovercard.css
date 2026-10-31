@@ -41,11 +41,13 @@
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  animation-name: session-hovercard-fade;
-  animation-duration: 1s;
-  animation-timing-function: linear;
-  animation-fill-mode: both;
-  animation-timeline: scroll(self inline);
+  @supports (animation-timeline: scroll(self inline)) {
+    animation-name: session-hovercard-fade;
+    animation-duration: 1s;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(self inline);
+  }
 }
 
 .session-hovercard__commentary,
@@ -58,11 +60,13 @@
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   overflow-wrap: anywhere;
-  animation-name: session-hovercard-fade;
-  animation-duration: 1s;
-  animation-timing-function: linear;
-  animation-fill-mode: both;
-  animation-timeline: scroll(self block);
+  @supports (animation-timeline: scroll(self block)) {
+    animation-name: session-hovercard-fade;
+    animation-duration: 1s;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(self block);
+  }
 }
 
 .session-hovercard__commentary .session-progress-card__markdown {
