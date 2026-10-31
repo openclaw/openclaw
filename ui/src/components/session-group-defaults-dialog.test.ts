@@ -102,6 +102,32 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
   expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
 });
 
+it("saves a folder picked from the listing with its literal path bytes", async () => {
+  const picked = "/workspace/client-work ";
+  const listDirectory = vi.fn(async (path?: string) => ({
+    path: path ?? "/workspace",
+    parent: "/",
+    home: "/home/test",
+    entries: path === picked ? [] : [{ name: "client-work ", path: picked }],
+  }));
+  const inspectRepository = vi.fn(async () => "not_git" as const);
+  const { modal, completed, submit } = await openDialog({
+    defaults: { cwd: "/workspace", worktree: false },
+    listDirectory,
+    inspectRepository,
+  });
+  await openFolderPicker(modal);
+  modal.querySelector<HTMLButtonElement>('[data-value="browse"]')!.click();
+  await waitForSolid(() => expect(modal.querySelectorAll('[role="option"]')).toHaveLength(1));
+  modal.querySelector<HTMLButtonElement>('[role="option"]')!.click();
+  await waitForSolid(() => expect(listDirectory).toHaveBeenLastCalledWith(picked));
+  modal.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.click();
+  await waitForSolid(() => expect(inspectRepository).toHaveBeenLastCalledWith(picked));
+  submitForm(modal);
+  await completed;
+  expect(submit).toHaveBeenCalledExactlyOnceWith({ cwd: picked, worktree: false });
+});
+
 it("selects and saves the Git worktree mode without creating unowned menu content", async () => {
   const warnings = vi.spyOn(console, "warn");
   try {

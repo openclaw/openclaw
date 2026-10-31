@@ -134,7 +134,9 @@ export async function editSessionGroupDefaultsDialog(
       },
       inspectRepository: async (path) => {
         requireCurrent();
-        const repoRoot = path?.trim() || deps.sessionGroupWorkspace()?.trim();
+        // The picked folder is a filesystem identity; whitespace only decides emptiness.
+        const requested = path?.trim() ? path : deps.sessionGroupWorkspace();
+        const repoRoot = requested?.trim() ? requested : undefined;
         if (!repoRoot) {
           return "unavailable";
         }

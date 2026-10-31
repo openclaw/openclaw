@@ -1,6 +1,9 @@
 // Membership stays on each session entry's category field; this module owns
 // which groups exist, their display order, and bulk member category updates.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -141,7 +144,9 @@ export async function updateSessionGroupDefaults(
       kind: "defaults",
       cfg: { agents: cfg.agents, session: cfg.session },
       name: normalized,
-      cwd: normalizeOptionalString(defaults.cwd) ?? null,
+      // The saved folder is a filesystem identity: "repo " and "repo" are
+      // different directories. Whitespace only decides whether one is set.
+      cwd: hasNonEmptyString(defaults.cwd) ? defaults.cwd : null,
       worktree: defaults.worktree,
     },
     env,

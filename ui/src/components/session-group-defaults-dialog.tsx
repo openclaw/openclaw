@@ -66,12 +66,15 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     let folderPopover: PopoverHandle | undefined;
     const browser = new PlaceBrowserState(options.listDirectory, () => publishBrowser(browser));
     const [browserView, publishBrowser] = createSignal(browser, { equals: false });
+    // A picked folder is a filesystem identity, not display text: keep its literal
+    // bytes and use whitespace only to decide whether the field is empty.
+    const literalCwd = () => (cwd().trim() ? cwd() : "");
 
     const performSubmit = action(function* () {
       setSaving(true);
       try {
         const errorMessage: string | null = yield options.submit({
-          cwd: cwd().trim(),
+          cwd: literalCwd(),
           worktree: repositoryStatus === "git" && worktree(),
         });
         if (modal.settled) {
@@ -107,7 +110,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     };
 
     const applyFolder = (path: string) => {
-      const nextCwd = path.trim();
+      const nextCwd = path.trim() ? path : "";
       setCwd(nextCwd);
       showPickerRoot();
       closePicker();
@@ -122,7 +125,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       const result = (async () => {
         let status: RepositoryStatus;
         try {
-          status = await options.inspectRepository(path.trim() || undefined);
+          status = await options.inspectRepository(path.trim() ? path : undefined);
         } catch (error) {
           // A path-authorization denial is not a repository status: collapsing it
           // into "couldn't verify Git" would present a retry that can never
@@ -360,7 +363,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 class="btn"
                 disabled={saving()}
                 onClick={() => {
-                  void inspectRepository(cwd().trim() === options.defaults.cwd.trim(), cwd());
+                  void inspectRepository(cwd() === options.defaults.cwd, cwd());
                   props.onRetry?.();
                 }}
               >

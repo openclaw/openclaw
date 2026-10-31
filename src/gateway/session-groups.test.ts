@@ -196,6 +196,17 @@ describe("session groups catalog", () => {
     expect(await defaults("Client", null, false)).toEqual([{ name: "Client", worktree: false }]);
   });
 
+  it("stores a literal default folder instead of its trimmed sibling", async () => {
+    await put(["Client"]);
+
+    expect(await defaults("Client", "/repos/client ")).toEqual([
+      groupDefaults("Client", "/repos/client "),
+    ]);
+    expect(catalog().defaults).toEqual([groupDefaults("Client", "/repos/client ")]);
+    // Whitespace alone still means no folder, so a cleared field stays cleared.
+    expect(await defaults("Client", "   ", false)).toEqual([{ name: "Client", worktree: false }]);
+  });
+
   it("does not recreate a deleted group from a stale defaults update", async () => {
     await put(["Client"]);
     await remove("Client");

@@ -111,8 +111,14 @@ export class PlaceBrowserState {
   }
 
   usablePath(): string | null {
-    const draft = this.draft.trim();
-    return !draft || isAbsolutePath(draft) ? draft : null;
+    // The chosen folder is a filesystem identity: a listing entry such as
+    // "work " must survive to the caller. Whitespace only decides emptiness,
+    // and typed drafts are still classified as absolute or not.
+    const draft = this.draft;
+    if (!draft.trim()) {
+      return "";
+    }
+    return isAbsolutePath(draft) ? draft : null;
   }
 
   reset() {
