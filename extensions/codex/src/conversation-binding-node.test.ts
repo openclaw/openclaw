@@ -39,7 +39,7 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
     assertCurrent.mockReset().mockResolvedValue();
     const bindingStore = createCodexTestBindingStore();
     const claims = createConversationClaimFixtures(() => "/codex", bindingStore);
-    const nodeSession = { nodeId: "mb-m5", sessionId: "node-1", agentId: "main", cwd: "/repo" };
+    const nodeSession = { nodeId: "mb-m5", sessionId: "node-1", agentId: "main", cwd: "/repo " };
     const firstTurn = createDeferred<{ ok: true; sessionId: string; text: string }>();
     const resume = vi.fn(() => firstTurn.promise);
 

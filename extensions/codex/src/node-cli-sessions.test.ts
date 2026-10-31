@@ -225,7 +225,7 @@ it.each(["legacy", "catalog-user"] as const)(
   async (route) => {
     const codexHome = await fs.mkdtemp(path.join(process.cwd(), ".codex-node-relative-home-"));
     const relativeHome = path.relative(process.cwd(), codexHome);
-    const project = path.join(tempDir, "project");
+    const project = path.join(tempDir, "project ");
     await fs.mkdir(project);
     vi.stubEnv("CODEX_HOME", relativeHome);
     const { factory } = await createCatalog("user");
@@ -365,7 +365,7 @@ it.each([
     records.unshift({ session_id: sessionId, ts: 1778677925, text: "first ask" });
     records.push({ session_id: "older", ts: 1778670000, text: "skip me" });
     sessionFile = await writeRollout(sessionId, [
-      { type: "session_meta", payload: { id: sessionId, cwd: "/repo" } },
+      { type: "session_meta", payload: { id: sessionId, cwd: "/repo " } },
     ]);
   }
   await writeHistory(records);
@@ -384,7 +384,7 @@ it.each([
       lastMessage: text,
       messageCount: hydrated ? 2 : 1,
       ...(scenario === "Date-invalid timestamp" ? {} : { updatedAt: "2026-05-13T13:18:42.000Z" }),
-      ...(hydrated ? { sessionFile, cwd: "/repo" } : {}),
+      ...(hydrated ? { sessionFile, cwd: "/repo " } : {}),
     },
   ]);
 });

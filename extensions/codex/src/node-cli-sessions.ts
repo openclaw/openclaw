@@ -19,6 +19,7 @@ import {
   asNonArrayRecord,
   isRecord,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -375,7 +376,7 @@ async function resumeLocalCodexCliSession(
     const text = await runCodexExecResume({
       sessionId,
       prompt,
-      cwd: typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined,
+      cwd: readNonBlankString(params.cwd),
       timeoutMs: normalizeTimeoutMs(params.timeoutMs),
       codexHome,
       assertCurrent,
@@ -526,7 +527,7 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
     updatedAt = normalizeOptionalString(parsed.timestamp) ?? updatedAt;
     if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
       sessionId = normalizeOptionalString(parsed.payload.id) ?? sessionId;
-      cwd = normalizeOptionalString(parsed.payload.cwd) ?? cwd;
+      cwd = readNonBlankString(parsed.payload.cwd) ?? cwd;
       return;
     }
     const messageText = readResponseItemMessageText(parsed);
