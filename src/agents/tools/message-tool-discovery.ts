@@ -296,6 +296,10 @@ export function hasMessageToolSourceConversation(
 ): boolean {
   const context = resolveEffectiveCurrentChannelContext(options);
   const channel = normalizeMessageChannel(context.currentChannelProvider);
+  if (channel === INTERNAL_MESSAGE_CHANNEL) {
+    // WebChat replies use the session-backed sink, not an external target.
+    return Boolean(options?.agentSessionKey?.trim());
+  }
   return Boolean(
     channel &&
     isDeliverableMessageChannel(channel) &&
