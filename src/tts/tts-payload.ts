@@ -25,8 +25,6 @@ import {
 } from "./tts-provider-resolution.js";
 import type { TtsStatusEntry } from "./tts-runtime-types.js";
 import {
-  getTtsMaxLength,
-  isSummarizationEnabled,
   resolveTtsConfig,
   resolveTtsSettingsSnapshot,
   type ResolvedTtsConfig,
@@ -121,7 +119,14 @@ export async function maybeApplyTtsToPayloadCore(
     return params.payload;
   }
   const cfg = selectLiveRuntimeConfig(params.cfg);
-  const { autoMode, config, prefsPath } = resolveTtsSettingsSnapshot({
+  const {
+    autoMode,
+    config,
+    prefsPath,
+    maxLength: preferredMaxLength,
+    summarize,
+    summaryInstructions,
+  } = resolveTtsSettingsSnapshot({
     cfg,
     preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     sessionAuto: params.ttsAuto,
@@ -188,7 +193,7 @@ export async function maybeApplyTtsToPayloadCore(
   }
 
   // Synthesis rejects text over config.maxTextLength, so never prepare more than that.
-  const maxLength = Math.min(getTtsMaxLength(prefsPath), config.maxTextLength);
+  const maxLength = Math.min(preferredMaxLength, config.maxTextLength);
   let textForAudio = ttsText;
   let wasSummarized = false;
 
@@ -198,8 +203,8 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  if (textForAudio.length > maxLength) {
-    if (!isSummarizationEnabled(prefsPath)) {
+  if (textForAudio.length > maxLength || (summarize && summaryInstructions && !explicitTtsText)) {
+    if (!summarize) {
       logVerbose(
         `TTS: truncating long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
       );
@@ -213,18 +218,21 @@ export async function maybeApplyTtsToPayloadCore(
           config,
           timeoutMs: config.timeoutMs,
           agentId: params.agentId,
+          instructions: summaryInstructions,
         });
         textForAudio = summary.summary;
         wasSummarized = true;
-        if (textForAudio.length > config.maxTextLength) {
+        if (textForAudio.length > maxLength) {
           logVerbose(
-            `TTS: summary exceeded hard limit (${textForAudio.length} > ${config.maxTextLength}); truncating.`,
+            `TTS: summary exceeded speech limit (${textForAudio.length} > ${maxLength}); truncating.`,
           );
-          textForAudio = `${truncateUtf16Safe(textForAudio, config.maxTextLength - 3)}...`;
+          textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
         }
       } catch {
         logVerbose("TTS: summarization failed, truncating instead.");
-        textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
+        if (textForAudio.length > maxLength) {
+          textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
+        }
       }
     }
   }

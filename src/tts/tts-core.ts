@@ -96,10 +96,11 @@ export async function summarizeText(
     config: ResolvedTtsConfig;
     timeoutMs: number;
     agentId?: string;
+    instructions?: string;
   },
   deps?: SummarizeTextDeps,
 ): Promise<SummarizeResult> {
-  const { text, targetLength, cfg, config, timeoutMs, agentId } = params;
+  const { text, targetLength, cfg, config, timeoutMs, agentId, instructions } = params;
   if (targetLength < 100 || targetLength > 10_000) {
     throw new Error(`Invalid targetLength: ${targetLength}`);
   }
@@ -139,7 +140,10 @@ export async function summarizeText(
                 role: "user",
                 content:
                   `You are an assistant that summarizes texts concisely while keeping the most important information. ` +
-                  `Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. ` +
+                  `Summarize the text to approximately ${targetLength} characters. ` +
+                  (instructions
+                    ? `Preserve facts, uncertainty, and any required action. Do not invent information. Apply these spoken style instructions to vocabulary and phrasing only: ${JSON.stringify(instructions)}. `
+                    : "Maintain the original tone and style. ") +
                   `Reply only with the summary, without additional explanations.\n\n` +
                   `<text_to_summarize>\n${text}\n</text_to_summarize>`,
                 timestamp: Date.now(),
