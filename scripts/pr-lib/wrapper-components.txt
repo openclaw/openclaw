@@ -843,6 +843,7 @@ src/config/zod-schema.channels.ts
 src/config/zod-schema.cloud-workers.ts
 src/config/zod-schema.core.ts
 src/config/zod-schema.desktop.ts
+src/config/zod-schema.gateway-roles.ts
 src/config/zod-schema.gateway.ts
 src/config/zod-schema.hooks.ts
 src/config/zod-schema.implicit-mentions.ts
@@ -863,6 +864,7 @@ src/config/zod-schema.session-config.ts
 src/config/zod-schema.session.ts
 src/config/zod-schema.storage.ts
 src/config/zod-schema.telemetry.ts
+src/config/zod-schema.tts-auto.ts
 src/config/zod-schema.ts
 src/cron/automation-result.ts
 src/cron/completion-status.ts

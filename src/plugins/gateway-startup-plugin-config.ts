@@ -16,7 +16,7 @@ import {
 } from "../memory-host-sdk/dreaming.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
-import { collectPluginConfigContractMatches } from "./config-contracts.js";
+import { collectPluginConfigContractMatches } from "./config-contract-matches.js";
 import {
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginIdFromConfig,

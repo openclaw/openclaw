@@ -1,6 +1,6 @@
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
-import { getRuntimeConfig } from "../../config/io.runtime.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeLlmFacade } from "./runtime-llm-facade.js";
 import { createRuntimeSystem } from "./runtime-system.js";
@@ -36,7 +36,7 @@ export function createRuntimeBase(): PluginRuntimeBase {
       "channel-ingress-transform-v1",
     ]),
     config: createRuntimeConfig(),
-    llm: createRuntimeLlmFacade(getRuntimeConfig),
+    llm: createRuntimeLlmFacade(readRuntimeConfig),
     // Only the registry proxy grants storage, never the base runtime directly.
     state: {
       resolveStateDir,

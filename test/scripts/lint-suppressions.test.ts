@@ -257,6 +257,8 @@ describe("production lint suppressions", () => {
         "src/agents/harness-runtimes.ts|unicorn/no-array-sort|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/prepared-model-runtime.synthetic-auth.ts|unicorn/no-array-sort|1",
+        // The prepared-runtime spy forwards the saved fork with its original receiver through .call.
+        "src/agents/prepared-model-runtime.test-harness.ts|typescript/unbound-method|1",
         "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
         // Media list snapshots must honor the JSON serialization contract; structuredClone cannot materialize plugin-bound proxies.

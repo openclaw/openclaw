@@ -18,7 +18,7 @@ import * as modelResolution from "./embedded-agent-runner/model.js";
 import { input } from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
-import { ModelRegistry } from "./sessions/model-registry.js";
+import { ModelRegistry } from "./sessions/model-registry-core.js";
 import { acquireSimpleCompletionModelForAgent } from "./simple-completion-runtime.js";
 import {
   completionChunk,

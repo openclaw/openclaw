@@ -8,7 +8,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
-import { ModelRegistry } from "../../agents/sessions/model-registry.js";
+import { ModelRegistry as ModelRegistryCore } from "../../agents/sessions/model-registry-core.js";
 import * as completion from "../../agents/simple-completion-execution.js";
 import {
   completionChunk,
@@ -217,7 +217,7 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
       },
     );
     vi.spyOn(shared, "resolveLocalCapabilityRuntimeConfig").mockResolvedValue(cfg);
-    const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
+    const builds = vi.spyOn(ModelRegistryCore, "fromCapturedSources");
     const finishCancel = createDeferred();
     const drainStarted = createDeferred();
     const pending: Promise<unknown>[] = [];

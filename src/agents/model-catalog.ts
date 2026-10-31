@@ -314,7 +314,11 @@ export async function buildPreparedModelCatalogSnapshot(
   );
   logStage("registry-read", `entries=${entries.length}`);
 
-  const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({ config: cfg });
+  // Suppression must use this catalog generation, without reopening metadata discovery.
+  const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({
+    config: cfg,
+    metadataSnapshot: manifestMetadataSnapshot,
+  });
   logStage("suppress-resolver-ready");
 
   for (const entry of entries) {

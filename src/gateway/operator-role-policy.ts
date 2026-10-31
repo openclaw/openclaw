@@ -11,7 +11,7 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";

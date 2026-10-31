@@ -20,6 +20,7 @@ import {
 import * as preparedRuntimes from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
+import { ModelRegistry as ModelRegistryCore } from "../../agents/sessions/model-registry-core.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import { acquireSimpleCompletionModelForAgent } from "../../agents/simple-completion-runtime.js";
 import {
@@ -227,7 +228,7 @@ it.each([
     };
     await withEnvAsync(env, async () => {
       prepareSharedAuthStoreOwnershipForNative();
-      const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
+      const create = vi.spyOn(ModelRegistryCore, "fromCapturedSources");
       const fork = vi.spyOn(ModelRegistry.prototype, "fork");
       const setRuntimeKey = vi.spyOn(AuthStorage.prototype, "setRuntimeApiKey");
       const resolveModel = modelResolution.resolveModelAsync;

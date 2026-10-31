@@ -4,7 +4,7 @@ import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
-import { ModelRegistry } from "../agents/sessions/model-registry.js";
+import { ModelRegistry as ModelRegistryCore } from "../agents/sessions/model-registry-core.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
@@ -189,7 +189,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           expect(
             (await resolveSystemAgentVerifiedInferenceRoute(verifiedInference))?.provider,
           ).toBe(fixture.providerId);
-          const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
+          const builds = vi.spyOn(ModelRegistryCore, "fromCapturedSources");
           spies.push(builds);
           if (mode === "cancel-drain") {
             const plugin = getAiTransportHost().plugin;

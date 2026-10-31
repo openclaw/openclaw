@@ -1,19 +1,18 @@
 // Runtime config tests cover plugin runtime config normalization and lookup.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createConfigResolutionFacts,
   getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 
-const getRuntimeConfigMock = vi.fn();
 const mutateConfigFileMock = vi.fn();
 const replaceConfigFileMock = vi.fn();
-
-vi.mock("../../config/io.runtime.js", () => ({
-  getRuntimeConfig: () => getRuntimeConfigMock(),
-}));
 
 vi.mock("../../config/mutate.js", () => ({
   mutateConfigFile: (...args: unknown[]) => mutateConfigFileMock(...args),
@@ -23,16 +22,16 @@ vi.mock("../../config/mutate.js", () => ({
 const { createRuntimeBase } = await import("./runtime-base.js");
 
 describe("plugin runtime config", () => {
+  afterEach(clearRuntimeConfigSnapshot);
   beforeEach(() => {
-    getRuntimeConfigMock.mockReset();
     mutateConfigFileMock.mockReset();
     replaceConfigFileMock.mockReset();
-    getRuntimeConfigMock.mockReturnValue({ plugins: {} });
+    setRuntimeConfigSnapshot({ plugins: {} });
   });
 
   it("reads config from the runtime snapshot", () => {
     const runtimeConfig = { plugins: { entries: {} } };
-    getRuntimeConfigMock.mockReturnValue(runtimeConfig);
+    setRuntimeConfigSnapshot(runtimeConfig);
 
     expect(createRuntimeBase().config.current()).toBe(runtimeConfig);
   });
@@ -49,7 +48,7 @@ describe("plugin runtime config", () => {
         new Map([[configPath, "FIXTURE_API_KEY"]]),
       ),
     );
-    getRuntimeConfigMock.mockReturnValue(runtimeConfig);
+    setRuntimeConfigSnapshot(runtimeConfig);
 
     const cloned = createRuntimeBase().config.current({ clone: true });
     expectDefined(cloned.env?.vars, "cloned config variables").FIXTURE_API_KEY = "changed";

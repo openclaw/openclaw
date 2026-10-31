@@ -129,6 +129,27 @@ beforeEach(() => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
 });
 
+it.each([true, false])(
+  "uses captured suppression rules over ambient rules (%s)",
+  async (suppress) => {
+    const suppressed = createManifestSnapshot("fixture", {
+      suppressions: [{ provider: "fixture", model: "retired" }],
+    });
+    const captured = suppress ? suppressed : metadataSnapshot;
+    const ambient = suppress ? metadataSnapshot : suppressed;
+    const snapshot = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
+      build({
+        config: {},
+        metadataSnapshot: captured,
+        entries: [row("fixture", "retired"), row("fixture", "kept")],
+      }),
+    );
+    const expected = suppress ? ["kept"] : ["kept", "retired"];
+    expect(snapshot.entries.map(({ id }) => id)).toEqual(expected);
+    expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(expected);
+  },
+);
+
 it("keeps replace publication closed to a warm refreshable inventory", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
     row("manifest-provider", "augmented-only", { name: "Augmented" }),

@@ -12,6 +12,9 @@ import { DmConfigSchema } from "./zod-schema.messages.js";
 import { ModelCompatSchema } from "./zod-schema.model-compat.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+import { TtsAutoSchema } from "./zod-schema.tts-auto.js";
+
+export { TtsAutoSchema } from "./zod-schema.tts-auto.js";
 
 export {
   DmConfigSchema,
@@ -494,7 +497,6 @@ export const MarkdownConfigSchema = z
 
 export const TtsProviderSchema = z.string().min(1);
 export const TtsModeSchema = z.enum(["final", "all"]);
-export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
 const TtsProviderConfigSchema = z
   .object({
     apiKey: SecretInputSchema.optional().register(sensitive),

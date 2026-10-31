@@ -50,10 +50,8 @@ export function buildSuppressedBuiltInModelError(params: {
 
 export function buildShouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
 }): (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => boolean {
-  const resolver = buildManifestBuiltInModelSuppressionResolver({
-    env: process.env,
-    ...params,
-  });
+  const resolver = buildManifestBuiltInModelSuppressionResolver(params);
   return (input) => resolver(input)?.suppress ?? false;
 }

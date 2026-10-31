@@ -17,6 +17,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { runIsolatedCompletion } from "./isolated-completion.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import { ModelRegistry as ModelRegistryCore } from "./sessions/model-registry-core.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 import {
   completionChunk,
@@ -138,7 +139,7 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
         },
         async () => {
           expect(getAsyncWorkSignal()).toBeUndefined();
-          const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
+          const create = vi.spyOn(ModelRegistryCore, "fromCapturedSources");
           const fork = vi.spyOn(ModelRegistry.prototype, "fork");
           spies.push(create, fork);
           if (streamTail) {

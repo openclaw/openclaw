@@ -7,7 +7,7 @@ import {
 } from "../media-generation-activity.test-support.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import type { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
-import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
+import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.snapshot.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import type { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 

@@ -75,7 +75,7 @@ import {
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { AuthStorage } from "./sessions/auth-storage-core.js";
 
 type WorkerGeneration = {
   pluginGeneration: Omit<

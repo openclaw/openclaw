@@ -105,17 +105,16 @@ async function expectCompleted(rpc: ReturnType<typeof sendAgentRpc>) {
 }
 
 async function mockPublication(agentDir: string, result: () => Promise<void>) {
-  const models = await import("../agents/models-config.js");
-  const ensure = models.ensureOpenClawModelsJson;
-  return vi
-    .spyOn(models, "ensureOpenClawModelsJson")
-    .mockImplementation(async (config, dir, options) => {
-      if (dir !== agentDir) {
-        return await ensure(config, dir, options);
-      }
-      await result();
-      return {};
-    });
+  const models = await import("../agents/models-config.prepared.js");
+  const ensure = models.ensurePreparedModelsJson;
+  return vi.spyOn(models, "ensurePreparedModelsJson").mockImplementation(async (input) => {
+    const context = await input;
+    if (context.agentDir !== agentDir) {
+      return await ensure(context);
+    }
+    await result();
+    return {};
+  });
 }
 
 function expectRuntime(
@@ -301,7 +300,11 @@ test("aborts one affected waiter without cancelling shared auth publication", as
       return pending;
     });
   const publicationGate = createDeferred();
-  const ensureSpy = await mockPublication(before.agentDir, () => publicationGate.promise);
+  const publicationEntered = createDeferred();
+  const ensureSpy = await mockPublication(before.agentDir, () => {
+    publicationEntered.resolve();
+    return publicationGate.promise;
+  });
   const published = observePublication("published");
   let participantRecorded = false;
   const unsubscribeParticipant = onSessionLifecycleEvent((event) => {
@@ -315,6 +318,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
   });
   try {
     refreshAuth(before.agentDir, "fresh-generation-key");
+    await publicationEntered.promise;
     const sibling = sendAgentRpc("main", siblingRunId);
     await expectCompleted(sibling);
     await runExecution.waitForCompletion(siblingRunId);

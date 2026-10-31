@@ -3,7 +3,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createPluginSourceCaptureRoot } from "../../plugins/plugin-source-capture-directory.js";
-import type { planOpenClawModelsJsonSource } from "../models-config.js";
+import type { planPreparedModelsJsonSource } from "../models-config.prepared.js";
 import type {
   PreparedModelCatalogWorkerInput,
   PreparedModelCatalogWorkerTask,
@@ -32,7 +32,7 @@ export type CatalogInspection = {
   credentialMatches?: boolean;
   authoredRef?: ReturnType<typeof getAuthoredConfigSecretRef>;
   resolvedEnvRef?: ReturnType<typeof getAuthoredConfigSecretRef>;
-  plans: Array<Awaited<ReturnType<typeof planOpenClawModelsJsonSource>>>;
+  plans: Array<Awaited<ReturnType<typeof planPreparedModelsJsonSource>>>;
 };
 
 export function createCatalogInspectionPool(env: NodeJS.ProcessEnv) {
