@@ -35,7 +35,10 @@ export function AttachmentRemove(props: {
   );
 }
 
-type VideoPreparation = { state: "offer" | "compressing" | "error"; progress?: number };
+type VideoPreparation = {
+  state: "offer" | "compressing" | "compatible-copy" | "error";
+  progress?: number;
+};
 
 function AttachmentVideoPreview(props: {
   attachment: ChatAttachment;

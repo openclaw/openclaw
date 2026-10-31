@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { ALL_FORMATS, BufferSource, Input } from "mediabunny";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -9,6 +11,11 @@ const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.ur
 // ISO BMFF padding crosses the limit while preserving real samples and quick encoding.
 const oversized = Buffer.concat([video, Buffer.alloc(256 * 1024)]);
 const limit = 128 * 1024;
+const mixedVideo = readFileSync(new URL("./fixtures/video-compatible-copy.mp4", import.meta.url));
+const padding = Buffer.alloc(512 * 1024);
+padding.writeUInt32BE(padding.length);
+padding.write("free", 4);
+const mixedOversized = Buffer.concat([mixedVideo, padding]);
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const upload = (page: Page, name: string, buffer = oversized) =>
   page
@@ -17,6 +24,138 @@ const upload = (page: Page, name: string, buffer = oversized) =>
     .setInputFiles({ name, mimeType: "video/mp4", buffer });
 
 suite.define(() => {
+  it("discloses the exact audio omission, preserves the original and draft, and encodes audible bounded output", () =>
+    suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, { attachmentMaxBytes: 512 * 1024 });
+        await page.goto(suite.server.baseUrl + "chat");
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.fill("Keep this draft and its notes.");
+        await page
+          .locator(".agent-chat__file-input")
+          .first()
+          .setInputFiles({
+            name: "notes.txt",
+            mimeType: "text/plain",
+            buffer: Buffer.from("Keep these notes"),
+          });
+        await upload(page, "mixed.mp4", mixedOversized);
+        await button(page, "Compress to fit").click();
+        await button(page, "Create compatible copy").waitFor();
+        expect(await gateway.getRequests("chat.send")).toEqual([]);
+        await button(page, "Create compatible copy").click();
+        const dialog = page.getByRole("dialog");
+        await dialog.waitFor();
+        expect(await dialog.textContent()).toContain(
+          "omit the additional unsupported APAC audio track and its spatial information",
+        );
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await button(page, "Remove mixed.mp4").click();
+        await upload(page, "mixed.mp4", mixedOversized);
+        await button(page, "Compress to fit").click();
+        await button(page, "Create compatible copy").click();
+        await dialog.waitFor();
+        writeFileSync(
+          suite.artifactDir + "/compatible-copy-consent.png",
+          (
+            await takeControlUiScreenshotFrame(
+              page,
+              dialog,
+              [dialog.getByRole("button", { name: "Create compatible copy", exact: true })],
+              { animations: "disabled" },
+            )
+          ).png,
+        );
+        await dialog.getByRole("button", { name: "Create compatible copy", exact: true }).click();
+        await page.locator(".chat-attachment-thumb--preparation").waitFor({ state: "detached" });
+        expect(await composer.inputValue()).toBe("Keep this draft and its notes.");
+        await button(page, "Remove notes.txt").waitFor();
+        const downloadPromise = page.waitForEvent("download");
+        await button(page, "Download original").click();
+        const download = await downloadPromise;
+        const recoveredPath = suite.artifactDir + "/original.mp4";
+        await download.saveAs(recoveredPath);
+        expect(readFileSync(recoveredPath)).toEqual(mixedOversized);
+        expect(await gateway.getRequests("chat.send")).toEqual([]);
+        writeFileSync(
+          suite.artifactDir + "/compatible-copy-prepared.png",
+          (
+            await takeControlUiScreenshotFrame(
+              page,
+              composer,
+              [button(page, "Download original")],
+              { animations: "disabled" },
+            )
+          ).png,
+        );
+        await button(page, "Send message").click();
+        const request = await gateway.waitForRequest("chat.send");
+        const params = request.params as {
+          attachments: Array<{ content: string; mimeType: string; fileName: string }>;
+        };
+        const output = params.attachments.find((attachment) =>
+          attachment.mimeType.startsWith("video/"),
+        )!;
+        const bytes = Buffer.from(output.content, "base64");
+        expect(bytes.length).toBeGreaterThan(0);
+        expect(bytes.length).toBeLessThanOrEqual(512 * 1024);
+        const parsed = new Input({ formats: ALL_FORMATS, source: new BufferSource(bytes) });
+        try {
+          const codecs = await Promise.all(
+            (await parsed.getTracks()).map((track) => track.getCodec()),
+          );
+          expect({ mime: output.mimeType, name: output.fileName, codecs }).toEqual(
+            output.mimeType === "video/mp4"
+              ? { mime: "video/mp4", name: "mixed.mp4", codecs: ["avc", "aac"] }
+              : { mime: "video/webm", name: "mixed.webm", codecs: ["vp9", "opus"] },
+          );
+        } finally {
+          parsed.dispose();
+        }
+        const playback = await page.evaluate(async (attachment) => {
+          const decodedBytes = Uint8Array.from(atob(attachment.content), (c) => c.charCodeAt(0));
+          const audio = new AudioContext();
+          const decoded = await audio.decodeAudioData(decodedBytes.buffer.slice(0));
+          const rms = Math.sqrt(
+            decoded.getChannelData(0).reduce((sum, value) => sum + value * value, 0) /
+              decoded.length,
+          );
+          const url = URL.createObjectURL(new Blob([decodedBytes], { type: attachment.mimeType }));
+          const player = document.createElement("video");
+          player.src = url;
+          player.muted = false;
+          player.volume = 1;
+          document.body.append(player);
+          try {
+            await player.play();
+            await new Promise<void>((resolve, reject) => {
+              player.addEventListener("ended", () => resolve(), { once: true });
+              player.addEventListener("error", () => reject(new Error("playback failed")), {
+                once: true,
+              });
+            });
+            return {
+              width: player.videoWidth,
+              height: player.videoHeight,
+              duration: player.duration,
+              muted: player.muted,
+              channels: decoded.numberOfChannels,
+              rms,
+            };
+          } finally {
+            player.pause();
+            player.remove();
+            URL.revokeObjectURL(url);
+            await audio.close();
+          }
+        }, output);
+        expect(playback).toMatchObject({ width: 320, height: 180, muted: false, channels: 2 });
+        expect(Math.abs(playback.duration - 6.037333)).toBeLessThanOrEqual(0.25);
+        expect(playback.rms).toBeGreaterThan(0.05);
+      },
+    ));
+
   it("contains the mobile offer, loads the encoder only after consent, and sends a playable copy", () =>
     suite.withPage(
       { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },

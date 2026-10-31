@@ -3,6 +3,7 @@ import {
   BlobSource,
   Conversion,
   Input,
+  IsobmffInputFormat,
   Mp4OutputFormat,
   Output,
   Quality,
@@ -11,6 +12,7 @@ import {
   canEncodeAudio,
   canEncodeVideo,
 } from "mediabunny";
+import { readIsobmffTrackIds } from "./chat-attachment-video-inventory.ts";
 import type { VideoCompressionRequest, VideoCompressionResponse } from "./chat-attachment-video.ts";
 
 const reply = (message: VideoCompressionResponse) =>
@@ -26,6 +28,47 @@ async function compress(data: VideoCompressionRequest) {
     if (videos.length !== 1 || !Number.isFinite(duration) || duration <= 0) {
       reply({ type: "error", reason: "unsupported" });
       return;
+    }
+    const unknownApac = [];
+    for (const track of audios) {
+      if ((await track.getCodec()) === null && (await track.getInternalCodecId()) === "apac") {
+        unknownApac.push(track);
+      }
+    }
+    const omitted = unknownApac.length === 1 ? unknownApac[0] : undefined;
+    if (unknownApac.length > 0 || data.omission) {
+      const retained = audios.find((track) => track !== omitted);
+      if (
+        !omitted ||
+        unknownApac.length !== 1 ||
+        audios.length !== 2 ||
+        !retained ||
+        !((await input.getFormat()) instanceof IsobmffInputFormat) ||
+        (await retained.getCodec()) !== "aac" ||
+        (await retained.getNumberOfChannels()) !== 2 ||
+        !(await retained.canDecode()) ||
+        !(await videos[0]!.canDecode()) ||
+        (data.omission && data.omission.omitApacTrackId !== omitted.id)
+      ) {
+        reply({ type: "error", reason: "unsupported" });
+        return;
+      }
+      const ids = await readIsobmffTrackIds(data.file);
+      const tracks = [...videos, ...audios];
+      if (ids.length !== tracks.length || tracks.some((track) => !ids.includes(track.id))) {
+        reply({ type: "error", reason: "unsupported" });
+        return;
+      }
+      const color = await videos[0]!.getColorSpace();
+      if (
+        (await videos[0]!.hasHighDynamicRange()) ||
+        color.primaries !== "bt709" ||
+        color.matrix !== "bt709" ||
+        (color.transfer !== "bt709" && color.transfer !== "iec61966-2-1")
+      ) {
+        reply({ type: "error", reason: "fidelity" });
+        return;
+      }
     }
     const width = await videos[0]!.getDisplayWidth();
     const height = await videos[0]!.getDisplayHeight();
@@ -49,7 +92,7 @@ async function compress(data: VideoCompressionRequest) {
     }
     const audioBitrate = 96_000;
     let videoBitrate = Math.floor(
-      (data.maxBytes * 8 * 0.82) / duration - audios.length * audioBitrate,
+      (data.maxBytes * 8 * 0.82) / duration - (audios.length - (omitted ? 1 : 0)) * audioBitrate,
     );
     // Allow a measured retry without retaining unbounded encoder output. Reuse
     // this capacity across attempts; bitrate is only an advisory codec target.
@@ -87,6 +130,7 @@ async function compress(data: VideoCompressionRequest) {
       conversion = await Conversion.init({
         input,
         output,
+        tracks: "all",
         showWarnings: false,
         video: {
           codec,
@@ -98,14 +142,30 @@ async function compress(data: VideoCompressionRequest) {
           forceTranscode: true,
           allowTransformationMetadata: false,
         },
-        audio: {
-          codec: audioCodec,
-          quality: new Quality({ bitrate: audioBitrate }),
-          forceTranscode: true,
-        },
+        audio: (track) =>
+          omitted && track.id === omitted.id
+            ? { discard: true }
+            : {
+                codec: audioCodec,
+                quality: new Quality({ bitrate: audioBitrate }),
+                forceTranscode: true,
+              },
       });
-      if (!conversion.isValid || conversion.discardedTracks.length > 0) {
+      const accounted = omitted
+        ? conversion.discardedTracks.length === 1 &&
+          conversion.discardedTracks[0]!.track.id === omitted.id &&
+          conversion.discardedTracks[0]!.reason === "discarded_by_user" &&
+          conversion.utilizedTracks.length === 2 &&
+          [...videos, ...audios]
+            .filter((track) => track !== omitted)
+            .every((track) => conversion!.utilizedTracks.some((used) => used.id === track.id))
+        : conversion.discardedTracks.length === 0;
+      if (!conversion.isValid || !accounted) {
         reply({ type: "error", reason: "unsupported" });
+        return;
+      }
+      if (omitted && !data.omission) {
+        reply({ type: "compatible-copy", omission: { omitApacTrackId: omitted.id } });
         return;
       }
       let lastProgress = -1;

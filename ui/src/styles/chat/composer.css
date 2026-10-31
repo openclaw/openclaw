@@ -1935,6 +1935,35 @@
   stroke: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
+.chat-attachment-original {
+  position: absolute;
+  right: 26px;
+  top: 2px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-attachment-thumb--original {
+  min-width: 216px;
+}
+
+.chat-attachment-thumb--original .chat-attachment-file__name {
+  padding-right: 24px;
+}
+
+.chat-attachment-original svg {
+  width: 14px;
+  height: 14px;
+}
+
 .chat-attachment-thumb--browser-annotation {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);

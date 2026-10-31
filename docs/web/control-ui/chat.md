@@ -562,6 +562,33 @@ Do not classify every MOV, HEVC recording, or Apple device as unsupported from
 that refusal. See [Mediabunny's format/codec guide](https://mediabunny.dev/guide/supported-formats-and-codecs)
 for the distinction between containers, codecs, and browser capabilities.
 
+### Compatible-copy proposal
+
+After **Compress to fit**, a narrowly eligible mixed-track recording offers
+**Create compatible copy** with a separate confirmation. Eligibility requires a
+complete ISO-BMFF inventory of one decodable video track, one decodable stereo
+AAC track, and one additional unsupported APAC audio track. The worker checks
+container track IDs as well as the library's audio/video inventory; hidden or
+additional tracks are not implicitly approved for removal.
+
+The confirmation explains that the copy omits the APAC track and its spatial
+information and re-encodes video and retained audio. MP4 uses H.264/AAC; WebM
+uses VP9/Opus, including for AAC-source content. Neither is lossless or spatially
+equivalent. Only known BT.709/sRGB SDR profiles qualify; HDR and unknown color
+profiles require a separate decision, not broader consent.
+
+**Download original** remains available while this attachment is in the draft.
+The source bytes are unchanged; removing the attachment or replacing the draft
+retires its pending consent and recovery reference. Retry revalidates the same
+omission, never additional track loss. Nothing is sent automatically.
+
+This is an implementation proposal under review, not physical-device qualification.
+The regression fixture is purpose-generated H.264/AAC with an unknown sample
+entry labeled APAC, **not genuine Apple APAC**. Genuine APAC, real MP4 output,
+physical Apple Safari, macOS Safari/WKWebView, Windows browser qualification,
+human listening, and HDR compatibility remain open under
+[#180550](https://github.com/openclaw/openclaw/issues/180550).
+
 ### Evidence baseline
 
 Source inspected at OpenClaw

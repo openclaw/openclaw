@@ -309,6 +309,13 @@ const catalog = {
       compressionUnsupported: "This browser cannot compress this video.",
       compressionTooLarge: "Video is still too large. Try a smaller file.",
       compressionFailed: "Could not compress video. Try again.",
+      compressionFidelity:
+        "This compatible copy requires a known SDR color profile. HDR and unrecognized color profiles are not supported. Keep the original or choose an SDR recording.",
+      createCompatibleCopy: "Create compatible copy",
+      compatibleCopyTitle: "Create a compatible copy?",
+      compatibleCopyDisclosure:
+        "This copy will keep the video and the stereo AAC audio content, but omit the additional unsupported APAC audio track and its spatial information. Video and audio will be re-encoded as H.264/AAC or VP9/Opus, depending on this browser. The copy is not lossless or spatially equivalent. Your original remains unchanged and downloadable while this attachment stays in the draft. Nothing is sent automatically.",
+      downloadOriginal: "Download original",
       showInTextField: "Show in text field",
       pastedText: "Pasted text",
       outsideAllowedFolders: "Outside allowed folders",
