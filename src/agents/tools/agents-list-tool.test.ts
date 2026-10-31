@@ -11,6 +11,19 @@ function configureAgents(
   loadConfigMock.mockReturnValue({ agents: { defaults, entries } });
 }
 
+type AgentListDetails = {
+  requester?: string;
+  allowAny?: boolean;
+  agents?: Array<{
+    id?: string;
+    name?: string;
+    description?: string;
+    configured?: boolean;
+    model?: string;
+    agentRuntime?: { id?: string; source?: string };
+  }>;
+};
+
 vi.mock("../../config/config.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
@@ -70,6 +83,103 @@ describe("agents_list tool", () => {
       [expectedAgent("openai/gpt-5.5", { id: "codex", source: "model" }, "codex", "Codex")],
       tool,
     );
+  });
+
+  it("returns trimmed descriptions only for allowed agents and omits blanks", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        entries: {
+          main: { subagents: { allowAgents: ["research", "blank"] } },
+          research: { name: "Research", description: "  Finds and synthesizes evidence  " },
+          blank: { description: "   " },
+          excluded: { description: "Excluded agent description" },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    const details = result.details as AgentListDetails;
+    expect(details.agents?.map((agent) => agent.id)).toEqual(["blank", "research"]);
+    expect(details.agents?.find((agent) => agent.id === "research")).toMatchObject({
+      name: "Research",
+      description: "Finds and synthesizes evidence",
+    });
+    expect(details.agents?.find((agent) => agent.id === "blank")).not.toHaveProperty("description");
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(details, null, 2) }]);
+    expect(JSON.stringify(result)).not.toContain("Excluded agent description");
+  });
+
+  it("bounds each description without splitting a surrogate pair", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: { entries: { main: { description: `${"a".repeat(511)}🚀tail` } } },
+    } satisfies OpenClawConfig);
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    expect((result.details as AgentListDetails).agents?.[0]?.description).toBe(
+      `${"a".repeat(511)}…`,
+    );
+  });
+
+  it.each([
+    { label: "ASCII", description: "a".repeat(600), count: 10, retained: 8, units: 1 },
+    { label: "CJK", description: "漢".repeat(512), count: 4, retained: 2, units: 4 },
+  ])(
+    "bounds the aggregate $label description budget without dropping agents",
+    async ({ description, count, retained, units }) => {
+      const ids = Array.from({ length: count }, (_, index) => `agent-${index}`);
+      loadConfigMock.mockReturnValue({
+        agents: {
+          entries: {
+            main: { subagents: { allowAgents: ["*"] } },
+            ...Object.fromEntries(ids.map((id) => [id, { description }])),
+          },
+        },
+      } satisfies OpenClawConfig);
+      const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+        "call",
+        {},
+      );
+      const agents = (result.details as AgentListDetails).agents;
+      expect(agents?.map((agent) => agent.id)).toEqual(["main", ...ids]);
+      const descriptions =
+        agents?.flatMap((agent) => (agent.description ? [agent.description] : [])) ?? [];
+      expect(descriptions).toHaveLength(retained);
+      expect(descriptions.reduce((total, text) => total + text.length * units, 0)).toBe(4096);
+      expect(
+        agents?.slice(retained + 1).every((agent) => !Object.hasOwn(agent, "description")),
+      ).toBe(true);
+    },
+  );
+
+  it("fits a mixed-script final description into the remaining aggregate budget", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        entries: {
+          main: { description: "a".repeat(505), subagents: { allowAgents: ["*"] } },
+          ...Object.fromEntries(
+            Array.from({ length: 7 }, (_, index) => [
+              `agent-${index}`,
+              { description: "a".repeat(512) },
+            ]),
+          ),
+          final: { description: "漢🚀more" },
+          later: { description: "Omitted after budget exhaustion" },
+        },
+      },
+    } satisfies OpenClawConfig);
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    const agents = (result.details as AgentListDetails).agents;
+    expect(agents?.find((agent) => agent.id === "final")?.description).toBe("漢🚀…");
+    expect(agents?.find((agent) => agent.id === "later")).not.toHaveProperty("description");
+    expect(agents?.[0]?.id).toBe("main");
   });
 
   it.each([
