@@ -241,6 +241,12 @@ console.log("headless-read-ok");`,
     );
   });
 
+  it("accepts optional: false for existing files and throws for missing files", async () => {
+    const { tool: local } = await fileFixture("present.txt", "content");
+    await expectReadText(local, { path: "present.txt", optional: false }, "content");
+    await expect(executeRead(local, { path: "missing.txt", optional: false })).rejects.toThrow();
+  });
+
   it.runIf(process.platform !== "win32")("rejects FIFOs without a writer", async () => {
     const tempDir = tempDirs.make("openclaw-read-fifo-");
     const fifoPath = path.join(tempDir, "live.pipe");
