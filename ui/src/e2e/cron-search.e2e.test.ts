@@ -146,51 +146,66 @@ suite.define(() => {
       }
     });
   });
-  it("windows jobs while preserving native Tab, menu focus, and the last loaded job", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const jobs = Array.from({ length: 500 }, (_, index) =>
-        cronJob("window-" + index, "Windowed reminder " + index),
-      );
-      await installMockGateway(page, {
-        methodResponses: {
-          "cron.list": cronList(jobs, "window-query", { total: jobs.length }),
-          "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
-          "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
-        },
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
+  ])(
+    "windows jobs while preserving native Tab, menu focus, and the last loaded job at %o",
+    async (viewport) => {
+      await suite.withPage({ viewport }, async ({ page }) => {
+        const jobs = Array.from({ length: 500 }, (_, index) =>
+          cronJob("window-" + index, "Windowed reminder " + index),
+        );
+        await installMockGateway(page, {
+          methodResponses: {
+            "cron.list": cronList(jobs, "window-query", { total: jobs.length }),
+            "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
+            "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "cron");
+        const rows = page.locator(".cron-table__row");
+        await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe("500");
+        expect(await rows.count()).toBeLessThan(40);
+        // The last row is pinned as the native reverse-Tab entry from the footer.
+        const edge = rows.nth((await rows.count()) - 2);
+        const index = Number(await edge.getAttribute("data-index"));
+        await edge.locator(".cron-table__name").focus();
+        for (let step = 0; step < 4; step++) {
+          await page.keyboard.press("Tab");
+        }
+        const next = page.locator(`[data-test-id="cron-row-window-${index + 1}"]`);
+        await expect
+          .poll(() =>
+            next
+              .locator(".cron-table__name")
+              .evaluate((element) => element === document.activeElement),
+          )
+          .toBe(true);
+        const trigger = next.locator(".cron-job-menu__trigger");
+        await trigger.click();
+        await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+        await expect
+          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        const lastName = page.locator('[data-test-id="cron-row-window-499"] .cron-table__name');
+        await lastName.focus();
+        await expect
+          .poll(() =>
+            lastName.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return rect.top >= 0 && rect.bottom <= innerHeight;
+            }),
+          )
+          .toBe(true);
+        await expect
+          .poll(() =>
+            page.locator('[data-test-id="cron-row-window-499"]').getAttribute("aria-posinset"),
+          )
+          .toBe("500");
+        expect(await rows.count()).toBeLessThan(40);
       });
-      await page.goto(suite.server.baseUrl + "cron");
-      const rows = page.locator(".cron-table__row");
-      await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe("500");
-      expect(await rows.count()).toBeLessThan(40);
-      // The last row is pinned as the native reverse-Tab entry from the footer.
-      const edge = rows.nth((await rows.count()) - 2);
-      const index = Number(await edge.getAttribute("data-index"));
-      await edge.locator(".cron-table__name").focus();
-      for (let step = 0; step < 4; step++) {
-        await page.keyboard.press("Tab");
-      }
-      const next = page.locator(`[data-test-id="cron-row-window-${index + 1}"]`);
-      await expect
-        .poll(() =>
-          next
-            .locator(".cron-table__name")
-            .evaluate((element) => element === document.activeElement),
-        )
-        .toBe(true);
-      const trigger = next.locator(".cron-job-menu__trigger");
-      await trigger.click();
-      await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
-      await page.keyboard.press("Escape");
-      await expect
-        .poll(() => trigger.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.locator('[data-test-id="cron-row-window-499"] .cron-table__name').focus();
-      await expect
-        .poll(() =>
-          page.locator('[data-test-id="cron-row-window-499"]').getAttribute("aria-posinset"),
-        )
-        .toBe("500");
-      expect(await rows.count()).toBeLessThan(40);
-    });
-  });
+    },
+  );
 });

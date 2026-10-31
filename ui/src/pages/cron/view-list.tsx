@@ -28,6 +28,7 @@ import { SettingsSection, SettingsPage } from "../../components/solid/settings-u
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import {
   AdminRequired,
@@ -406,6 +407,15 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
     },
     { targets: () => [list, ...(scroller ? [scroller] : [])], changeTiming: "sync", fonts: true },
   );
+  createLayoutMeasurement(
+    () => window().height,
+    () => {
+      // Retry a clamped scroll adjustment after Solid commits the measured height.
+      const { _willUpdate: update } = virtualizer;
+      update();
+    },
+    { targets: () => [list], changeTiming: "sync" },
+  );
   const byId = createMemo(() => new Map(props.rows.map((job, index) => [job.id, { job, index }])));
   const geometry = createMemo(() => new Map(window().items.map((item) => [item.key, item])));
   const visible = createMemo(() => {
@@ -416,6 +426,24 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       return props.rows.slice(0, 12);
     }
     return window().items.flatMap((item) => byId().get(String(item.key))?.job ?? []);
+  });
+  createPendingFocus(() => ({ rows: visible(), focused: list?.ownerDocument.activeElement }), {
+    requested: (next, previous) => previous !== undefined && next.rows !== previous.rows,
+    focus: ({ focused }) => {
+      if (!(focused instanceof HTMLElement) || !list.contains(focused)) {
+        return;
+      }
+      // WebKit can blur a retained control when keyed neighbors move.
+      queueMicrotask(() => {
+        const doc = focused.ownerDocument;
+        if (
+          focused.isConnected &&
+          (doc.activeElement === doc.body || doc.activeElement === doc.documentElement)
+        ) {
+          focused.focus({ preventScroll: true });
+        }
+      });
+    },
   });
   function Row(row: { job: CronJob }) {
     let element: HTMLDivElement;
@@ -449,6 +477,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
           if (windowed()) {
             pinFocus();
             publish();
+            // Keep the native target visible as estimated mobile rows measure.
+            virtualizer.scrollToIndex(byId().get(row.job.id)!.index);
           }
         }}
         style={
