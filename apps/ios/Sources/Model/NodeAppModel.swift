@@ -1296,8 +1296,11 @@ final class NodeAppModel {
         self.pushWakeLogger.info("\(leaseLogMessage, privacy: .public)")
     }
 
-    private func suppressBackgroundReconnect(reason: String) {
+    func suppressBackgroundReconnect(reason: String) {
         guard self.isBackgrounded else { return }
+        // Established background Talk owns its connections until that turn stops.
+        // The ordinary grace deadline must not tear down its active audio.
+        guard !self.backgroundTalkKeptActive || !self.talkMode.canKeepContinuousTalkActiveInBackground else { return }
         let hadLease = self.backgroundReconnectLeaseUntil != nil
         let changed = hadLease || !self.backgroundReconnectSuppressed
         self.backgroundReconnectLeaseUntil = nil

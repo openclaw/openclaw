@@ -39,6 +39,58 @@ with the accepted harness IDs. Model Setup stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
 
+## Checklist before you open a provider PR
+
+- **Live listing.** If the vendor has a model-list API, the provider lists the
+  account's models live, so new vendor models need no OpenClaw release. See
+  [live model discovery](/plugins/sdk-provider-plugins/model-catalogs#live-model-discovery).
+  `src/plugins/contracts/provider-live-listing.contract.test.ts` enforces this
+  for bundled hosted providers.
+- **Thinking from catalog data.** Put the profile on the manifest row:
+  `compat.defaultThinkingLevel` makes the row own it, and `thinkingLevelMap`,
+  `compat.supportedReasoningEfforts`, `compat.adaptiveThinking`,
+  `compat.thinkingRequired` and `compat.thinkingLevelLabels` shape the ladder. Do
+  not add a `resolveThinkingProfile` hook for a model its row can describe. Add
+  the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
+  Use `compat.thinkingLevels` when the offered ladder differs from what the map implies.
+- **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  Without the manifest half, the Gateway never refreshes the provider and only
+  catalog rows appear.
+- **Row IDs match the listing.** Use the ID the vendor's model list returns.
+  `modelIdNormalization` aliases only fold what users type.
+- **Connection-only setup.** Onboarding saves the endpoint and credential through
+  `createProviderConnectionPresetAppliers`. Outside `models.mode: "replace"`, which
+  keeps its documented exception, it never copies catalog rows into config. See
+  [model catalogs](/plugins/sdk-provider-plugins/model-catalogs).
+- **Docs.** Add `docs/providers/<id>.md` and list the provider in alphabetical
+  order on the provider index.
+- **Proof.** Run a real agent turn on an isolated Gateway with a real key before
+  the PR opens. API calls and mocked transports do not replace it. Make that
+  Gateway look like a real install:
+  - Enable the bundled plugins users run alongside yours, with credentials,
+    not only your provider. Other plugins' hooks only show up when they are
+    configured.
+  - Save the key the way users do (the Control UI provider dialog, or
+    `openclaw models auth paste-api-key`), not only through an environment
+    variable.
+  - Set `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` and check that the
+    `[model-fetch] start provider=<id> … url=` line names your vendor's
+    endpoint.
+- **Stay inside your provider.** Core also runs some hooks for providers you do
+  not own:
+  - `normalizeTransport` receives other providers' transports. Return nothing
+    unless the context names your provider or already targets your endpoint.
+    Core ignores another plugin's change that moves a provider to a different
+    origin, and
+    `src/plugins/contracts/provider-transport-scope.contract.test.ts` fails any
+    bundled hook that rewrites a foreign transport.
+  - `augmentModelCatalog` and `resolveExternalAuthProfiles` run as global
+    discovery. Return only catalog rows and auth profiles for providers your
+    plugin owns.
+- **New model for an existing provider.** Add catalog data, not code. Search
+  every provider for the predecessor model ID before adding an exact-ID rule.
+
 ## Import an existing credential during sign-in
 
 An auth method can declare `credentialImport` with a `migrationProviderId`,
@@ -432,7 +484,7 @@ not retain or close the shared pool; the Gateway owns its shutdown.
     that govern deprecated surfaces named on this page and its child pages.
 
     To read runtime auth profiles, await `loadAuthProfileStoreForRuntimeAsync`
-    from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
+    from `openclaw/plugin-sdk/provider-auth`. It reads persisted profiles in a
     database worker and preserves the optional third `env` argument for
     service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
     is deprecated through 2026-12-31 and will be removed in the first January 2027 stable release.
@@ -632,6 +684,41 @@ for the phase to settle, then merges model rows and provider outcomes in provide
 label order. Hooks retain their individual discovery deadlines; completion order
 does not change catalog precedence.
 
+## Per-request credentials in custom transports
+
+`createStreamFn` receives an optional `requestAuth` capability with `version: 1`
+and `resolve({ signal }): Promise<{ apiKey: string; assertCurrent(): void }>`.
+The embedded run's auth owner supplies it for a selected stored OAuth profile.
+Await it immediately before **every physical request**, including provider-private
+continuation and stream-recovery requests, then call the result's `assertCurrent()`
+and check cancellation again before dispatch. Do not cache the returned bearer
+or fall back to `StreamOptions.apiKey` on rejection.
+
+The capability re-reads the canonical credential owner and uses the existing
+OAuth refresh/rotation machinery. It stays bound to the selected profile,
+provider, account and automation authorization, and rejects after the run closes,
+the auth selection advances, or cancellation. Closure during awaited preparation
+also prevents returning credentials. An already-claimed OAuth refresh retains
+its existing independent settlement owner.
+
+This is additive: older hosts, other completion entrypoints, and calls without a
+selected stored OAuth profile may omit it. Bounded auth views such as
+`openclaw agent exec` with state-database shared auth, and env-only scopes, omit
+it because those views cannot supply canonical account authorization. Their
+existing local-credential and shared-OAuth exclusion rules remain unchanged.
+Setup-owned verification of a replacement OAuth sign-in also omits the capability:
+it uses the exact active setup credential scope, not ambient account authorization.
+The replacement stays unavailable outside that scope until verified activation.
+Runtime-only external OAuth profiles also omit the capability: the external
+credential source retains ownership, without requiring a canonical stored row.
+Persisted external profiles retain canonical capture and retirement checks.
+Absence retains the existing static `apiKey` behavior, not a guarantee of renewal
+during an attempt. Static API keys are unchanged. Account-less legacy OAuth
+credentials may keep the same refresh
+grant; a rotated grant without account identity fails closed rather than assuming
+it belongs to the same account. This capability does not retry HTTP 401, replay
+conversations, or transfer refresh grants to a transport.
+
 ## Provider stream decorators
 
 `wrapStreamFn` receives optional request context for provider-owned behavior:
@@ -762,3 +849,32 @@ resolve here.
 - [Building plugins](/plugins/building-plugins)
 - [Building channel plugins](/plugins/sdk-channel-plugins)
 - [Model providers](/concepts/model-providers)
+
+## Worker resource receipts
+
+A worker provider may advertise `supportsResourceReceipts: true` on its existing
+`WorkerProvider` registration. This promises exact-resource handling in
+provision replay, inspection, and destruction; it does not advertise disk retention.
+
+`WorkerResourceReceipt` has version `1`, the exact `leaseId`, and an `identity`
+map containing bounded, nonsecret immutable provider fields. The provider owns
+those fields; core validates their representation and preserves their equality,
+without interpreting vendor resource names. Use 1–16 ASCII identifier keys
+(up to 64 characters), with nonempty trimmed string values up to 2,048 characters
+and no control characters. Never include credentials or bearer URLs.
+
+During provisioning, await `options.recordResourceReceipt(receipt)` as soon as the
+allocated resource can be qualified, before setup, enrollment, or compensating
+cleanup affects that resource. Return the same receipt with the lease. The host
+commits it against the environment's original provision operation. Subsequent
+calls carry `resourceReceipt`: verify it against provider-owned facts, never
+replace it or allocate a successor. Inspection returns the same qualified receipt
+alongside status; an unavailable or mismatched observation throws. Even a
+`destroyed` observation cannot settle receipt-bound custody without that identity.
+
+Destruction checks `assertCurrent` after preparation and immediately before each
+provider effect, and resolves only after exact-resource deletion is confirmed.
+A rejected or lost deletion reply retains cleanup custody. The host can retry
+that exact deletion after restart even when live inspection labels are gone.
+Legacy providers and persisted rows with no receipt keep their existing contract;
+receipt-bearing rows refuse providers that no longer advertise this capability.

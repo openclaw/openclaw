@@ -303,10 +303,12 @@ export function createPrometheusMetricStore(
     sample.count += 1;
     sample.sum += value;
     sample.renderedDirty = true;
+    // Bounds are fixed and ascending; cumulative counts are needed only at scrape time.
     for (let index = 0; index < sample.buckets.length; index += 1) {
       const bucket = sample.buckets[index];
       if (bucket !== undefined && value <= bucket) {
         sample.counts[index] = (sample.counts[index] ?? 0) + 1;
+        break;
       }
     }
   };
@@ -339,7 +341,12 @@ export function createPrometheusMetricStore(
       return output;
     };
     const emitted = new Set<string>();
+    let previousName: string | undefined;
     const header = (name: string, type: string, help: string) => {
+      if (previousName === name) {
+        return;
+      }
+      previousName = name;
       if (!emitted.has(name)) {
         emitted.add(name);
         let cached = headers.get(name);
@@ -393,9 +400,12 @@ export function createPrometheusMetricStore(
       }
       header(sample.name, "histogram", sample.help);
       if (!sample.rendered || sample.renderedDirty) {
-        sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
-          write(prefix, sample.counts[bucketIndex] ?? sample.count);
-        });
+        let cumulative = 0;
+        for (let bucketIndex = 0; bucketIndex < sample.counts.length; bucketIndex++) {
+          cumulative += sample.counts[bucketIndex]!;
+          write(sample.bucketPrefixes[bucketIndex]!, cumulative);
+        }
+        write(sample.bucketPrefixes[sample.counts.length]!, sample.count);
         write(sample.sumPrefix, sample.sum);
         write(sample.countPrefix, sample.count);
         sample.rendered = finish(sample.rendered);

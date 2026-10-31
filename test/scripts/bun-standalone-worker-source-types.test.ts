@@ -2,50 +2,107 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
+import { createStandaloneSourceGlobals } from "../../scripts/lib/bun-standalone-source-globals.mjs";
 import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
 import { createStandaloneSourceTransforms } from "../../scripts/lib/bun-standalone-source-transforms.mjs";
 import { collectNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
 import { createWorkerDeployBuildPlugin } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 
+const sourceRoot = path.resolve(import.meta.dirname, "../..");
+
+function expectSourceTypes(
+  cwd: string,
+  files: Record<string, string>,
+  compilerOptions: Record<string, unknown> = {},
+  rootConfig: { files?: string[]; include?: string[] } = {},
+) {
+  using session = createNativeTypeScriptProject({
+    cwd,
+    configFileName: "tsconfig.json",
+    files: {
+      "package.json": '{"type":"module"}',
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          noEmit: true,
+          module: "nodenext",
+          target: "esnext",
+          types: ["node"],
+          skipLibCheck: true,
+          ...compilerOptions,
+        },
+        files: ["consumer.ts"],
+        ...rootConfig,
+      }),
+      ...files,
+    },
+  });
+  expect(collectNativeTypeScriptDiagnostics(session.project)).toEqual([]);
+}
+
+async function transformWorkerSource(
+  runtimeRoot: string,
+  filename: string,
+  contents = fs.readFileSync(filename, "utf8"),
+  parse = createStandaloneSourceParser(),
+) {
+  const transforms = createStandaloneSourceTransforms({ sourceRoot, runtimeRoot, parse });
+  const transformed = await transforms.transform({
+    filename,
+    contents,
+    config: { plugins: [createWorkerDeployBuildPlugin(sourceRoot)] },
+  });
+  fs.symlinkSync(
+    path.join(sourceRoot, "node_modules"),
+    path.join(runtimeRoot, "node_modules"),
+    "dir",
+  );
+  return transformed;
+}
+
+async function withRuntimeRoot(prefix: string, run: (root: string) => Promise<void>) {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try {
+    await run(runtimeRoot);
+  } finally {
+    fs.rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+}
+
 describe("standalone worker source types", () => {
+  it("preserves the Knowledge worker SDK resolver after image namespace rewriting", () => {
+    const filename = path.join(sourceRoot, "extensions/knowledge/src/worker-sdk-resolver.ts");
+    const transformed = rewriteStandaloneImports({
+      contents: fs.readFileSync(filename, "utf8"),
+      filename,
+      runtimeRoot: sourceRoot,
+      embeddedPaths: {},
+      moduleAliases: {},
+      workerThreadsShim: "",
+      parse: createStandaloneSourceParser(),
+      preserveTypes: true,
+    });
+    expectSourceTypes(
+      sourceRoot,
+      {
+        "worker.ts": transformed,
+        "globals.d.ts": createStandaloneSourceGlobals(),
+        "consumer.ts": `import {installWorkerSdkResolver} from "./worker.js"; installWorkerSdkResolver({"openclaw/plugin-sdk/example": "file:///runtime/example.js"});`,
+      },
+      {},
+      { files: ["worker.ts", "globals.d.ts", "consumer.ts"] },
+    );
+  });
+
   it("retains the Gateway transport types through the portable worker transform", async () => {
-    const sourceRoot = path.resolve(import.meta.dirname, "../..");
-    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-worker-types-"));
-    try {
+    await withRuntimeRoot("standalone-worker-types-", async (runtimeRoot) => {
       const filename = path.join(sourceRoot, "packages/gateway-client/src/websocket.ts");
-      const transforms = createStandaloneSourceTransforms({
-        sourceRoot,
+      const transformed = await transformWorkerSource(runtimeRoot, filename);
+      expectSourceTypes(
         runtimeRoot,
-        parse: createStandaloneSourceParser(),
-      });
-      const transformed = await transforms.transform({
-        filename,
-        contents: fs.readFileSync(filename, "utf8"),
-        config: { plugins: [createWorkerDeployBuildPlugin(sourceRoot)] },
-      });
-      fs.symlinkSync(
-        path.join(sourceRoot, "node_modules"),
-        path.join(runtimeRoot, "node_modules"),
-        "dir",
-      );
-      using session = createNativeTypeScriptProject({
-        cwd: runtimeRoot,
-        configFileName: "tsconfig.json",
-        files: {
-          "package.json": '{"type":"module"}',
-          "tsconfig.json": JSON.stringify({
-            compilerOptions: {
-              strict: true,
-              noEmit: true,
-              module: "nodenext",
-              target: "esnext",
-              lib: ["ES2023"],
-              types: ["node"],
-              skipLibCheck: true,
-            },
-            files: ["consumer.ts"],
-          }),
+        {
           "websocket.ts": transformed.contents,
           "consumer.ts": `import { WebSocket, WebSocketServer, type GatewayWebSocketTargetOptions, type GatewayWebSocketClientOptions, type ClientOptions, type RawData } from "./websocket.js";
 const target: GatewayWebSocketTargetOptions = { url: "wss://example.invalid", tlsServerName: "example.invalid" };
@@ -60,49 +117,54 @@ export function inspect() { return [target.tlsServerName, wsOptions.maxPayload, 
 const invalidTarget: GatewayWebSocketTargetOptions = { tlsServerName: 42 };
 `,
         },
-      });
-      expect(collectNativeTypeScriptDiagnostics(session.project)).toEqual([]);
-    } finally {
-      fs.rmSync(runtimeRoot, { recursive: true, force: true });
-    }
-  });
-  it("retains contextual parameters when composing the Browser runtime", async () => {
-    const sourceRoot = path.resolve(import.meta.dirname, "../..");
-    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-browser-types-"));
-    try {
-      const filename = path.join(sourceRoot, "src/worker/worker-deploy-browser-runtime.ts");
-      const transforms = createStandaloneSourceTransforms({
-        sourceRoot,
-        runtimeRoot,
-        parse: createStandaloneSourceParser(),
-      });
-      const transformed = await transforms.transform({
-        filename,
-        contents: fs.readFileSync(filename, "utf8"),
-        config: { plugins: [createWorkerDeployBuildPlugin(sourceRoot)] },
-      });
-      fs.symlinkSync(
-        path.join(sourceRoot, "node_modules"),
-        path.join(runtimeRoot, "node_modules"),
-        "dir",
+        { lib: ["ES2023"] },
       );
-      using session = createNativeTypeScriptProject({
-        cwd: runtimeRoot,
-        configFileName: "tsconfig.json",
-        files: {
-          "package.json": '{"type":"module"}',
-          "tsconfig.json": JSON.stringify({
-            compilerOptions: {
-              strict: true,
-              noEmit: true,
-              module: "nodenext",
-              target: "esnext",
-              lib: ["ES2023"],
-              types: ["node"],
-              skipLibCheck: true,
-            },
-            files: ["consumer.ts"],
-          }),
+    });
+  });
+
+  it("retains Playwright loader types when its CommonJS modules are source project roots", async () => {
+    await withRuntimeRoot("standalone-playwright-types-", async (runtimeRoot) => {
+      const filename = path.join(
+        sourceRoot,
+        "extensions/browser/src/browser/playwright-core.runtime.ts",
+      );
+      const playwrightRoot = fs.realpathSync(path.join(sourceRoot, "node_modules/playwright-core"));
+      const transformed = await transformWorkerSource(runtimeRoot, filename);
+      expectSourceTypes(
+        runtimeRoot,
+        {
+          "playwright.ts": transformed.contents,
+          "consumer.ts": `import { getPlaywrightCore, getPlaywrightUserAgent } from "./playwright.js";
+const core: typeof import("playwright-core") = getPlaywrightCore();
+const browser: Promise<import("playwright-core").Browser> = core.chromium.connectOverCDP("http://example.invalid");
+const userAgent: string = getPlaywrightUserAgent();
+// @ts-expect-error The loader must retain Playwright's connection argument type.
+getPlaywrightCore().chromium.connectOverCDP(42);
+// @ts-expect-error The loader's User-Agent remains a string.
+const invalidUserAgent: number = getPlaywrightUserAgent();
+void [browser, userAgent, invalidUserAgent];
+`,
+        },
+        { allowJs: true, lib: ["ES2023"] },
+        {
+          files: [
+            "consumer.ts",
+            path.join(playwrightRoot, "index.js"),
+            path.join(playwrightRoot, "lib/coreBundle.js"),
+          ],
+          include: [],
+        },
+      );
+    });
+  });
+
+  it("retains contextual parameters when composing the Browser runtime", async () => {
+    await withRuntimeRoot("standalone-browser-types-", async (runtimeRoot) => {
+      const filename = path.join(sourceRoot, "src/worker/worker-deploy-browser-runtime.ts");
+      const transformed = await transformWorkerSource(runtimeRoot, filename);
+      expectSourceTypes(
+        runtimeRoot,
+        {
           "src/worker/worker-deploy-browser-runtime.ts": transformed.contents,
           "src/worker/browser-runtime.ts": `export type WorkerBrowserRuntime = {
   createAttachedBrowserToolRuntime: (params: { cdpUrl: string }) => Promise<string>;
@@ -114,17 +176,13 @@ export const result: Promise<string> = runtime.createAttachedBrowserToolRuntime(
 void runtime.createAttachedBrowserToolRuntime({ cdpUrl: 42 });
 `,
         },
-      });
-      expect(collectNativeTypeScriptDiagnostics(session.project)).toEqual([]);
-    } finally {
-      fs.rmSync(runtimeRoot, { recursive: true, force: true });
-    }
+        { lib: ["ES2023"] },
+      );
+    });
   });
 
   it("typechecks the facade activation loader after replacing the host implementation", async () => {
-    const sourceRoot = path.resolve(import.meta.dirname, "../..");
-    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-facade-types-"));
-    try {
+    await withRuntimeRoot("standalone-facade-types-", async (runtimeRoot) => {
       const filename = path.join(sourceRoot, "src/plugin-sdk/facade-runtime.ts");
       const source = fs.readFileSync(filename, "utf8");
       const parse = createStandaloneSourceParser();
@@ -137,33 +195,10 @@ void runtime.createAttachedBrowserToolRuntime({ cdpUrl: 42 });
         )
         .map((node) => source.slice(node.start ?? 0, node.end ?? 0))
         .join("\n");
-      const transforms = createStandaloneSourceTransforms({ sourceRoot, runtimeRoot, parse });
-      const transformed = await transforms.transform({
-        filename,
-        contents,
-        config: { plugins: [createWorkerDeployBuildPlugin(sourceRoot)] },
-      });
-      fs.symlinkSync(
-        path.join(sourceRoot, "node_modules"),
-        path.join(runtimeRoot, "node_modules"),
-        "dir",
-      );
-      using session = createNativeTypeScriptProject({
-        cwd: runtimeRoot,
-        configFileName: "tsconfig.json",
-        files: {
-          "package.json": '{"type":"module"}',
-          "tsconfig.json": JSON.stringify({
-            compilerOptions: {
-              strict: true,
-              noEmit: true,
-              module: "nodenext",
-              target: "esnext",
-              types: ["node"],
-              skipLibCheck: true,
-            },
-            files: ["facade-runtime.ts"],
-          }),
+      const transformed = await transformWorkerSource(runtimeRoot, filename, contents, parse);
+      expectSourceTypes(
+        runtimeRoot,
+        {
           "facade-runtime.ts": `import { fileURLToPath } from "node:url";
 declare const CURRENT_MODULE_PATH: string;
 declare function getPluginCacheSource(key: string): {
@@ -178,10 +213,9 @@ export { loadFacadeActivationCheckRuntime, loadFacadeActivationCheckRuntimeAsync
 `,
           "facade-activation-check.runtime.ts": 'export const marker = "activated";',
         },
-      });
-      expect(collectNativeTypeScriptDiagnostics(session.project)).toEqual([]);
-    } finally {
-      fs.rmSync(runtimeRoot, { recursive: true, force: true });
-    }
+        {},
+        { files: ["facade-runtime.ts"] },
+      );
+    });
   });
 });

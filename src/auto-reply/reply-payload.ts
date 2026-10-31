@@ -6,10 +6,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type {
-  HarnessCompletionRecovery,
-  RestartRecoveryTerminalDeliveryEvidence,
-} from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
@@ -27,6 +23,7 @@ export type {
 
 export type ReplyMediaFailureCode =
   | "file-not-found"
+  | "file-too-large"
   | "unsupported-format"
   | "delivery-failed"
   | "invalid-reference";
@@ -110,6 +107,7 @@ export type ReplyDeliveryContext = {
 
 const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
+  "file-too-large": "Too large to attach. Look for this file in Files.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
   "invalid-reference":
@@ -237,12 +235,8 @@ export type SessionWriterDeliveryAuthority = {
         sessionId: string;
         lifecycleRevision?: string;
         activeWriterRunId?: string;
-        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
-        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
       }
     | undefined;
-  /** Captured admitted completion authority, retained by the durable queue. */
-  harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
   expectedSessionId: string;
   expectedWriterRunId?: string;
@@ -266,6 +260,8 @@ export type ReplyPayloadMetadata = {
   blockSourceText?: string;
   /** UTF-16 source range represented by this block within one assistant message. */
   blockSourceRange?: readonly [start: number, end: number];
+  /** An authored line break continues an already accepted source text block. */
+  streamedSourceBoundary?: true;
   /** Live source receipts retained until final text recovery settles. */
   blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */
@@ -377,8 +373,10 @@ export type ReplyPayloadMetadata = {
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
-  /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
-  queueAdmissionNotice?: true;
+  /** The channel notice has a canonical model-fallback transcript event in the Control UI. */
+  modelFallbackNotice?: true;
+  /** Runtime queue decision; successful acceptance can use a client's queue presentation. */
+  queueAdmissionNotice?: true | "queued";
 };
 
 // Source Gateways and native plugin SDK chunks must share the same payload identity.

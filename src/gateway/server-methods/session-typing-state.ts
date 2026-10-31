@@ -7,15 +7,14 @@ export const TYPING_THROTTLE_MS = 1_000;
 export const TYPING_PREVIEW_THROTTLE_MS = 250;
 const TYPING_ACTIVE_TTL_MS = 2_500;
 const MAX_TYPING_THROTTLE_KEYS = 2_048;
-type PendingTypingBroadcast = {
-  signature: string;
-  intervalMs: number;
-  emit: () => boolean;
-};
 type TypingBroadcastState = {
   at: number;
   signature: string;
-  pending?: PendingTypingBroadcast;
+  pending?: {
+    signature: string;
+    intervalMs: number;
+    emit: () => boolean;
+  };
   timer?: ReturnType<typeof setTimeout>;
 };
 type TypingConnectionState = { updatedAt: number; preview?: string; cursor?: number };

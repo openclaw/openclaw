@@ -100,7 +100,7 @@ export async function files(directory: string): Promise<string[]> {
 export async function fixture(
   run: (input: { state: OpenClawTestState; source: string; client?: Client }) => Promise<void>,
   postgres = false,
-  rows = 1,
+  { rows = 1, store = "workboard" }: { rows?: number; store?: "workboard" | "state" } = {},
 ) {
   await withOpenClawTestState(
     {
@@ -112,13 +112,16 @@ export async function fixture(
       },
     },
     async (state) => {
-      const source = state.statePath("plugins", "workboard", "workboard.sqlite");
+      const source =
+        store === "state"
+          ? state.statePath("state", "openclaw.sqlite")
+          : state.statePath("plugins", "workboard", "workboard.sqlite");
       await state.writeText("plugins.json", '{"entries":{"workboard":{"enabled":false}}}');
       await state.writeConfig(portConfig);
-      const { admit } = await workboardPortProvider.loadDescriptor();
-      assert(admit);
-      await admit(source);
-      {
+      if (store === "workboard") {
+        const { admit } = await workboardPortProvider.loadDescriptor();
+        assert(admit);
+        await admit(source);
         using db = openNodeSqliteDatabase(source);
         db.exec(`UPDATE workboard_schema_migrations SET applied_at = 17;
           INSERT INTO workboard_boards (id, name, created_at, updated_at)

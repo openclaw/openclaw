@@ -203,10 +203,8 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     view.fill(0);
     expect(lifecycle.enqueuePendingAudio(Buffer.alloc(512 * 1024, 0x02))).toBe(true);
     expect(lifecycle.enqueuePendingAudio(Buffer.from([0x03]))).toBe(false);
-    expect(lifecycle.drainPendingAudio()).toEqual([
-      Buffer.alloc(512 * 1024, 0x01),
-      Buffer.alloc(512 * 1024, 0x02),
-    ]);
+    const pending = lifecycle.drainPendingAudio().map((chunk) => chunk.toString("hex"));
+    expect(pending).toEqual(["01".repeat(512 * 1024), "02".repeat(512 * 1024)]);
 
     const small = Buffer.alloc(960, 0x03);
     lifecycle.enqueuePendingAudio(small);
@@ -251,9 +249,9 @@ describe("createRealtimeVoiceAudioQueue", () => {
     expect(queue.enqueue(first)).toBe(true);
     expect(queue.enqueue(second)).toBe(true);
     expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
-    expect(queue.dequeue()).toEqual(first);
+    expect(queue.dequeue()?.equals(first), "first dequeued audio bytes").toBe(true);
     expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
-    expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
+    expect(queue.drain().map((buf) => buf.toString("hex"))).toEqual([second.toString("hex"), "03"]);
   });
 
   it("resets audio queue accounting on clear", () => {

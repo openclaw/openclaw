@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
+import {
+  interruptCodexTurnAndWaitBestEffort,
+  terminateCodexBackgroundTerminals,
+} from "./attempt-client-cleanup.js";
 import type { CodexAppServerClient } from "./client.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
@@ -348,6 +351,8 @@ describeLive("codex native subagent monitor live", () => {
               connectionFingerprint,
             },
             agentId: "live",
+            cancelChildProcesses: (threadId, _turnId, assertCurrent) =>
+              terminateCodexBackgroundTerminals(client, threadId, false, undefined, assertCurrent),
             claimDirectChild: (childThreadId) => {
               claims.set(revision, childThreadId);
               return () => releases.add(childThreadId);

@@ -102,7 +102,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     command === "docker" &&
     args[0] === "inspect" &&
     args[1] === "-f" &&
-    args[2] === "{{.State.Running}}";
+    args[2] ===
+      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}';
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
   let stdout = "";
   if (command === "docker" && args[0] === "context" && args[1] === "inspect") {

@@ -8,6 +8,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "../../sessions/session-controller.js";
@@ -24,6 +25,7 @@ import {
 } from "./agent-runner-event-handler.js";
 import type { CompletedAgentAuthSelection } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildFallbackCandidateTurnParams } from "./agent-runner-run-params.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
@@ -128,6 +130,42 @@ export async function runEmbeddedFallbackCandidate(
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         ...runBaseParams,
+        beforeRecoveryCompaction: async (recovery) => {
+          if (turn.recoveryMemoryFlushAttempted) {
+            return "skipped: already attempted this turn";
+          }
+          turn.recoveryMemoryFlushAttempted = true;
+          const entry =
+            turn.sessionKey && turn.storePath
+              ? await readSessionEntryInWorker({
+                  storePath: turn.storePath,
+                  sessionKey: turn.sessionKey,
+                })
+              : turn.getActiveSessionEntry();
+          if (entry?.sessionId !== recovery.sessionId) {
+            return "skipped: source session changed";
+          }
+          const flushed = await runMemoryFlushIfNeeded({
+            cfg: params.runtimeConfig,
+            followupRun: {
+              ...turn.followupRun,
+              abortSignal: params.runAbortSignal ?? turn.followupRun.abortSignal,
+              run: { ...candidateRun, ...recovery },
+            },
+            recoveryContextTokenBudget: recovery.contextTokenBudget,
+            defaultModel: recovery.model,
+            resolvedVerboseLevel: turn.resolvedVerboseLevel,
+            sessionEntry: entry,
+            sessionStore: turn.activeSessionStore,
+            sessionKey: turn.sessionKey,
+            runtimePolicySessionKey: turn.runtimePolicySessionKey,
+            storePath: turn.storePath,
+            replyOperation: turn.replyOperation,
+            abortSignal: params.runAbortSignal,
+            opts: { runId: params.runId },
+          });
+          return flushed.outcome;
+        },
         ...params.scheduledInference?.runParams,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
@@ -141,6 +179,7 @@ export async function runEmbeddedFallbackCandidate(
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
         ...buildFallbackCandidateTurnParams(params),
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
+        sessionPromptDelivery: turn.getActiveSessionEntry()?.delivery,
         provider: params.provider,
         agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,

@@ -78,23 +78,6 @@ export function processCommandHasFlag(
   return values.length === 1 && values[0] === value;
 }
 
-function commandLineMatchesManagedChrome(params: {
-  command: { argv: string[] | null; text: string };
-  exe: BrowserExecutable;
-  profile: ResolvedBrowserProfile;
-  userDataDir: string;
-}): boolean {
-  return (
-    isChromeExecutableFamilyMatch(params.command.text, params.exe) &&
-    processCommandHasFlag(
-      params.command,
-      "remote-debugging-port",
-      String(params.profile.cdpPort),
-    ) &&
-    processCommandHasFlag(params.command, "user-data-dir", params.userDataDir)
-  );
-}
-
 function parseLinuxTcpListenInodesForPort(table: string, port: number): Set<string> {
   const expectedPort = port.toString(16).toUpperCase().padStart(4, "0");
   const inodes = new Set<string>();
@@ -245,7 +228,8 @@ function readHeadlessShellProfilePids(userDataDir: string): number[] | null {
       const output = execFileSync("ps", ["-axww", "-o", "pid=,command="], {
         encoding: "utf8",
         timeout: 1000,
-        maxBuffer: 1024 * 1024,
+        // Match the browser MCP census budget for a host-wide argument listing.
+        maxBuffer: 4 * 1024 * 1024,
       });
       for (const line of output.split(/\r?\n/)) {
         const match = /^\s*(\d+)\s+(.+)$/.exec(line);
@@ -295,12 +279,11 @@ export function readOwnedManagedChromeIdentity(params: {
   if (
     !command ||
     (params.headlessShellOnly && !headlessShellExecutable(command)) ||
-    !commandLineMatchesManagedChrome({
-      command,
-      exe: params.exe,
-      profile: params.profile,
-      userDataDir: params.userDataDir,
-    })
+    !(
+      isChromeExecutableFamilyMatch(command.text, params.exe) &&
+      processCommandHasFlag(command, "remote-debugging-port", String(params.profile.cdpPort)) &&
+      processCommandHasFlag(command, "user-data-dir", params.userDataDir)
+    )
   ) {
     return null;
   }

@@ -24,7 +24,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const root = tempDirs.make("relay-native-owner-");
     const marker = path.join(root, "native-anchor.json");
-    const nativeOwner = path.join(root, "native-anchor.ts");
+    const nativeOwner = path.join(root, "native-anchor.mts");
     const preload = path.join(root, "empty instrumentation.mjs");
     await writeFile(preload, "");
     const anchor = resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");

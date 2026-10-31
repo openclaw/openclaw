@@ -9,7 +9,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   McpSseSessionExpiredError,
   OpenClawSSEClientTransport,
@@ -141,9 +141,7 @@ describe("node host MCP live lifecycle", () => {
 
     await vi.waitFor(() => expect(pending).toHaveLength(1));
     client.onToolsChanged?.();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect(client.request).toHaveBeenCalledOnce();
     expect(lists.maxActive()).toBe(1);
 

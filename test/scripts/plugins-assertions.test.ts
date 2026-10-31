@@ -30,6 +30,7 @@ import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { isProcessPresent } from "./run-process.test-support.js";
 
 const npmArtifact = {
   artifactKind: "npm-pack",
@@ -128,15 +129,6 @@ function writeFixtureServerShims(
   chmodSync(path.join(binDir, "node"), 0o755);
   chmodSync(path.join(binDir, "sleep"), 0o755);
   writeFileSync(pidPath, "");
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function runPluginsSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
@@ -485,7 +477,7 @@ done
     const pid = Number(readFileSync(pidPath, "utf8"));
     expect(Number.isInteger(pid)).toBe(true);
     // The shell EXIT trap joins this exact fixture child before returning.
-    expect(isProcessAlive(pid)).toBe(false);
+    expect(isProcessPresent(pid)).toBe(false);
     if (!stubborn) {
       expect(readFileSync(cleanupPath, "utf8")).toBe("caller-cleanup");
     }
@@ -1010,6 +1002,50 @@ fs.renameSync = (source, destination) => {
       }
     },
   );
+
+  it.for(["2147483648", String(Number.MAX_SAFE_INTEGER)])(
+    "rejects overflowing ClawHub preflight timeout %s before making a request",
+    (timeoutMs, { signal }) =>
+      fixtures.run(async () => {
+        let requests = 0;
+        const result = await clawhubPreflight(
+          signal,
+          (_request, response) => {
+            requests += 1;
+            response.end("{}");
+          },
+          { OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: timeoutMs },
+        );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: ${timeoutMs}`,
+        );
+        expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+        expect(requests).toBe(0);
+      }),
+  );
+
+  it("accepts the maximum ClawHub preflight timeout for request and response body", ({ signal }) =>
+    fixtures.run(async () => {
+      const result = await clawhubPreflight(
+        signal,
+        (_request, response) => {
+          setImmediate(() => {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.write('{"package":');
+            setImmediate(() => {
+              response.end(JSON.stringify({ family: "code-plugin", runtimeId: CLAWHUB_ID }) + "}");
+            });
+          });
+        },
+        { OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "2147483647" },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        "Using ClawHub package @openclaw/kitchen-sink (code-plugin).",
+      );
+      expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+    }));
 
   it.for(["request timeout", "body timeout", "body limit"])(
     "bounds ClawHub package preflight: %s",

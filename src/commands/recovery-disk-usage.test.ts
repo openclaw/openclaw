@@ -15,7 +15,11 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
-import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunVerification,
+} from "../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { collectRecoveryDiskUsage, formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
@@ -34,6 +38,17 @@ it("reports logical bytes and distinct eligibility counts by kind through status
         clock.mockReturnValue(now);
         const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
         clock.mockReturnValue(now + 1_000);
+        recordUpdateRunVerification(
+          runId,
+          {
+            serviceRunning: true,
+            versionMatch: true,
+            settled: true,
+            coreReady: true,
+            pluginErrors: [],
+          },
+          { env: state.env },
+        );
         finishUpdateRun(runId, { status: "succeeded" }, { env: state.env });
         captures.push({ runId, bytes: now === 1_000 ? 11 : 13 });
       }
@@ -45,6 +60,7 @@ it("reports logical bytes and distinct eligibility counts by kind through status
     }
     const doctor = `doctor-${randomUUID()}`;
     fs.mkdirSync(path.join(root, doctor));
+    fs.writeFileSync(path.join(root, doctor, UPDATE_CAPTURE_PRIVACY_MARKER), "");
     fs.writeFileSync(path.join(root, doctor, "original"), Buffer.alloc(17));
     fs.mkdirSync(state.statePath("state"), { recursive: true });
     const original = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");

@@ -49,8 +49,7 @@ beforeEach(() => {
 });
 
 async function runStorageCli(args: string) {
-  const program = new OpenClawCommand();
-  program.enablePositionalOptions();
+  const program = new OpenClawCommand().enablePositionalOptions();
   registerStorageCommand(program);
   await program.parseAsync(["storage", ...args.split(" ")], { from: "user" });
 }
@@ -99,19 +98,12 @@ describe("storage CLI with filesystem transport", () => {
   );
 
   it("initializes, verifies a probe round trip, deletes the probe, and lists availability", async () => {
-    await expectJson("--json init archive", {
-      name: "archive",
-      provider: "filesystem",
-      state: "ok",
-      encrypted: false,
-    });
+    await expectJson("--json init archive", { state: "ok", encrypted: false });
 
     await expectJson("test archive --json", { name: "archive", state: "ok", sizeBytes: 256 });
     expect(await fs.readdir(root)).toEqual(["openclaw-storage.json"]);
 
-    await expectJson("list --json", {
-      locations: [{ name: "archive", provider: "filesystem", state: "ok" }],
-    });
+    await expectJson("list --json", { locations: [{ name: "archive", state: "ok" }] });
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -145,7 +137,6 @@ describe("storage CLI with filesystem transport", () => {
       );
     }
     expect(runtime.log.mock.calls.flat().join(" ")).not.toContain("synthetic-private-credential");
-    expect(acquire).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
 

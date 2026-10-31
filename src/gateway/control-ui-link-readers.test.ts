@@ -68,7 +68,7 @@ function setup() {
 
 describe("plugin link-reader discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
-  it("does not index methods when no link readers are visible", () => {
+  it.each([false, true])("does not enumerate methods for visible readers=%s", (visible) => {
     const { register, methods } = setup();
     register("panel", {
       declarations: [descriptor("panel", { surface: "tab", path: "/panel" })],
@@ -85,10 +85,30 @@ describe("plugin link-reader discovery", () => {
         }),
       ],
     });
+    if (visible) {
+      register("notes", { image: true });
+    }
     const registry = methods();
     using descriptors = vi.spyOn(registry, "descriptors");
 
-    expect(listControlUiLinkReaders(["operator.read"], registry)).toEqual([]);
+    expect(listControlUiLinkReaders(["operator.read"], registry)).toEqual(
+      visible
+        ? [
+            {
+              pluginId: "notes",
+              id: "document",
+              label: "document",
+              icon: undefined,
+              linkReader: {
+                hosts: ["notes.example"],
+                pathPattern: "^/items/[0-9]+$",
+                detailMethod: "notes.read",
+                imageMethod: "notes.image",
+              },
+            },
+          ]
+        : [],
+    );
     expect(descriptors).not.toHaveBeenCalled();
   });
   it.each([

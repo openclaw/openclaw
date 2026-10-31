@@ -48,9 +48,7 @@ it("proves the survivor archive before automatic retirement and rejects unproven
   const assertion = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
   const run = (...args: string[]) =>
     spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: 10_000 });
-  const succeeds = (result: ReturnType<typeof run>) => {
-    expect(result.status, result.stderr).toBe(0);
-  };
+  const succeeds = (result: ReturnType<typeof run>) => expect(result.status, result.stderr).toBe(0);
   succeeds(run(assertion, "seed-legacy-operator-pending-delivery"));
   const original = fs.readFileSync(store.storePath, "utf8");
   const imported = await runDoctorSessionSqlite({
@@ -99,49 +97,43 @@ it("proves the survivor archive before automatic retirement and rejects unproven
     .find((item) => item.archivePath === move.archivePath)!;
   expect(retired.artifact?.disposal.state).toBe("disposed");
   succeeds(verify());
-
   // A missing original alone, another receipt, or an unobserved deletion cannot pass.
-  const receipt = fs.readFileSync(manifestPath, "utf8");
-  const disposal = retired.artifact!.disposal;
-  for (const fault of ["receipt", "digest", "observation", "recreated"] as const) {
-    const proof = fs
-      .readdirSync(archives)
-      .map((name) => path.join(archives, name))
-      .find((file) => fs.readFileSync(file, "utf8") === original)!;
-    if (fault === "receipt") {
-      retired.artifact!.disposal = { state: "retained" };
-    }
-    if (fault === "digest") {
-      retired.artifact!.identity.sha256 = "0".repeat(64);
-    }
-    if (fault === "observation") {
-      fs.renameSync(proof, `${proof}.parked`);
-    }
-    if (fault === "recreated") {
-      fs.writeFileSync(move.archivePath, original);
-    }
-    if (fault === "receipt" || fault === "digest") {
-      fs.writeFileSync(manifestPath, JSON.stringify(finished));
-    }
-    const rejected = verify();
-    expect(rejected.status, fault).not.toBe(0);
-    expect(rejected.stderr).toContain(
-      {
-        receipt: "archive missing without disposal receipt",
-        digest: "disposed archive digest changed",
-        observation: "ENOENT",
-        recreated: "disposed session archive was recreated",
-      }[fault],
-    );
-    fs.writeFileSync(manifestPath, receipt);
-    if (fault === "receipt") {
-      retired.artifact!.disposal = disposal;
-    }
-    if (fault === "observation") {
-      fs.renameSync(`${proof}.parked`, proof);
-    }
-    if (fault === "recreated") {
-      fs.unlinkSync(move.archivePath);
+  const artifact = retired.artifact!;
+  const { disposal, identity } = artifact;
+  const editReceipt = (change: Partial<typeof artifact>) => {
+    Object.assign(artifact, change);
+    fs.writeFileSync(manifestPath, JSON.stringify(finished));
+  };
+  const proof = fs
+    .readdirSync(archives)
+    .map((name) => path.join(archives, name))
+    .find((file) => fs.readFileSync(file, "utf8") === original)!;
+  const parked = `${proof}.parked`;
+  for (const [reason, corrupt, restore] of [
+    [
+      "archive missing without disposal receipt",
+      () => editReceipt({ disposal: { state: "retained" } }),
+      () => editReceipt({ disposal }),
+    ],
+    [
+      "disposed archive digest changed",
+      () => editReceipt({ identity: { ...identity, sha256: "0".repeat(64) } }),
+      () => editReceipt({ identity }),
+    ],
+    ["ENOENT", () => fs.renameSync(proof, parked), () => fs.renameSync(parked, proof)],
+    [
+      "disposed session archive was recreated",
+      () => fs.writeFileSync(move.archivePath, original),
+      () => fs.unlinkSync(move.archivePath),
+    ],
+  ] as const) {
+    corrupt();
+    try {
+      const rejected = verify();
+      expect(rejected.status, reason).not.toBe(0);
+      expect(rejected.stderr).toContain(reason);
+    } finally {
+      restore();
     }
   }
 });

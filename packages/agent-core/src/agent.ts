@@ -1,7 +1,9 @@
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import type {
   ImageContent,
   Message,
   Model,
+  PreparedSystemPrompt,
   SimpleStreamOptions,
   TextContent,
   ThinkingBudgets,
@@ -11,9 +13,11 @@ import { runAgentLoop } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
+  getInternalBeforeRequest,
   getInternalBeforeToolBatch,
   getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
+  setInternalBeforeRequest,
 } from "./internal-hooks.js";
 import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
@@ -130,6 +134,7 @@ export interface AgentOptions {
  */
 export class Agent {
   private mutableState: MutableAgentState;
+  private preparedSystemPrompt?: PreparedSystemPrompt;
   private readonly listeners = new Set<
     (event: AgentEvent, signal: AbortSignal) => Promise<void> | void
   >();
@@ -344,7 +349,6 @@ export class Agent {
         "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
       );
     }
-    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
     let messages: AgentMessage[];
     if (Array.isArray(input)) {
       messages = input;
@@ -417,10 +421,15 @@ export class Agent {
 
     try {
       const signal = abortController.signal;
+      this.preparedSystemPrompt = prepareSystemPrompt(
+        this.mutableState.systemPrompt,
+        this.preparedSystemPrompt,
+      );
       await runAgentLoop(
         messages,
         {
           systemPrompt: this.mutableState.systemPrompt,
+          preparedSystemPrompt: this.preparedSystemPrompt,
           // The loop copies messages synchronously before emitting its first event.
           messages: this.mutableState.messages,
           tools: this.mutableState.tools.slice(),
@@ -482,7 +491,7 @@ export class Agent {
         },
       },
     );
-    return {
+    const config: AgentLoopConfig = {
       model: this.mutableState.model,
       repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
@@ -522,6 +531,17 @@ export class Agent {
         this.steeringQueue.consumeCancellation(message) ||
         this.followUpQueue.consumeCancellation(message),
     };
+    const beforeRequest = getInternalBeforeRequest(this);
+    if (beforeRequest) {
+      setInternalBeforeRequest(config, async (signal) => {
+        const messages = await beforeRequest(signal);
+        if (messages?.length) {
+          this.mutableState.messages.push(...messages);
+        }
+        return messages;
+      });
+    }
+    return config;
   }
 
   /**
@@ -566,9 +586,6 @@ export class Agent {
           this.mutableState.streamingMessage = undefined;
         }
         this.mutableState.messages.push(event.message);
-        if (event.message.role === "user") {
-          delete this.toolLoopRecoveryState.repeatedToolError;
-        }
         this.steeringQueue.commit(event.message);
         this.followUpQueue.commit(event.message);
         break;

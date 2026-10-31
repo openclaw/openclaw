@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as mcp from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { buildCliRunResult } from "./cli-run-settlement.js";
 import {
   closePluginTestAdmissions,
@@ -19,18 +21,14 @@ function message(role: "assistant" | "user", content: Record<string, unknown>[])
 }
 
 it.each([
-  { name: "interruptible", interruptible: true, lateReply: "Late duplicate reply" },
-  { name: "uninterruptible", interruptible: false, lateReply: "Late duplicate reply" },
-  {
-    name: "uninterruptible hidden acknowledgement",
-    interruptible: false,
-    lateReply: "HEARTBEAT_OK",
-  },
-])("settles yield after receipt ($name)", async ({ interruptible, lateReply }) => {
+  [true, "Late duplicate reply"],
+  [false, "Late duplicate reply"],
+  [false, "HEARTBEAT_OK"],
+] as const)("settles yield after receipt (%s, %s)", async (interruptible, lateReply) => {
   const order: string[] = [];
-  const interrupt = vi.fn(async () => {
-    order.push("interrupt");
-  });
+  const interrupt = async (reason: string) => {
+    order.push(reason);
+  };
   const { context } = await createExecution();
   context.mcpDeliveryCapture = true;
   context.preparedBackend.backend.command = process.execPath;
@@ -51,11 +49,8 @@ it.each([
       { type: "tool_use", id: "yield-1", name: "mcp__openclaw__sessions_yield", input: {} },
     ]);
     const request = mcp.markMcpLoopbackRequestStarted(execution.env.OPENCLAW_MCP_CLI_CAPTURE_KEY);
-    const call = mcp.markMcpLoopbackToolCallStarted({
-      requestCaptureHandle: request,
-      toolName: "sessions_yield",
-      args: {},
-    });
+    const tool = { toolName: "sessions_yield", args: {} };
+    const call = mcp.markMcpLoopbackToolCallStarted({ requestCaptureHandle: request, ...tool });
     const yieldContext = mcp.resolveMcpLoopbackYieldContext(request);
     if (!call || !yieldContext) {
       throw new Error("Missing production MCP capture");
@@ -64,8 +59,7 @@ it.each([
     const result = { content: [{ type: "text", text: '{"status":"yielded"}' }] };
     mcp.recordMcpLoopbackToolCallResult({
       captureHandle: call,
-      toolName: "sessions_yield",
-      args: {},
+      ...tool,
       outcome: "completed",
       result,
     });
@@ -96,8 +90,22 @@ it.each([
     sessionBindingDisabled: false,
     preparedContextAgentMeta: {},
   });
-  expect(order).toEqual(interruptible ? ["answered", "interrupt"] : ["answered"]);
-  expect(interrupt.mock.calls).toEqual(interruptible ? [["yield"]] : []);
+  const attempts: string[] = [];
+  const outcome = await runWithModelFallback({
+    cfg: undefined,
+    provider: "external",
+    model: "primary",
+    fallbacksOverride: ["external/fallback"],
+    skipAuthProfileRuntime: true,
+    run: async (_provider, model) => {
+      attempts.push(model);
+      return result;
+    },
+    classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+  });
+  expect(order).toEqual(interruptible ? ["answered", "yield"] : ["answered"]);
+  expect(attempts).toEqual(["primary"]);
+  expect(outcome.attempts).toEqual([]);
   if (interruptible) {
     expect(assistantEvents).toEqual([]);
   }

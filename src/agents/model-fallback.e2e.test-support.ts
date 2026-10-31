@@ -26,9 +26,11 @@ export function createFallbackE2eMocks(
   const sleepWithAbortMock = vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined);
   function install() {
     // mock-isolation: runner tests isolate plugin discovery from the process registry.
-    vi.doMock("../plugins/runtime.js", () => {
+    vi.doMock("../plugins/runtime.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
       if (!replyEntry) {
         return {
+          ...actual,
           getActivePluginRegistry: () => null,
           getActivePluginRegistryWorkspaceDir: () => undefined,
           requireActivePluginRegistry: () => ({}),
@@ -36,6 +38,7 @@ export function createFallbackE2eMocks(
       }
       const registry = createEmptyPluginRegistry();
       return {
+        ...actual,
         getActivePluginRegistry: () => null,
         getActivePluginRegistryVersion: () => 0,
         getActivePluginRegistryWorkspaceDir: () => undefined,

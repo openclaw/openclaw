@@ -160,7 +160,6 @@ export function registerMatrixEncryptionCommands(root: Command): void {
           onJson: (result) => ({ success: result.bootstrap.success, ...result }),
           shouldFail: (result) => !result.bootstrap.success,
           errorPrefix: "Encryption setup failed",
-          onJsonError: (message) => ({ success: false, error: message }),
         });
       },
     );

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { createRuntimeLlmUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -89,14 +90,7 @@ describe("runtime.llm.complete diagnostics", () => {
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue(preparedModel.selection);
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
-      usage: {
-        input: 11,
-        output: 7,
-        cacheRead: 5,
-        cacheWrite: 2,
-        total: 25,
-        cost: { total: 0.0042 },
-      },
+      usage: createRuntimeLlmUsageFixture(),
       stopReason: "stop",
     });
   });

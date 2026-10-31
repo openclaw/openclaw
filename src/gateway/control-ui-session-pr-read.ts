@@ -26,7 +26,7 @@ import {
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
+import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   SessionRowFactsPending,
@@ -168,7 +168,7 @@ function withControlUiTaskPrTarget(
   target: ControlUiSessionPrTarget | undefined,
   projection: SessionRowProjection,
   root: EntryRow,
-  getAllows: () => ReturnType<typeof createSessionListEntryFilter>,
+  getAllows: Parameters<typeof prepareTaskPublicationSessions>[2],
   ownerProfileId?: string,
 ): ControlUiSessionPrTarget | undefined {
   if (!target || root.entry.incognito || isIncognitoSessionKey(root.key)) {
@@ -265,7 +265,21 @@ export function createControlUiSessionPrRead(params: {
   const actorProfile = actor?.kind === "operator" ? actor.profileId : undefined;
   const profileInput = client.authenticatedUserProfile?.profileId;
   const userInput = client.authenticatedUserId;
-  const scopes = (client.connect.scopes ?? []).toSorted().join("\0");
+  const scopes = [...(client.connect.scopes ?? [])];
+  const scopeKey = scopes.toSorted().join("\0");
+  const hasCurrentScopes = () => {
+    const current = client.connect.scopes;
+    if ((current?.length ?? 0) !== scopes.length) {
+      return false;
+    }
+    for (let index = 0; index < scopes.length; index++) {
+      if (current![index] !== scopes[index]) {
+        // Reordering preserves the grant, including duplicate multiplicity.
+        return current!.toSorted().join("\0") === scopeKey;
+      }
+    }
+    return true;
+  };
   const access = client.internal?.operatorAccessAuthority;
   const connectionSignal = client.connectionSignal;
   const projection = getSessionRowProjection();
@@ -300,7 +314,7 @@ export function createControlUiSessionPrRead(params: {
         client.authenticatedUserId !== userInput ||
         currentActor?.kind !== actorKind ||
         (currentActor?.kind === "operator" ? currentActor.profileId : undefined) !== actorProfile ||
-        (client.connect.scopes ?? []).toSorted().join("\0") !== scopes ||
+        !hasCurrentScopes() ||
         client.internal?.operatorAccessAuthority !== access ||
         !hasCurrentGatewayOperatorAccess(access)
       ) {
@@ -364,7 +378,17 @@ export function createControlUiSessionPrRead(params: {
         (isIncognitoSessionKey(selected.key)
           ? projection.needsMembershipPreparation()
           : projection.sharingTargetState(query).status !== "ready") ||
-        createSessionListEntryFilter({ cfg, client })?.(selected.key, selected.entry) === false
+        createSessionListEntryFilter({
+          cfg,
+          client,
+          // Private rows retain their prepared memory authority, outside resident membership.
+          membership: isIncognitoSessionKey(selected.key)
+            ? undefined
+            : projection.readMembership({
+                ...query,
+                storePath: selected.storeTarget.storePath,
+              }),
+        })?.(selected.key, selected.entry) === false
       ) {
         return undefined;
       }
@@ -448,7 +472,23 @@ export function createControlUiSessionPrRead(params: {
         projectedTarget,
         projection,
         current,
-        () => createSessionListEntryFilter({ cfg: getRuntimeConfig(), client }),
+        () => {
+          const cfg = getRuntimeConfig();
+          const isCreator = prepareSessionCreatorProfile(profileInput ?? actorProfile);
+          return (row) =>
+            createSessionListEntryFilter(
+              {
+                cfg,
+                client,
+                membership: projection.readMembership({
+                  key: row.key,
+                  agentId: row.agentId,
+                  storePath: row.storeTarget.storePath,
+                }),
+              },
+              isCreator,
+            )?.(row.key, row.entry) !== false;
+        },
         actorProfile,
       );
       return target

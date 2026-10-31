@@ -71,7 +71,8 @@ private func historyPayload(
     activeRunIds: [String]? = nil,
     inFlightRun: OpenClawChatInFlightRun? = nil,
     canonicalKey: String? = nil,
-    agentId: String? = nil) -> OpenClawChatHistoryPayload
+    agentId: String? = nil,
+    deltaCursor: String? = nil) -> OpenClawChatHistoryPayload
 {
     OpenClawChatHistoryPayload(
         sessionKey: sessionKey,
@@ -85,7 +86,8 @@ private func historyPayload(
                 key: canonicalKey,
                 agentId: agentId)
             : nil,
-        inFlightRun: inFlightRun)
+        inFlightRun: inFlightRun,
+        deltaCursor: deltaCursor)
 }
 
 private func progressCard(
@@ -918,6 +920,7 @@ final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
     private let thinkingPatchResults: [OpenClawChatModelPatchResult?]
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
+    private let historyCursorHook: (@Sendable (String, String?) async throws -> OpenClawChatHistoryPayload)?
     private let fetchProgressCardHook: (@Sendable (String, String?) async throws -> ProgressCard?)?
     private let advertisedMethodHook: (@Sendable (String) async -> Bool?)?
     private let historyResponseHook:
@@ -965,6 +968,7 @@ final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
         thinkingPatchResults: [OpenClawChatModelPatchResult?] = [],
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
+        historyCursorHook: (@Sendable (String, String?) async throws -> OpenClawChatHistoryPayload)? = nil,
         fetchProgressCardHook: (@Sendable (String, String?) async throws -> ProgressCard?)? = nil,
         advertisedMethodHook: (@Sendable (String) async -> Bool?)? = nil,
         historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
@@ -997,6 +1001,7 @@ final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
         healthResponses: [Bool] = [true])
     {
         self.historyResponses = historyResponses
+        self.historyCursorHook = historyCursorHook
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
         self.modelAvailabilityIsSessionScoped = modelAvailabilityIsSessionScoped
@@ -1064,7 +1069,13 @@ final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
         return OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: "created-\(key)")
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        if let historyCursorHook { return try await historyCursorHook(sessionKey, cursor) }
+        return try await self.requestHistory(sessionKey: sessionKey)
+    }
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        if let historyCursorHook { return try await historyCursorHook(sessionKey, nil) }
         let idx = await state.nextHistoryCallIndex()
         if let requestHistoryHook {
             try await requestHistoryHook(sessionKey)
@@ -4536,38 +4547,28 @@ struct ChatViewModelTests {
     }
 
     @Test @MainActor func `older history cannot replace newer run snapshot`() async throws {
-        let olderGate = SessionSubscribeGate()
-        let olderCompletions = AsyncCounter()
         let initialHistory = historyPayload(
             inFlightRun: OpenClawChatInFlightRun(runId: "run-initial", text: "initial"))
-        let (_, vm) = await makeViewModel(
-            historyResponses: [initialHistory],
-            historyResponseHook: { _, index, _ in
-                if index == 1 {
-                    await olderGate.wait()
-                    _ = await olderCompletions.increment()
-                    return historyPayload(
-                        inFlightRun: OpenClawChatInFlightRun(runId: "run-older", text: "older"))
-                }
-                if index >= 2 {
-                    return historyPayload(
-                        inFlightRun: OpenClawChatInFlightRun(runId: "run-newer", text: "newer"))
-                }
-                return nil
-            })
-
-        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
+        let (_, vm) = await makeViewModel(historyResponses: [initialHistory])
+        defer { vm.detachTransport() }
+        vm.pendingRunRefreshDelaysMs = []
         try await loadAndWaitBootstrap(vm: vm)
-        let olderRefresh = vm.resumeFromForeground()
-        await olderGate.waitUntilBlocked()
-        await vm.resumeFromForeground().value
-        #expect(vm.streamingAssistantText == "newer")
 
-        await olderGate.release()
-        await olderRefresh.value
-        #expect(await olderCompletions.current() == 1)
-        #expect(await MainActor.run { vm.pendingRunCount } == 1)
-        #expect(await MainActor.run { vm.streamingAssistantText } == "newer")
+        // Equivalent foreground reads now share one transaction. Exercise the response-order
+        // fence directly without requiring a duplicate wire read to bypass a blocked owner.
+        let older = vm.beginHistoryRequest()
+        let newer = vm.beginHistoryRequest()
+        #expect(vm.applyHistoryPayload(
+            historyPayload(inFlightRun: OpenClawChatInFlightRun(runId: "run-newer", text: "newer")),
+            for: newer,
+            preservingOptimisticLocalMessages: true))
+        #expect(vm.streamingAssistantText == "newer")
+        #expect(!vm.applyHistoryPayload(
+            historyPayload(inFlightRun: OpenClawChatInFlightRun(runId: "run-older", text: "older")),
+            for: older,
+            preservingOptimisticLocalMessages: true))
+        #expect(vm.pendingRunCount == 1)
+        #expect(vm.streamingAssistantText == "newer")
     }
 
     @Test @MainActor func `delayed history cannot overwrite newer live run text`() async throws {
@@ -4671,17 +4672,20 @@ struct ChatViewModelTests {
         await staleGate.waitUntilBlocked()
         #expect(await historyCalls.current() == 2)
 
-        await vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+        let terminalRefresh = vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
             runId: "run-active",
             sessionKey: "main",
             state: "final",
             message: nil,
-            errorMessage: nil)))?.value
-        #expect(vm.pendingRunCount == 0 && vm.messages.contains { $0.content.contains { $0.text == "done" } })
+            errorMessage: nil)))
 
+        // History reads share one transaction, so the terminal refresh queues behind the
+        // delayed read. Release that read before awaiting the refresh.
         await staleGate.release()
         await staleRefresh.value
+        await terminalRefresh?.value
         #expect(await staleCompletions.current() == 1)
+        #expect(vm.messages.contains { $0.content.contains { $0.text == "done" } })
         #expect(await MainActor.run { vm.pendingRunCount } == 0)
         #expect(await MainActor.run { vm.streamingAssistantText } == nil)
     }
@@ -4731,20 +4735,23 @@ struct ChatViewModelTests {
         await staleGate.waitUntilBlocked()
         #expect(await historyCalls.current() == 2)
 
-        await vm.handleTransportEvent(
+        let terminalRefresh = vm.handleTransportEvent(
             .chat(
                 OpenClawChatEventPayload(
                     runId: "run-active",
                     sessionKey: "main",
                     state: "final",
                     message: chatTextMessage(role: "assistant", text: "live final", timestamp: 2),
-                    errorMessage: nil)))?.value
+                    errorMessage: nil)))
         #expect(vm.messages.count { $0.content.first?.text == "live final" } == 2)
-        #expect(await historyCalls.current() == 3)
 
+        // History reads share one transaction, so the terminal refresh queues behind the
+        // delayed read. Release that read before awaiting the refresh.
         await staleGate.release()
         await staleRefresh.value
+        await terminalRefresh?.value
         #expect(await staleCompletions.current() == 1)
+        #expect(await historyCalls.current() == 3)
         #expect(await MainActor.run { vm.messages.count { $0.content.first?.text == "live final" } == 2 })
         #expect(await MainActor.run { vm.pendingRunCount } == 0)
     }
@@ -4784,16 +4791,19 @@ struct ChatViewModelTests {
         await staleGate.waitUntilBlocked()
         #expect(await historyCalls.current() == 2)
 
-        await vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+        let terminalRefresh = vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
             runId: "run-finished",
             sessionKey: "main",
             state: "final",
             message: nil,
-            errorMessage: nil)))?.value
-        #expect(await historyCalls.current() == 3)
+            errorMessage: nil)))
+        // History reads share one transaction, so the terminal refresh queues behind the
+        // delayed read. Release that read before awaiting the refresh.
         await staleGate.release()
         await staleRefresh.value
+        await terminalRefresh?.value
         #expect(await staleCompletions.current() == 1)
+        #expect(await historyCalls.current() == 3)
 
         emitAssistantText(transport: transport, runId: "run-current", text: "current live")
         await waitForObservedState { vm.streamingAssistantText == "current live" }
@@ -5411,7 +5421,7 @@ struct ChatViewModelTests {
     func `lagging history keeps a held question before its provisional final reply`(
         snapshotHasOlderHistory: Bool) async throws
     {
-        let refreshGate = SessionSubscribeGate()
+        let refreshGate = AsyncGate()
         let historyCount = AsyncCounter()
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload(), historyPayload(), historyPayload()],
@@ -5456,8 +5466,8 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.messages.compactMap { $0.content.first?.text } } == (
             snapshotHasOlderHistory ? ["older question"] : []) + ["held question", "held answer"])
 
-        await refreshGate.waitUntilBlocked()
-        await refreshGate.release()
+        // The queued refreshes read one after another; the gate stays open for all of them.
+        await refreshGate.open()
         await send.value
         await refresh?.value
     }
@@ -7105,18 +7115,15 @@ struct ChatViewModelTests {
 
         vm.input = "retry"
         let send = try #require(vm.send())
-        await send.value
         _ = try await waitForLastSentRunId(transport)
-        #expect(await MainActor.run {
-            vm.sessionId == sessionId &&
-                vm.messages.contains { message in
-                    message.content.contains { $0.text == "second answer" }
-                }
-        })
 
+        // History reads share one transaction, so the send refresh queues behind the
+        // stale read and publishes the newer reply after it.
         await staleRefreshGate.release()
         await staleRefresh?.value
+        await send.value
         #expect(await staleRefreshReleasedCount.current() == 1)
+        #expect(vm.sessionId == sessionId)
 
         #expect(await MainActor.run {
             vm.messages.contains { message in
@@ -7170,17 +7177,14 @@ struct ChatViewModelTests {
 
         vm.input = "original request"
         let send = try #require(vm.send())
-        await send.value
         _ = try await waitForLastSentRunId(transport)
-        #expect(await MainActor.run {
-            vm.sessionId == "sess-canonical" &&
-                vm.messages.containsUserText("canonical redacted request") &&
-                vm.messages.contains { $0.content.contains { $0.text == "canonical answer" } }
-        })
 
+        // History reads share one transaction, so the send refresh queues behind the
+        // stale read and publishes the newer reply after it.
         let healthCallsBeforeRelease = await transport.healthCallCount()
         await staleRefreshGate.release()
         await staleRefresh?.value
+        await send.value
         #expect(await transport.healthCallCount() > healthCallsBeforeRelease)
 
         #expect(vm.sessionId == "sess-canonical")
@@ -9697,6 +9701,7 @@ struct ChatViewModelTests {
             case "newer-history": vm.refresh()
             default: vm.detachTransport()
             }
+            if retirement == "newer-history" { await refusalGate.open() }
             if retirement != "detach" {
                 if retirement != "route" { replacement = vm.bootstrapTask }
                 await replacement?.value
@@ -10455,13 +10460,13 @@ struct ChatViewModelTests {
         await staleHistoryGate.waitUntilBlocked()
 
         vm.refresh()
+        await staleHistoryGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-current-refresh")
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "current refresh" }
         })
 
-        await staleHistoryGate.release()
         await canceledBootstrap?.value
 
         #expect(await MainActor.run { vm.sessionId } == "sess-current-refresh")
@@ -10504,13 +10509,13 @@ struct ChatViewModelTests {
         #expect(await mainHistoryCount.current() == 2)
 
         vm.refresh()
+        await staleRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-main-manual-refresh")
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "current manual refresh" }
         })
 
-        await staleRefreshGate.release()
         await eventRefresh?.value
         #expect(await staleRefreshReleasedCount.current() == 1)
 
@@ -10567,10 +10572,10 @@ struct ChatViewModelTests {
                     state: "final",
                     message: nil,
                     errorMessage: nil)))
+        await sendRefreshGate.release()
         await finalRefresh?.value
         #expect(await mainHistoryCount.current() == 3)
 
-        await sendRefreshGate.release()
 
         await send.value
         #expect(await MainActor.run {
@@ -10624,17 +10629,17 @@ struct ChatViewModelTests {
                     state: "final",
                     message: nil,
                     errorMessage: nil)))
+        await sendRefreshGate.release()
         await finalRefresh?.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-terminal-empty-refresh" &&
                 vm.pendingRunCount == 0
         })
 
-        await sendRefreshGate.release()
 
         await send.value
         #expect(await MainActor.run {
-            vm.sessionId == "sess-main-send-refresh" &&
+            vm.sessionId == "sess-main-terminal-empty-refresh" &&
                 vm.pendingRunCount == 0 &&
                 vm.messages.contains { message in
                     message.content.contains { $0.text == "reply from older success" }
@@ -10688,6 +10693,7 @@ struct ChatViewModelTests {
                         text: "reply from final event",
                         timestamp: now + 0.5),
                     errorMessage: nil)))
+        await sendRefreshGate.release()
         await finalRefresh?.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-terminal-user-only-refresh" &&
@@ -10696,11 +10702,10 @@ struct ChatViewModelTests {
                 }
         })
 
-        await sendRefreshGate.release()
 
         await send.value
         #expect(await MainActor.run {
-            vm.sessionId == "sess-main-send-refresh" &&
+            vm.sessionId == "sess-main-terminal-user-only-refresh" &&
                 vm.pendingRunCount == 0 &&
                 vm.messages.contains { message in
                     message.content.contains { $0.text == "reply from durable history" }
@@ -10708,24 +10713,31 @@ struct ChatViewModelTests {
         })
     }
 
-    @Test @MainActor func `manual refresh user only history does not drop older assistant run refresh`() async throws {
+    @Test(arguments: [
+        false,
+        true,
+    ]) @MainActor func `manual refresh user only history does not drop older assistant run refresh`(
+        cursorBearing: Bool) async throws
+    {
         let sendRefreshGate = SessionSubscribeGate()
         let mainHistoryCount = AsyncCounter()
         let now = Date().timeIntervalSince1970 * 1000
         let (_, vm) = await makeViewModel(
             historyResponses: [
-                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "main", sessionId: "sess-main", deltaCursor: cursorBearing ? "0" : nil),
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main-send-refresh",
                     messages: [
                         chatTextMessage(role: "user", text: "hello", timestamp: now),
                         chatTextMessage(role: "assistant", text: "reply from older success", timestamp: now + 1),
-                    ]),
+                    ],
+                    deltaCursor: cursorBearing ? "1" : nil),
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main-manual-user-only-refresh",
-                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)]),
+                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)],
+                    deltaCursor: cursorBearing ? "0" : nil),
             ],
             requestHistoryHook: { sessionKey in
                 guard sessionKey == "main" else { return }
@@ -10743,19 +10755,24 @@ struct ChatViewModelTests {
         #expect(await mainHistoryCount.current() == 2)
 
         vm.refresh()
+        await sendRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh" && vm.pendingRunCount == 0)
 
-        await sendRefreshGate.release()
 
         await send?.value
-        #expect(vm.sessionId == "sess-main-send-refresh")
+        #expect(vm.sessionId == "sess-main-manual-user-only-refresh")
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "reply from older success" }
         })
     }
 
-    @Test @MainActor func `manual refresh older complete history does not drop pending user assistant run refresh`() async throws {
+    @Test(arguments: [
+        false,
+        true,
+    ]) @MainActor func `manual refresh older complete history does not drop pending user assistant run refresh`(
+        cursorBearing: Bool) async throws
+    {
         let sendRefreshGate = SessionSubscribeGate()
         let mainHistoryCount = AsyncCounter()
         let now = Date().timeIntervalSince1970 * 1000
@@ -10768,18 +10785,21 @@ struct ChatViewModelTests {
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main",
-                    messages: olderCompleteMessages),
+                    messages: olderCompleteMessages,
+                    deltaCursor: cursorBearing ? "0" : nil),
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main-send-refresh",
                     messages: olderCompleteMessages + [
                         chatTextMessage(role: "user", text: "hello", timestamp: now),
                         chatTextMessage(role: "assistant", text: "reply from pending turn", timestamp: now + 1),
-                    ]),
+                    ],
+                    deltaCursor: cursorBearing ? "1" : nil),
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main-manual-older-complete-refresh",
-                    messages: olderCompleteMessages),
+                    messages: olderCompleteMessages,
+                    deltaCursor: cursorBearing ? "0" : nil),
             ],
             requestHistoryHook: { sessionKey in
                 guard sessionKey == "main" else { return }
@@ -10797,25 +10817,27 @@ struct ChatViewModelTests {
         #expect(await mainHistoryCount.current() == 2)
 
         vm.refresh()
+        await sendRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-main-manual-older-complete-refresh")
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "older answer" }
         })
-        #expect(!vm.messages.contains { message in
-            message.content.contains { $0.text == "reply from pending turn" }
-        })
 
-        await sendRefreshGate.release()
 
         await send?.value
-        #expect(vm.sessionId == "sess-main-send-refresh")
+        #expect(vm.sessionId == "sess-main-manual-older-complete-refresh")
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "reply from pending turn" }
         })
     }
 
-    @Test @MainActor func `manual stale complete refresh after final event does not drop durable reply refresh`() async throws {
+    @Test(arguments: [
+        false,
+        true,
+    ]) @MainActor func `manual stale complete refresh after final event does not drop durable reply refresh`(
+        cursorBearing: Bool) async throws
+    {
         let sendRefreshGate = SessionSubscribeGate()
         let eventRefreshGate = SessionSubscribeGate()
         let mainHistoryCount = AsyncCounter()
@@ -10829,22 +10851,26 @@ struct ChatViewModelTests {
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main",
-                    messages: olderCompleteMessages),
+                    messages: olderCompleteMessages,
+                    deltaCursor: cursorBearing ? "0" : nil),
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main-send-refresh",
                     messages: olderCompleteMessages + [
                         chatTextMessage(role: "user", text: "hello", timestamp: now),
                         chatTextMessage(role: "assistant", text: "durable reply", timestamp: now + 1),
-                    ]),
+                    ],
+                    deltaCursor: cursorBearing ? "1" : nil),
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main-event-stale-complete-refresh",
-                    messages: olderCompleteMessages),
+                    messages: olderCompleteMessages,
+                    deltaCursor: cursorBearing ? "0" : nil),
                 historyPayload(
                     sessionKey: "main",
                     sessionId: "sess-main-manual-stale-complete-refresh",
-                    messages: olderCompleteMessages),
+                    messages: olderCompleteMessages,
+                    deltaCursor: cursorBearing ? "0" : nil),
             ],
             requestHistoryHook: { sessionKey in
                 guard sessionKey == "main" else { return }
@@ -10873,6 +10899,7 @@ struct ChatViewModelTests {
                     state: "final",
                     message: chatTextMessage(role: "assistant", text: "local final reply", timestamp: now + 0.5),
                     errorMessage: nil)))
+        await sendRefreshGate.release()
         await eventRefreshGate.waitUntilBlocked()
         #expect(await MainActor.run {
             vm.messages.contains { message in
@@ -10881,24 +10908,23 @@ struct ChatViewModelTests {
         })
 
         vm.refresh()
+        await eventRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(await mainHistoryCount.current() == 4)
         #expect(vm.sessionId == "sess-main-manual-stale-complete-refresh")
-        #expect(!vm.messages.contains { message in
+        #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "durable reply" }
         })
 
-        await eventRefreshGate.release()
         await finalRefresh?.value
         #expect(await MainActor.run {
-            vm.sessionId == "sess-main-event-stale-complete-refresh"
+            vm.sessionId == "sess-main-manual-stale-complete-refresh"
         })
 
-        await sendRefreshGate.release()
 
         await send.value
         #expect(await MainActor.run {
-            vm.sessionId == "sess-main-send-refresh" &&
+            vm.sessionId == "sess-main-manual-stale-complete-refresh" &&
                 vm.messages.contains { message in
                     message.content.contains { $0.text == "durable reply" }
                 }
@@ -10985,13 +11011,14 @@ struct ChatViewModelTests {
         let bootstrap = vm.bootstrapTask
         await bootstrapHistoryGate.waitUntilBlocked()
 
-        await vm.handleTransportEvent(.seqGap)?.value
+        let refresh = vm.handleTransportEvent(.seqGap)
+        await bootstrapHistoryGate.release()
+        await refresh?.value
         #expect(vm.sessionId == "sess-main-event-newer")
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "newer event refresh" }
         })
 
-        await bootstrapHistoryGate.release()
         await bootstrap?.value
 
         #expect(vm.sessionId == "sess-main-event-newer")
@@ -11062,9 +11089,9 @@ struct ChatViewModelTests {
         #expect(await mainHistoryCount.current() == 3)
 
         emitExternalFinal(transport: transport, runId: "external-run", sessionKey: "main")
+        await staleFallbackGate.release()
         await waitForObservedState { vm.sessionId == "sess-main-newer-empty-refresh" }
 
-        await staleFallbackGate.release()
         await staleFallbackReleasedCount.wait { $0 >= 1 }
         #expect(await staleFallbackReleasedCount.current() == 1)
 
@@ -11195,13 +11222,14 @@ struct ChatViewModelTests {
         #expect(await otherHistoryCount.current() == 1)
         #expect(await MainActor.run { vm.messages.isEmpty })
 
-        await vm.handleTransportEvent(.seqGap)?.value
+        let refresh = vm.handleTransportEvent(.seqGap)
+        await staleBootstrapGate.release()
+        await refresh?.value
         #expect(vm.sessionKey == "other" && vm.sessionId == "sess-other-newer-refresh")
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "newer other refresh" }
         })
 
-        await staleBootstrapGate.release()
         await staleBootstrap?.value
         #expect(await staleBootstrapReleasedCount.current() == 1)
 
@@ -14428,5 +14456,895 @@ struct ChatStreamPresentationTests {
         try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
         #expect(vm.liveAssistantDisplayText == "Ready now")
         #expect(restored.count == 1)
+    }
+}
+
+private actor HistoryDeltaScript {
+    var step = 0
+    var resetNext = false
+    var requests: [OpenClawChatGatewayRequest] = []
+    var responseBytes = 0
+
+    func bytesRead() -> Int {
+        self.responseBytes
+    }
+
+    func advance(to step: Int) {
+        self.step = step
+    }
+
+    func reset() {
+        self.resetNext = true
+    }
+
+    func snapshot() -> [OpenClawChatGatewayRequest] {
+        self.requests
+    }
+
+    func read(
+        sessionKey: String,
+        cursor: String?) throws -> OpenClawChatHistoryPayload
+    {
+        self.requests.append(OpenClawChatGatewayRequests.history(
+            sessionKey: sessionKey,
+            agentID: nil,
+            cursor: cursor,
+            maxBytes: cursor == nil ? nil : 256 * 1024))
+        if cursor != nil, self.resetNext {
+            self.resetNext = false
+            return try JSONDecoder().decode(
+                OpenClawChatHistoryPayload.self,
+                from: Data(#"{"kind":"reset"}"#.utf8))
+        }
+        let start = cursor.flatMap(Int.init).map { $0 + 1 } ?? 0
+        let rows: [AnyCodable] = start <= self.step ? (start...self.step).map { index in
+            let message = chatTextMessage(
+                role: index == 0 ? "user" : "assistant",
+                text: "row-" + String(index),
+                timestamp: Double(index + 1))
+            var record = message.dictionaryValue ?? [:]
+            var metadata = ["id": "message-" + String(index)]
+            if index == 0 { metadata["idempotencyKey"] = "script:user" }
+            record["__openclaw"] = AnyCodable(metadata)
+            let canonical = AnyCodable(record)
+            return cursor == nil ? canonical : AnyCodable(["message": canonical.value])
+        } : []
+        let payload = OpenClawChatHistoryPayload(
+            sessionKey: sessionKey,
+            sessionId: cursor == nil ? "script-session" : nil,
+            messages: rows,
+            thinkingLevel: nil,
+            sessionInfo: OpenClawChatSessionInfo(hasActiveRun: self.step < 11),
+            kind: cursor == nil ? nil : "delta",
+            deltaCursor: String(self.step))
+        let data = try JSONEncoder().encode(payload)
+        self.responseBytes += data.count
+        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+}
+
+private actor HistoryDeltaCache: OpenClawChatTranscriptCache {
+    private var canonicalKeys: Set<String> = []
+    private var messages: [OpenClawChatMessage] = []
+    func loadSessions() async -> [OpenClawChatSessionEntry] {
+        []
+    }
+
+    func loadTranscript(sessionKey _: String) async -> [OpenClawChatMessage] {
+        []
+    }
+
+    func storeSessions(_: [OpenClawChatSessionEntry]) async {}
+    func storeCanonicalTranscript(
+        sessionKey _: String,
+        agentID _: String?,
+        messages: [OpenClawChatMessage],
+        canonicalMessageIdempotencyKeys: Set<String>) async
+    {
+        self.canonicalKeys = canonicalMessageIdempotencyKeys
+        self.messages = messages
+    }
+
+    func keys() -> Set<String> {
+        self.canonicalKeys
+    }
+
+    func rows() -> [OpenClawChatMessage] {
+        self.messages
+    }
+}
+
+struct ChatHistoryDeltaTests {
+    @MainActor
+    private func fixture() -> (HistoryDeltaScript, OpenClawChatViewModel) {
+        let script = HistoryDeltaScript()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            historyCursorHook: { key, cursor in
+                try await script.read(
+                    sessionKey: key,
+                    cursor: cursor)
+            })
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport)
+        return (script, model)
+    }
+
+    @Test @MainActor func `prepared delta identity survives publication`() async throws {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let request = model.beginHistoryRequest()
+        await script.advance(to: 1)
+        let payload = try await script.read(sessionKey: "main", cursor: "0")
+        let prepared = try #require(OpenClawChatViewModel.decodeHistoryDelta(payload))
+        let message = try #require(prepared.first)
+        #expect(model.applyHistoryPayload(
+            payload,
+            for: request,
+            preservingOptimisticLocalMessages: true,
+            decodedDeltaMessages: prepared))
+        #expect(model.messages.last?.id == message.id)
+        #expect(model.historyDeltaCursor == "1")
+    }
+
+    @Test @MainActor func `busy run uses one page and eleven deltas`() async {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        for step in 1...10 {
+            await script.advance(to: step)
+            model.handleTransportEvent(.sessionMessage(.init(
+                sessionKey: "main",
+                message: cacheMessage(
+                    role: "assistant",
+                    text: "row-" + String(step),
+                    timestamp: Double(step + 1)),
+                messageId: "message-" + String(step),
+                messageSeq: step)))
+            model.handleTransportEvent(.sessionsChanged(.init(
+                sessionKey: "main",
+                phase: "message")))
+            await model.historyInvalidationRefresh?.task.value
+        }
+        await script.advance(to: 11)
+        await model.handleTransportEvent(.chat(.init(
+            runId: "script-run",
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))?.value
+        let requests = await script.snapshot()
+        let full = requests.filter { $0.params["cursor"] == nil }.count
+        let delta = requests.count - full
+        let bytes = await script.bytesRead()
+        print("HISTORY_SCRIPT total=", requests.count, "full=", full, "delta=", delta, "responseBytes=", bytes)
+        #expect(full == 1, "Busy run must fetch exactly one full page, not the transcript at every tool step")
+        #expect(delta == 11, "Ten persisted tool steps and run end must use incremental history")
+        #expect(requests.count == 12)
+        #expect(requests.allSatisfy { $0.params["limit"] == nil })
+        #expect(requests.dropFirst().allSatisfy { $0.params["maxBytes"]?.intValue == 256 * 1024 })
+        let actual = model.messages.flatMap { $0.content.compactMap(\.text) }
+        let expected = (0...11).map { "row-" + String($0) }
+        #expect(actual == expected)
+        #expect(model.sessionId == "script-session")
+    }
+
+    @Test(arguments: ["reconnect", "gap", "foreground"])
+    @MainActor func `missed messages recover incrementally`(trigger: String) async {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await script.advance(to: 2)
+        switch trigger {
+        case "reconnect": await model.handleTransportEvent(.reconnected)?.value
+        case "gap": await model.handleTransportEvent(.seqGap)?.value
+        default:
+            model.resumeFromForeground()
+            await waitForObservedState { model.messages.count == 3 }
+        }
+        let requests = await script.snapshot()
+        #expect(requests.count == 2)
+        #expect(requests.last?.params["cursor"]?.stringValue == "0")
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["row-0", "row-1", "row-2"])
+        #expect(model.sessionId == "script-session")
+    }
+
+    @Test @MainActor func `anchored completion after accepted wait reloads canonical order`() async {
+        let calls = AsyncCounter()
+        func row(_ text: String, rawSeq: Int, activity: [String: AnyCodable]? = nil) -> AnyCodable {
+            var record = chatTextMessage(role: "assistant", text: text, timestamp: Double(rawSeq))
+                .dictionaryValue ?? [:]
+            var position: [String: AnyCodable] = [
+                "source": AnyCodable("history"), "rawSeq": AnyCodable(rawSeq),
+            ]
+            if let activity { position["activity"] = AnyCodable(activity) }
+            record["__openclaw"] = AnyCodable([
+                "id": AnyCodable(text), "transcriptPosition": AnyCodable(position),
+            ])
+            return AnyCodable(record)
+        }
+        let exec = row("exec", rawSeq: 1)
+        let wait = row("wait", rawSeq: 2)
+        let completion = row("completion", rawSeq: 3, activity: [
+            "afterRawSeq": AnyCodable(1), "scopeId": AnyCodable("nested"), "startOrder": AnyCodable(0),
+        ])
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { _, cursor in
+            let call = await calls.increment()
+            let rows: [AnyCodable]
+            let next: String
+            switch call {
+            case 1:
+                #expect(cursor == nil)
+                rows = [exec, wait]
+                next = "after-wait"
+            case 2:
+                #expect(cursor == "after-wait")
+                rows = [AnyCodable(["message": completion.value])]
+                next = "after-completion"
+            case 3:
+                #expect(cursor == nil, "Anchored placement must trigger a canonical read")
+                rows = [exec, completion, wait]
+                next = "after-completion"
+            default:
+                #expect(cursor == "after-completion")
+                rows = []
+                next = "after-completion"
+            }
+            return OpenClawChatHistoryPayload(
+                sessionKey: "main", sessionId: cursor == nil ? "history-session" : nil,
+                messages: rows, thinkingLevel: nil,
+                kind: cursor == nil ? nil : "delta", deltaCursor: next)
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.historyDeltaCursor == "after-wait")
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["exec", "wait"])
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["exec", "completion", "wait"])
+        #expect(await calls.current() == 3, "Initial page, anchored delta, and canonical fallback")
+        #expect(model.historyDeltaCursor == "after-completion")
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["exec", "completion", "wait"])
+    }
+
+    @Test @MainActor func `reset falls back to canonical page`() async {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await script.advance(to: 3)
+        await script.reset()
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let requests = await script.snapshot()
+        #expect(requests.count == 3)
+        guard requests.count == 3 else { return }
+        #expect(requests[1].params["cursor"]?.stringValue == "0")
+        #expect(requests[2].params["cursor"] == nil)
+        #expect(model.messages.count == 4)
+    }
+
+    @Test @MainActor func `delta orders missed predecessor before live row`() async {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        model.handleTransportEvent(.sessionMessage(.init(
+            sessionKey: "main",
+            message: cacheMessage(
+                role: "assistant",
+                text: "row-2",
+                timestamp: 3),
+            messageId: "message-2",
+            messageSeq: 2)))
+        await script.advance(to: 2)
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["row-0", "row-1", "row-2"])
+        // No new rows is a valid refresh; it must not delete the canonical prefix.
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.messages.count == 3)
+    }
+
+    @Test @MainActor func `newer overlapping delta retries after older delta applies`() async throws {
+        let script = HistoryDeltaScript()
+        let gate = SessionSubscribeGate()
+        let calls = AsyncCounter()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            let payload = try await script.read(sessionKey: key, cursor: cursor)
+            if await calls.increment() == 2 { await gate.wait() }
+            return payload
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let older = model.beginHistoryRequest()
+        await script.advance(to: 2)
+        let newer = Task { await model.refreshHistoryAfterRun() }
+        await gate.waitUntilBlocked()
+        await script.advance(to: 1)
+        let first = try await script.read(sessionKey: "main", cursor: "0")
+        #expect(model.applyHistoryPayload(first, for: older, preservingOptimisticLocalMessages: true))
+        await script.advance(to: 2)
+        await gate.release()
+        #expect(await newer.value.applied)
+        #expect(model.historyDeltaCursor == "2")
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["row-0", "row-1", "row-2"])
+        let requests = await script.snapshot()
+        #expect(requests.last?.params["cursor"]?.stringValue == "1")
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func `malformed delta falls back without skipping a row`(missingMessage: Bool) async {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let malformed = OpenClawChatHistoryPayload(
+            sessionKey: "",
+            sessionId: nil,
+            messages: [AnyCodable(missingMessage ? [:] : ["message": ["content": []]])],
+            thinkingLevel: nil,
+            kind: "delta",
+            deltaCursor: "broken-tip")
+        #expect(!model.applyHistoryPayload(
+            malformed,
+            for: model.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: true))
+        #expect(model.historyDeltaCursor == "0")
+        // Exercise the refresh owner too: the invalid row is not accepted by the wire-to-transcript path.
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            if cursor != nil { return malformed }
+            return try await script.read(sessionKey: key, cursor: nil)
+        })
+        let fallback = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { fallback.detachTransport() }
+        #expect(await fallback.refreshHistoryAfterRun().applied)
+        await script.advance(to: 1)
+        #expect(await fallback.refreshHistoryAfterRun().applied)
+        #expect(fallback.historyDeltaCursor == "1")
+        #expect(fallback.messages.flatMap { $0.content.compactMap(\.text) } == ["row-0", "row-1"])
+    }
+
+    @Test(arguments: [
+        #"{"kind":"delta","messages":{},"deltaCursor":"tip"}"#,
+        #"{"kind":"delta","messages":[],"deltaCursor":42}"#,
+    ])
+    @MainActor func `malformed wire delta falls back to canonical history`(json: String) async {
+        let script = HistoryDeltaScript()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            if cursor != nil {
+                return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data(json.utf8))
+            }
+            return try await script.read(sessionKey: key, cursor: nil)
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await script.advance(to: 1)
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.historyDeltaCursor == "1")
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["row-0", "row-1"])
+        let requests = await script.snapshot()
+        #expect(requests.count == 2)
+        #expect(requests.last?.params["cursor"] == nil)
+    }
+
+    @Test(arguments: [0, 2])
+    @MainActor func `reset removes canonical rows but retains a pending echo`(rowCount: Int) async {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        await script.advance(to: 3)
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let echo = OpenClawChatMessage(role: "user", content: [.init(type: "text", text: "local")], timestamp: 5)
+        model.messages.append(echo)
+        model.pendingLocalUserEchoMessageIDsByRunID["pending"] = echo.id
+        await script.advance(to: rowCount - 1)
+        await script.reset()
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let expected = (0..<rowCount).map { "row-" + String($0) } + ["local"]
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == expected)
+        #expect(!model.messages.contains { $0.content.contains { $0.text == "row-3" } })
+    }
+
+    @Test @MainActor func `delta cache retains canonical user proof and excludes local echo`() async {
+        let script = HistoryDeltaScript()
+        let cache = HistoryDeltaCache()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            try await script.read(sessionKey: key, cursor: cursor)
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let echo = OpenClawChatMessage(
+            role: "user",
+            content: [.init(type: "text", text: "local")],
+            timestamp: 5,
+            idempotencyKey: "local:user")
+        model.messages.append(echo)
+        model.pendingLocalUserEchoMessageIDsByRunID["pending"] = echo.id
+        await script.advance(to: 1)
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await model.pendingCacheWriteTask?.value
+        let keys = await cache.keys()
+        #expect(keys.contains("script:user"))
+        #expect(!keys.contains("local:user"))
+    }
+
+    @Test @MainActor func `empty reset removes deleted cached rows`() async {
+        let script = HistoryDeltaScript()
+        let cache = HistoryDeltaCache()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            try await script.read(sessionKey: key, cursor: cursor)
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        await script.advance(to: 3)
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await model.pendingCacheWriteTask?.value
+        #expect(await cache.rows().count == 4)
+        await script.advance(to: -1)
+        await script.reset()
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await model.pendingCacheWriteTask?.value
+        #expect(model.messages.isEmpty)
+        #expect(await cache.rows().isEmpty)
+    }
+
+    @Test @MainActor func `route change rejects an in flight old delta`() async throws {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let stale = model.beginHistoryRequest()
+        await script.advance(to: 2)
+        let delta = try await script.read(sessionKey: "main", cursor: "0")
+        model.invalidateHistoryCursor()
+        #expect(!model.applyHistoryPayload(delta, for: stale, preservingOptimisticLocalMessages: true))
+        #expect(model.historyDeltaCursor == nil)
+        #expect(model.messages.count == 1)
+    }
+
+    @Test @MainActor func `route change uses canonical page`() async {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await script.advance(to: 2)
+        await model.handleTransportEvent(.routeChanged)?.value
+        let requests = await script.snapshot()
+        #expect(requests.count == 2)
+        #expect(requests.last?.params["cursor"] == nil)
+        #expect(model.messages.count == 3)
+    }
+
+    @Test func `missing session key is accepted only for cursor responses`() throws {
+        let decoder = JSONDecoder()
+        let page = Data(#"{"messages":[]}"#.utf8)
+        #expect(throws: DecodingError.self) { try decoder.decode(OpenClawChatHistoryPayload.self, from: page) }
+        let delta = Data(#"{"kind":"delta","messages":[],"deltaCursor":"tip"}"#.utf8)
+        #expect(try decoder.decode(OpenClawChatHistoryPayload.self, from: delta).deltaCursor == "tip")
+    }
+
+    @Test @MainActor func `overlapping delta cannot roll back cursor`() async throws {
+        let (script, model) = self.fixture()
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let older = model.beginHistoryRequest()
+        let newer = model.beginHistoryRequest()
+        await script.advance(to: 2)
+        let payload = try await script.read(
+            sessionKey: "main",
+            cursor: "0")
+        #expect(model.applyHistoryPayload(
+            payload,
+            for: newer,
+            preservingOptimisticLocalMessages: true))
+        #expect(!model.applyHistoryPayload(
+            payload,
+            for: older,
+            preservingOptimisticLocalMessages: true))
+        #expect(model.messages.count == 3)
+        #expect(model.historyDeltaCursor == "2")
+    }
+}
+
+struct ChatHistoryCoalescingTests {
+    @Test @MainActor func `outbox confirmation queues behind canonical route replacement`() async {
+        let gate = SessionSubscribeGate()
+        let reads = AsyncCounter()
+        let confirmations = AsyncCounter()
+        let entered = AsyncCounter()
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "old question", timestamp: 1),
+            chatTextMessage(role: "assistant", text: "old answer", timestamp: 2),
+        ], deltaCursor: "old-route")
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { _, _ in
+            let count = await reads.increment()
+            if count == 2 { await gate.wait() }
+            return count == 1 ? before : historyPayload()
+        })
+        let cache = HistoryDeltaCache()
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let replacement = model.handleTransportEvent(.routeChanged)
+        await gate.waitUntilBlocked()
+        let lease = OpenClawChatTransportRouteLease(
+            sendTargetedMessage: { _, _, _, _, _, _ in throw NSError(domain: "unused-send", code: 1) },
+            requestTargetedHistory: { _, _ in
+                _ = await confirmations.increment()
+                return historyPayload()
+            })
+        let confirmation = Task {
+            Task { @MainActor in _ = await entered.increment() }
+            await model.refreshHistoriesAfterOutboxFlush(
+                targets: [.init(presentationSessionKey: "main", deliverySessionKey: "main", agentID: nil)],
+                routeLease: lease)
+        }
+        await entered.wait { $0 == 1 }
+        #expect(await confirmations.current() == 0)
+        await gate.release()
+        await replacement?.value
+        await confirmation.value
+        await model.pendingCacheWriteTask?.value
+        #expect(await reads.current() == 2)
+        #expect(await confirmations.current() == 1)
+        #expect(model.messages.isEmpty)
+        #expect(await cache.rows().isEmpty)
+        #expect(!model.historyRequiresCanonicalReplacement)
+    }
+
+    @Test @MainActor func `publication honors replacement captured by the request`() async {
+        let cache = HistoryDeltaCache()
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "old question", timestamp: 1),
+            chatTextMessage(role: "assistant", text: "old answer", timestamp: 2),
+        ])
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: TestChatTransport(historyResponses: [before]), transcriptCache: cache)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        model.invalidateHistoryCursor(replacingCanonicalHistory: true)
+        let request = model.beginHistoryRequest()
+        #expect(model.applyHistoryPayload(historyPayload(), for: request, preservingOptimisticLocalMessages: true))
+        await model.pendingCacheWriteTask?.value
+        #expect(model.messages.isEmpty)
+        #expect(await cache.rows().isEmpty)
+        #expect(!model.historyRequiresCanonicalReplacement)
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func `route replacement keeps unconfirmed local users without old canonical anchors`(empty: Bool) async {
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "old question", timestamp: 1),
+            chatTextMessage(role: "assistant", text: "old answer", timestamp: 2),
+        ])
+        let after = historyPayload(messages: empty ? [] : [
+            chatTextMessage(role: "assistant", text: "replacement", timestamp: 3),
+        ])
+        let confirmed = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "submitted question", timestamp: 4, idempotencyKey: "local:user"),
+        ])
+        let cache = HistoryDeltaCache()
+        let transport = TestChatTransport(historyResponses: [before, after, after, confirmed])
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let local = cacheMessage(role: "user", text: "submitted question", timestamp: 4, idempotencyKey: "local:user")
+        model.appendMessage(local)
+        model.pendingRuns.insert("local")
+        model.pendingLocalUserEchoMessageIDsByRunID["local"] = local.id
+        await model.handleTransportEvent(.routeChanged)?.value
+        #expect(model.pendingRuns.isEmpty)
+        let expected = (empty ? [] : ["replacement"]) + ["submitted question"]
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == expected)
+        #expect(model.historyRouteLocalUserEchoIDs == [local.id])
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == expected)
+        await model.pendingCacheWriteTask?.value
+        #expect(await !cache.keys().contains("local:user"))
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.messages.filter { $0.id == local.id }.count == 1)
+        #expect(model.historyRouteLocalUserEchoIDs.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func `route replacement removes the previous gateways answered turn and cache`(empty: Bool) async {
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "route A question", timestamp: 1),
+            chatTextMessage(role: "assistant", text: "route A answer", timestamp: 2),
+        ], deltaCursor: "route-A")
+        let after = historyPayload(messages: empty ? [] : [
+            chatTextMessage(role: "assistant", text: "route B history", timestamp: 3),
+        ], deltaCursor: "route-B")
+        let cache = HistoryDeltaCache()
+        let transport = TestChatTransport(historyResponses: [before, after])
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await model.pendingCacheWriteTask?.value
+        #expect(await cache.rows().count == 2)
+        await model.handleTransportEvent(.routeChanged)?.value
+        await model.pendingCacheWriteTask?.value
+        let expected = empty ? [] : ["route B history"]
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == expected)
+        #expect(await cache.rows().flatMap { $0.content.compactMap(\.text) } == expected)
+        #expect(model.historyDeltaCursor == "route-B")
+    }
+
+    @Test @MainActor func `equivalent overlapping refreshes share one wire read and publication`() async {
+        let script = HistoryDeltaScript()
+        let gate = SessionSubscribeGate()
+        let calls = AsyncCounter()
+        let entered = AsyncCounter()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            let payload = try await script.read(sessionKey: key, cursor: cursor)
+            if await calls.increment() == 2 { await gate.wait() }
+            return payload
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await script.advance(to: 1)
+        let first = Task { await model.refreshHistoryAfterRun() }
+        await gate.waitUntilBlocked()
+        let followers = (0..<8).map { _ in
+            Task {
+                // This MainActor child runs after its parent suspends in the refresh owner.
+                Task { @MainActor in _ = await entered.increment() }
+                return await model.refreshHistoryAfterRun()
+            }
+        }
+        await entered.wait { $0 == 8 }
+        #expect(await calls.current() == 2)
+        await gate.release()
+        #expect(await first.value.applied)
+        for follower in followers {
+            #expect(await follower.value.applied)
+        }
+        #expect(await calls.current() == 2)
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["row-0", "row-1"])
+        #expect(model.historyDeltaCursor == "1")
+    }
+
+    @Test @MainActor func `invalidations during a read share one trailing read from accepted cursor`() async {
+        let script = HistoryDeltaScript()
+        let gate = SessionSubscribeGate()
+        let calls = AsyncCounter()
+        let entered = AsyncCounter()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            let payload = try await script.read(sessionKey: key, cursor: cursor)
+            if await calls.increment() == 2 { await gate.wait() }
+            return payload
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await script.advance(to: 1)
+        let first = Task { await model.refreshHistoryAfterRun() }
+        await gate.waitUntilBlocked()
+        model.invalidateHistorySnapshots()
+        let followers = (0..<3).map { _ in
+            Task {
+                Task { @MainActor in _ = await entered.increment() }
+                return await model.refreshHistoryAfterRun()
+            }
+        }
+        await entered.wait { $0 == 3 }
+        await script.advance(to: 2)
+        #expect(await calls.current() == 2)
+        await gate.release()
+        #expect(await first.value.applied)
+        for follower in followers {
+            #expect(await follower.value.applied)
+        }
+        let requests = await script.snapshot()
+        #expect(requests.count == 3)
+        #expect(requests.last?.params["cursor"]?.stringValue == "1")
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == ["row-0", "row-1", "row-2"])
+    }
+
+    @Test @MainActor func `route replacement does not wait for an old unresponsive read`() async {
+        let script = HistoryDeltaScript()
+        let gate = SessionSubscribeGate()
+        let calls = AsyncCounter()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            let payload = try await script.read(sessionKey: key, cursor: cursor)
+            if await calls.increment() == 2 { await gate.wait() }
+            return payload
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        await script.advance(to: 1)
+        let stale = Task { await model.refreshHistoryAfterRun() }
+        await gate.waitUntilBlocked()
+        await script.advance(to: 2)
+        await model.handleTransportEvent(.routeChanged)?.value
+        #expect(model.historyDeltaCursor == "2")
+        #expect(await script.snapshot().last?.params["cursor"] == nil)
+        await gate.release()
+        #expect(await !(stale.value).applied)
+        #expect(model.historyDeltaCursor == "2")
+    }
+
+    @Test @MainActor func `detach rejects both owner and waiting refresh results`() async {
+        let script = HistoryDeltaScript()
+        let gate = SessionSubscribeGate()
+        let entered = AsyncCounter()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            let payload = try await script.read(sessionKey: key, cursor: cursor)
+            await gate.wait()
+            return payload
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let first = Task { await model.refreshHistoryAfterRun() }
+        await gate.waitUntilBlocked()
+        let follower = Task {
+            Task { @MainActor in _ = await entered.increment() }
+            return await model.refreshHistoryAfterRun()
+        }
+        await entered.wait { $0 == 1 }
+        model.detachTransport()
+        await gate.release()
+        #expect(await !(first.value).applied)
+        #expect(await !(follower.value).applied)
+        #expect(model.messages.isEmpty)
+        #expect(model.historyDeltaCursor == nil)
+    }
+
+    @Test @MainActor func `bootstrap shares the history owner and reports read failures`() async {
+        let gate = SessionSubscribeGate()
+        let calls = AsyncCounter()
+        let entered = AsyncCounter()
+        let transport = TestChatTransport(historyResponses: [], requestHistoryHook: { _ in
+            if await calls.increment() == 1 { await gate.wait() }
+            throw NSError(domain: "history-test", code: 1, userInfo: [NSLocalizedDescriptionKey: "History unavailable"])
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        model.load()
+        await gate.waitUntilBlocked()
+        let follower = Task {
+            Task { @MainActor in _ = await entered.increment() }
+            return await model.refreshHistoryAfterRun()
+        }
+        await entered.wait { $0 == 1 }
+        #expect(await calls.current() == 1)
+        await gate.release()
+        await model.bootstrapTask?.value
+        #expect(await !(follower.value).applied)
+        #expect(model.errorText == "History unavailable")
+        #expect(!model.isLoading)
+    }
+}
+
+struct ChatHistoryMutationTests {
+    @Test(arguments: [false, true])
+    @MainActor func `explicit mutation discards route retained local users from empty history`(compact: Bool) async {
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "assistant", text: "old history", timestamp: 1),
+        ])
+        let cache = HistoryDeltaCache()
+        let transport = TestChatTransport(historyResponses: [before, historyPayload(), historyPayload()])
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+        let local = cacheMessage(role: "user", text: "submitted question", timestamp: 2, idempotencyKey: "local:user")
+        model.appendMessage(local)
+        model.pendingRuns.insert("local")
+        model.pendingLocalUserEchoMessageIDsByRunID["local"] = local.id
+        await model.handleTransportEvent(.routeChanged)?.value
+        #expect(model.messages.map(\.id) == [local.id])
+        #expect(model.historyRouteLocalUserEchoIDs == [local.id])
+        if compact { await model.performCompact() } else { await model.performReset() }
+        await model.bootstrapTask?.value
+        await model.pendingCacheWriteTask?.value
+        #expect(model.messages.isEmpty)
+        #expect(model.historyRouteLocalUserEchoIDs.isEmpty)
+        #expect(await cache.rows().isEmpty)
+        #expect(await model.refreshHistoryAfterRun().applied)
+        #expect(model.messages.isEmpty)
+    }
+
+    @Test @MainActor func `route change retains pending reset replacement and clears cached rows`() async {
+        let gate = SessionSubscribeGate()
+        let calls = AsyncCounter()
+        let cache = HistoryDeltaCache()
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "old question", timestamp: 1),
+            chatTextMessage(role: "assistant", text: "old answer", timestamp: 2),
+        ])
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { _, _ in
+            let call = await calls.increment()
+            if call == 2 { await gate.wait() }
+            return call == 1 ? before : historyPayload()
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        model.load()
+        await model.bootstrapTask?.value
+        await model.pendingCacheWriteTask?.value
+        #expect(await cache.rows().count == 2)
+        await model.performReset()
+        await gate.waitUntilBlocked()
+        #expect(model.historyRequiresCanonicalReplacement)
+        await model.handleTransportEvent(.routeChanged)?.value
+        await gate.release()
+        await model.bootstrapTask?.value
+        await model.pendingCacheWriteTask?.value
+        #expect(model.messages.isEmpty)
+        #expect(await cache.rows().isEmpty)
+        #expect(!model.historyRequiresCanonicalReplacement)
+    }
+
+    @Test(arguments: [0, 1])
+    @MainActor func `manual bootstrap retains session identity across delta history`(step: Int) async {
+        let script = HistoryDeltaScript()
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            try await script.read(sessionKey: key, cursor: cursor)
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        model.load()
+        await model.bootstrapTask?.value
+        #expect(model.sessionId == "script-session")
+        await script.advance(to: step)
+        model.load()
+        await model.bootstrapTask?.value
+        #expect(await script.snapshot().last?.params["cursor"]?.stringValue == "0")
+        #expect(model.sessionId == "script-session")
+        #expect(model.messages.count == step + 1)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    @MainActor func `explicit mutation replaces cursorless history and its cache`(
+        compact: Bool,
+        empty: Bool) async
+    {
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "old question", timestamp: 1),
+            chatTextMessage(role: "assistant", text: "old answer", timestamp: 2),
+        ])
+        let after = historyPayload(messages: empty ? [] : [
+            chatTextMessage(role: "assistant", text: "replacement", timestamp: 3),
+        ])
+        let cache = HistoryDeltaCache()
+        let transport = TestChatTransport(historyResponses: [before, after])
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
+        defer { model.detachTransport() }
+        model.load()
+        await model.bootstrapTask?.value
+        await model.pendingCacheWriteTask?.value
+        #expect(await cache.rows().count == 2)
+        if compact { await model.performCompact() } else { await model.performReset() }
+        await model.bootstrapTask?.value
+        await model.pendingCacheWriteTask?.value
+        let expected = empty ? [] : ["replacement"]
+        #expect(model.messages.flatMap { $0.content.compactMap(\.text) } == expected)
+        #expect(await cache.rows().flatMap { $0.content.compactMap(\.text) } == expected)
+    }
+
+    @Test @MainActor func `reset fences an outstanding cursorless read`() async {
+        let gate = SessionSubscribeGate()
+        let calls = AsyncCounter()
+        let before = historyPayload(messages: [
+            chatTextMessage(role: "user", text: "old question", timestamp: 1),
+            chatTextMessage(role: "assistant", text: "old answer", timestamp: 2),
+        ])
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { _, _ in
+            let call = await calls.increment()
+            if call == 2 { await gate.wait() }
+            return call <= 2 ? before : historyPayload()
+        })
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { model.detachTransport() }
+        model.load()
+        await model.bootstrapTask?.value
+        let oldRead = Task { await model.refreshHistoryAfterRun() }
+        await gate.waitUntilBlocked()
+        await model.performReset()
+        // Release the old network read after reset succeeds, regardless of cancellation support.
+        await gate.release()
+        await model.bootstrapTask?.value
+        #expect(await !(oldRead.value).applied)
+        #expect(model.messages.isEmpty)
     }
 }

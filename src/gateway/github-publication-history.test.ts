@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  publicationPullRequestResponse,
+  readPublicationCommit,
+} from "./github-publication-git.test-support.js";
 import {
   BRANCH,
   SESSION_KEY,
@@ -10,6 +15,7 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  overrideCommands as interceptCommand,
   root,
 } from "./github-publication.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -19,21 +25,15 @@ const url = "https://github.com/openclaw/openclaw/pull/125200";
 const human = "Co-authored-by: alice <7+alice@users.noreply.github.com>";
 const marker = "OpenClaw-Publication: previous-writer";
 let f: Awaited<ReturnType<typeof historyFixture>>;
-function interceptCommand(
-  handler: (argv: string[]) => ReturnType<typeof commandResult> | undefined,
-) {
-  const fallback = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(
-    (argv: string[], options?: { input?: string }) => handler(argv) ?? fallback(argv, options),
-  );
-}
 
 async function historyFixture() {
   const workspace = await createRealPublicationWorkspace();
   const { git, cwd } = workspace;
   const gitResult = async (...args: string[]) => commandResult(await git(...args));
   const remote = path.join(root, "remote.git");
+  const remoteGit = git.bind(undefined, "-C", remote);
   await git("init", "--bare", remote);
+  await remoteGit("config", "uploadpack.allowFilter", "true");
   const fallback = mocks.runCommand.getMockImplementation()!;
   const calls: string[][] = [];
   let published = false;
@@ -55,11 +55,12 @@ async function historyFixture() {
         return gitResult("ls-remote", "--refs", remote, `refs/heads/${BRANCH}`);
       }
       if (argv.includes("fetch")) {
-        const sha = argv.at(-1)!;
-        if (sha === (await remoteHead())) {
-          return gitResult("fetch", "--no-tags", "--no-write-fetch-head", remote, sha);
-        }
-        return commandResult();
+        const remoteIndex = argv.indexOf("--") + 1;
+        return gitResult(
+          ...argv
+            .slice(1)
+            .map((arg, index) => (index + 1 === remoteIndex ? pathToFileURL(remote).href : arg)),
+        );
       }
       if (argv.includes("push")) {
         try {
@@ -77,6 +78,19 @@ async function historyFixture() {
       }
       if (argv.includes("state=all")) {
         return commandResult(JSON.stringify(published ? [pr] : []));
+      }
+      const commit = argv.find((arg) => arg.startsWith("repos/openclaw/openclaw/git/commits/"));
+      if (commit) {
+        try {
+          return commandResult(
+            JSON.stringify(await readPublicationCommit(remoteGit, commit.split("/").at(-1)!)),
+          );
+        } catch {
+          return commandResult("", 1);
+        }
+      }
+      if (argv.includes("GET") && argv.includes("repos/openclaw/openclaw/pulls/125200")) {
+        return commandResult(JSON.stringify(publicationPullRequestResponse(pr)));
       }
       if (argv.includes("POST")) {
         const body = JSON.parse(options!.input!);
@@ -195,7 +209,44 @@ describe("GitHub publication branch history", () => {
     const signedHead = await f.git("hash-object", "-t", "commit", "-w", signedCommit);
     await f.git("update-ref", "HEAD", signedHead);
     await f.git("config", "log.showSignature", "true");
+    // A newer target base needs ancestry and tree metadata, not its file contents.
+    await f.git("push", f.remote, "HEAD:refs/heads/main");
+    const remoteFile = path.join(root, "base-only.txt");
+    await fs.writeFile(remoteFile, "remote base contents\n");
+    const remoteBlob = await f.git("-C", f.remote, "hash-object", "-w", remoteFile);
+    await f.git("-C", f.remote, "read-tree", signedHead);
+    await f.git(
+      "-C",
+      f.remote,
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      "100644",
+      remoteBlob,
+      "base-only.txt",
+    );
+    const remoteTree = await f.git("-C", f.remote, "write-tree");
+    const remoteBase = await f.git(
+      "-C",
+      f.remote,
+      "commit-tree",
+      remoteTree,
+      "-p",
+      signedHead,
+      "-m",
+      "Advance base",
+    );
+    await f.git("-C", f.remote, "update-ref", "refs/heads/main", remoteBase);
+    interceptCommand((args) =>
+      args.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))
+        ? commandResult(JSON.stringify({ ref: "refs/heads/main", sha: remoteBase }))
+        : undefined,
+    );
+    vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
+    await expect(f.git("cat-file", "-e", remoteBase)).rejects.toThrow();
     const first = await f.published("initial");
+    expect(await f.git("rev-parse", `${remoteBase}^{tree}`)).toBe(remoteTree);
+    await expect(f.git("cat-file", "-e", remoteBlob)).rejects.toThrow();
     const firstHead = await f.remoteHead();
     expect(await f.publish("initial")).toEqual(first);
     await f.write("next accepted edit\n");
@@ -318,16 +369,73 @@ describe("GitHub publication branch history", () => {
     await f.rejected("diverged", "push_rejected", "published head");
   });
 
-  it("retains identity-change semantics when identity is revoked during remote observation", async () => {
+  it("fails a push the remote rejected instead of leaving it unconfirmed", async () => {
+    const hook = path.join(f.remote, "hooks", "pre-receive");
+    await fs.writeFile(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    expect(await f.publish("rejected-push")).toMatchObject({
+      status: "failed",
+      code: "push_rejected",
+      nextAction: expect.stringContaining("openclaw/openclaw. Nothing was pushed as @"),
+    });
+    expect(await f.remoteHead()).toBe("");
+    expect(f.calls.some((args) => args.includes("POST"))).toBe(false);
+  });
+
+  it("continues the canonical PR when the configured repository uses different casing", async () => {
+    const repository = await mocks.resolveRepository(f.cwd);
+    mocks.resolveRepository.mockResolvedValue({
+      ...repository,
+      originUrl: "git@github.com:OpenClaw/OpenClaw.git",
+    });
+    const transport = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation((argv: string[], options: unknown) =>
+      transport(
+        argv.map((arg) =>
+          arg.replace(/^repos\/OpenClaw\/OpenClaw(?=\/|$)/u, "repos/openclaw/openclaw"),
+        ),
+        options,
+      ),
+    );
+    await f.published("case-alias-first");
+    await f.write("saved update through the same repository alias\n");
+    await f.published("case-alias-update");
+  });
+
+  it.each(["branch", "published-pr"])(
+    "retains identity-change semantics during %s observation",
+    async (observation) => {
+      if (observation === "published-pr") {
+        await f.published("initial");
+      }
+      const fallback = mocks.runCommand.getMockImplementation()!;
+      mocks.runCommand.mockImplementation(async (args: string[], options) => {
+        const result = await fallback(args, options);
+        if (
+          observation === "branch"
+            ? args.includes("ls-remote")
+            : args.includes("repos/openclaw/openclaw/pulls/125200")
+        ) {
+          mocks.matchesIdentity.mockReturnValue(false);
+        }
+        return result;
+      });
+      await f.rejected("revoked-identity", "identity_changed", "Reconnect");
+    },
+  );
+
+  it("rejects a receipt PR naming another head repository without changing saved work", async () => {
+    await f.published("initial");
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (args: string[], options) => {
       const result = await fallback(args, options);
-      if (args.includes("ls-remote")) {
-        mocks.matchesIdentity.mockReturnValue(false);
+      if (args.includes("GET") && args.includes("repos/openclaw/openclaw/pulls/125200")) {
+        const pr = JSON.parse(result.stdout.toString());
+        pr.head.repo.full_name = "other-owner/openclaw";
+        return commandResult(JSON.stringify(pr));
       }
       return result;
     });
-    await f.rejected("revoked-identity", "identity_changed", "Reconnect");
+    await f.rejected("foreign-head", "github_rejected", "permission");
   });
 
   it.each(["failed", "wrong-ref", "fetch", "ancestry"] as const)(

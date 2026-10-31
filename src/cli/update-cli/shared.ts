@@ -490,6 +490,23 @@ export async function ensureGitCheckout(params: {
   return { checkoutDir: await fs.realpath(params.dir), step: null };
 }
 
+/** Inspect installation ownership without package-manager discovery or cache writes. */
+export async function assertGlobalUpdateOwner(
+  params: Parameters<typeof resolveGlobalManager>[0],
+): Promise<void> {
+  await (
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
+  ).assertUnowned(params.root);
+  if (params.installKind !== "git" && (await resolveBrewOpenClawPath(params.root))) {
+    const reason = resolveUnmanagedUpdateInstallReason();
+    throw new UpdatePreMutationError(
+      reason,
+      "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
+      { failureFacts: [] },
+    );
+  }
+}
+
 export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -497,18 +514,8 @@ export async function resolveGlobalManager(params: {
   pkgOwnership?: SystemPackageOwnershipInspection;
   serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
-  await (
-    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
-  ).assertUnowned(params.root);
+  await assertGlobalUpdateOwner(params);
   if (params.installKind !== "git") {
-    if (await resolveBrewOpenClawPath(params.root)) {
-      const reason = resolveUnmanagedUpdateInstallReason();
-      throw new UpdatePreMutationError(
-        reason,
-        "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
-        { failureFacts: [] },
-      );
-    }
     const diagnostics: string[] = [];
     const detected = await detectGlobalInstallManagerForRoot(
       runCommandWithTimeout,

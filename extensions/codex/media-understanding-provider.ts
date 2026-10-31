@@ -1,4 +1,5 @@
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
@@ -9,6 +10,8 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexBoundedTurnOptions } from "./src/app-server/bounded-turn.js";
 import type { CodexUserInput } from "./src/app-server/protocol.js";
+
+const loadBoundedTurn = createLazyRuntimeModule(() => import("./src/app-server/bounded-turn.js"));
 
 const CODEX_MEDIA_PROVIDER_ID = "codex";
 const DEFAULT_CODEX_IMAGE_MODEL = "gpt-6-astra";
@@ -64,7 +67,7 @@ async function runCodexMediaTask(
     }
   }
   req.signal?.throwIfAborted();
-  const { runBoundedCodexAppServerTurn } = await import("./src/app-server/bounded-turn.js");
+  const { runBoundedCodexAppServerTurn } = await loadBoundedTurn();
   req.signal?.throwIfAborted();
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,

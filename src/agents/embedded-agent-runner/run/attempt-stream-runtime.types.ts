@@ -5,6 +5,9 @@ import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js
 
 export type PreparedStreamRuntime = {
   abortable: <T>(promise: Promise<T>) => Promise<T>;
+  normalizeToolCallIds?: ReturnType<
+    typeof installEmbeddedAttemptStreamGuards
+  >["normalizeToolCallIds"];
   cache: {
     onModelRequest?: ReturnType<typeof installEmbeddedAttemptStreamGuards>["onModelRequest"];
     getObservation?: ReturnType<

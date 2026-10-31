@@ -7,6 +7,7 @@ import type { SessionHistoryWorkerDatabase } from "../config/sessions/session-tr
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import type { SelectionRow } from "../gateway/session-row-projection-record.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../state/agent-database-admission-error.js";
 import {
@@ -22,9 +23,15 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 export const STATUS_RECENT_SESSION_LIMIT = 10;
 const SESSION_STORE_READ_SLICE_MS = 8;
 type SessionStoreSummary = Awaited<ReturnType<SessionHistoryWorkerDatabase["readStoreSummary"]>>;
+type SummaryRow = SessionStoreSummary["recent"][number];
+type ProjectionStoreSummary = {
+  count: number;
+  agents: Map<string, { rows: Map<string, SummaryRow>; ordered: SummaryRow[] }>;
+  windows: Map<number, SessionStoreSummary>;
+};
 const projectionSummaries = new WeakMap<
   SessionRowProjection,
-  { revision: object; windows: Map<number, Map<string, SessionStoreSummary>> }
+  Map<string, ProjectionStoreSummary>
 >();
 export type PreparedStatusSessionStores = Awaited<
   ReturnType<
@@ -52,51 +59,96 @@ function compareSessionRows(
   );
 }
 
+function updateProjectionSummary(store: ProjectionStoreSummary, row: SelectionRow, seed = false) {
+  let agent = store.agents.get(row.agentId);
+  if (!agent) {
+    agent = { rows: new Map(), ordered: [] };
+    store.agents.set(row.agentId, agent);
+  }
+  const previous = agent.rows.get(row.key);
+  const next = { sessionKey: row.key, entry: row.entry };
+  if (!previous) {
+    store.count++;
+  }
+  agent.rows.set(row.key, next);
+  if (seed) {
+    agent.ordered.push(next);
+    return;
+  }
+  const locate = (candidate: SummaryRow) => {
+    let lo = 0;
+    let hi = agent.ordered.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (compareSessionRows(agent.ordered[mid]!, candidate) < 0) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  };
+  if (previous) {
+    agent.ordered.splice(locate(previous), 1);
+  }
+  agent.ordered.splice(locate(next), 0, next);
+  store.windows.clear();
+}
+
 function summarizeProjectionRows(
   projection: SessionRowProjection,
   storePath: string,
   recentLimit: number,
 ): SessionStoreSummary {
   const revision = projection.state.revision;
-  let retained = projectionSummaries.get(projection);
-  if (retained?.revision !== revision) {
-    retained = { revision, windows: new Map() };
-    projectionSummaries.set(projection, retained);
+  let stores = projectionSummaries.get(projection);
+  if (!stores) {
+    stores = new Map();
+    projectionSummaries.set(projection, stores);
+    const retained = stores;
+    projection.onSelectionChange((change) => {
+      if (change.kind === "reset" || !change.row) {
+        retained.clear();
+      } else {
+        const store = retained.get(change.row.storeTarget.storePath);
+        if (store) {
+          updateProjectionSummary(store, change.row);
+        }
+      }
+    });
   }
-  let stores = retained.windows.get(recentLimit);
-  const cached = stores?.get(storePath);
+  let store = stores.get(storePath);
+  const cached = store?.windows.get(recentLimit);
   if (cached) {
     return cached;
   }
-  const rows = projection.selectEntries({ storePath, sortBy: null });
-  // Keep each namespace's candidates until the publisher selects surviving windows.
+  if (!store) {
+    store = { count: 0, agents: new Map(), windows: new Map() };
+    for (const row of projection.selectEntries({ storePath, sortBy: null })) {
+      updateProjectionSummary(store, row, true);
+    }
+    for (const agent of store.agents.values()) {
+      agent.ordered.sort(compareSessionRows);
+    }
+    // Selection can acquire dirty entries; retain only a stable owner revision.
+    if (projection.state.revision === revision) {
+      stores.set(storePath, store);
+    }
+  }
+  const agents = [...store.agents];
   if (recentLimit !== 0) {
-    rows.sort(
-      (left, right) =>
-        (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0) ||
-        (left.key < right.key ? -1 : left.key > right.key ? 1 : 0),
-    );
+    agents.sort(([, left], [, right]) => compareSessionRows(left.ordered[0]!, right.ordered[0]!));
   }
+  // Copy only requested windows: prepared readers keep their snapshots across later publications.
   const byAgent: SessionStoreSummary["byAgent"] = new Map();
-  for (const row of rows) {
-    let agent = byAgent.get(row.agentId);
-    if (!agent) {
-      agent = { count: 0, recent: [] };
-      byAgent.set(row.agentId, agent);
-    }
-    agent.count += 1;
-    if (recentLimit < 0 || agent.recent.length < recentLimit) {
-      agent.recent.push({ sessionKey: row.key, entry: row.entry });
-    }
+  for (const [agentId, agent] of agents) {
+    byAgent.set(agentId, {
+      count: agent.rows.size,
+      recent: agent.ordered.slice(0, recentLimit < 0 ? undefined : recentLimit),
+    });
   }
-  const summary: SessionStoreSummary = { count: rows.length, recent: [], byAgent };
-  // Selection can acquire dirty entries; retain only a stable owner revision.
-  if (projection.state.revision === revision) {
-    if (!stores) {
-      retained.windows.set(recentLimit, (stores = new Map()));
-    }
-    stores.set(storePath, summary);
-  }
+  const summary: SessionStoreSummary = { count: store.count, recent: [], byAgent };
+  store.windows.set(recentLimit, summary);
   return summary;
 }
 

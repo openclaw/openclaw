@@ -36,6 +36,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { updateRepairCommand } from "./update-repair-command.js";
@@ -127,11 +128,8 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-update-repair-"));
   const root = tempDirs.make("openclaw-update-repair-install-");
   fs.mkdirSync(path.join(root, "dist"));
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.3" }));
-  fs.writeFileSync(
-    path.join(root, "dist", "build-info.json"),
-    JSON.stringify({ buildId: "installed-build" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { version: "2026.9.3" });
+  writeFixtureJsonSync(path.join(root, "dist", "build-info.json"), { buildId: "installed-build" });
   mocks.resolveRoot.mockResolvedValue(root);
   mocks.readConfig.mockResolvedValue({ valid: true, config: {} });
   mocks.resolveChannel.mockReset().mockResolvedValue({ tag: "latest", version: "2026.9.3" });
@@ -379,59 +377,59 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it.each([
-    "live",
-    "unobserved",
-    "unrelated inherited ID",
-    "unrecorded adopter",
-    "recent request",
-  ] as const)("preserves the %s and refuses maintenance", async (owner) => {
-    const young = owner === "recent request";
-    const unobserved = owner === "unobserved" || owner === "unrelated inherited ID";
-    const run = seedRun({
-      phase: young ? undefined : "validating",
-      driver: owner === "recent request" ? undefined : "live",
-      ageMs: young ? 60_000 : undefined,
-    });
-    if (unobserved) {
-      recordUpdateRunPhase(run.runId, "validating", {
-        origin: { driver: { ...run.origin.driver!, host: "other-host.invalid" } },
+  it.each(["live", "unrelated inherited ID", "unrecorded adopter", "recent request"] as const)(
+    "preserves the %s and refuses maintenance",
+    async (owner) => {
+      const young = owner === "recent request";
+      const unobserved = owner === "unrelated inherited ID";
+      const run = seedRun({
+        phase: young ? undefined : "validating",
+        driver: owner === "recent request" ? undefined : "live",
+        ageMs: young ? 60_000 : undefined,
       });
-    }
-    if (owner === "unrecorded adopter") {
-      recordUpdateRunStep(run.runId, { step: "driver:identity-unavailable", status: "completed" });
-    }
-    if (owner === "unrelated inherited ID" || owner === "unrecorded adopter") {
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-    }
-    const current = getUpdateRun(run.runId)!;
-    const pending = updateRepairCommand({});
-    await expect(pending).rejects.toThrow(
-      `Update ${run.runId} remains recorded as running (${run.phase});`,
-    );
-    if (owner === "live" || owner === "unobserved") {
-      for (const detail of [
-        `PID ${run.origin.driver!.pid}`,
-        current.origin.driver!.host,
-        unobserved ? "liveness: not observed" : "liveness: alive",
-        `started ${new Date(run.createdAtMs).toISOString()}`,
-        "age 3600s",
-        `last activity ${new Date(current.updatedAtMs).toISOString()}`,
-        "stop it through its owning host",
-        "openclaw update repair",
-      ]) {
-        await expect(pending).rejects.toThrow(detail);
+      if (unobserved) {
+        recordUpdateRunPhase(run.runId, "validating", {
+          origin: { driver: { ...run.origin.driver!, host: "other-host.invalid" } },
+        });
       }
-    }
-    if (owner === "unrecorded adopter") {
-      await expect(pending).rejects.toThrow("unrecorded adopter");
-      expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(
-        expect.objectContaining({ step: "finalize:repair-continuation" }),
+      if (owner === "unrecorded adopter") {
+        recordUpdateRunStep(run.runId, {
+          step: "driver:identity-unavailable",
+          status: "completed",
+        });
+      }
+      if (owner === "unrelated inherited ID" || owner === "unrecorded adopter") {
+        vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      }
+      const current = getUpdateRun(run.runId)!;
+      const pending = updateRepairCommand({});
+      await expect(pending).rejects.toThrow(
+        `Update ${run.runId} remains recorded as running (${run.phase});`,
       );
-    }
-    expect(getUpdateRun(run.runId)).toEqual(current);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-  });
+      if (owner === "live") {
+        for (const detail of [
+          `PID ${run.origin.driver!.pid}`,
+          current.origin.driver!.host,
+          unobserved ? "liveness: not observed" : "liveness: alive",
+          `started ${new Date(run.createdAtMs).toISOString()}`,
+          "age 3600s",
+          `last activity ${new Date(current.updatedAtMs).toISOString()}`,
+          "stop it through its owning host",
+          "openclaw update repair",
+        ]) {
+          await expect(pending).rejects.toThrow(detail);
+        }
+      }
+      if (owner === "unrecorded adopter") {
+        await expect(pending).rejects.toThrow("unrecorded adopter");
+        expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(
+          expect.objectContaining({ step: "finalize:repair-continuation" }),
+        );
+      }
+      expect(getUpdateRun(run.runId)).toEqual(current);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, "staging"] as const)(
     "repairs an abandoned %s row through the public command without maintenance",

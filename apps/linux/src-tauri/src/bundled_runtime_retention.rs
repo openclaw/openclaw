@@ -178,7 +178,54 @@ fn live_executables(names: &BTreeSet<OsString>) -> RuntimeResult<Vec<PathBuf>> {
     result
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
 fn live_executables(_: &BTreeSet<OsString>) -> RuntimeResult<Vec<PathBuf>> {
-    Err("Runtime seed collection is supported only on Linux and Windows.".into())
+    use std::os::unix::ffi::OsStringExt;
+    // Match Linux's per-user census; an incomplete census defers all collection.
+    const PROC_UID_ONLY: u32 = 4; // sys/proc_info.h; libc exposes proc_listpids but not this selector.
+    let uid = unsafe { libc::geteuid() };
+    let required = unsafe { libc::proc_listpids(PROC_UID_ONLY, uid, std::ptr::null_mut(), 0) };
+    if required <= 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut pids = vec![0_i32; required as usize / std::mem::size_of::<i32>() + 64];
+    let capacity = pids.len() * std::mem::size_of::<i32>();
+    let actual = unsafe {
+        libc::proc_listpids(
+            PROC_UID_ONLY,
+            uid,
+            pids.as_mut_ptr().cast(),
+            capacity as i32,
+        )
+    };
+    if actual <= 0 || actual as usize >= capacity {
+        return Err("Could not complete the runtime process census.".into());
+    }
+    pids.truncate(actual as usize / std::mem::size_of::<i32>());
+    let mut paths = Vec::new();
+    for pid in pids.into_iter().filter(|pid| *pid > 0) {
+        let mut bytes = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let count =
+            unsafe { libc::proc_pidpath(pid, bytes.as_mut_ptr().cast(), bytes.len() as u32) };
+        if count <= 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                continue;
+            }
+            return Err(error.into());
+        }
+        bytes.truncate(
+            bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(count as usize),
+        );
+        paths.push(PathBuf::from(OsString::from_vec(bytes)));
+    }
+    Ok(paths)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+fn live_executables(_: &BTreeSet<OsString>) -> RuntimeResult<Vec<PathBuf>> {
+    Err("Runtime seed collection is unsupported on this platform.".into())
 }

@@ -7,11 +7,13 @@ import {
   type AgentEventStream,
 } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getRpcSourceForGateway } from "../sessions/session-controller.rpc-sources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
+import { createGatewayTerminalTracking } from "./server-runtime-terminal-tracking.js";
 import { agentDiscoveryMock } from "./test-helpers.runtime-state.js";
 
 type AgentEventHandler = (event: AgentEventPayload) => void | Promise<void>;
@@ -67,7 +69,9 @@ export function emitAgentEvents(
 export function subscribeAgentEvents(handler: AgentEventHandler) {
   const pending: Array<Promise<void>> = [];
   const unsubscribe = onAgentRuntimeEvent((event) => {
-    const accepted = Promise.resolve(handler(event));
+    const accepted = new Promise<void>((resolve) => {
+      resolve(handler(event));
+    });
     pending.push(accepted);
     // Observe rejection now; drain retains the original promise and still fails.
     accepted.catch(() => undefined);
@@ -80,6 +84,33 @@ export function subscribeAgentEvents(handler: AgentEventHandler) {
     },
     { drain },
   );
+}
+
+export async function createHistoryEventHandler(context: GatewayRequestContext) {
+  const {
+    createAgentEventHandler,
+    createSessionEventSubscriberRegistry,
+    createSessionMessageSubscriberRegistry,
+  } = await import("./server-chat.js");
+  const terminalTracking = createGatewayTerminalTracking({
+    getScopedRpcSource: (runId) => getRpcSourceForGateway(runId, context.resolveGatewayContext),
+  });
+  return createAgentEventHandler({
+    broadcast: context.broadcast,
+    broadcastToConnIds: context.broadcastToConnIds,
+    nodeHasSessionSubscribers: () => false,
+    nodeSendToSession: context.nodeSendToSession,
+    agentRunSeq: context.agentRunSeq,
+    chatRunState: context.chatRunState,
+    resolveSessionKeyForRun: () => "main",
+    clearAgentRunContext: vi.fn(),
+    toolEventRecipients: context.chatRunState.toolEventRecipients,
+    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    clearTrackedActiveRun: terminalTracking.clearTrackedActiveRun,
+    settleTrackedTerminal: terminalTracking.settleTrackedTerminal,
+    trackTrackedRunTerminalPersistence: terminalTracking.trackTrackedRunTerminalPersistence,
+  });
 }
 
 export function registerChatRun(
@@ -170,15 +201,6 @@ export function createDirectChatContext(
     readChatMetadata: vi.fn(async () => {
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),
-    recoveryRuntime: {
-      prepareRestartRecovery: () => undefined,
-      resumeChatInput: async () => {
-        throw new Error("Unexpected chat input recovery");
-      },
-      dispatchAgent: vi.fn(),
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(),
-    },
     dedupe: new Map(),
     ...overrides,
   } as unknown as GatewayRequestContext;

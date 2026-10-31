@@ -12,7 +12,7 @@ import {
   spawnCommand,
   withCommandProcessScope,
 } from "./exec-spawn.js";
-import { runExec } from "./exec.js";
+import { runCommandBuffered, runExec } from "./exec.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 const transport = vi.hoisted(() => ({ spawn: vi.fn(), settle: vi.fn() }));
@@ -201,6 +201,34 @@ it.each([false, true])("unknown broker launch (proven non-start: %s)", async (no
   expect(reservation.spawned).not.toHaveBeenCalled();
   expect(reservation.settled).toHaveBeenCalledTimes(notStarted ? 1 : 0);
 });
+
+it.each([
+  { notStarted: false, canonical: false },
+  { notStarted: true, canonical: false },
+  { notStarted: false, canonical: true },
+])(
+  "preserves buffered startup cleanup (notStarted=$notStarted, canonical=$canonical)",
+  async ({ notStarted, canonical }) => {
+    const fixture = commandFixture();
+    if (notStarted) {
+      fixture.child.markNotStarted();
+    }
+    const failure = canonical
+      ? new CommandProcessCleanupError()
+      : new Error("broker lost before PID delivery");
+    const pending = runCommandBuffered(["fixture"]);
+    fixture.fail(failure);
+    fixture.cleanup.resolve("forced");
+    const result = await pending;
+    expect(result.termination).toBe("error");
+    expect(hasCommandProcessCleanupError(result.error)).toBe(!notStarted);
+    if (notStarted || canonical) {
+      expect(result.error).toBe(failure);
+    } else {
+      expect(result.error?.cause).toBe(failure);
+    }
+  },
+);
 
 it.each([false, true])("failed binding withholds input (group live: %s)", async (live) => {
   const fixture = commandFixture();

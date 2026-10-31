@@ -112,7 +112,7 @@ export function createQuestionHandlers(
       question,
       observation,
       authorize,
-      withCurrent<T>(consume: () => T, includeMembers?: boolean) {
+      withCurrent<T>(consume: () => T) {
         return withPreparedQuestionSessions(
           options,
           [authorize.target],
@@ -126,7 +126,6 @@ export function createQuestionHandlers(
           },
           {
             assertCurrent: authorize.assertCurrent,
-            ...(includeMembers !== undefined ? { includeMembers } : {}),
           },
         );
       },
@@ -394,7 +393,6 @@ export function createQuestionHandlers(
               },
               {
                 assertCurrent: authority.assertCurrent,
-                includeMembers: !narrow && requiresSharing(),
               },
             );
           } catch (error) {
@@ -474,111 +472,107 @@ export function createQuestionHandlers(
         const { question, observation, authorize } = selected;
         let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
         let save: Promise<void> | undefined;
-        await selected.withCurrent(
-          () => {
-            if ("cancel" in request) {
-              authorize.assertCurrent();
-              respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
-              return;
-            }
-            const secretQuestion = question.questions[0];
-            const binding = secretQuestion?.secretStore;
-            if (!binding) {
-              if (request.secretStoreAllowedHosts !== undefined) {
-                respondError(
-                  respond,
-                  ErrorCodes.INVALID_REQUEST,
-                  "Secret store allowed hosts require a store-bound question.",
-                );
-                return;
-              }
-              authorize.assertCurrent();
-              respond(
-                true,
-                manager.resolve(request.id, request.answers, request.resolvedBy, {
-                  resolutionId: request.resolutionId,
-                }),
-                undefined,
-              );
-              return;
-            }
-            const submittedAnswers = request.answers.answers;
-            const values = Object.hasOwn(submittedAnswers, secretQuestion.questionId)
-              ? submittedAnswers[secretQuestion.questionId]
-              : undefined;
-            const value = values?.[0];
-            if (
-              Object.keys(submittedAnswers).length !== 1 ||
-              values?.length !== 1 ||
-              value === undefined
-            ) {
+        await selected.withCurrent(() => {
+          if ("cancel" in request) {
+            authorize.assertCurrent();
+            respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
+            return;
+          }
+          const secretQuestion = question.questions[0];
+          const binding = secretQuestion?.secretStore;
+          if (!binding) {
+            if (request.secretStoreAllowedHosts !== undefined) {
               respondError(
                 respond,
                 ErrorCodes.INVALID_REQUEST,
-                `question '${secretQuestion.questionId}' requires exactly one secret value`,
+                "Secret store allowed hosts require a store-bound question.",
               );
               return;
             }
-            registerSecretValueForRedaction(value);
-            const allowedHosts = request.secretStoreAllowedHosts ?? binding.allowedHosts;
-            save = (async () => {
-              let saved = false;
-              let authority: Awaited<ReturnType<typeof prepareQuestionCommitAuthority>> | undefined;
-              try {
-                const currentAuthority = await prepareQuestionCommitAuthority(
-                  options,
-                  observation,
-                  request.id,
-                );
-                authority = currentAuthority;
-                // Only the synthetic marker enters state, fanout, and waiting agents.
-                const result = await manager.resolveWithCommit(
-                  request.id,
-                  { answers: { [secretQuestion.questionId]: ["stored"] } },
-                  request.resolvedBy,
-                  {
-                    resolutionId: request.resolutionId,
-                    commit: async (assertQuestionCurrent) => {
-                      await storeWriteService.write({
-                        name: binding.name,
-                        value,
-                        kind: "secret",
-                        ...(allowedHosts !== undefined ? { allowedHosts } : {}),
-                        updatedBy: storeWriteService.resolveUpdatedBy(client),
-                        assertCurrent: () => {
-                          currentAuthority.assertCurrent();
-                          assertQuestionCurrent();
-                        },
-                      });
-                      saved = true;
-                    },
+            authorize.assertCurrent();
+            respond(
+              true,
+              manager.resolve(request.id, request.answers, request.resolvedBy, {
+                resolutionId: request.resolutionId,
+              }),
+              undefined,
+            );
+            return;
+          }
+          const submittedAnswers = request.answers.answers;
+          const values = Object.hasOwn(submittedAnswers, secretQuestion.questionId)
+            ? submittedAnswers[secretQuestion.questionId]
+            : undefined;
+          const value = values?.[0];
+          if (
+            Object.keys(submittedAnswers).length !== 1 ||
+            values?.length !== 1 ||
+            value === undefined
+          ) {
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              `question '${secretQuestion.questionId}' requires exactly one secret value`,
+            );
+            return;
+          }
+          registerSecretValueForRedaction(value);
+          const allowedHosts = request.secretStoreAllowedHosts ?? binding.allowedHosts;
+          save = (async () => {
+            let saved = false;
+            let authority: Awaited<ReturnType<typeof prepareQuestionCommitAuthority>> | undefined;
+            try {
+              const currentAuthority = await prepareQuestionCommitAuthority(
+                options,
+                observation,
+                request.id,
+              );
+              authority = currentAuthority;
+              // Only the synthetic marker enters state, fanout, and waiting agents.
+              const result = await manager.resolveWithCommit(
+                request.id,
+                { answers: { [secretQuestion.questionId]: ["stored"] } },
+                request.resolvedBy,
+                {
+                  resolutionId: request.resolutionId,
+                  commit: async (assertQuestionCurrent) => {
+                    await storeWriteService.write({
+                      name: binding.name,
+                      value,
+                      kind: "secret",
+                      ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+                      updatedBy: storeWriteService.resolveUpdatedBy(client),
+                      assertCurrent: () => {
+                        currentAuthority.assertCurrent();
+                        assertQuestionCurrent();
+                      },
+                    });
+                    saved = true;
                   },
-                );
-                currentAuthority.assertCurrent();
-                reload = { name: binding.name, result };
-              } catch (error) {
-                if (!saved && managerError(error, respond)) {
-                  return;
-                }
-                respondError(
-                  respond,
-                  !saved && error instanceof SecretStoreValidationError
-                    ? ErrorCodes.INVALID_REQUEST
-                    : ErrorCodes.UNAVAILABLE,
-                  saved
-                    ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
-                    : error instanceof SecretStoreValidationError
-                      ? error.message
-                      : "Secret store entry could not be saved.",
-                );
-              } finally {
-                authority?.release();
+                },
+              );
+              currentAuthority.assertCurrent();
+              reload = { name: binding.name, result };
+            } catch (error) {
+              if (!saved && managerError(error, respond)) {
+                return;
               }
-            })();
-          },
-          !readGatewayRequestMutationAuthority(options).sessionScope &&
-            hasOperatorBoundary(client, options.context.getRuntimeConfig()),
-        );
+              respondError(
+                respond,
+                !saved && error instanceof SecretStoreValidationError
+                  ? ErrorCodes.INVALID_REQUEST
+                  : ErrorCodes.UNAVAILABLE,
+                saved
+                  ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
+                  : error instanceof SecretStoreValidationError
+                    ? error.message
+                    : "Secret store entry could not be saved.",
+              );
+            } finally {
+              authority?.release();
+            }
+          })();
+        });
         await save;
         if (reload) {
           try {

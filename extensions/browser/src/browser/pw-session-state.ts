@@ -253,7 +253,7 @@ export function ensurePageState(page: Page): PageState {
     managedSave.catch(() => {});
     download.path = async () => (await managedSave).path;
     if (actionCapture) {
-      actionCapture.lastEventAtMs = Date.now();
+      actionCapture.lastEventAtMs = performance.now();
     }
     actionCapture?.pending.push(managedSave);
     for (const finish of actionCapture?.waiters.splice(0) ?? []) {

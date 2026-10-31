@@ -6,13 +6,9 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
+import type { ContextCompactProps } from "./chat-context-compact.tsx";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
-
-type ContextNoticeOptions = {
-  messages?: unknown[];
-  providerUsage?: ProviderUsageDisplayProps;
-};
 
 export function latestAssistantProvider(messages: unknown[] | undefined): string | null {
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
@@ -64,9 +60,13 @@ export function getContextNoticeViewModel(session: GatewaySessionRow | undefined
   };
 }
 
-export type ContextNoticeProps = ContextNoticeOptions & {
+export type ContextNoticeProps = {
+  messages?: unknown[];
+  providerUsage?: ProviderUsageDisplayProps;
+} & {
   session?: GatewaySessionRow;
   gateway?: ApplicationGateway;
   agentId?: string;
   onOpenContext?: () => void;
-};
+  connected?: boolean;
+} & Pick<ContextCompactProps, "onCompact" | "compactionStatus" | "runActive">;

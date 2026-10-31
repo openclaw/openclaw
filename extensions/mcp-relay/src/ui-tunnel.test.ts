@@ -76,9 +76,8 @@ describe("Control UI relay tunnel", () => {
         ["accept-encoding", "br, gzip"],
         ["cookie", "asset=ok"],
       ]);
-      expect(Buffer.from(await new Response(input.body).arrayBuffer())).toEqual(
-        Buffer.concat([upload, Buffer.from("end")]),
-      );
+      const sent = Buffer.from(await new Response(input.body).arrayBuffer());
+      expect(sent.equals(Buffer.concat([upload, Buffer.from("end")])), "HTTP upload").toBe(true);
       return {
         response: new Response(download, {
           headers: {
@@ -126,7 +125,7 @@ describe("Control UI relay tunnel", () => {
       more: false,
     });
     const result = await response(f);
-    expect(result.body).toEqual(download);
+    expect(result.body.equals(download), "HTTP download bytes").toBe(true);
     expect(result.head).toEqual({
       type: "ui.http.head",
       sid: HTTP.sid,

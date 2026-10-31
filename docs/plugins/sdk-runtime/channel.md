@@ -9,6 +9,20 @@ sidebarTitle: "Channel helpers"
 
 Channel-specific runtime helpers, available when a channel plugin is loaded. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Channel plugins](/plugins/sdk-channel-plugins) is the step-by-step guide.
 
+## Queued source replies
+
+A channel with a task-correlated reply destination can pass
+`replyOptions.onQueuedFollowupReplyBatch` to inbound dispatch. The callback remains
+attached to that input when it queues behind an active turn. Batches distinguish
+progress from completed, failed, and aborted execution; only terminal batches
+should settle the source task, including successful completion with no payloads.
+
+Set the callback's `ownsCompletion(channel)` predicate for the channel whose
+completion it owns. Matching replies stay with this source callback instead of
+being routed as a new outbound message. Leave it unset for ordinary origin-routed
+channel replies. The channel must retain its task identity and make settlement
+idempotent; progress does not establish completion.
+
 ## Channel namespaces
 
 <AccordionGroup>

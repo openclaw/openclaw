@@ -5,11 +5,16 @@ import { createRequire } from "node:module";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type * as lineageWriter from "../../node-host/node-worker-lineage-completion.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { monotonicNow, remainingMonotonicMs as left } from "../../shared/monotonic-time.js";
+import { enterAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
+import { releaseProcessStdin } from "../release-stdin.js";
 import { serializeBrokerError } from "../spawn-broker/protocol.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import type { acquireLinuxChildSubreaper } from "./linux-child-subreaper.js";
 import {
   hasLiveOwnedProcessGroupMembers,
   killOwnedProcessGroupMembers,
@@ -58,17 +63,13 @@ function delay(ms: number, retainOwner = false): Promise<void> {
 export function runServiceChildGroupAnchor(): void {
   const launchGrant = createDeferredCore();
   let start: ServiceChildStart | undefined;
-  let subreaper:
-    | ReturnType<typeof import("./linux-child-subreaper.js").acquireLinuxChildSubreaper>
-    | undefined;
+  let subreaper: ReturnType<typeof acquireLinuxChildSubreaper> | undefined;
   let descendantsReaped = false;
   let state: AnchorState = "starting";
   let sequence = 0;
   let lastHostSequence = 0;
   let command: ChildProcess | undefined;
-  let lineageCompletion:
-    | typeof import("../../node-host/node-worker-lineage-completion.js")
-    | undefined;
+  let lineageCompletion: typeof lineageWriter | undefined;
   let inheritedLineageClosed = false;
   let workerStarted = false;
   let workerLineageFds: number[] = [];
@@ -107,7 +108,7 @@ export function runServiceChildGroupAnchor(): void {
 
   const finish = (code: number) => {
     process.exitCode = code;
-    process.stdin.destroy();
+    releaseProcessStdin();
     const disconnect = () => {
       // end() flushes the receipt; destroy() also releases the readable socket.
       control?.off("close", disconnect);
@@ -127,7 +128,7 @@ export function runServiceChildGroupAnchor(): void {
   const closeAuthority = async (
     reason: Extract<ServiceChildAnchorMessage, { type: "closing" }>["reason"],
     hardKill: boolean,
-    deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS,
+    deadline = monotonicNow() + GRACEFUL_CANCEL_TIMEOUT_MS,
   ) => {
     if (!start || state === "closed") {
       return;
@@ -150,7 +151,7 @@ export function runServiceChildGroupAnchor(): void {
       });
       const acknowledged = await Promise.race([
         retirementReady.promise,
-        delay(Math.max(0, deadline - Date.now())).then(() => false),
+        delay(Math.max(0, deadline - monotonicNow())).then(() => false),
       ]);
       finish(acknowledged ? 0 : 1);
       return;
@@ -166,7 +167,7 @@ export function runServiceChildGroupAnchor(): void {
     // crossing cancellation cannot destroy the host's unread closing receipt.
     const requiresAcknowledgement = start.acknowledgeClosing === true;
     closingSequence = requiresAcknowledgement ? sequence + 1 : undefined;
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs > 0) {
       void send({ type: "closing", reason }).then(
         () => {
@@ -182,7 +183,7 @@ export function runServiceChildGroupAnchor(): void {
     if (
       remainingMs <= 0 ||
       !(await Promise.race([retirementReady.promise, delay(remainingMs).then(() => false)])) ||
-      Date.now() >= deadline ||
+      monotonicNow() >= deadline ||
       hardKill
     ) {
       process.kill(0, "SIGKILL");
@@ -243,7 +244,7 @@ export function runServiceChildGroupAnchor(): void {
       await reportStartupFailure("command startup cancelled before spawn", true);
       return;
     }
-    const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    const deadline = monotonicNow() + GRACEFUL_CANCEL_TIMEOUT_MS;
     const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (!start.ownedWorker && !forceCleanup && rootExit && pendingOutput.size > 0) {
       // Preserve inherited diagnostics after root exit within the same cleanup budget.
@@ -251,9 +252,7 @@ export function runServiceChildGroupAnchor(): void {
     }
     if (subreaper) {
       try {
-        while (
-          !subreaper.drain(forceCleanup || Date.now() >= cleanupDeadline ? "SIGKILL" : "SIGTERM")
-        ) {
+        while (!subreaper.drain(forceCleanup || left(deadline) <= 0 ? "SIGKILL" : "SIGTERM")) {
           // Yield so the runtime can consume its one direct root. Adopted children stay
           // with the native wait owner even after the caller gives up waiting.
           await delay(10, true);
@@ -301,11 +300,9 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     if (start.ownedWorker) {
-      if (!forceCleanup) {
-        process.kill(0, "SIGTERM");
-      }
       const settled = Promise.all([rootExited.promise, lineageDone.promise]);
       if (!forceCleanup) {
+        process.kill(0, "SIGTERM");
         await Promise.race([settled, termGraceDone, forceCleanupRequested.promise]);
       }
       if (!rootExit) {
@@ -369,17 +366,17 @@ export function runServiceChildGroupAnchor(): void {
       if (forceCleanup || !rootExit || pendingOutput.size > 0 || !lineageClosed) {
         break;
       }
-      const remainingMs = cleanupDeadline - Date.now();
+      const remainingMs = Math.max(0, left(deadline));
       if (remainingMs <= 0) {
         break;
       }
       // This census only schedules retirement or escalation; it cannot certify closure.
       // The outside-group host must observe kernel group disappearance after we exit.
       if (hasLiveOwnedProcessGroupMembers(remainingMs) === false) {
-        await closeAuthority(reason, false, cleanupDeadline);
+        await closeAuthority(reason, false, deadline);
         return;
       }
-      const nextObservationMs = Math.min(100, cleanupDeadline - Date.now());
+      const nextObservationMs = Math.min(100, Math.max(0, left(deadline)));
       if (nextObservationMs <= 0) {
         break;
       }
@@ -511,6 +508,9 @@ export function runServiceChildGroupAnchor(): void {
       (socket as Socket & { connect(options: { fd: number }): Socket }).connect({ fd: controlFd });
     }
 
+    if (next.executionIntent === "agent-tool") {
+      enterAgentExecCgroup();
+    }
     // Prepare before launch: loading this writer during TERM consumes cleanup grace
     // and can race a source loader's compiler receiving the same group signal.
     lineageCompletion =
@@ -680,7 +680,7 @@ export function runServiceChildGroupAnchor(): void {
       const stopInput = () => {
         input.unpipe(destination);
         input.off("end", endInput);
-        input.destroy();
+        releaseProcessStdin();
         if (!inputClosed) {
           inputClosed = true;
           void send({ type: "stdin-closed" });

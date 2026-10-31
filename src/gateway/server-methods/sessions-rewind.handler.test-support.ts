@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
@@ -20,6 +20,11 @@ import type {
   GatewayRequestHandlerOptions,
 } from "./types.js";
 
+export {
+  expectRpcError as expectCutFailure,
+  expectRpcResult as expectCutReply,
+} from "./rpc-response.test-support.js";
+
 export const sessionKey = "agent:main:rewind-handler";
 export const sourceSessionId = "rewind-handler-source";
 export const cfg = { agents: { entries: { main: {} } } };
@@ -35,23 +40,18 @@ export function installHarness(
   registerPlugin = false,
   id = "test-harness",
 ) {
-  const registry = createEmptyPluginRegistry();
+  const registry = harnessRegistry(id, {
+    label: "Test harness",
+    supports: () => ({ supported: false }),
+    runAttempt: async () => {
+      throw new Error("not used");
+    },
+    ...overrides,
+  });
+  registry.agentHarnesses[0]!.source = "runtime";
   if (registerPlugin) {
     registry.plugins.push(createPluginRecord({ id }));
   }
-  registry.agentHarnesses.push({
-    pluginId: id,
-    source: "runtime",
-    harness: {
-      id,
-      label: "Test harness",
-      supports: () => ({ supported: false }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      ...overrides,
-    },
-  });
   setActivePluginRegistry(registry);
 }
 
@@ -114,17 +114,6 @@ export async function invokeHandler(
     ...options,
   });
   return respond;
-}
-
-export function expectCutFailure(
-  respond: ReturnType<typeof vi.fn>,
-  error: Record<string, unknown>,
-) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-}
-
-export function expectCutReply(respond: ReturnType<typeof vi.fn>, result: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, result, undefined);
 }
 
 export async function restrictedOperator(

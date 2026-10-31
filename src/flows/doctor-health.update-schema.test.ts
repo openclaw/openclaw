@@ -35,7 +35,10 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
-import { addPreCutoverClientCredentialTablesForTest } from "../state/openclaw-state-schema.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+} from "../state/openclaw-state-schema.test-support.js";
 import { VERSION } from "../version.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -100,6 +103,11 @@ it.each([
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
     const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
     await closeDatabases();
+    {
+      using predecessor = openNodeSqliteDatabase(shared);
+      restorePreTemplateStateIdentifiersForTest(predecessor);
+      addPreCutoverClientCredentialTablesForTest(predecessor);
+    }
     setSchemaVersion(shared, 19);
     executeSql(shared, "ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state");
     const readRows = (db: DatabaseSync) => ({
@@ -233,7 +241,7 @@ it.each([
       } else {
         expect(failure).toMatchObject(refusal);
       }
-      expect(readFiles(files)).toEqual(bytes);
+      readFiles(files).forEach((data, i) => expect(data.equals(bytes[i]!), files[i]).toBe(true));
       expect(readDatabase(shared)).toEqual(before);
       expect(mocks.runContributions).not.toHaveBeenCalled();
     });
@@ -259,6 +267,7 @@ it.each([
     const sourceVersion = CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1;
     {
       using predecessor = new DatabaseSync(shared);
+      restorePreTemplateStateIdentifiersForTest(predecessor);
       addPreCutoverClientCredentialTablesForTest(predecessor);
     }
     setSchemaVersion(shared, sourceVersion);
@@ -421,7 +430,7 @@ it.each([
           migrated.prepare("SELECT value_json FROM cache_entries WHERE key='retained'").get(),
         ).toEqual({ value_json: '{"keep":true}' });
       } else {
-        expect(fs.readFileSync(agent)).toEqual(before[0]);
+        expect(fs.readFileSync(agent).equals(before[0]!), agent).toBe(true);
       }
     } finally {
       observe.mockRestore();

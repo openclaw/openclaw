@@ -35,6 +35,7 @@ import {
   parseGatewayPayload,
 } from "./nodes.helpers.js";
 import {
+  captureNodeSystemRunEventSource,
   isForwardedNodeInvokeApprovalAuthorityActive,
   resolveNodeInvokeRuntimeAuthorityError,
 } from "./nodes.invoke-authority.js";
@@ -54,7 +55,15 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
-  "node.invoke": async ({ params, respond, context, client, req, signal }) => {
+  "node.invoke": async ({
+    params,
+    respond,
+    context,
+    client,
+    req,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
     if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
     }
@@ -494,6 +503,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           command,
           params: forwardedParams.params,
           turnSource,
+          prepareSystemRunEventSource: (key) =>
+            captureNodeSystemRunEventSource({ client, context, hasCurrentClientAuthority }, key),
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,

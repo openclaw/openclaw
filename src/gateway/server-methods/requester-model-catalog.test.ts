@@ -44,6 +44,7 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
 import {
   createChatMetadataOwner,
@@ -52,7 +53,6 @@ import {
 import {
   createModelsListTestContext,
   requestModelsList,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import { projectRequesterModelCatalog } from "./requester-model-catalog-projection.js";
 import type { GatewayClient } from "./types.js";

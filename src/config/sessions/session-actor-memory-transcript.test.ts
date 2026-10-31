@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   SessionActorAppend,
   SessionActorOutcome,
@@ -7,7 +7,7 @@ import type {
 } from "./session-actor-contract.js";
 import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -105,7 +105,10 @@ async function fixture(
       {
         commandId: "initialize",
         phaseId: "turn",
-        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
+        expectedState: buildSessionTranscriptTurnExpectedState({
+          sessionId: "session-1",
+          updatedAt: 1,
+        }),
         lifecycle: {},
         turn: {
           ...turn(
@@ -127,11 +130,7 @@ async function fixture(
   let command = 0;
   const append = (plan: SessionTurnPlan) =>
     actor.appendToolResult(
-      {
-        commandId: `append-${++command}`,
-        phaseId: "turn",
-        turn: plan,
-      },
+      { commandId: `append-${++command}`, phaseId: "turn", turn: plan },
       authority,
     );
   return {
@@ -156,7 +155,7 @@ async function fixture(
         {
           commandId,
           phaseId: "turn",
-          expectedState: buildRestartRecoveryExpectedState({ sessionId, updatedAt: 1 }),
+          expectedState: buildSessionTranscriptTurnExpectedState({ sessionId, updatedAt: 1 }),
           lifecycle: {},
           pending: {
             kind: "stage",
@@ -192,7 +191,10 @@ describe("memory actor transcript", () => {
       ...messageInput("assistant-1", "user-1", messageJson),
       view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } },
     };
+    using parse = vi.spyOn(JSON, "parse");
     const first = committed(await metadata("metadata", input));
+    // Decode once for admission and once for the detached result; reload uses the envelope.
+    expect(parse.mock.calls.filter(([json]) => json === messageJson).length).toBeLessThanOrEqual(2);
     const result = metadataResult(first);
     assert(result.reload?.ok && result.reload.value.kind === "full");
     expect(result.reload.value.snapshot.eventJson?.at(-1)).toContain(`"message":${messageJson}}`);

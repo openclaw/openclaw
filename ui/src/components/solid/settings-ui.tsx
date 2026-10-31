@@ -54,10 +54,12 @@ export function SettingsPage(props: {
   children?: JSX.Element;
   wide?: boolean;
   carapace?: boolean;
+  busy?: boolean;
 }) {
   return (
     <ShellLayoutBoundary traits={{ settingsPage: true, settingsWide: props.wide }}>
       <div
+        aria-busy={props.busy ? "true" : undefined}
         class={[
           "settings-page",
           { "settings-page--wide": props.wide, "oc-app-surface": props.carapace },
@@ -274,6 +276,7 @@ export function SettingsNavRow(
 
 function ToggleControl(
   props: SettingsToggleControl & {
+    inputLabel?: string;
     label?: JSX.Element;
     labelledBy?: string;
     inputRef?: (element: HTMLInputElement) => void;
@@ -290,7 +293,8 @@ function ToggleControl(
         checked={props.checked}
         disabled={props.disabled}
         aria-disabled={props.saving ? "true" : undefined}
-        aria-labelledby={props.labelledBy ?? labelId}
+        aria-label={props.inputLabel}
+        aria-labelledby={props.inputLabel === undefined ? (props.labelledBy ?? labelId) : undefined}
         onClick={(event) => {
           const input = event.currentTarget;
           if (props.disabled || props.saving) {
@@ -333,7 +337,7 @@ function ToggleControl(
         }}
       />
       <span class="settings-toggle__control" aria-hidden="true" />
-      <Show when={!props.labelledBy}>
+      <Show when={props.inputLabel === undefined && !props.labelledBy}>
         <span id={labelId} class="settings-control__sr-label">
           {props.label}
         </span>
@@ -348,7 +352,7 @@ export function SettingsToggle(
     inputRef?: (element: HTMLInputElement) => void;
   },
 ) {
-  return <ToggleControl {...props} label={props.ariaLabel} />;
+  return <ToggleControl {...props} inputLabel={props.ariaLabel} />;
 }
 
 export function SettingsToggleRow(

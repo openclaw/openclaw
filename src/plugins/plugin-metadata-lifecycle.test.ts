@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
@@ -190,14 +190,14 @@ it.each([false, true])(
   },
 );
 
-it.each([
+it.for([
   { borrowed: true, deferred: true, releasedBeforeClose: false },
   { borrowed: false, deferred: true, releasedBeforeClose: false },
   { borrowed: true, deferred: false, releasedBeforeClose: false },
   { borrowed: true, deferred: false, releasedBeforeClose: true },
 ])(
   "settles retirement (borrowed: $borrowed, deferred: $deferred, early release: $releasedBeforeClose)",
-  async ({ borrowed, deferred, releasedBeforeClose }) => {
+  async ({ borrowed, deferred, releasedBeforeClose }, { signal }) => {
     const cache = getPluginCache();
     const pluginId = deferred ? "turn-owner" : "retained-publication";
     const dispose = vi.fn();
@@ -229,7 +229,7 @@ it.each([
     const publication = owner.waitForRetirement();
     let closing: Promise<unknown> | undefined;
     try {
-      await withTestTimeout(publication, 1_000, "Publication waited for its retained consumer");
+      await withinTest(publication, signal);
       if (deferred) {
         expect(await publication).toEqual({
           cleanupCount: 0,

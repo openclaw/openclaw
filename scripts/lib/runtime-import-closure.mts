@@ -12,6 +12,7 @@ import { createNativeTypeScriptProject } from "./native-typescript.mts";
 import { visitModuleSpecifiers } from "./ts-guard-utils.mts";
 
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
+const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
 
 type ImportReference = {
   kind: string;
@@ -87,7 +88,9 @@ export function createRuntimeImportGraph(
   const root = resolve(rootPath);
   const configFileName = join(root, ".openclaw-runtime-imports.tsconfig.json");
   const roots = new Set(
-    inputs.filter((file) => sourceFilePattern.test(file)).map((file) => resolve(root, file)),
+    inputs
+      .filter((file) => sourceFilePattern.test(file) && (sourceImports || !isDeclaration(file)))
+      .map((file) => resolve(root, file)),
   );
   const configText = () =>
     JSON.stringify({
@@ -130,7 +133,6 @@ export function createRuntimeImportGraph(
   });
   const parser = new API({ cwd: root });
   const references = new Map<string, ImportReference[]>();
-  const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
   let session;
   try {
     session = createNativeTypeScriptProject({
@@ -228,6 +230,9 @@ export function createRuntimeImportGraph(
     compilerOptions: project.parsedCommandLine.options,
     dependencies(file: string) {
       const absolute = resolve(root, file);
+      if (!sourceImports && isDeclaration(absolute)) {
+        return [];
+      }
       let source = project.program.getSourceFile(absolute);
       if (!source && sourceFilePattern.test(absolute) && !roots.has(absolute)) {
         // Exact runtime files and computed generator inputs can be outside the
@@ -282,14 +287,15 @@ export function collectRuntimeImportClosure(
   }: { includeDynamicImports?: boolean; validatePackages?: boolean } = {},
 ): string[] {
   const closure = new Set(inputs.map((file) => file.split(sep).join("/")));
-  const sourceInputs = inputs.filter((file) => /\.[cm]?[jt]s$/.test(file));
+  // Declaration artifacts remain in the inventory, but cannot execute imports.
+  const sourceInputs = inputs.filter((file) => /\.[cm]?[jt]s$/.test(file) && !isDeclaration(file));
   if (sourceInputs.length === 0) {
     return [...closure].toSorted();
   }
   const graph = createRuntimeImportGraph(root, sourceInputs, { includeDynamicImports });
   try {
     for (const file of closure) {
-      if (!/\.[cm]?[jt]s$/.test(file)) {
+      if (!/\.[cm]?[jt]s$/.test(file) || isDeclaration(file)) {
         continue;
       }
       for (const { specifier, resolvedFileName, isExternalLibraryImport } of graph.dependencies(

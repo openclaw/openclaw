@@ -58,6 +58,7 @@ it.each([false, true])(
       runMessageSent,
     });
     const token = createExecutionIdentityAdmissionToken("run-alice");
+    const route = { channel: "telegram", accountId: "acct" };
     const target = { to: "chat-1", replyToId: "source-1", threadId: 42 };
     const sessionKey = (agentId: string) =>
       `agent:${agentId}:telegram:group:chat-1:thread:telegram-account-acct:thread:42`;
@@ -84,8 +85,7 @@ it.each([false, true])(
         agents: { entries: { alice: {}, bob: {} } },
         broadcast: { "telegram:chat-1": ["alice", "bob"] },
       },
-      channel: "telegram",
-      accountId: "acct",
+      ...route,
       route: { agentId: "main", sessionKey: "agent:main:telegram:group:chat-1" },
       ctxPayload: createCtx({
         Provider: "telegram",
@@ -119,7 +119,6 @@ it.each([false, true])(
         deliverPrepared: (plan) => deliver(plan.payload),
       },
     });
-
     expectDispatched(result);
     if (prepared) {
       const requests = sendBatch.mock.calls.map(([request]) => request);
@@ -127,8 +126,7 @@ it.each([false, true])(
       for (const agentId of ["alice", "bob"]) {
         const request = requests.find((entry) => entry.session?.agentId === agentId);
         expect(request).toMatchObject({
-          channel: "telegram",
-          accountId: "acct",
+          ...route,
           ...target,
           runId: `run-${agentId}`,
           session: { agentId, key: sessionKey(agentId) },
@@ -147,8 +145,8 @@ it.each([false, true])(
         expect(hook).toHaveBeenCalledWith(
           expect.objectContaining({ ...event, content: `${agentId} answer` }),
           expect.objectContaining({
-            channelId: "telegram",
-            accountId: "acct",
+            channelId: route.channel,
+            accountId: route.accountId,
             conversationId: "chat-1",
             sessionKey: sessionKey(agentId),
             runId: `run-${agentId}`,

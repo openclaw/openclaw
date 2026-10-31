@@ -12,6 +12,7 @@ source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh
 source scripts/e2e/lib/upgrade-survivor/backup-rollback.sh
 source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh
+source scripts/e2e/lib/upgrade-survivor/native-plugin-ui.sh
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 source scripts/e2e/lib/upgrade-survivor/paths.sh
 
@@ -366,7 +367,10 @@ const summary = {
   packageActivationRecovery: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "package-activation-recovery.json")),
   nativeAssignmentEligibility: readArtifact("native-assignment-eligibility.json"),
   nativeAssignments: readArtifact("native-assignment-proof.json", "legacy-operator-state"),
+  deferredSchemaDoctor: readArtifact("deferred-schema-doctor.json", "legacy-operator-state"),
   pluginPolicy: readArtifact("webhooks-only-policy/result.json", "legacy-operator-state"),
+  nativePluginUi: readArtifact("native-ui-candidate-proof.json", "legacy-operator-state"),
+  nativePluginUiOptOut: readArtifact("native-ui-opt-out/native-ui-candidate-proof.json", "legacy-operator-state"),
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
@@ -580,7 +584,7 @@ trap 'on_signal SIGINT 130' INT
 trap 'on_signal SIGTERM 143' TERM
 
 phase() {
-  local name="$1" phase_status previous_phase="$CURRENT_PHASE"
+  local name="$1" phase_status previous_phase="$CURRENT_PHASE" phase_started="$SECONDS"
   shift
   CURRENT_PHASE="$name"
   echo "==> upgrade-survivor:$name" >&3
@@ -588,6 +592,8 @@ phase() {
   "$@"
   phase_status=$?
   [ "$phase_status" -eq 0 ] || return "$phase_status"
+  # Timed-out containers lose phases.jsonl; the streamed log keeps the budget breakdown.
+  echo "==> upgrade-survivor:$name passed $((SECONDS - phase_started))s (total ${SECONDS}s)" >&3
   json_event "$name" passed
   CURRENT_PHASE="$previous_phase"
 }
@@ -820,6 +826,10 @@ NODE
     registry_args+=("openclaw" "$candidate_version" "$candidate_tarball")
   fi
 
+  if native_plugin_ui_upgrade_enabled; then
+    registry_args+=("openclaw-survivor-native-ui" "1.0.0" "$ARTIFACT_ROOT/native-ui-fixture.tgz")
+  fi
+
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
     FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" \
@@ -944,7 +954,7 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback" "$RUNTIME_ROOT/webhooks-only-policy"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback" "$RUNTIME_ROOT/webhooks-only-policy" "$RUNTIME_ROOT/native-ui-fixture" "$RUNTIME_ROOT/native-ui-opt-out"
   rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
   mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
@@ -1078,6 +1088,7 @@ seed_legacy_operator_gateway() {
   start_gateway
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator-gateway
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs legacy-operator-turn baseline
+  probe_native_plugin_ui_upgrade baseline
   stop_gateway
 }
 
@@ -1096,6 +1107,23 @@ assert_schema_outcome() {
     "$ARTIFACT_ROOT/schema-before.json" "$update_exit_code" "$installed_version" "$update_outcome" \
     "$ARTIFACT_ROOT/schema-after.json"
 }
+
+observe_deferred_schema_doctor() (
+  local observed doctor_status=0
+  umask 077
+  observed="$(node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs doctor-before \
+    "$ARTIFACT_ROOT/schema-before.json" "$ARTIFACT_ROOT/deferred-schema-private.json")" || return "$?"
+  if [ "$observed" = "observed" ]; then
+    # Informational findings intentionally exit 1; the complete JSON owns acceptance.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --lint \
+      --only core/doctor/database-engine --severity-min info --json \
+      >"$ARTIFACT_ROOT/deferred-schema-doctor-private.json" \
+      2>"$ARTIFACT_ROOT/deferred-schema-doctor-private.err" || doctor_status=$?
+  fi
+  node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs doctor-after \
+    "$ARTIFACT_ROOT/deferred-schema-private.json" "$doctor_status" \
+    "$ARTIFACT_ROOT/deferred-schema-doctor-private.json" "$ARTIFACT_ROOT/deferred-schema-doctor.json"
+)
 
 start_formerly_bundled_doctor() {
   echo "==> upgrade-survivor:formerly-bundled-doctor" >&3
@@ -1661,6 +1689,9 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   update_exit_code="$update_status"
+  node -e 'const steps = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).steps ?? [];
+    console.log(`update steps: ${steps.map((s) => `${s.name}=${Math.round(s.durationMs / 1000)}s`).join(", ")}`);' \
+    "$update_json" >&3 2>/dev/null || true
   # A nonzero command never runs the JSON assertion and must not be labeled as one.
   if [ "$after_repair" = "1" ] && [ "$update_status" -eq 0 ]; then
     CURRENT_PHASE="recovery-update-result-assertion"
@@ -2417,6 +2448,29 @@ phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "session-share" ]; then
+  require_isolated_manual_baseline openclaw@2026.10.7
+  phase configure-sharing-baseline node scripts/e2e/lib/upgrade-survivor/session-share.mjs configure "$(package_root)"
+  phase prepare-sharing-baseline run_doctor
+  phase start-sharing-baseline start_gateway
+  phase seed-sharing-baseline node scripts/e2e/lib/upgrade-survivor/session-share.mjs seed "$(package_root)"
+  phase stop-sharing-baseline stop_gateway
+  phase resolve-sharing-candidate resolve_candidate_version
+  phase sharing-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
+  phase update-sharing-candidate update_candidate
+  if [ "$update_outcome" != "success" ] || [ "$update_repair_required" != "0" ]; then
+    echo "Session sharing upgrade requires successful native migration without manual repair." >&2
+    exit 1
+  fi
+  phase sharing-installed-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs installed "$(package_root)" "$CANDIDATE_SPEC"
+  # Read the updater's result before Gateway startup or a standalone Doctor can repair it.
+  phase inspect-sharing-first-hop node scripts/e2e/lib/upgrade-survivor/session-share.mjs inspect "$(package_root)"
+  phase start-sharing-candidate start_gateway
+  phase assert-sharing-candidate node scripts/e2e/lib/upgrade-survivor/session-share.mjs candidate "$(package_root)"
+  run_completed="1"
+  echo "Session sharing survivor passed: native update preserved published group-only settings, session identities, transcripts, and paired-node selection."
+  exit 0
+fi
 if [ "$SCENARIO" = "package-publication-recovery" ] || [ "$SCENARIO" = "package-verification-recovery" ] || [ "$SCENARIO" = "package-stranded-first-hop" ]; then
   source scripts/e2e/lib/upgrade-survivor/package-activation-recovery.sh
   run_package_activation_recovery_survivor
@@ -2721,8 +2775,10 @@ phase prepare-update-restart-probe prepare_update_restart_probe
 phase bootstrap-mobile-pairing bootstrap_mobile_pairing
 phase seed-state seed_state
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase pack-native-plugin-ui-fixture pack_native_plugin_ui_fixture
   phase configure-baseline-plugin-registry configure_plugin_registry baseline
   phase install-companion-plugin install_companion_plugins
+  phase prepare-native-plugin-ui-upgrade prepare_native_plugin_ui_upgrade
   phase seed-legacy-operator-gateway seed_legacy_operator_gateway
   if [ "$native_assignment_enabled" = "1" ]; then
     phase configure-native-assignment-fixture start_native_assignment_fixture
@@ -2800,7 +2856,21 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase seed-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     seed-legacy-operator-pending-delivery
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase seed-legacy-doctor-repairs node scripts/e2e/lib/upgrade-survivor/legacy-operator-doctor-repairs.mjs seed
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] && [ "$baseline_version" = "2026.9.2" ]; then
+  if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ]; then
+    # Observe the shipped unfenced updater's natural header before any candidate probe.
+    phase observe-deferred-schema-doctor observe_deferred_schema_doctor
+  else
+    echo "Skipping deferred-schema Doctor witness: a selected tarball source is required." >&3
+  fi
+fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-legacy-doctor-repairs node scripts/e2e/lib/upgrade-survivor/legacy-operator-doctor-repairs.mjs assert
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase assert-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-legacy-operator-pending-delivery "$UPDATE_JSON" "$UPDATE_ERR"
@@ -2901,6 +2971,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-agent-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     legacy-operator-turn candidate
   phase legacy-operator-plugin assert_prepublish_plugin_install
+  phase native-plugin-ui-upgrade probe_native_plugin_ui_upgrade candidate
   if [ "$native_assignment_enabled" = "1" ]; then
     phase verify-native-assignment-recovery node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs live "$candidate_version"
   fi
@@ -2970,6 +3041,9 @@ if [ "$LIVE_ENABLED" = "1" ]; then
 fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase verify-backup-rollback verify_backup_rollback
+  if native_plugin_ui_upgrade_enabled; then
+    phase verify-native-plugin-ui-opt-out native_plugin_ui_opt_out verify
+  fi
   if [ "$baseline_version" = "2026.9.2" ]; then
     phase verify-sole-plugin-policy legacy_operator_plugin_policy verify
   fi

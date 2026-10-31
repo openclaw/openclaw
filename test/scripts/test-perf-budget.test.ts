@@ -114,9 +114,6 @@ it.each([
     { testResults: [{ name: "missing-timing" }] },
     "Vitest JSON report contained no timed file results",
   ],
-  ["{", "failed to read Vitest JSON report"],
 ] as const)("rejects reports without timed file evidence: %j", (payload, message) => {
-  const reportPath = path.join(tempDirs.make("perf-report-"), "report.json");
-  fs.writeFileSync(reportPath, typeof payload === "string" ? payload : JSON.stringify(payload));
-  expect(() => testing.collectPerfReportStats(reportPath)).toThrow(message);
+  expect(() => testing.collectPerfReportStats(payload)).toThrow(message);
 });

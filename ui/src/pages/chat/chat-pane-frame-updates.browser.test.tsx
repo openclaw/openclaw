@@ -2,13 +2,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import {
-  createSessionCapabilityFixture,
   createTestChatPane,
   connectPaneTestView,
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 // mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
 vi.mock("./chat-pane-layout-view.tsx", async (importOriginal) => {

@@ -1,6 +1,6 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { collectChatOutboxes } from "./chat-outbox-scopes.ts";
 import type { ChatHost } from "./chat-send-contract.ts";

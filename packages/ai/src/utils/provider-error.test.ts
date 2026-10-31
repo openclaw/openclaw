@@ -192,7 +192,6 @@ describe("projectProviderError", () => {
         },
       });
     }
-    expect(() => projectProviderError(error)).not.toThrow();
     expect(projectProviderError(error).errorMessage).toContain("connection failed");
   });
   it("never throws when a proxy revokes itself after descriptor collection", () => {

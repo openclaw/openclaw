@@ -98,6 +98,16 @@ function requireHookError(response: HookResponse): { code?: unknown; message?: u
   return error;
 }
 
+function actionClient(scopes: string[]) {
+  return {
+    connId: "test-client",
+    scopes,
+    allowsAgent: expect.any(Function),
+    isSharedGateway: expect.any(Function),
+    assertCurrent: expect.any(Function),
+  };
+}
+
 function expectObservedEvent(
   observed: unknown[],
   index: number,
@@ -519,13 +529,7 @@ describe("plugin session actions", () => {
         expect(handler).toHaveBeenCalledWith({
           pluginId,
           actionId,
-          client: {
-            connId: "test-client",
-            scopes,
-            allowsAgent: expect.any(Function),
-            isSharedGateway: expect.any(Function),
-            assertCurrent: expect.any(Function),
-          },
+          client: actionClient(scopes),
         });
       }
     });
@@ -552,13 +556,7 @@ describe("plugin session actions", () => {
         actionId: "approve",
         sessionKey: MAIN_SESSION_KEY,
         agentId: "main",
-        client: {
-          connId: "test-client",
-          scopes: [APPROVALS_SCOPE],
-          allowsAgent: expect.any(Function),
-          isSharedGateway: expect.any(Function),
-          assertCurrent: expect.any(Function),
-        },
+        client: actionClient([APPROVALS_SCOPE]),
       });
       const blankPluginId = await callPluginSessionActionForTest(
         {

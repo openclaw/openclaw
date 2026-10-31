@@ -10,6 +10,7 @@ import {
   testing as cliBackendsTesting,
 } from "./cli-backends.test-support.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -359,6 +360,43 @@ it.each(["configured", "literal"] as const)(
   },
 );
 
+it.each([true, false])(
+  "selects an opt-in harness only when supported with a host default (%s)",
+  async (supported) => {
+    const cfg: OpenClawConfig = {
+      ...custom,
+      plugins: { entries: { copilot: { enabled: true } } },
+      agents: {
+        defaults: { models: { "fixture/model": { agentRuntime: { id: "openclaw" } } } },
+      },
+    };
+    const registry = harnessRegistry("copilot", {
+      supports: ({ requestedRuntime }) => ({
+        supported: supported && requestedRuntime === "copilot",
+      }),
+    });
+    published.owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      pluginRegistry: registry,
+    });
+    const result = await prepareModelSelectionRuntime({
+      ...request,
+      cfg,
+      catalog: published.owner.modelCatalog.entries,
+      rawRuntime: "copilot",
+      hydrateThinkingCatalog: false,
+    });
+    if (!supported) {
+      expect(result).toMatchObject({ status: "rejected", reason: "invalid-runtime" });
+      return;
+    }
+    expect(result).toMatchObject({
+      status: "ready",
+      runtime: { kind: "set", runtime: "copilot" },
+      harness: { id: "copilot" },
+    });
+  },
+);
+
 it("does not let a retained host pin bypass a forced unavailable native runtime", async () => {
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
   vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
@@ -397,6 +435,61 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   current = false;
   expect(choice.validate()).toContain("not available");
 });
+
+it.each(["implicit", "configured"] as const)(
+  "admits a %s native-only model for spawn like the turn path",
+  async (routing) => {
+    // Only the native runtime lists this model; no API row can materialize it.
+    const entry: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "native-only",
+      name: "Native only",
+      reasoning: true,
+      nativeRuntime: "native-test",
+    };
+    const cfg: OpenClawConfig =
+      routing === "configured"
+        ? {
+            agents: {
+              defaults: {
+                models: { "fixture/native-only": { agentRuntime: { id: "native-test" } } },
+              },
+            },
+          }
+        : {};
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "native-test",
+      source: "fixture",
+      harness: {
+        id: "native-test",
+        label: "Native test",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        readModelCatalogReadiness: () => ({ accountType: "oauth" }),
+        runAttempt: vi.fn(),
+      },
+    });
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [entry], routeVariants: [entry] },
+    });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    expect(
+      await prepareModelChoice({
+        cfg,
+        agentId: "main",
+        raw: "fixture/native-only",
+        source: "override",
+      }),
+    ).toMatchObject({
+      kind: "resolved",
+      ref: { provider: "fixture", model: "native-only" },
+      model: { provider: "fixture", id: "native-only" },
+    });
+  },
+);
 
 it("rejects a stale native observation without renewing it", async () => {
   // This choice also runs inside config write locks; native discovery there needs its own decision.

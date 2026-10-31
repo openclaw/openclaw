@@ -5,7 +5,11 @@ import {
 } from "./claw-package-lifecycle-lease-key.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
-import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import {
+  withOpenClawStateLeaseAsync,
+  type OpenClawStateAsyncLeaseContext,
+} from "./openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 export type ClawPackageLifecycleLeaseIdentity = {
   scope: typeof CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE;
@@ -16,6 +20,7 @@ export type ClawPackageLifecycleLeaseIdentity = {
 export type ClawPackageLifecycleLease = {
   identity: ClawPackageLifecycleLeaseIdentity;
   assertCurrent: () => void;
+  assertOwned: () => Promise<void>;
   release: () => Promise<void> | void;
 };
 
@@ -40,7 +45,16 @@ export async function acquireClawPackageLifecycleLease(
           if (!active) {
             throw new Error("Package lifecycle lease has been released.");
           }
-          lease.assertOwned();
+          lease.assertCurrent();
+        },
+        assertOwned: async () => {
+          if (!active) {
+            throw new Error("Package lifecycle lease has been released.");
+          }
+          await lease.assertOwned();
+          if (!active) {
+            throw new Error("Package lifecycle lease has been released.");
+          }
         },
         release: async () => {
           if (active) {
@@ -72,22 +86,26 @@ export async function acquireClawPackageLifecycleLease(
 export function withClawPackageLifecycleLease<T>(
   artifact: ClawPackageLifecycleArtifact,
   operation: (
-    lease: OpenClawStateLeaseContext,
+    lease: OpenClawStateAsyncLeaseContext,
     identity: ClawPackageLifecycleLeaseIdentity,
   ) => Promise<T>,
   options: OpenClawStateDatabaseOptions & { signal?: AbortSignal } = {},
 ): Promise<T> {
-  return withOpenClawStateLease(
+  const context = captureOpenClawStateWorkerContext({
+    env: options.env,
+    path: options.database?.path ?? options.path,
+  });
+  return withOpenClawStateLeaseAsync(
     {
       scope: CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
       key: clawPackageLifecycleLeaseKey(artifact),
-      database: { scope: "shared", options },
       leaseMs: 5 * 60_000,
       waitMs: 0,
       signal: options.signal,
       leaseLabel: "Claw package lifecycle",
       operationLabel: "claw.package.lifecycle",
     },
+    context,
     (lease, identity) => {
       return operation(lease, {
         scope: CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,

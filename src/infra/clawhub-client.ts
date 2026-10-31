@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sleepWithAbort } from "./backoff.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
 import { isErrno } from "./errno.js";
@@ -28,6 +29,7 @@ export type ClawHubFetchOptions = {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export type ClawHubRequestParams = ClawHubFetchOptions & {
@@ -186,6 +188,7 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
 type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
 
 async function requestClawHub(params: ClawHubRequestParams) {
+  params.signal?.throwIfAborted();
   if (params.json !== undefined && params.form !== undefined) {
     throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
   }
@@ -229,6 +232,7 @@ async function requestClawHub(params: ClawHubRequestParams) {
     init.body = params.form;
   }
   const request = async () => {
+    params.signal?.throwIfAborted();
     const controller = new AbortController();
     // Fetch rejects with the abort reason; preserve timeout classification for read retries.
     const timeoutError = Object.assign(
@@ -247,7 +251,9 @@ async function requestClawHub(params: ClawHubRequestParams) {
     try {
       const response = await fetch(url, {
         ...init,
-        signal: controller.signal,
+        signal: params.signal
+          ? AbortSignal.any([controller.signal, params.signal])
+          : controller.signal,
       });
       return { response, url, hasToken: Boolean(token), releaseDeadline };
     } catch (error) {
@@ -262,6 +268,7 @@ async function requestClawHub(params: ClawHubRequestParams) {
     return await request();
   }
   return await retryClawHubRead(request, {
+    sleep: params.signal ? (ms) => sleepWithAbort(ms, params.signal) : undefined,
     disposeRetry: async ({ response, releaseDeadline }) => {
       releaseDeadline();
       await cancelUnreadResponseBody(response);

@@ -21,35 +21,30 @@ function storePendingUploadForTest(
   return id;
 }
 
-function requirePendingUpload(id: string) {
-  const upload = getPendingUpload(id);
-  if (!upload) {
-    throw new Error(`expected pending upload ${id}`);
-  }
-  return upload;
-}
-
 describe("pending-uploads", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
+  beforeEach(() => vi.useFakeTimers());
 
   afterEach(() => {
     for (const id of createdUploadIds) {
       removePendingUpload(id);
     }
     createdUploadIds.clear();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
   describe("storePendingUpload", () => {
-    it("auto-removes entry after TTL expires", () => {
-      const id = storePendingUploadForTest();
-
-      expect(requirePendingUpload(id).filename).toBe("file.txt");
-      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-      expect(getPendingUpload(id)).toBeUndefined();
-    });
+    it.each([0, -3_600_000, 3_600_000])(
+      "expires normally despite a %dms wall-clock step",
+      (step) => {
+        const createdAt = Date.now();
+        const id = storePendingUploadForTest();
+        vi.setSystemTime(createdAt + step);
+        expect(getPendingUpload(id)).toMatchObject({ filename: "file.txt", createdAt });
+        vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+        expect(getPendingUpload(id)).toBeUndefined();
+      },
+    );
   });
 
   describe("removePendingUpload", () => {
@@ -83,8 +78,8 @@ describe("pending-uploads", () => {
     it("returns undefined when entry is past TTL but timer has not yet fired", () => {
       const id = storePendingUploadForTest();
 
-      // Manually advance time without firing timers to simulate stale entry
-      vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1);
+      const base = performance.now();
+      vi.spyOn(performance, "now").mockReturnValue(base + 5 * 60 * 1000 + 1);
       expect(getPendingUpload(id)).toBeUndefined();
     });
   });

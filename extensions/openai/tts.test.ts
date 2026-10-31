@@ -11,7 +11,8 @@ import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: async ({
     url,
     init,
@@ -22,7 +23,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
     response: await globalThis.fetch(url, init),
     release: vi.fn(async () => {}),
   }),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 const speech = buildOpenAISpeechProvider();

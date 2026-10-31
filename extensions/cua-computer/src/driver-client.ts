@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeMethodBinder } from "openclaw/plugin-sdk/lazy-runtime";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
@@ -324,6 +325,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
         return this.runtime;
       })
       .catch((error: unknown) => {
+        materializeErrorStack(error);
         this.loadFailure = error;
         this.hasLoadFailure = true;
         throw error;

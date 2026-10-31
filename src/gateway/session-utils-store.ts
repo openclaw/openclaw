@@ -7,6 +7,7 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentEntries,
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -18,7 +19,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveSandboxRuntimeSettings } from "../agents/sandbox/config.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
@@ -428,12 +429,14 @@ export async function listAgentsForGateway(
   );
   const agents = roster.map((entry) => {
     const { id } = entry;
-    const execDefaults = resolveExecDefaults({ cfg, agentId: id, execApprovals });
     // This label must never overstate permissiveness. When sandbox policy can vary
     // by session, the effective policy is unknowable at agent scope: omit the label.
     const defaultPermissionMode =
-      resolveSandboxConfigForAgent(cfg, id).mode === "off"
-        ? resolvedPermissionLabel(execDefaults)
+      resolveSandboxRuntimeSettings(
+        cfg.agents?.defaults?.sandbox,
+        resolveAgentConfig(cfg, id)?.sandbox,
+      ).mode === "off"
+        ? resolvedPermissionLabel(resolveExecDefaults({ cfg, agentId: id, execApprovals }))
         : undefined;
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     const model = resolveGatewayAgentModel(cfg, id, resolvedModel);

@@ -56,8 +56,6 @@ export function createTestPlugin(params?: {
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
   isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
   isLinked?: ChannelPlugin<TestAccount>["config"]["isLinked"];
-  disabledReason?: ChannelPlugin<TestAccount>["config"]["disabledReason"];
-  unconfiguredReason?: ChannelPlugin<TestAccount>["config"]["unconfiguredReason"];
   unlinkedReason?: ChannelPlugin<TestAccount>["config"]["unlinkedReason"];
 }): ChannelPlugin<TestAccount, unknown, unknown, 2> {
   const id = params?.id ?? "discord";
@@ -68,8 +66,6 @@ export function createTestPlugin(params?: {
     isEnabled: (resolved) => resolved.enabled !== false,
     ...(params?.isConfigured ? { isConfigured: params.isConfigured } : {}),
     ...(params?.isLinked ? { isLinked: params.isLinked } : {}),
-    ...(params?.disabledReason ? { disabledReason: params.disabledReason } : {}),
-    ...(params?.unconfiguredReason ? { unconfiguredReason: params.unconfiguredReason } : {}),
     ...(params?.unlinkedReason ? { unlinkedReason: params.unlinkedReason } : {}),
   };
   if (params?.includeDescribeAccount !== false) {

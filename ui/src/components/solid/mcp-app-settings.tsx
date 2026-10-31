@@ -5,14 +5,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 
 registerMcpAppEnglish();
 
-export type McpAppSettingsView = {
+export function McpAppSettingsForm(props: {
   settings: McpAppSettings;
   busy: boolean;
   onSave: (changes: McpAppSettings["values"]) => void;
   onTool: (name: string) => void;
-};
-
-export function McpAppSettingsForm(props: McpAppSettingsView) {
+}) {
   // Accepted settings replace the local draft; busy/notice updates preserve edits.
   const [values, setValues] = createStore(() => ({ ...props.settings.values }), {});
   const changes = createMemo(() =>

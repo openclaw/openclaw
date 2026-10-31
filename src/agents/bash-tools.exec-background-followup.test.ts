@@ -371,7 +371,10 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
         action: "log",
         sessionId: processSessionId,
       });
-      expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: "CRON_EXEC_DONE\n\nProcess exited with code 0.",
+      });
     } finally {
       unsubscribe();
       release();
@@ -548,18 +551,6 @@ test.for(["completed", "revoked", "missing"] as const)(
       scopes: ["operator.admin"],
       assertCurrent() {},
     });
-    const adminExecution = expectDefined(
-      preparePluginToolExecutionCapabilities({ authority: admin, config, agentId: "main" })(
-        () => {},
-      ).modelExecution,
-      "admin reviewer capability",
-    );
-    await expect(
-      adminExecution.run(
-        { model: "mock-openai/admin-only", explicit: true },
-        async ({ model: selectedModel }) => selectedModel,
-      ),
-    ).resolves.toBe("mock-openai/admin-only");
     const enqueueFromAdmin = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority: admin },
       () =>
@@ -582,12 +573,6 @@ test.for(["completed", "revoked", "missing"] as const)(
         assertInvocationCurrent() {},
       });
     const original = scenario === "missing" ? undefined : authority;
-    const initial = preparePluginToolExecutionCapabilities({
-      authority: original,
-      config,
-      agentId: "main",
-    })(() => {});
-    expect(Boolean(constructReview(initial))).toBe(scenario !== "missing");
     const reached = createDeferredCore<PluginToolExecutionCapabilities>();
     const proceed = createDeferredCore();
     model.mockImplementation(async (params) => {

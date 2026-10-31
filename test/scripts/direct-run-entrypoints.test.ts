@@ -28,6 +28,7 @@ import {
   preparedScriptWrapperEnv,
   testRunnerFixtureEnv,
 } from "./prepared-script-wrapper.test-support.js";
+import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 
 const installedModulesDir = path.dirname(
   path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
@@ -64,21 +65,9 @@ async function implementationReadyBeforeSettlement(
   pidPath: string,
   operation: PromiseLike<unknown>,
 ): Promise<number> {
-  // The PID record precedes the receipt; command output and exit use different pipes.
+  // Require the published PID record before reading it for termination.
   const recorded = () => existsSync(pidPath) && readFileSync(pidPath, "utf8").trim() !== "";
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!recorded()) {
-        throw new Error(`timeout waiting for pid in ${pidPath}`);
-      }
-    },
-    (error: unknown) => {
-      if (!recorded()) {
-        throw error;
-      }
-    },
-  );
-  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
+  await fixtureReadyBeforeSettlement(receipts, pidPath, operation, recorded);
   return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 }
 

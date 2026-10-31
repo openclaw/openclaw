@@ -52,6 +52,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { CLI_NAME } from "../cli-name.js";
+import { createUpdateDoctorProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
   readPackageName,
@@ -67,6 +68,7 @@ import {
   captureUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { observeUpdateParentDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
 import { createPackageUpdateDoctorCompletion } from "./update-command-doctor-completion.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
@@ -126,7 +128,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   await createUpdateConfigSnapshot(doctorEnv);
   const candidateHostVersion = await readPackageVersion(params.root);
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
-  const sectionTiming = createUpdateDoctorSectionTiming();
+  const sectionTiming = createUpdateDoctorSectionTiming(process.env, createUpdateDoctorProgress());
   // Service ownership stays with the finalizer while the retained package
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
@@ -232,6 +234,13 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
   try {
+    if (context?.databaseBackup) {
+      await observeUpdateParentDatabaseWrites(context.databaseBackup, {
+        env: doctorEnv,
+        root: params.root,
+        assertCurrent,
+      });
+    }
     outcome = {
       step: context
         ? await withUpdateDoctorChild(
@@ -248,7 +257,9 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
                 fullIntegrityCheck: params.fullIntegrityCheck,
-                databaseGenerations: context.databaseBackup?.sourceGenerations,
+                databaseGenerations:
+                  context.databaseBackup?.migration?.to ??
+                  context.databaseBackup?.sourceGenerations,
                 databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,
                 get serviceInspectionDeadlineAtMs() {

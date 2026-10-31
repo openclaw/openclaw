@@ -41,7 +41,7 @@ export function SidebarPages(props: { host: AppSidebarRenderHost }): JSX.Element
     const result = SIDEBAR_NAV_ROUTES.filter((route) =>
       props.host.sidebarMenus.isRouteEnabled(route),
     )
-      .toSorted((left, right) => titleForRoute(left).localeCompare(titleForRoute(right)))
+      .toSorted((left, right) => titleForRoute(left, t).localeCompare(titleForRoute(right, t)))
       .map((route) => serializeSidebarEntry({ type: "route", route }));
     for (const key of new Set([
       ...zone().pluginTabs.keys(),

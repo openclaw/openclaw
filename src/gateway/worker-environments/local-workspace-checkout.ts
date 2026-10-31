@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,10 +7,23 @@ import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
+
+export function localWorkspaceProjectionPath(owner: LocalWorkspaceOwner) {
+  if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
+    throw new Error("Invalid managed worktree identity");
+  }
+  return path.join(
+    realpathSync(resolveStateDir(owner.env)),
+    "worktree-projections",
+    owner.worktree.id,
+    "workspace",
+  );
+}
 
 /** Build independent, source-only Git metadata before any guest can write this checkout. */
 export async function prepareLocalWorkspaceCheckout(params: {

@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import * as policy from "../plugins/provider-policy-surface.js";
 import * as artifacts from "../plugins/public-surface-loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -72,15 +73,9 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
           baseUrl: "https://provider.invalid/v1",
           api: "openai-completions",
           apiKey: "fixture-key",
-          models: modelIds.map((id) => ({
-            id,
-            name: id,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 32000,
-            maxTokens: 1024,
-          })),
+          models: modelIds.map((id) =>
+            buildCatalogModel(id, { contextWindow: 32000, maxTokens: 1024 }),
+          ),
         },
       },
     },

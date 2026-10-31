@@ -6,8 +6,6 @@ export type ReplyToolAuthorityInput = {
   originatingChannel?: FollowupRun["originatingChannel"];
   toolsAllow?: string[];
   disableTools?: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   run: Partial<
     Pick<
       FollowupRun["run"],
@@ -52,6 +50,8 @@ export type ReplyToolAuthorityInput = {
       | "gatewayUiCommandTarget"
       | "toolBindings"
     >
-  > &
-    Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
+  > & { operatorProfileId?: string } & Pick<
+      FollowupRun["run"],
+      "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model"
+    >;
 };

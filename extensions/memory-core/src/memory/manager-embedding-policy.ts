@@ -4,8 +4,10 @@ import {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   formatEmbeddingModelInput,
+  resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   asOptionalRecord,
@@ -16,17 +18,36 @@ import type { EmbeddingProvider } from "./embeddings.js";
 export function embedMemoryQuery(
   provider: EmbeddingProvider,
   text: string,
-  instruction: string | undefined,
+  settings: Pick<ResolvedMemorySearchConfig, "queryInstruction" | "inputFormat">,
   options: EmbeddingProviderCallOptions,
 ): Promise<number[]> {
+  const instruction = settings.queryInstruction || settings.inputFormat?.query;
   return provider.embed(
-    instruction
+    instruction !== undefined
       ? `${instruction}${text}`
       : formatEmbeddingModelInput(text, provider.model, "query"),
     {
       ...options,
       inputType: "query",
-      ...(instruction ? { queryInstructionApplied: true } : {}),
+      ...(instruction !== undefined ? { queryInstructionApplied: true } : {}),
+    },
+  );
+}
+
+export function embedMemoryDocuments(
+  provider: EmbeddingProvider,
+  inputs: Array<string | EmbeddingInput>,
+  inputFormat: ResolvedMemorySearchConfig["inputFormat"],
+  options: EmbeddingProviderCallOptions,
+): Promise<number[][]> {
+  return provider.embedBatch(
+    inputs.map((input) =>
+      formatEmbeddingModelInput(input, provider.model, "document", inputFormat),
+    ),
+    {
+      ...options,
+      inputType: "document",
+      ...(inputFormat ? { documentFormatApplied: true } : {}),
     },
   );
 }
@@ -59,6 +80,30 @@ type MemoryEmbeddingChunk = {
   text: string;
   embeddingInput?: EmbeddingInput;
 };
+
+export function formatMemoryEmbeddingChunks<T extends MemoryEmbeddingChunk>(
+  chunks: T[],
+  model: string,
+  inputFormat: ResolvedMemorySearchConfig["inputFormat"],
+): T[] {
+  if (!inputFormat && !resolveEmbeddingInputFormatVersion(model)) {
+    return chunks;
+  }
+  return chunks.map((chunk) => ({
+    ...chunk,
+    ...formatEmbeddingModelInput(chunk, model, "document", inputFormat),
+    ...(chunk.embeddingInput
+      ? {
+          embeddingInput: formatEmbeddingModelInput(
+            chunk.embeddingInput,
+            model,
+            "document",
+            inputFormat,
+          ),
+        }
+      : {}),
+  }));
+}
 
 export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   chunks: T[],
@@ -151,8 +196,14 @@ function isInvalidEmbeddingResponse(error: unknown): boolean {
 }
 
 function embeddingRetryMessage(error: unknown): string {
-  const message = asOptionalRecord(error)?.embeddingErrorMessage;
-  return typeof message === "string" ? message : formatErrorMessage(error);
+  const fields = asOptionalRecord(error);
+  const message = fields?.embeddingErrorMessage;
+  // Wrapped provider errors can put the item cap beyond the message preview.
+  // The bounded raw-body preview may still contain it.
+  const errorBody = typeof fields?.errorBody === "string" ? fields.errorBody : undefined;
+  return [typeof message === "string" ? message : formatErrorMessage(error), errorBody]
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
 }
 
 function resolveMemoryEmbeddingRetryBudget(

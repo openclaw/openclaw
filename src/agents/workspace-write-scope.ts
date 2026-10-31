@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import asyncFs from "node:fs/promises";
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -9,7 +10,16 @@ function canonicalPath(filePath: string): string {
   return path.resolve(existingPath, ...unresolvedSegments);
 }
 
-function findRepository(start: string) {
+type WorkspaceReads<T> = Generator<string, T, string>;
+type Repository = {
+  directory: string;
+  gitFile: string;
+  gitDir: string;
+  commonDir: string;
+  linked: boolean;
+};
+
+function* findRepository(start: string): WorkspaceReads<Repository | undefined> {
   for (let directory = start; ; directory = path.dirname(directory)) {
     const gitFile = path.join(directory, ".git");
     let stat: fs.Stats | undefined;
@@ -34,14 +44,17 @@ function findRepository(start: string) {
       if (!stat.isFile()) {
         return undefined;
       }
-      const pointer = /^gitdir: (.+)$/.exec(fs.readFileSync(gitFile, "utf8").trim())?.[1];
+      const gitContents = yield gitFile;
+      const pointer = /^gitdir: (.+)$/.exec(gitContents.trim())?.[1];
       if (!pointer) {
         return undefined;
       }
-      const gitDir = fs.realpathSync(path.resolve(directory, pointer));
-      const commonDir = fs.realpathSync(
-        path.resolve(gitDir, fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim()),
-      );
+      const gitDirPath = path.resolve(directory, pointer);
+      const gitDir = fs.realpathSync(gitDirPath);
+      const commonFile = path.join(gitDir, "commondir");
+      const commonContents = yield commonFile;
+      const commonPath = path.resolve(gitDir, commonContents.trim());
+      const commonDir = fs.realpathSync(commonPath);
       return { directory, gitFile, gitDir, commonDir, linked: true };
     } catch {
       return undefined;
@@ -49,31 +62,29 @@ function findRepository(start: string) {
   }
 }
 
-function isRegisteredWorktree(repository: NonNullable<ReturnType<typeof findRepository>>): boolean {
+function* isRegisteredWorktree(repository: Repository): WorkspaceReads<boolean> {
   if (path.dirname(repository.gitDir) !== path.join(repository.commonDir, "worktrees")) {
     return false;
   }
   try {
-    const registeredGitFile = fs.realpathSync(
-      path.resolve(
-        repository.gitDir,
-        fs.readFileSync(path.join(repository.gitDir, "gitdir"), "utf8").trim(),
-      ),
-    );
-    return registeredGitFile === fs.realpathSync(repository.gitFile);
+    const backpointer = path.join(repository.gitDir, "gitdir");
+    const contents = yield backpointer;
+    const registeredPath = path.resolve(repository.gitDir, contents.trim());
+    const registeredGitFile = fs.realpathSync(registeredPath);
+    const gitFile = fs.realpathSync(repository.gitFile);
+    return registeredGitFile === gitFile;
   } catch {
     // Missing, stale, or forged registration never expands the admitted root.
     return false;
   }
 }
 
-/** Select a host boundary from current Git registration, never a startup snapshot. */
-export function resolveHostWorkspaceRoot(root: string, absolutePath: string): string {
+function* selectHostWorkspaceRoot(root: string, absolutePath: string): WorkspaceReads<string> {
   const resolvedRoot = path.resolve(root);
   const target = path.resolve(absolutePath);
   // Resolve parents without following the final entry: unlink may remove a symlink.
   const canonicalTarget = path.join(canonicalPath(path.dirname(target)), path.basename(target));
-  const repository = findRepository(canonicalPath(resolvedRoot));
+  const repository = yield* findRepository(canonicalPath(resolvedRoot));
   if (
     [target, canonicalTarget].some((entry) =>
       entry.split(path.sep).some((segment) => segment.toLowerCase() === ".git"),
@@ -87,17 +98,51 @@ export function resolveHostWorkspaceRoot(root: string, absolutePath: string): st
   if (
     isPathInside(resolvedRoot, target) ||
     !repository ||
-    (repository.linked && !isRegisteredWorktree(repository))
+    (repository.linked && !(yield* isRegisteredWorktree(repository)))
   ) {
     return resolvedRoot;
   }
-  const candidate = findRepository(canonicalTarget);
+  const candidate = yield* findRepository(canonicalTarget);
   if (
     !candidate?.linked ||
     candidate.commonDir !== repository.commonDir ||
-    !isRegisteredWorktree(candidate)
+    !(yield* isRegisteredWorktree(candidate))
   ) {
     return resolvedRoot;
   }
   return candidate.directory;
+}
+
+/** Mutation effects require current registration inside fs-safe's synchronous guard. */
+export function resolveHostWorkspaceRoot(root: string, absolutePath: string): string {
+  const reads = selectHostWorkspaceRoot(root, absolutePath);
+  let step = reads.next();
+  while (!step.done) {
+    let contents: string;
+    try {
+      contents = fs.readFileSync(step.value, "utf8");
+    } catch (error) {
+      step = reads.throw(error);
+      continue;
+    }
+    step = reads.next(contents);
+  }
+  return step.value;
+}
+
+/** Git contents are async here; stat, realpath and fs-safe prefix traversal remain sync. */
+export async function resolveHostRootAsync(root: string, absolutePath: string): Promise<string> {
+  const reads = selectHostWorkspaceRoot(root, absolutePath);
+  let step = reads.next();
+  while (!step.done) {
+    let contents: string;
+    try {
+      contents = await asyncFs.readFile(step.value, "utf8");
+    } catch (error) {
+      step = reads.throw(error);
+      continue;
+    }
+    step = reads.next(contents);
+  }
+  return step.value;
 }

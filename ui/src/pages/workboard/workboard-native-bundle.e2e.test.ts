@@ -72,11 +72,16 @@ suite.define(() => {
   it.each(["chromium", "webkit"] as const)(
     "loads the native bundle and preserves overlay focus and card identity in %s",
     async (engine) => {
-      const proof = createWorkboardProof(suite, "workboard-native", undefined, {
+      const proof = createWorkboardProof("workboard-native", {
         captureMode: engine,
       });
       for (const view of views) {
-        for (const theme of ["light", "dark"] as const) {
+        // Native behavior covers both layouts; visual proof keeps every theme/layout pair.
+        const themes =
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? (["light", "dark"] as const)
+            : ([view.name === "desktop" ? "light" : "dark"] as const);
+        for (const theme of themes) {
           const options = {
             colorScheme: theme,
             locale: "en-US",

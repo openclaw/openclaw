@@ -35,28 +35,6 @@ function summaryEntry(sessionKey: string): InternalSessionEntry {
       headline: "Finished",
       health: "done",
     },
-    restartRecoveryOperatorSource: {
-      version: 1,
-      ...summary,
-      sourceRunId: "synthetic-run",
-      snapshot: {
-        profileId: "synthetic-profile",
-        scopes: ["operator.read"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "synthetic-grant",
-          role: "operator",
-          authMethod: "token",
-        },
-        controlUiAdmin: false,
-        localOperator: true,
-        sourceIngress: "internal",
-      },
-    },
   };
 }
 
@@ -66,13 +44,6 @@ it.each(["matching", "stale", "legacy"] as const)(
     const sessionKey = "agent:main:synthetic-summary";
     const entry = summaryEntry(sessionKey);
     if (kind === "stale") {
-      Object.assign(entry.restartRecoveryOperatorSource!, {
-        sessionKey: "agent:other:previous",
-        sessionId: "previous-session",
-        lifecycleRevision: "previous-lifecycle",
-        sourceRunId: "previous-run",
-        agentId: "other",
-      });
       Object.assign(entry.observerDigest!, {
         sessionId: "previous-session",
         lifecycleRevision: "previous-lifecycle",
@@ -82,7 +53,6 @@ it.each(["matching", "stale", "legacy"] as const)(
       delete entry.observerDigest!.lifecycleRevision;
       delete entry.observerDigest!.runId;
       delete entry.observerDigest!.agentId;
-      delete entry.restartRecoveryOperatorSource!.lifecycleRevision;
     }
     const expected = structuredClone(entry);
     const readers = createSessionHistoryWorkerReaders(
@@ -151,16 +121,13 @@ it("retains one physical string for each equal summary identity after worker dec
       const row = target(target(holder, "rows"), 0);
       const entry = target(row, "entry");
       const digest = target(entry, "observerDigest");
-      const source = target(entry, "restartRecoveryOperatorSource");
-      for (const nested of [digest, source]) {
+      for (const nested of [digest]) {
         for (const field of ["sessionId", "lifecycleRevision"]) {
           assert.equal(target(nested, field), target(entry, field), field + " retained a duplicate string node");
         }
         assert.equal(target(nested, "sessionKey"), target(row, "sessionKey"));
       }
-      assert.equal(target(source, "sourceRunId"), target(entry, "lastRunId"));
       assert.equal(target(digest, "runId"), target(entry, "lastRunId"));
-      assert.equal(target(source, "agentId"), target(digest, "agentId"));
       console.log("shared summary identities");
     `,
     { imports: ["./scripts/tsx.mjs"], timeout: 30_000 },

@@ -17,8 +17,8 @@ const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
   export: "ChatClawHubCard",
 });
 
-// Chat and pending New Session messages share these boundaries. Empty media
-// collections must not load the renderers or the players they register.
+// Pending New Session images use this adapter; transcript images render with the row.
+// Empty collections keep deferred renderers and their players asleep.
 export function MessageImages(
   props: Parameters<typeof import("./chat-message-images-solid.tsx").MessageImages>[0],
 ) {

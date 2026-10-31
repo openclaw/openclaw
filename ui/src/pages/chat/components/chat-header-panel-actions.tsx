@@ -1,27 +1,32 @@
-import { createMemo, createUniqueId, Show } from "solid-js";
-import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import {
-  BOARD_SIZE_PRESETS,
-  type BoardWidgetPageMenu,
-} from "../../../components/board/board-widget-cell-options.ts";
-import { boardWidgetMenuEntries } from "../../../components/board/board-widget-menu.tsx";
+  createMemo,
+  createUniqueId,
+  Errored,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+  type Element,
+} from "solid-js";
+import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
   createMenuControls,
   Menu,
   type MenuControls,
   type MenuEntry,
+  type MenuItem,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { ClearCompanion, ExternalPanelLink } from "../chat-panel-header-actions.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
-  isSidebarSlotVisible,
-  openSlot,
   promoteSidebarPanel,
   setSidebarDock,
   setSidebarExpanded,
@@ -33,10 +38,17 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
-import { useChatQuickActionEntries, type ChatQuickAction } from "./chat-quick-action.tsx";
+import type { ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const DashboardContent = lazy(() => import("./chat-header-panel-menu-content.tsx"), {
+  export: "ChatDashboardMenuContent",
+});
+const LayoutContent = lazy(() => import("./chat-header-panel-menu-content.tsx"), {
+  export: "ChatPaneLayoutMenuContent",
+});
 
 export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
 
@@ -207,6 +219,95 @@ export function ChatPanelHeaderActions(
   );
 }
 
+type ChatPanelMenuHandlers = {
+  items: () => readonly MenuEntry[];
+  select: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
+};
+export type ChatPanelMenuContentProps = {
+  menuProps: ChatPaneLayoutMenuProps & { widgetMenu?: BoardWidgetPageMenu };
+  controls: MenuControls;
+  readMenu: () => MenuHandle | undefined;
+  onReady: (handlers: ChatPanelMenuHandlers | undefined) => void;
+  renderItems: (items: () => readonly MenuEntry[]) => Element;
+};
+
+/** Hand off initial keyboard focus only while the opening gesture still owns it. */
+function createPanelMenuFocusHandoff() {
+  let menu: MenuHandle | undefined;
+  let openingFocus: globalThis.Element | null | undefined;
+  let focusLast = false;
+  let stopKeyboard: (() => void) | undefined;
+  onSettled(() => () => stopKeyboard?.());
+  return {
+    read: () => menu,
+    bind(this: void, handle: MenuHandle) {
+      menu = handle;
+      stopKeyboard?.();
+      const trigger = handle.overlay.trigger;
+      stopKeyboard = trigger
+        ? listen(
+            trigger,
+            "keydown",
+            (event) => {
+              if (!handle.overlay.open) {
+                focusLast = event.key === "ArrowUp";
+              }
+            },
+            true,
+          )
+        : undefined;
+    },
+    beforeShow(this: void) {
+      openingFocus = menu?.overlay.surface.ownerDocument.activeElement;
+    },
+    openChange(this: void, open: boolean) {
+      if (!open) {
+        openingFocus = undefined;
+        focusLast = false;
+      }
+    },
+    focusReady(this: void) {
+      if (!menu?.overlay.open) {
+        return;
+      }
+      const active = menu.overlay.surface.ownerDocument.activeElement;
+      if (
+        active !== openingFocus &&
+        active !== menu.overlay.surface &&
+        active !== menu.overlay.surface.ownerDocument.body
+      ) {
+        return;
+      }
+      const last = focusLast ? menu.itemElements().at(-1) : undefined;
+      if (last) {
+        last.focus({ preventScroll: true });
+      } else {
+        menu.focusFirst();
+      }
+    },
+  };
+}
+
+function ChatPanelMenuBoundary(props: {
+  controls: MenuControls;
+  focusReady: () => void;
+  fallback: Element;
+  children: Element;
+}) {
+  return (
+    <Errored
+      fallback={(error, reset) => {
+        onSettled(props.focusReady);
+        return (
+          <LazyViewError error={error()} onRetry={reset} retryRef={props.controls.ref()} inline />
+        );
+      }}
+    >
+      <Loading fallback={props.fallback}>{props.children}</Loading>
+    </Errored>
+  );
+}
+
 /** External Dashboard controls reuse the layout and page-widget owners. */
 export function ChatDashboardMenu(
   props: ChatPaneLayoutMenuProps & {
@@ -214,163 +315,12 @@ export function ChatDashboardMenu(
   },
 ) {
   const id = createUniqueId();
-  let menu: MenuHandle | undefined;
-  const actions = createMemo((): ChatQuickAction[] => {
-    const layout = props.sidebarLayout;
-    const result: ChatQuickAction[] = [];
-    // The shared mobile host owns expansion without changing the retained desktop layout.
-    if (!props.mobile && layout && props.onLayoutChange) {
-      const main = sidebarMainPanel(layout);
-      const dashboard = layout.columns
-        .flatMap((column) => column.panels)
-        .find((panel) => panel.slot === "dashboard");
-      if (dashboard && layout.open && !layout.expanded) {
-        result.push({
-          id: "dashboard-swap",
-          label: t("chat.sidePanel.swap", {
-            main: t("chat.sidePanel.conversation"),
-            side: t("chat.sidePanel.dashboard"),
-          }),
-          icon: "arrowLeftRight",
-          onActivate: () => {
-            const next = ensureSidebarConversation(layout);
-            const target =
-              main?.slot === "dashboard"
-                ? next.columns
-                    .flatMap((column) => column.panels)
-                    .find((panel) => panel.slot === "conversation")
-                : dashboard;
-            if (target) {
-              props.onLayoutChange?.(
-                openSlot(
-                  promoteSidebarPanel(next, target.id),
-                  main?.slot === "dashboard" ? "dashboard" : "conversation",
-                ),
-                { dashboardPresentation: "personal" },
-              );
-            }
-          },
-        });
-      }
-      if (dashboard) {
-        result.push({
-          id: "dashboard-expand",
-          label: t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expandPanel", {
-            panel: t("chat.sidePanel.dashboard"),
-          }),
-          icon: layout.expanded ? "minimize" : "maximize",
-          onActivate: () =>
-            props.onLayoutChange?.(
-              main?.slot === "dashboard" || layout.expanded
-                ? setSidebarExpanded(layout, !layout.expanded)
-                : toggleSidebarPanelExpanded(layout, dashboard.id),
-              { dashboardPresentation: "personal" },
-            ),
-        });
-      }
-      if (!isSidebarSlotVisible(layout, "conversation")) {
-        result.push({
-          id: "dashboard-show-chat",
-          label: t("chat.sidePanel.showChat"),
-          icon: "messageSquare",
-          onActivate: () =>
-            props.onLayoutChange?.(openSlot(ensureSidebarConversation(layout), "conversation"), {
-              dashboardPresentation: "personal",
-            }),
-        });
-      }
-    }
-    for (const action of props.layoutMenuActions ?? []) {
-      if (action.id === "dashboard-default") {
-        result.push({ ...action, icon: "bookmark" });
-      }
-    }
-    return result;
-  });
-  const actionItems = useChatQuickActionEntries(actions);
-  const groupedActionItems = createMemo((): MenuEntry[] =>
-    actionItems().flatMap((entry): MenuEntry[] =>
-      entry.id !== "dashboard-default"
-        ? [entry]
-        : [
-            {
-              kind: "content",
-              id: "default-separator",
-              content: <div class="board-widget__menu-separator" role="separator" />,
-            },
-            entry.kind === "content"
-              ? {
-                  id: `${entry.id}-status`,
-                  label: actions().find((action) => action.id === entry.id)!.label,
-                  disabled: true,
-                  render: (attributes) => (
-                    <div {...attributes} class="chat-dashboard-menu__default-status">
-                      {entry.content}
-                      <Icon name="check" />
-                    </div>
-                  ),
-                }
-              : entry,
-          ],
-    ),
-  );
-  const widgetItems = createMemo((): MenuEntry[] => {
-    const page = props.widgetMenu;
-    if (!page?.canMutate) {
-      return [];
-    }
-    const entries = boardWidgetMenuEntries({ ...page, disabled: false });
-    const destinations = entries.filter((entry) => entry.id.startsWith("move:"));
-    const currentSize = Object.entries(BOARD_SIZE_PRESETS).find(
-      ([, size]) => size.w === page.widget.sizeW && size.h === page.widget.sizeH,
-    )?.[0];
-    // These are fresh menu projections; widget state and action IDs stay native.
-    for (const entry of entries) {
-      if (entry.kind === "content" || entry.kind === "group") {
-        continue;
-      }
-      if (entry.id.startsWith("resize:")) {
-        entry.class = [
-          "board-widget__preset",
-          { "is-current": entry.id === `resize:${currentSize}` },
-        ];
-      } else if (entry.id === "height:auto") {
-        entry.icon = <Icon name="arrowUpDown" />;
-      }
-    }
-    return [
-      {
-        kind: "content",
-        id: "page-separator",
-        content: <div class="board-widget__menu-separator" role="separator" />,
-      },
-      {
-        kind: "content",
-        id: "resize-heading",
-        content: <div class="board-widget__menu-heading">{t("chat.sidePanel.dashboardSize")}</div>,
-      },
-      {
-        kind: "group",
-        id: "page-sizes",
-        class: "chat-dashboard-menu__sizes",
-        items: entries.filter((entry) => entry.id.startsWith("resize:")),
-      },
-      ...entries.filter((entry) => entry.id === "height:auto"),
-      ...(destinations.length
-        ? [
-            {
-              id: "page-move",
-              label: t("board.widget.moveToTab"),
-              icon: <Icon name="panelsTopLeft" />,
-              children: destinations,
-            },
-          ]
-        : []),
-      ...entries.filter((entry) => entry.id === "separator" || entry.id === "remove"),
-    ];
-  });
+  const controls = createMenuControls();
+  const focus = createPanelMenuFocusHandoff();
+  let handlers: ChatPanelMenuHandlers | undefined;
   return (
     <Menu
+      controls={controls}
       lazy="while-open"
       id={`chat-dashboard-${id}`}
       label={t("chat.sidePanel.dashboardOptions")}
@@ -386,33 +336,40 @@ export function ChatDashboardMenu(
         </>
       }
       items={[
-        ...groupedActionItems(),
-        ...widgetItems(),
         {
-          kind: "content",
-          id: "page-granted-capabilities",
-          content: (
-            <Show when={props.widgetMenu}>
-              {(page) => <BoardGrantedCapabilities widget={page().widget} presentation="details" />}
-            </Show>
+          kind: "group",
+          id: "dashboard-content",
+          get items() {
+            return handlers?.items() ?? [];
+          },
+          render: (renderItems) => (
+            <ChatPanelMenuBoundary
+              controls={controls}
+              focusReady={focus.focusReady}
+              fallback={renderItems(() => [
+                { id: "loading", label: t("common.loading"), disabled: true },
+              ])}
+            >
+              <DashboardContent
+                menuProps={props}
+                controls={controls}
+                readMenu={focus.read}
+                onReady={(next) => {
+                  handlers = next;
+                  if (next) {
+                    onSettled(focus.focusReady);
+                  }
+                }}
+                renderItems={renderItems}
+              />
+            </ChatPanelMenuBoundary>
           ),
         },
       ]}
-      ref={(handle) => {
-        menu = handle;
-      }}
-      onSelect={(item, event) => {
-        event.preventDefault();
-        menu?.close();
-        const action = actions().find((candidate) => candidate.id === item.id);
-        if (action) {
-          if (action.kind !== "status" && !action.disabled) {
-            void action.onActivate();
-          }
-        } else {
-          props.widgetMenu?.onSelect(item.id);
-        }
-      }}
+      ref={focus.bind}
+      onBeforeShow={focus.beforeShow}
+      onOpenChange={focus.openChange}
+      onSelect={(item, event) => handlers?.select(item, event)}
     />
   );
 }
@@ -449,43 +406,10 @@ let nextLayoutId = 0;
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const id = `chat-pane-layout-${++nextLayoutId}`;
   const controls = createMenuControls();
-  let menu: MenuHandle | undefined;
+  const focus = createPanelMenuFocusHandoff();
   const model = createMemo(() => chatPaneLayoutModel(props));
-  const headerActions = createMemo(
-    () => <ChatPaneLayoutHeaderActions model={model()} controls={controls} />,
-    { lazy: true },
-  );
-  const primary = useChatQuickActionEntries(
-    () => (props.mobile ? model().panelActions : model().actions),
-    true,
-  );
-  const secondary = useChatQuickActionEntries(
-    () => (props.mobile ? model().actions : model().panelActions),
-    true,
-  );
-  const items = createMemo(
-    (): MenuEntry[] => {
-      return [
-        ...primary(),
-        ...(primary().length && secondary().length
-          ? [
-              {
-                kind: "content" as const,
-                id: "panel-actions",
-                content: <div class="session-menu__separator" role="separator" />,
-              },
-            ]
-          : []),
-        ...secondary(),
-        {
-          kind: "content",
-          id: "header-actions",
-          content: headerActions(),
-        },
-      ];
-    },
-    { lazy: true },
-  );
+  let handlers: ChatPanelMenuHandlers | undefined;
+
   return (
     <Show
       when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
@@ -509,18 +433,41 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
             <Show when={!props.mobile}>{t("chat.sessionHeader.layout")}</Show>
           </>
         }
-        items={items()}
-        ref={(handle) => {
-          menu = handle;
-        }}
-        onSelect={(item, event) => {
-          const action = model().allActions.find((candidate) => candidate.id === item.id);
-          if (action && action.kind !== "status" && !action.disabled) {
-            event.preventDefault();
-            menu?.close();
-            void action.onActivate();
-          }
-        }}
+        items={[
+          {
+            kind: "group",
+            id: "layout-content",
+            get items() {
+              return handlers?.items() ?? [];
+            },
+            render: (renderItems) => (
+              <ChatPanelMenuBoundary
+                controls={controls}
+                focusReady={focus.focusReady}
+                fallback={renderItems(() => [
+                  { id: "loading", label: t("common.loading"), disabled: true },
+                ])}
+              >
+                <LayoutContent
+                  menuProps={props}
+                  controls={controls}
+                  readMenu={focus.read}
+                  onReady={(next) => {
+                    handlers = next;
+                    if (next) {
+                      onSettled(focus.focusReady);
+                    }
+                  }}
+                  renderItems={renderItems}
+                />
+              </ChatPanelMenuBoundary>
+            ),
+          },
+        ]}
+        ref={focus.bind}
+        onBeforeShow={focus.beforeShow}
+        onOpenChange={focus.openChange}
+        onSelect={(item, event) => handlers?.select(item, event)}
       />
     </Show>
   );

@@ -1,6 +1,10 @@
 import type { AgentsListResult, ModelCatalogResult } from "../../api/types.ts";
-import { resolveChatModelSelectState } from "../../lib/chat/model-select-state.ts";
-import { chatHistoryRequests } from "./chat-history-state.ts";
+import {
+  resolveChatFastModeSelectState,
+  resolveChatModelSelectValues,
+} from "../../lib/chat/model-select-state.ts";
+import { resolveThinkingProfileForSession } from "../../lib/chat/thinking.ts";
+import { chatHistoryRequests, getAcceptedChatHistorySession } from "./chat-history-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
@@ -29,14 +33,18 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
     }
     const session = selectedChatSessionRow(host);
     // A catalog default cannot replace the selected session's unresolved model.
-    if (!session) {
+    if (
+      !session?.sessionId ||
+      session.sessionId !== host.currentSessionId ||
+      (host.sessions.state.resultCached && !getAcceptedChatHistorySession(host))
+    ) {
       return;
     }
     const agents: AgentsListResult | null = host.agentsList;
-    const selection = resolveChatModelSelectState({
+    const agent = agents?.agents.find((row) => row.id === resolveChatAgentId(host));
+    const selection = resolveChatModelSelectValues({
       activeSession: session,
-      agentDefaultModel: agents?.agents.find((agent) => agent.id === resolveChatAgentId(host))
-        ?.model?.primary,
+      agentDefaultModel: agent?.model?.primary,
       modelOverrides: host.sessions.state.modelOverrides,
       sessionKey: host.sessionKey,
       sessionsResult: host.sessionsResult,
@@ -50,8 +58,35 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
         (candidate.id === model &&
           (!session?.modelProvider || session.modelProvider === candidate.provider)),
     );
+    const profile = resolveThinkingProfileForSession(
+      session,
+      host.sessionsResult?.defaults,
+      result.models,
+    );
+    const { active, currentOverride, label, supported } = resolveChatFastModeSelectState({
+      catalog: result.models,
+      connected: host.connected,
+      currentModelOverride: selection.currentOverride,
+      fastModeTarget: session,
+      gatewayAvailable: Boolean(host.client),
+      loading: host.chatLoading,
+      sessionsResult: host.sessionsResult,
+    });
     const previous = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
-    const composer = entry ? { id: entry.id, provider: entry.provider, name: entry.name } : null;
+    const composer = entry
+      ? {
+          id: entry.id,
+          provider: entry.provider,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          speed: { active, currentOverride, label, supported },
+          thinkingLevel: session.thinkingLevel,
+          thinkingDefault: profile?.thinkingDefault,
+          thinkingLevels: profile?.thinkingLevels?.slice(0, 30),
+          permissionMode: session.permissionMode,
+          defaultPermissionMode: agent?.defaultPermissionMode,
+        }
+      : null;
     if (JSON.stringify(previous?.composer) === JSON.stringify(composer)) {
       return;
     }

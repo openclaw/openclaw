@@ -11,6 +11,7 @@ export {
   isMentionsDismissParams,
   isMentionsListResult,
   isMentionsChangedEvent,
+  isMentionsFailedEvent,
   isUsersBackgroundGetParams,
   isUsersBackgroundUploadParams,
   isUsersBackgroundRemoveParams,

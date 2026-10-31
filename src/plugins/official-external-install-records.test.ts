@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   isOfficialCatalogLookupPluginIdReplacement as isReplacement,
-  isThirdPartyNpmInstallRecord,
+  isThirdPartyNpmInstallRecord as isThirdParty,
   isTrustedOfficialCatalogLookupDuplicate as isDuplicate,
   isTrustedOfficialPluginInstallRecord as isTrusted,
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveClawHub,
@@ -70,9 +70,12 @@ describe("official plugin install trust", () => {
     { sourcePath: "/tmp/official" },
     { source: "path" },
   ] satisfies Partial<PluginInstallRecord>[])(
-    "rejects unsupported npm provenance %j",
+    "rejects invalid official and third-party npm provenance %j",
     (override) => {
       expect(trusts({ ...npmRecord, ...override })).toBe(false);
+      expect(
+        isThirdParty("demo", "@vendor/demo", npmInstall("@vendor/demo", "1.0.0", override)),
+      ).toBe(false);
     },
   );
 
@@ -92,29 +95,6 @@ describe("official plugin install trust", () => {
       }),
     ).toBe(trusted);
   });
-});
-
-describe("third-party npm install identity", () => {
-  it.each([
-    { resolvedName: "@vendor/other" },
-    { resolvedSpec: "@vendor/other@1.0.0" },
-    { clawhubPackage: "@vendor/other" },
-    { spec: "file:/tmp/plugin.tgz" },
-    { artifactKind: "npm-pack" },
-    { sourcePath: "/tmp/plugin" },
-    { source: "clawhub" },
-  ] satisfies Partial<PluginInstallRecord>[])(
-    "rejects conflicting or local evidence %j",
-    (override) => {
-      expect(
-        isThirdPartyNpmInstallRecord(
-          "demo",
-          "@vendor/demo",
-          npmInstall("@vendor/demo", "1.0.0", override),
-        ),
-      ).toBe(false);
-    },
-  );
 });
 
 describe("trusted official npm install records", () => {

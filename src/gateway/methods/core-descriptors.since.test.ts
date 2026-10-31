@@ -33,7 +33,7 @@ const TRAIN_2026_8_METHODS = `
   diagnostics.lanes plugins.inspect device.pair.setupStatus openclaw.setup.activate.start
   exec.approval.grants.list exec.approval.grants.revoke models.authOrderSet
   sessions.patchMany sessions.goal.update sessions.goal.clear
-  sessions.groups.update sessions.groups.defaults sessions.recover
+  sessions.groups.update sessions.groups.defaults
   update.hold sessions.catalog.startTerminal
   sessions.github.publish sessions.github.options sessions.github.status sessions.github.confirm
   users.github.status users.github.authorize.start users.github.authorize.poll

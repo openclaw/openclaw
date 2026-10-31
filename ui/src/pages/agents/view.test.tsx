@@ -406,6 +406,7 @@ describe("renderAgents", () => {
       directText(tab),
     );
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(
         container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),

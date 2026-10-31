@@ -3,12 +3,12 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
+import { getMockCallOutput } from "../cli/test-runtime-capture.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
@@ -48,13 +48,6 @@ function makeEvent(params: Partial<TrajectoryEvent> & { type: string }): Traject
     sessionKey,
     ...params,
   };
-}
-
-function runtimeOutput(runtime: RuntimeEnv): string {
-  return vi
-    .mocked(runtime.log)
-    .mock.calls.map((call) => String(call[0]))
-    .join("\n");
 }
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tail-");
@@ -139,11 +132,11 @@ describe("sessionsTailCommand", () => {
     await writeSessionEntry(key);
     await appendEvents(events, { key });
     await explicitTail(options);
-    return runtimeOutput(runtime);
+    return getMockCallOutput(runtime.log);
   }
 
   function expectOutput(contains: string[], absent: string[] = []) {
-    const output = runtimeOutput(runtime);
+    const output = getMockCallOutput(runtime.log);
     for (const text of contains) {
       expect(output).toContain(text);
     }
@@ -271,7 +264,7 @@ describe("sessionsTailCommand", () => {
   it("reports an empty default selection without failing or following", async () => {
     await tail({ agent: "main", follow: true });
 
-    expect(runtimeOutput(runtime)).toBe("No sessions found.");
+    expect(getMockCallOutput(runtime.log)).toBe("No sessions found.");
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -363,7 +356,7 @@ describe("sessionsTailCommand", () => {
       expect(runtime.error).not.toHaveBeenCalled();
     }
 
-    const output = runtimeOutput(runtime);
+    const output = getMockCallOutput(runtime.log);
     for (const entry of entries) {
       expect(output.includes(`${entry.label} ok`)).toBe(expected.includes(entry.label));
     }

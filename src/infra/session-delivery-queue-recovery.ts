@@ -18,6 +18,7 @@ import {
   moveSessionDeliveryToFailed,
 } from "./session-delivery-queue-storage.js";
 import {
+  isProducedSessionDelivery,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
@@ -207,7 +208,7 @@ export async function drainPendingSessionDelivery(
 ): Promise<QueuedSessionDelivery | null> {
   const claim = await recoveryCoordinator.withClaim(opts.id, async () => {
     const entry = await loadPendingSessionDelivery(opts.id, opts.queueContext);
-    if (!entry) {
+    if (!entry || !isProducedSessionDelivery(entry)) {
       return null;
     }
     const result = await processPendingSessionDelivery({
@@ -253,7 +254,9 @@ export async function recoverPendingSessionDeliveries(opts: {
   maxEnqueuedAt?: number;
 }): Promise<DeliveryRecoverySummary> {
   const pending = (await loadPendingSessionDeliveries(opts.queueContext)).filter(
-    (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
+    (entry) =>
+      isProducedSessionDelivery(entry) &&
+      (opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt),
   );
   if (pending.length === 0) {
     return createEmptyDeliveryRecoverySummary();

@@ -171,6 +171,38 @@ function setLastSessionEntry(context: DeliveryContext) {
 
 describe("resolveDeliveryTarget", () => {
   it.each([
+    [undefined, 0, true, 0, 2],
+    ["room:default", undefined, true, undefined, 1],
+    ["room:default", 0, false, undefined, 1],
+    ["room:default", 0, true, 0, 3],
+    ["room:other", 0, true, undefined, 2],
+  ] as const)(
+    "resolves historical routes only for explicit thread inheritance (%s, %s, %s)",
+    async (to, threadId, inheritSessionThread, expectedThread, routeCalls) => {
+      const resolveRoute = vi.fn(forumMessagingForTest.resolveOutboundSessionRoute!);
+      setPlugins(
+        plugin("forum", {
+          messaging: { ...forumMessagingForTest, resolveOutboundSessionRoute: resolveRoute },
+        }),
+      );
+      const sessionKey = `agent:${AGENT_ID}:source`;
+      setSessionEntry(sessionKey, { channel: "forum", to: "room:default", threadId });
+      const result = await resolveTarget({ channel: "forum", to, sessionKey }, makeCfg(), {
+        dryRun: true,
+        inheritSessionThread,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        to: to ?? "room:default",
+        threadId: expectedThread,
+        sessionRoute: { to: to ?? "room:default" },
+      });
+      expect(result.ok && result.sessionRoute?.threadId).toBe(expectedThread);
+      expect(resolveRoute).toHaveBeenCalledTimes(routeCalls);
+    },
+  );
+
+  it.each([
     // Regression #91613: the shared main bucket can belong to another conversation.
     ["shared recipient", undefined, "alpha", "wrong room"],
     ["missing target", undefined, "alpha", "requires target"],

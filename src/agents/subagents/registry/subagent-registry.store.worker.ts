@@ -78,11 +78,11 @@ export const subagentRegistryOperations = {
   "subagents.persistChanges": (
     input: SubagentRegistryWrite,
     context: WorkerWriteOperationContext,
-  ): SubagentRegistryWriteReceipt => {
+  ): void => {
     const { writeId, values, deleteRunIds, terminalEvents = [] } = input;
-    let committedReceipt: SubagentRegistryWriteReceipt | undefined;
+    let committed = false;
     try {
-      return context.write((writer): SubagentRegistryWriteReceipt => {
+      context.write((writer) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
         writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
         const { notices } = recordSessionStateEventsInDatabase(writer.db, terminalEvents);
@@ -99,16 +99,14 @@ export const subagentRegistryOperations = {
         };
         deferSqliteWorkerCommitReceipt(writer.db, receipt);
         deferSqlitePostCommitPublication(writer.db, () => {
-          committedReceipt = receipt;
+          committed = true;
         });
-        return receipt;
       });
     } catch (error) {
-      if (!committedReceipt) {
+      if (!committed) {
         throw error;
       }
       log.warn("Subagent registry write committed before cleanup failed", { error });
-      return committedReceipt;
     }
   },
 };

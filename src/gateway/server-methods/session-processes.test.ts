@@ -9,6 +9,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import { sessionProcessHandlers } from "./session-processes.js";
 
 afterEach(resetProcessRegistryForTests);
@@ -121,11 +122,7 @@ it("discards a remote process response after the request authority closes", asyn
     current = false;
     reply.resolve({ sessionId: "remote-session", processes: [], truncated: false });
     await pending;
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expectRpcError(respond, { code: "UNAVAILABLE" });
     expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
   });
 });

@@ -517,9 +517,11 @@ export function retainSessionEntryWorkerPublication(params: {
                   sharingProjection &&
                   sharingEntry &&
                   previous?.entry &&
-                  previous.entry.sessionId === sharingEntry.sessionId &&
-                  (read.followLifecycle ||
-                    previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision)
+                  ((previous.entry.sessionId === sharingEntry.sessionId &&
+                    (read.followLifecycle ||
+                      previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision)) ||
+                    (read.followTranscript &&
+                      previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision))
                 ? {
                     entry: sharingEntry,
                     membership: new Set(sharingProjection.membership[2]),

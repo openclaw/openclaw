@@ -30,7 +30,7 @@ inputs:
     description: Current-run artifact published by the boundary producer.
 outputs:
   cache-key:
-    value: ${{ steps.identity.outputs.cache-key }}
+    value: ${{ steps.identity.outputs.cache-key || steps.pack.outputs.cache-key || steps.restore.outputs.cache-key }}
     description: Content and native-toolchain cache identity.
   cache-hit:
     value: ${{ steps.cache.outputs.cache-hit || 'false' }}
@@ -54,7 +54,10 @@ runs:
           exit 0
         fi
         echo "enabled=true" >> "$GITHUB_OUTPUT"
-        node scripts/ci-sdk-declarations.mts key
+        # Run artifacts compute their identity during authoritative pack/restore.
+        case "$SDK_OPERATION" in
+          restore-main|save-main) node scripts/ci-sdk-declarations.mts key ;;
+        esac
 
     - name: Restore main SDK declarations
       id: cache
@@ -80,11 +83,13 @@ runs:
         merge-multiple: true
 
     - name: Admit current-run SDK declarations
+      id: restore
       if: inputs.mode == 'restore-run' && steps.identity.outputs.enabled == 'true'
       shell: bash
       run: node scripts/ci-sdk-declarations.mts restore --required
 
     - name: Pack current-run SDK declarations
+      id: pack
       if: inputs.mode == 'publish-run' && steps.identity.outputs.enabled == 'true'
       shell: bash
       run: node scripts/ci-sdk-declarations.mts pack

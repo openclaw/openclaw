@@ -181,7 +181,8 @@ describe("method scope resolution and authorization", () => {
     ["sessions.patch", guarded, WRITE],
     ["sessions.patch", { ...guarded, permissionMode: "full" }, ADMIN, WRITE],
     ["sessions.dispatch", { ...ownKey, deviceId: "device-1" }, WRITE],
-    ["sessions.dispatch", { ...ownKey, profileId: "development" }, ADMIN, WRITE],
+    ["sessions.dispatch", { ...ownKey, profileId: "development" }, WRITE, READ],
+    ["sessions.dispatch", ownKey, ADMIN, WRITE],
     ["sessions.move", move({ kind: "gateway" }), WRITE],
     ["sessions.move", move({ kind: "profile", profileId: "development" }), ADMIN, WRITE],
   ] satisfies [string, unknown, string | string[], string?][])(

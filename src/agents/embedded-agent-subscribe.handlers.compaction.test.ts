@@ -31,7 +31,6 @@ function createCompactionContext(messages: AgentMessage[] = []): EmbeddedAgentSu
   });
   Object.assign(ctx, {
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
-    ensureCompactionPromise: vi.fn(),
     incrementCompactionCount: () => {
       compactionCount += 1;
     },
@@ -50,12 +49,11 @@ function assistant(timestamp?: number): AgentMessage {
     ...(timestamp !== undefined ? { timestamp } : {}),
   } as AgentMessage;
 }
-function summary(timestamp?: number): AgentMessage {
+function summary(): AgentMessage {
   return {
     role: "compactionSummary",
     summary: "compressed",
     tokensBefore: 120_000,
-    ...(timestamp !== undefined ? { timestamp } : {}),
   } as AgentMessage;
 }
 const completed = {
@@ -72,32 +70,8 @@ const usage = (messages: AgentMessage[]) =>
   messages.filter((message) => message.role === "assistant").map((message) => message.usage);
 
 describe("compaction handlers", () => {
-  it("keeps failure details in client events, not logs, while preserving live usage", async () => {
-    const messages = [assistant(1_000)];
-    const before = usage(messages);
-    const ctx = createCompactionContext(messages);
-    const onAgentEvent = vi.fn();
-    ctx.params.onAgentEvent = onAgentEvent;
-    const privateMarker = "private_compaction_payload";
-    const reason = `Provider unavailable: ${privateMarker.repeat(100)}`;
-    await handleCompactionEnd(ctx, endEvent({ status: "failed", reason }, "overflow"));
-    expect(ctx.log.warn).toHaveBeenCalledExactlyOnceWith(
-      "embedded run auto-compaction failed",
-      expect.objectContaining({
-        event: "embedded_run_compaction_end",
-        reason: "overflow",
-        outcome: "failed",
-        reasonClass: "unknown",
-      }),
-    );
-    expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain(privateMarker);
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "compaction",
-      data: { phase: "end", completed: false, willRetry: false, outcome: "failed", reason },
-    });
-    expect(usage(messages)).toEqual(before);
-  });
-
+  const privateMarker = "private_compaction_payload";
+  const reason = `Provider unavailable: ${privateMarker.repeat(100)}`;
   it.each([
     ["default subscription floor", {}, 2, 2],
     ["caller-owned accounting", { compactionCountOwner: "caller" }, 1, 2],
@@ -170,24 +144,27 @@ describe("compaction handlers", () => {
   );
 
   it.each([
+    ["failed usage is preserved", [assistant(1_000)], [false], { status: "failed", reason }],
     ["aborted usage is preserved", [assistant(1_000)], [false], { status: "aborted" }],
-    [
-      "timestamps override transcript order",
-      [assistant(3_000), summary(2_000), assistant(1_000)],
-      [false, true],
-      completed,
-    ],
-    [
-      "legacy entries use summary position",
-      [assistant(), summary(), assistant()],
-      [true, false],
-      completed,
-    ],
+    ["legacy ordering", [assistant(), summary(), assistant()], [true, false], completed],
   ] satisfies Array<[string, AgentMessage[], boolean[], Parameters<typeof endEvent>[0]]>)(
     "%s",
     async (_name, messages, stale, outcome) => {
       const before = usage(messages);
-      await handleCompactionEnd(createCompactionContext(messages), endEvent(outcome));
+      const ctx = createCompactionContext(messages);
+      const onAgentEvent = (ctx.params.onAgentEvent = vi.fn());
+      await handleCompactionEnd(
+        ctx,
+        endEvent(outcome, outcome?.status === "failed" ? "overflow" : "threshold"),
+      );
+      if (outcome?.status === "failed") {
+        expect(ctx.log.warn).toHaveBeenCalledOnce();
+        expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain(privateMarker);
+        expect(onAgentEvent).toHaveBeenCalledWith({
+          stream: "compaction",
+          data: { phase: "end", completed: false, willRetry: false, outcome: "failed", reason },
+        });
+      }
       expect(usage(messages)).toEqual(
         stale.map((isStale, index) => (isStale ? makeZeroUsageSnapshot() : before[index])),
       );

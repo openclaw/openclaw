@@ -57,9 +57,14 @@ function prefixAt(
   );
 }
 
-it.each([false, true])(
-  "selects cache-TTL dependencies without scanning messages (analyzed=%s)",
-  async (analyzed) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "selects cache-TTL dependencies without repeated identity scans (analyzed=%s, legacy=%s)",
+  async (analyzed, legacy) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { database, scope } = createSessionCompoundWorkerFixture();
       const marker = checkpoint("checkpoint", null, {
@@ -81,6 +86,12 @@ it.each([false, true])(
             [{ type: "session", id: scope.sessionId, version: 3 }, marker, ...messages],
             { scheduleProjectionReconcile: false },
           );
+          if (legacy) {
+            // Imported prefixes can have a canonical header without an auxiliary identity.
+            database.db
+              .prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND seq = 0")
+              .run(scope.sessionId);
+          }
           if (analyzed) {
             // The same type-index seek must cover transcripts admitted without a backfill.
             database.db
@@ -98,14 +109,30 @@ it.each([false, true])(
         database.db.exec("ANALYZE");
       }
       const prepare = database.db.prepare.bind(database.db);
-      const statements: StatementSync[] = [];
+      const statements = new Map<StatementSync, string>();
       const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
         const statement = prepare(query);
         if (
           query.includes('"transcript_event_identities"') &&
           statement.columns().some(({ name }) => name === "navigation_valid")
         ) {
-          statements.push(statement);
+          statements.set(statement, statement.expandedSQL);
+          const observe = <Method extends "all" | "get" | "iterate">(
+            observed: Pick<StatementSync, Method | "expandedSQL">,
+            method: Method,
+          ) => {
+            observed[method] = new Proxy(observed[method], {
+              apply(invoke, receiver: StatementSync, args) {
+                const result = Reflect.apply(invoke, receiver, args);
+                // Capture bindings before the executor releases the statement.
+                statements.set(statement, observed.expandedSQL);
+                return result;
+              },
+            });
+          };
+          for (const method of ["all", "get", "iterate"] as const) {
+            observe(statement, method);
+          }
         }
         return statement;
       });
@@ -115,12 +142,21 @@ it.each([false, true])(
           anchorIds: [anchor.id],
           entries: [marker],
         });
-        expect(statements).toHaveLength(1);
-        const plan = prepare(`EXPLAIN QUERY PLAN ${statements[0]!.expandedSQL}`).all();
+        expect(statements.size).toBe(1);
+        const plan = prepare(`EXPLAIN QUERY PLAN ${statements.values().next().value!}`).all();
         const drivingSearch = plan.find(
           ({ detail }) => typeof detail === "string" && detail.startsWith("SEARCH "),
         )?.detail;
-        expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
+        if (legacy) {
+          expect(
+            plan.some(
+              ({ detail }) =>
+                typeof detail === "string" && detail.includes("(session_id=? AND seq=?) LEFT-JOIN"),
+            ),
+          ).toBe(true);
+        } else {
+          expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
+        }
       } finally {
         spy.mockRestore();
       }

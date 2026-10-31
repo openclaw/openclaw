@@ -158,7 +158,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["create", "validate", "build", "dev"].map((subcommand): CliCommandCatalogEntry => ({
-    commandPath: ["claws", subcommand],
+    commandPath: ["templates", subcommand],
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   })),
@@ -198,6 +198,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "gateway-status" },
+  },
+  {
+    commandPath: ["gateway", "auth-token"],
+    exact: true,
+    // The command owns a non-observing config read; exec SecretRefs still need the CLI PATH.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["gateway", "recover-lock"],

@@ -10,7 +10,10 @@ import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { resolvePackageActivationHelper } from "../../infra/package-update-activation-journal.js";
+import {
+  resolvePackageActivationControl,
+  resolvePackageActivationHelper,
+} from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
 import {
   readPackageActivationReceipt,
@@ -36,6 +39,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import * as shared from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
@@ -112,15 +116,12 @@ function expectPreview(note: RegExp, targetVersion?: string) {
 }
 function writeRunnablePackage(root: string, entry = 'import "./dist/index.js";\n') {
   fs.writeFileSync(path.join(root, "openclaw.mjs"), entry);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "1.0.0",
-      type: "module",
-      bin: { openclaw: "openclaw.mjs" },
-    }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), {
+    name: "openclaw",
+    version: "1.0.0",
+    type: "module",
+    bin: { openclaw: "openclaw.mjs" },
+  });
 }
 function prepareRunnablePreview(
   f: Parameters<typeof preparePreview>[0] & { launcher: string },
@@ -264,29 +265,65 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       }
     },
   );
-  it.each(["prepared", "publishing", "publication-complete", "damaged candidate"] as const)(
-    "settles a verified installed candidate with the original lease (%s)",
+  it.each([
+    "prepared",
+    "publishing",
+    "publication-complete",
+    "damaged candidate",
+    "manual install",
+    "copied journal",
+    "manual with published launcher",
+  ] as const)(
+    "settles only verified or obsolete package publication with the original lease (%s)",
     async (phase) => {
-      const f = await publication(phase === "damaged candidate" ? "publication-complete" : phase);
+      const manual = [
+        "manual install",
+        "copied journal",
+        "manual with published launcher",
+      ].includes(phase);
+      const f = await publication(
+        phase === "prepared" || phase === "publishing" ? phase : "publication-complete",
+      );
+      if (manual) {
+        fs.renameSync(f.packageRoot, `${f.packageRoot}.external-backup`);
+        fs.cpSync(`${f.packageRoot}.external-backup`, f.packageRoot, { recursive: true });
+        writeRunnablePackage(f.packageRoot);
+        if (phase !== "manual with published launcher") {
+          fs.renameSync(f.launcher, `${f.launcher}.external-backup`);
+          fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
+        }
+        if (phase === "copied journal") {
+          const control = resolvePackageActivationControl(f.anchor);
+          fs.renameSync(control, `${control}.external-backup`);
+          fs.cpSync(`${control}.external-backup`, control, { recursive: true });
+        }
+      }
       if (phase === "damaged candidate") {
         fs.appendFileSync(f.liveFile, "// changed live content\n");
       }
       const retained = () => [snapshot(f.packageRoot), snapshot(f.anchor)];
       const before = retained();
-      if (phase === "damaged candidate") {
+      if (phase === "damaged candidate" || phase === "manual with published launcher") {
         await expect(prepareUpdateCommand({ json: true })).rejects.toThrow(
-          "inventoried dist files changed",
+          phase === "damaged candidate"
+            ? "inventoried dist files changed"
+            : "openclaw update repair",
         );
         expect(retained()).toEqual(before);
         return;
       }
       const previous = fs.readFileSync(f.previousFile);
       const candidate = fs.readFileSync(f.liveFile);
-      await withPublicationFence(f.packageRoot, (fence) => expectLiveOwnerBlocks(f, fence));
       await expectUnchanged(preview);
       expectPreview(/Would settle.*update can proceed/);
+      await withPublicationFence(f.packageRoot, (fence) => expectLiveOwnerBlocks(f, fence));
 
       await settle(f);
+      if (manual) {
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Stale package publication"),
+        );
+      }
       assertManagedUpdateLeaseDatabaseIdentity(f.record.descriptor.authority);
       expect(fs.readFileSync(f.liveFile)).toEqual(candidate);
       expect(fs.readFileSync(f.retiredFile)).toEqual(previous);

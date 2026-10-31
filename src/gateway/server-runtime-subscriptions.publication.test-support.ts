@@ -25,6 +25,8 @@ import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -35,6 +37,7 @@ import type { createSubscriptionTestFixture } from "./server-runtime-subscriptio
 import { registerSubscriptionChatRun } from "./server-runtime-subscriptions.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import type { readSessionMessageByIdAsync } from "./session-transcript-readers.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 export function registerSessionPublicationTests(fixture: {
   createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
@@ -51,6 +54,64 @@ export function registerSessionPublicationTests(fixture: {
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }): void {
   const { createParams, start, transcriptBroadcastMocks, warn } = fixture;
+  it("publishes running at controller execution start without waiting for transcript activity", async () => {
+    const key = "agent:main:starting-turn";
+    const sessionId = "starting-turn-session";
+    const storePath = "/synthetic/starting-turn/sessions.db";
+    const projection = createSessionRowProjectionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      store: { [key]: { sessionId, updatedAt: 1 } },
+      storePath,
+    });
+    const params = createParams();
+    params.sessionEventSubscribers.subscribe("conn-start");
+    const registration = registerSubscriptionChatRun(params, {
+      runId: "starting-turn-run",
+      sessionKey: key,
+      sessionId,
+      agentId: "main",
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: key,
+        incarnation: sessionId,
+        agentId: "main",
+      }),
+    });
+    const subscriptions = start({ ...params, getSessionRowProjection: () => projection });
+    try {
+      await claimRpcSourceForTest(registration.entry, { executionStarted: false });
+      expect(params.broadcastToConnIds).not.toHaveBeenCalled();
+      const operation = registration.entry.input.claim?.operation;
+      if (!operation) {
+        throw new Error("Expected the claimed controller turn");
+      }
+      markReplyOperationExecutionStarted(operation);
+      // Backend attachment and execution notification can observe the same boundary.
+      markReplyOperationExecutionStarted(operation);
+      await subscriptions.agentUnsub();
+      expect(params.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: key,
+          reason: "agent.run.started",
+          session: expect.objectContaining({
+            key,
+            sessionId,
+            status: "running",
+            hasActiveRun: true,
+          }),
+        }),
+        new Set(["conn-start"]),
+        expect.objectContaining({ dropIfSlow: true }),
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await subscriptions.agentUnsub();
+      subscriptions.transcriptUnsub();
+      subscriptions.lifecycleUnsub();
+      projection.dispose();
+    }
+  });
   it("joins committed lifecycle publication before subscription shutdown", async ({ signal }) => {
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     const key = "agent:main:finished-child";

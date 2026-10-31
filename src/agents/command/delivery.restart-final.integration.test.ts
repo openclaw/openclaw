@@ -225,7 +225,6 @@ it.each(
       });
     }
     const marker = await persistMarker(target, entry, payloads, {
-      admittedRecoverySource: undefined,
       deliveryContext: { channel: "matrix", to: "!restart:example" },
       commandOwnerReference: assertOwnerCurrent.recoveryReference,
     });
@@ -447,7 +446,11 @@ it.each(
       }
       if (mayRecover) {
         expect(loadSessionEntry(target)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: expect.any(String), state: "delivered" },
+          {
+            id: expect.any(String),
+            state: "delivered",
+            receipt: { platformMessageId: "delivered-final-2", resultCount: 2 },
+          },
         ]);
       }
       // Re-enter recovery after settlement; neither success nor revocation may replay.

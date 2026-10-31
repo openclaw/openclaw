@@ -411,7 +411,11 @@ export async function installPluginFromGitSpec(
   };
   const published = await installPackageDir(
     transactionRequest
-      ? requestDeferredPackageDirInstall(installParams, transactionRequest.assertOwned)
+      ? requestDeferredPackageDirInstall(
+          installParams,
+          transactionRequest.assertOwned,
+          transactionRequest.prepareSettlement,
+        )
       : installParams,
   ).catch((error: unknown) => ({
     ok: false as const,

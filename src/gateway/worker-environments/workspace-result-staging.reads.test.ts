@@ -317,7 +317,7 @@ it("isolates cancellation and releases failed staged reads for retry", async () 
 it.each<[number, number, FixtureOptions]>([
   [64, 4, { linked: true }],
   [300, 6, {}],
-  [0, 4, { largeFileBytes: 9 * 1024 * 1024 }],
+  [0, 4, { largeFileBytes: 64 * 1024 * 1024 }],
   [0, 4, { objectFormat: "sha256" }],
 ])(
   "materializes %i files with at most %i Git reads (%j)",

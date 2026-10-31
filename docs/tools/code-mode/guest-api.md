@@ -53,6 +53,11 @@ provide local byte conversion, not filesystem, module, or network access.
 Returned values still use the JSON-only bridge; emit decoded text or an array of
 byte values rather than a binary attachment.
 
+Module loading is unavailable. Direct `import()` and `require()` calls are
+rejected before execution. In the Node executor, dynamic imports constructed
+through `eval` or `Function` reject with the same module-access guidance and
+can be caught inside the cell. Uncaught rejections fail the owning cell.
+
 `console.log`, `console.info`, `console.warn`, `console.error`, and
 `console.debug` emit diagnostic text through the same ordered output channel as
 `text` and `json`, not through host logs. They return `undefined`;
@@ -246,10 +251,22 @@ retain the native MCP result (`content`, optional `structuredContent`, and
 optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are
 not guest-visible.
 
+Native Gateway and sandbox exec workdir errors and foreground process failures
+include their concise diagnostic in `message`, with command output in `aggregated`. Returned failures
+remain values; thrown tool errors remain catchable.
+
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
 truncation metadata.
+
+## Reading skill companions
+
+Installed skills use `await skills.read(name)` for complete instructions.
+For local Gateway skills, `await skills.read(name, "references/workflow.md")`
+returns a text companion scoped to that skill's directory (256 KiB maximum).
+Traversal, symlinks, hardlinks, and binary content are rejected. Restricted
+placements remain instruction-only; see [skill reads](/tools/skills#search-installed-skills).
 
 ## Session store
 
@@ -272,6 +289,12 @@ with `TypeError`. Values use the normal bridge JSON normalization. Each
 serialized value may use at most 256 KiB of encoded JSON, and all stored values
 together may use at most 1 MiB. Exceeding either limit rejects with `RangeError`
 and leaves the store unchanged. `await store(key, undefined)` deletes a key.
+Catch a capacity error by `error instanceof RangeError` or
+`error.code === "store_range"`, then store a summary or smaller value. If the
+total is full, delete unneeded keys before retrying the write. For larger data
+needed only in this reply, use `results.save(value)` instead. An uncaught
+capacity error reports `invalid_input`; it does not automatically replay the
+cell or commit that cell's pending writes.
 `await load(key)` returns `undefined` when missing and otherwise returns a
 detached copy; editing that copy does not change the saved value.
 
@@ -288,7 +311,7 @@ store entries do not enter model context. Loading network-derived data carries
 its provenance into the receiving cell's normal untrusted-content wrapper.
 
 Both executors support these helpers in interactive cells with a bound session.
-Headless and `restartSafe` cells reject store operations, as do cells without
+Headless cells reject store operations, as do cells without
 an available session manager. Read `API.read("results.d.ts")` for the contract.
 
 ## Reading paginated file data
@@ -302,3 +325,15 @@ with the same path and the returned `offset`, optional `cursor`, and optional
 Do not strip display-notice patterns from file data: those strings may be actual
 file contents. Each call still honors its explicit `limit`; if more file data
 remains, the result is `"truncated"` and its continuation describes the next page.
+
+Large local text reads stop after capturing a page. In a truncated result,
+`truncation.totalLines` and `truncation.totalBytes` are absent until the reader
+reaches EOF and can count the complete source and selection exactly. Use `continuation`, not a total
+or a display notice, to request more data. Reads that reach EOF retain exact totals.
+
+On Windows, files without a UTF-16 BOM choose UTF-8 or the system encoding from
+the first 1 MiB. Every offset and page uses that same leading window. Invalid
+bytes beyond the window no longer change the encoding of earlier text; they
+use the selected decoder’s replacement behavior. BOM-marked UTF-16 and
+non-Windows UTF-8 decoding are unchanged. Later offsets still require scanning
+the preceding text, but a page never requires scanning the remainder of the file.

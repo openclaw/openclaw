@@ -17,6 +17,7 @@ import {
   createImageProcessor,
   getImageMetadata,
   readImageMetadataFromHeader,
+  readImageProbeFromHeader,
   resizeToJpeg,
 } from "./media-services.js";
 
@@ -144,28 +145,52 @@ describe("loadWebMedia", () => {
     }
   });
 
-  it("preserves oriented JPEG bytes and corrects a stale HEIF filename with model limits", async () => {
-    const jpeg = await resizeToJpeg({
-      buffer: createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 }),
-      maxSide: 32,
-      quality: 92,
-      withoutEnlargement: true,
-    });
-    const orientation = Buffer.from(
-      "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
-      "hex",
-    );
-    const buffer = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
-    expect(readImageMetadataFromHeader(buffer)).toEqual({ width: 16, height: 32 });
-    await expect(getImageMetadata(buffer)).resolves.toEqual({ width: 16, height: 32 });
-    const file = await writeFile("portrait.heif", buffer);
-    const options = localOptions({
-      imageCompression: { quality: "balanced", models: [{ maxSidePx: 32, maxPixels: 1024 }] },
-    });
-    const result = await media.loadWebMedia(file, options);
-    expect(result.buffer).toEqual(buffer);
-    expect([result.contentType, result.fileName]).toEqual(["image/jpeg", "portrait.jpg"]);
-  });
+  it.each([
+    { orientation: null, expected: { width: 32, height: 16 } },
+    { orientation: 1, expected: { width: 32, height: 16 } },
+    { orientation: 4, expected: { width: 32, height: 16 } },
+    { orientation: 5, expected: { width: 16, height: 32 } },
+    { orientation: 6, expected: { width: 16, height: 32 } },
+    { orientation: 7, expected: { width: 16, height: 32 } },
+    { orientation: 8, expected: { width: 16, height: 32 } },
+  ] as const)(
+    "preserves EXIF $orientation metadata and JPEG bytes while correcting a stale HEIF filename",
+    async ({ orientation, expected }) => {
+      const jpeg = await resizeToJpeg({
+        buffer: createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 }),
+        maxSide: 32,
+        quality: 92,
+        withoutEnlargement: true,
+      });
+      let buffer = jpeg;
+      if (orientation !== null) {
+        const exif = Buffer.from(
+          "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
+          "hex",
+        );
+        // The TIFF orientation value starts at byte 28 of this APP1 segment.
+        exif.writeUInt16LE(orientation, 28);
+        buffer = Buffer.concat([jpeg.subarray(0, 2), exif, jpeg.subarray(2)]);
+      }
+      expect(readImageProbeFromHeader(buffer)).toEqual({
+        width: 32,
+        height: 16,
+        format: "jpeg",
+        hasAlpha: false,
+        orientation,
+        bytes: buffer.length,
+      });
+      expect(readImageMetadataFromHeader(buffer)).toEqual(expected);
+      await expect(getImageMetadata(buffer)).resolves.toEqual(expected);
+      const file = await writeFile("portrait.heif", buffer);
+      const options = localOptions({
+        imageCompression: { quality: "balanced", models: [{ maxSidePx: 32, maxPixels: 1024 }] },
+      });
+      const result = await media.loadWebMedia(file, options);
+      expect(result.buffer).toEqual(buffer);
+      expect([result.contentType, result.fileName]).toEqual(["image/jpeg", "portrait.jpg"]);
+    },
+  );
 
   it("preserves the explicit GIF byte cap for optimized remote media", async () => {
     const buffer = Buffer.alloc(10);

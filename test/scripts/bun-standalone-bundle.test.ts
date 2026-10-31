@@ -9,14 +9,29 @@ const configuredBun = process.env.OPENCLAW_BUN_PATH?.trim();
 const bunCommand = configuredBun || "bun";
 const hasBun = spawnSync(bunCommand, ["--version"], { timeout: 10_000 }).status === 0;
 
+function runBundleFixture(
+  prefix: string,
+  source: (root: string) => string,
+  expectedOutput: string,
+): void {
+  const root = temporary.make(prefix);
+  const script = path.join(root, "bundle.mjs");
+  fs.writeFileSync(script, source(root));
+  const result = spawnSync(bunCommand, [script], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe(expectedOutput);
+}
+
 it.skipIf(!configuredBun && !hasBun)(
   "excludes orphan dynamic chunks while rejecting reachable unrendered module URLs",
   () => {
-    const root = temporary.make("standalone-bundle-reachability-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+    runBundleFixture(
+      "standalone-bundle-reachability-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { bundleStandaloneModules, finalizeStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
@@ -67,14 +82,8 @@ for (const mode of ["orphan", "reachable", "declared"]) {
 }
 console.log("orphan removed; reachable and declared markers rejected");
 `,
+      "orphan removed; reachable and declared markers rejected",
     );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("orphan removed; reachable and declared markers rejected");
   },
 );
 
@@ -82,11 +91,9 @@ console.log("orphan removed; reachable and declared markers rejected");
 it.skipIf(!configuredBun && !hasBun)(
   "removes dead exports inside live chunks without removing namespace or declared exports",
   () => {
-    const root = temporary.make("standalone-bundle-exports-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+    runBundleFixture(
+      "standalone-bundle-exports-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -130,14 +137,6 @@ for (const mode of ["dead", "namespace", "declared"]) {
 }
 console.log("dead shared export removed; live namespace and declared exports preserved");
 `,
-    );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
       "dead shared export removed; live namespace and declared exports preserved",
     );
   },
@@ -146,11 +145,9 @@ console.log("dead shared export removed; live namespace and declared exports pre
 it.skipIf(!configuredBun && !hasBun)(
   "rebases file-loader URLs when shared code moves into nested entry roots",
   () => {
-    const root = temporary.make("standalone-bundle-assets-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+    runBundleFixture(
+      "standalone-bundle-assets-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { bundleStandaloneModules, finalizeStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
@@ -187,14 +184,6 @@ assert.equal(linked.success, true, String(linked.logs));
 assert.deepEqual(read(linked.entryOutputs), ["asset first", "asset second"]);
 console.log("both nested roots read their assets after shared chunks move");
 `,
-    );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
       "both nested roots read their assets after shared chunks move",
     );
   },
@@ -206,11 +195,9 @@ it.skipIf(!configuredBun && !hasBun).each([
 ])(
   "keeps $mode split modules reproducible and retains resources from metafile inputs",
   ({ sourceAot }) => {
-    const root = temporary.make("standalone-bundle-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+    runBundleFixture(
+      "standalone-bundle-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { bundleStandaloneModules, finalizeStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
@@ -282,13 +269,7 @@ for (const directory of ["first", "second"]) {
 assert.deepEqual(results[0], results[1]);
 console.log("identical split modules and valid metafile inputs");
 `,
+      "identical split modules and valid metafile inputs",
     );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("identical split modules and valid metafile inputs");
   },
 );

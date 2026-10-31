@@ -332,9 +332,9 @@ it("bounds archived residency across pages and evicts the least recently read ro
       const refresh = createRefresh(owner);
       return {
         ...refresh,
-        prepareExactRows(queries) {
+        prepareExactRows(...args) {
           // All materialization slices finish here while the reader still holds archive pins.
-          const pending = refresh.prepareExactRows(queries);
+          const pending = refresh.prepareExactRows(...args);
           return pending
             ? pending.then(() => afterExactPreparation?.())
             : afterExactPreparation?.();
@@ -390,9 +390,10 @@ it("bounds archived residency across pages and evicts the least recently read ro
       };
       overlappingPage = listRows(projection, { archived: true, limit: 110, offset: 18 });
       await waitForPage(overlappingPage, secondPrepared, signal);
+      writeRow(query.key, { sessionId: "replacement", updatedAt: 128, archivedAt: 1 });
       releasePage.resolve();
-      const wholePage = await pendingPage;
-      expect(wholePage.sessions).toHaveLength(128);
+      const { sessions } = await pendingPage;
+      expect([sessions.length, sessions[0]?.sessionId]).toEqual([128, "replacement"]);
       expect(projection.selectEntries().filter(ready)).toHaveLength(110);
     } finally {
       releasePage.resolve();

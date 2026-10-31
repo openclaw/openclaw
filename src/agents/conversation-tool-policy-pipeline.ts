@@ -1,4 +1,4 @@
-import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
+import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   applyToolPolicyPipeline,
@@ -11,7 +11,7 @@ function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
   policy: TPolicy | undefined,
   alsoAllow: readonly string[] | undefined,
 ): TPolicy | undefined {
-  if (isFrozenClawToolAllowPolicy(policy)) {
+  if (isFrozenTemplateToolAllowPolicy(policy)) {
     return policy;
   }
   return mergeAlsoAllowPolicy(policy, alsoAllow ? [...alsoAllow] : undefined);
@@ -22,7 +22,7 @@ function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
  * diverge on profile `alsoAllow`, sender, sandbox, delegation, or runtime-cap semantics.
  */
 export function resolveConversationToolPolicies(params: {
-  capabilityProfile: ResolvedConversationCapabilityProfile;
+  capabilityProfile: Pick<ResolvedConversationCapabilityProfile, "policy">;
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
   additionalInheritedAllow?: readonly string[];

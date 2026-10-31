@@ -60,6 +60,10 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     context even when `allowBots: false` disables their ability to trigger turns.
     The receiving bot's own output is excluded from automatic history.
 
+    When the bounded session transcript confirms a completed answer, unchanged
+    requests with matching message IDs are not quoted again. Edits, unseen discussion,
+    unfinished requests, and attachments remain eligible; reply targets stay separate.
+
     Human replies carry the selected parent message independently of `allowBots`.
     Missing or empty nested reply payloads are fetched from Discord. If the parent
     is deleted or unavailable, its reply ID remains in context rather than silently

@@ -109,11 +109,15 @@ vi.mock("./agent-scope.js", async () => {
     resolveAgentConfig: () => undefined,
     resolveAgentDir: () => compactionTestState.agentDir ?? "/tmp/openclaw-agent",
     resolveDefaultAgentId: () => "main",
-    resolveEffectiveModelFallbacks: () => undefined,
     resolveSessionAgentId: () => "main",
     resolveAgentWorkspaceDir: () => compactionTestState.workspaceDir ?? "/tmp/openclaw-workspace",
   };
 });
+
+vi.mock("./model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection-config.js")>()),
+  resolveEffectiveModelFallbacks: () => undefined,
+}));
 
 vi.mock("./model-catalog.js", async () => {
   const { buildPreparedModelCatalogSnapshot } =
@@ -395,7 +399,7 @@ function readCompactionLifecyclePhases(): Array<string | undefined> {
 
 const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
-const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
+const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined] as const;
 
 // Vitest rewrites imported references, but not re-export specifiers. Materialize
 // these runtime bindings after its hoisted mocks register, or exports become undefined.

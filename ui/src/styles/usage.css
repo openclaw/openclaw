@@ -1,5 +1,6 @@
 .usage-page {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
   container-type: inline-size;
 }
@@ -43,6 +44,7 @@
 .session-detail-row,
 .session-detail-bottom {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -413,11 +415,6 @@
 .usage-export-menu > .oc-menu {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 48px));
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .usage-filter-option {
@@ -498,11 +495,11 @@
 }
 
 /* Visibility inherits through the display: contents tooltip host. */
-.usage-lower-bound--off {
+.usage-partial-notice--off {
   visibility: hidden;
 }
 
-.usage-lower-bound__chip {
+.usage-partial-notice__chip {
   padding: 3px 8px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-full);
@@ -514,8 +511,8 @@
   cursor: help;
 }
 
-.usage-lower-bound__chip:hover,
-.usage-lower-bound__chip:focus-visible {
+.usage-partial-notice__chip:hover,
+.usage-partial-notice__chip:focus-visible {
   color: var(--text);
 }
 
@@ -610,6 +607,22 @@
 .session-logs-list {
   display: grid;
   gap: 10px;
+}
+
+/* Long conversation text must not recursively size implicit grid columns in WebKit. */
+.session-logs-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.session-logs-list--windowed {
+  display: block;
+  height: min(70vh, 640px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.session-logs-window {
+  position: relative;
 }
 
 .usage-summary-grid {
@@ -941,9 +954,8 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
   gap: 5px var(--space-3);
-  padding: 10px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  font-size: 13px;
+  padding: var(--space-3) 0;
+  font-size: var(--control-ui-text-md);
 }
 
 .usage-list-bar {
@@ -1814,6 +1826,7 @@
 
 .session-log-entry {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);

@@ -142,7 +142,10 @@ vi.mock("../agent-model-discovery.js", () => ({
   discoverModelsAsync: vi.fn(async () => ({ find: vi.fn(() => null) })),
 }));
 
+// mock-isolation: Resolution tests supply their own rows; bundled vendor rows must not leak in.
 vi.mock("./model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: () => () => undefined,
+  listBundledVendorCatalogRows: () => [],
   canonicalizeManifestModelCatalogProviderAlias: (params: { provider: string }) =>
     resolveManifestModelCatalogProviderAliasMetadataMock(params).provider,
   resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
@@ -648,7 +651,10 @@ describe("resolveModel", () => {
       if (apiOverride) {
         expect(model.thinkingLevelMap).toEqual({ off: null });
       } else {
-        expect(model.compat).toMatchObject(deepSeekCatalogCompat);
+        expect(model.compat).toMatchObject({
+          ...deepSeekCatalogCompat,
+          supportsReasoningEffort: mode !== "fallback",
+        });
       }
       if (mode === "fallback") {
         expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({

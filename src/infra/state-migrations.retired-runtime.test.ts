@@ -12,7 +12,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { inspectCurrentConversationBindingRecordsInDatabase as readBindings } from "./outbound/current-conversation-bindings.kernel.js";
 import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
-import { migrateRetiredRuntimeState } from "./state-migrations.retired-runtime.js";
 import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 
 const binding = {
@@ -64,11 +63,18 @@ function write(relative: string, value: unknown) {
   return { file, bytes };
 }
 function migrate() {
-  return migrateRetiredRuntimeState({ stateDir, env, assertCurrent() {} });
+  return repairRetiredDoctorState(env);
 }
 function expectArchived({ file, bytes }: ReturnType<typeof write>, suffix = ".migrated") {
   expect(fs.existsSync(file)).toBe(false);
   expect(fs.readFileSync(`${file}${suffix}`)).toEqual(bytes);
+}
+function countImportedRowsSql(table: string) {
+  const where =
+    table === "config_machine_state"
+      ? " WHERE state_key IN ('voicewake.triggers', 'voicewake.routing')"
+      : "";
+  return `SELECT COUNT(*) AS count FROM ${table}${where}`;
 }
 
 it("preserves meaningful settings and bindings while archiving every retired source", async () => {
@@ -166,7 +172,7 @@ it.each(imports)(
     expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
     expect(result.changes).not.toContainEqual(expect.stringContaining(`Migrated ${relative}`));
     expect(
-      openOpenClawStateDatabase({ env }).db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(),
+      openOpenClawStateDatabase({ env }).db.prepare(countImportedRowsSql(table)).get(),
     ).toMatchObject({ count: 0 });
     expectArchived(source);
     expectArchived(valid);
@@ -186,7 +192,7 @@ it.each(imports)(
       await expect(migrate()).rejects.toThrow("synthetic runtime import failure");
       expect(fs.readFileSync(source.file)).toEqual(source.bytes);
       expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).toThrow("doctor --fix");
-      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toMatchObject({
+      expect(db.prepare(countImportedRowsSql(table)).get()).toMatchObject({
         count: 0,
       });
     } finally {
@@ -194,7 +200,7 @@ it.each(imports)(
     }
     await migrate();
     expectArchived(source);
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toMatchObject({
+    expect(db.prepare(countImportedRowsSql(table)).get()).toMatchObject({
       count: 1,
     });
     expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).not.toThrow();
@@ -204,6 +210,6 @@ it.each(imports)(
 it("does not import another profile's default-home approval", async () => {
   const source = write(approvalsFile, { version: 1, approvals: [] });
   const profileDir = path.join(path.dirname(stateDir), ".openclaw-work");
-  await migrateRetiredRuntimeState({ stateDir: profileDir, env, assertCurrent() {} });
+  await repairRetiredDoctorState({ ...env, OPENCLAW_STATE_DIR: profileDir });
   expect(fs.readFileSync(source.file)).toEqual(source.bytes);
 });

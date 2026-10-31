@@ -65,7 +65,7 @@ function assertMonitorCurrent(options: SessionUpstreamMonitorOptions): void {
 }
 
 function isIdleSession(
-  entry: SessionEntry | undefined,
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
   options: SessionUpstreamMonitorOptions,
 ): boolean {
   return Boolean(
@@ -76,13 +76,14 @@ function isIdleSession(
 async function loadProbeSession(
   probe: Pick<SessionUpstreamProbe, "sessionKey" | "agentId">,
   options: SessionUpstreamMonitorOptions,
-): Promise<SessionEntry | undefined> {
+): Promise<Pick<SessionEntry, "sessionId"> | undefined> {
   assertMonitorCurrent(options);
   const scope = {
     sessionKey: probe.sessionKey,
     agentId: probe.agentId,
     clone: false,
     env: options.env,
+    projection: "list" as const,
   };
   return readSessionEntryReadOnlyInWorker(scope, () => assertMonitorCurrent(options));
 }
@@ -147,7 +148,7 @@ async function runSessionUpstreamMonitorTick(
       continue;
     }
     const probes: SessionUpstreamProbe[] = [];
-    const sessionBySessionKey = new Map<string, SessionEntry>();
+    const sessionBySessionKey = new Map<string, Pick<SessionEntry, "sessionId">>();
     for (const link of links) {
       const probe = {
         sessionKey: link.sessionKey,

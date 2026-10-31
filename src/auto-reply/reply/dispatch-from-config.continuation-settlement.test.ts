@@ -157,7 +157,6 @@ describe("accepted continuation status delivery", () => {
         sessionId: "session-1",
         updatedAt: 1,
         pendingFinalDelivery: pending,
-        restartRecoverySourceIngress: "channel",
       });
       const error = new OutboundDeliveryError("retained for recovery", {
         cause: new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline") }),
@@ -185,7 +184,6 @@ describe("accepted continuation status delivery", () => {
       expect(memory.read()?.pendingFinalDelivery).toEqual(
         expected ? { ...pending, deliveries: [{ id: "delivery-1", state: expected }] } : undefined,
       );
-      expect(memory.read()?.restartRecoverySourceIngress).toBe(expected ? "channel" : undefined);
     },
   );
 

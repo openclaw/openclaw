@@ -245,6 +245,7 @@ export async function prepareWorkerTurnPrompt(params: {
     sessionAgentId: agentId,
     systemPromptText,
     systemPromptReport: prompt.systemPromptReport,
+    systemPromptRuntimeContextFragments: prompt.runtimeContextFragments,
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
   });
   const history = context.hookMessagesForCurrentPrompt;

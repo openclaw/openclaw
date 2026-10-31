@@ -86,7 +86,6 @@ export type NativeWorkerRequest =
   | { type: "post"; id: number; value: unknown; transferList: Transferable[] }
   | { type: "resource-owner"; id: number; sequence: number; value: unknown }
   | { type: "stop" | "release"; id: number }
-  | { type: "ref"; id: number; referenced: boolean }
   | { type: "cpu"; id: number; requestId: number; previous?: NodeJS.CpuUsage }
   | { type: "heap"; id: number; requestId: number };
 

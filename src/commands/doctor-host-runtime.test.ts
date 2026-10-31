@@ -106,6 +106,35 @@ beforeEach(() => {
   });
 });
 
+it.each(["cli", "gateway-service"] as const)(
+  "reports a nonblocking security recommendation for compatible %s Node",
+  async (source) => {
+    const root = await hostRoot();
+    if (source === "cli") {
+      mocks.root.mockResolvedValue(root);
+      mocks.detectRuntime.mockResolvedValue({
+        kind: "node",
+        version: "24.21.0",
+        execPath: "/fixture/node",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      });
+    } else {
+      setHostService(root, true);
+      mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "supported", version: "26.8.1" });
+    }
+    expect(await collectNodeRuntimeFindings({})).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        source,
+        message: expect.stringContaining("SECURITY WARNING"),
+        fixHint: ownerHint,
+      }),
+    ]);
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+  },
+);
+
 it.each([
   { owner: "CLI", surface: "config" },
   { owner: "service", surface: "config" },

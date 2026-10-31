@@ -518,16 +518,9 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  min-height: 48px;
-}
-
-.settings-row-mount + .settings-row-mount > .settings-row,
-.settings-row + .settings-row,
-.settings-row + .settings-subrows,
-.settings-subrows + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  gap: var(--space-3);
+  padding: var(--list-row-padding);
+  min-height: var(--list-row-min-height);
 }
 
 .settings-row--nested {
@@ -545,7 +538,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-row__title {
   font-size: var(--control-ui-text-md);
-  font-weight: 500;
+  font-weight: var(--list-row-title-weight);
   color: var(--text-strong);
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -740,7 +733,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-row--nav:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 /* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */
@@ -757,9 +750,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 0 0 auto;
 }
 
-.settings-row__chevron svg {
-  width: 14px;
-  height: 14px;
+.settings-row__chevron svg,
+.settings-row__chevron .session-css-icon {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   /* Icons rely on currentColor; without this the SVG falls back to black fill
      and disappears in dark mode. */
   stroke: currentColor;
@@ -775,10 +769,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-subrows .settings-row {
   padding-left: var(--space-7);
-}
-
-.settings-subrows .settings-row + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
 
 .settings-toggle {
@@ -965,6 +955,27 @@ textarea.settings-input {
   .settings-status {
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+}
+
+/* Narrow screens stack the Recovery row, so its actions get the full width.
+   Whole buttons wrap and grow to fill each line; the primary retry leads on
+   its own line. Wide screens keep the single right-aligned row. */
+@media (max-width: 768px) {
+  .updates-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+
+    > .btn {
+      flex: 1 1 auto;
+      min-height: 40px;
+    }
+
+    > .btn.primary {
+      flex-basis: 100%;
+      order: -1;
+    }
   }
 }
 
@@ -1366,22 +1377,11 @@ textarea.settings-input {
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
-.settings-row + .quiet-hours-window,
-.quiet-hours-window .settings-row + .settings-row {
-  border-top: 0;
-}
-
 .quiet-hours-window .settings-row {
   padding-top: 0;
 }
 
 /* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
-.settings-save-indicator__claw {
-  display: inline-flex;
-  width: 15px;
-  height: 15px;
-}
-
 .settings-sidebar__esc {
   margin-left: auto;
   padding: 2px 6px;
@@ -1638,54 +1638,9 @@ openclaw-settings-save-indicator:empty {
   color: var(--danger);
 }
 
-.settings-save-indicator--saved {
-  animation: settingsSaveIndicatorFade 2s ease-out both;
-}
-
 .settings-save-indicator svg {
   width: 15px;
   height: 15px;
-}
-
-.settings-save-indicator__claw svg {
-  fill: currentColor;
-  stroke: none;
-  animation: chatWorkingClawFlex 2.4s ease-out infinite;
-}
-
-.settings-save-indicator__claw svg .claw-icon__jaw {
-  transform-box: view-box;
-  transform-origin: 8.6px 11px;
-  animation: chatWorkingClawSnip 2.4s ease-out infinite;
-}
-
-.settings-save-indicator__claw--saved svg,
-.settings-save-indicator__claw--saved svg .claw-icon__jaw {
-  animation-duration: 650ms;
-  animation-iteration-count: 1;
-}
-
-.settings-save-indicator__check {
-  color: var(--ok);
-}
-
-@keyframes settingsSaveIndicatorFade {
-  0%,
-  88% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-save-indicator--saved,
-  .settings-save-indicator__claw svg,
-  .settings-save-indicator__claw svg .claw-icon__jaw {
-    animation: none;
-  }
 }
 
 .settings-sidebar__footer .sidebar-footer-build {

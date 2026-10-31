@@ -1,10 +1,9 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { button, el } from "./page-dom.js";
 import {
   accessText,
   andList,
-  button,
-  el,
   recordsText,
   storeIcon,
   storeLabel,
@@ -16,7 +15,6 @@ import type { StoreChange, StoreEntry } from "./stores-contract.js";
 import { icon, type IconName } from "./ui-icons.js";
 
 export { accessText, storeLabel, storeOf, type Names } from "./store-entries.js";
-export { storeDialog } from "./store-dialog.js";
 
 /** Agent viewing selector and the viewed agent's store context (spec §8.1).
  * Selecting an agent only changes what is viewed. */
@@ -203,7 +201,7 @@ export function storesSection(
   const inventory = el("section", undefined, "knowledge-store-inventory");
   inventory.append(el("h3", "Stores", "knowledge-eyebrow"));
   const list = el("div", undefined, "knowledge-surface");
-  for (const entry of [...snapshot.stores].toSorted(
+  for (const entry of snapshot.stores.toSorted(
     (a, b) => Number(b.kind === "named") - Number(a.kind === "named"),
   )) {
     const row = el("div", undefined, "knowledge-store-row"),

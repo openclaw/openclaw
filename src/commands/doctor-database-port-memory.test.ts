@@ -21,6 +21,17 @@ vi.mock("../plugins/memory-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/memory-runtime.js")>()),
   getActiveMemorySearchManagerCore: plugin.open,
 }));
+// Host sizing is measured state; pin it so scheduling does not depend on the CI runner.
+const host = vi.hoisted(() => ({ rebuildConcurrency: undefined as number | undefined }));
+vi.mock("./doctor-database-port-memory-concurrency.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./doctor-database-port-memory-concurrency.js")>();
+  return {
+    ...actual,
+    resolveMemoryRebuildConcurrency: () =>
+      host.rebuildConcurrency ?? actual.resolveMemoryRebuildConcurrency(),
+  };
+});
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -28,6 +39,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   plugin.open.mockReset();
+  host.rebuildConcurrency = undefined;
   try {
     await state.cleanup();
   } finally {
@@ -237,4 +249,77 @@ it("resolves each agent's embedding SecretRef without a peer's missing key block
     "synthetic-memory-value",
   );
   expect(JSON.stringify(results)).not.toContain("synthetic-memory-value");
+});
+
+function overlappingSyncs(expected: number) {
+  let active = 0;
+  let peak = 0;
+  let started = 0;
+  const allStarted = Promise.withResolvers<void>();
+  return {
+    peak: () => peak,
+    sync: async () => {
+      active += 1;
+      started += 1;
+      peak = Math.max(peak, active);
+      if (started >= expected) {
+        allStarted.resolve();
+      }
+      // Release only once `expected` rebuilds overlap; a sequential scheduler fails by test timeout.
+      await allStarted.promise;
+      active -= 1;
+    },
+  };
+}
+
+it("overlaps agent rebuilds up to the host limit and isolates one agent's failure", async () => {
+  host.rebuildConcurrency = 3;
+  const agents = ["alpha", "beta", "broken", "delta"];
+  await state.writeConfig({
+    agents: { ownership: "explicit", entries: Object.fromEntries(agents.map((id) => [id, {}])) },
+  });
+  const stores = await agentStores(agents);
+  const syncs = overlappingSyncs(3);
+  plugin.open.mockImplementation(async ({ agentId }) => ({
+    manager: manager({
+      sync: async () => {
+        await syncs.sync();
+        if (agentId === "broken") {
+          throw new Error("private provider response");
+        }
+      },
+    }),
+    searchRuntimeRegistered: true,
+  }));
+
+  const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
+  expect(syncs.peak()).toBe(3);
+  expectStatuses(results, {
+    alpha: "rebuilt",
+    beta: "rebuilt",
+    broken: "failed",
+    delta: "rebuilt",
+  });
+  expect(results.find(({ agentId }) => agentId === "broken")?.warning).toContain(
+    "openclaw memory index --agent broken",
+  );
+  expect(JSON.stringify(results)).not.toContain("private provider response");
+});
+
+it("rebuilds one agent at a time when the host allows no fanout", async () => {
+  host.rebuildConcurrency = 1;
+  const agents = ["alpha", "beta", "gamma"];
+  await state.writeConfig({
+    agents: { ownership: "explicit", entries: Object.fromEntries(agents.map((id) => [id, {}])) },
+  });
+  const stores = await agentStores(agents);
+  const syncs = overlappingSyncs(1);
+  plugin.open.mockImplementation(async () => ({
+    manager: manager({ sync: syncs.sync }),
+    searchRuntimeRegistered: true,
+  }));
+
+  const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
+  expect(syncs.peak()).toBe(1);
+  expectStatuses(results, { alpha: "rebuilt", beta: "rebuilt", gamma: "rebuilt" });
 });

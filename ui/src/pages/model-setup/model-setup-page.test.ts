@@ -435,7 +435,8 @@ describe("Model setup account connections", () => {
         apiKeySupported: false,
         quickApiKeySetup: false,
         loginOptions: [
-          { ...authOption("radius/radius", "Radius account"), kind: "oauth", brandId: "radius" },
+          // Qualified choice ids never name the brand; the badge must use brandId.
+          { ...authOption("radius/radius", "Radius account"), kind: "oauth", brandId: "meta" },
         ],
       },
     ],
@@ -443,7 +444,7 @@ describe("Model setup account connections", () => {
 
   const setup = {
     ...detection,
-    authOptions: [{ ...authOption("setup-only", "Setup-only account"), brandId: "setup-only" }],
+    authOptions: [{ ...authOption("setup-only", "Setup-only account"), brandId: "meta" }],
   };
   let fixture: ReturnType<typeof createContext>;
   beforeEach(() => {
@@ -479,7 +480,7 @@ describe("Model setup account connections", () => {
     await waitForFast(() =>
       expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain("Radius account"),
     );
-    pageButton(page, '[data-models-login-provider="radius"]')!.click();
+    pageButton(page, '[data-models-login-provider="meta"]')!.click();
     await page.updateComplete;
     [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
       .find((button) => button.textContent?.includes("Radius account"))!
@@ -584,6 +585,11 @@ describe("Model setup account connections", () => {
       expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
         labelFor(operation) + " is open in a new tab.",
       );
+      expect(
+        modal
+          .querySelector(".wizard-sign-in__badge [data-provider-icon]")
+          ?.getAttribute("data-provider-icon"),
+      ).toBe("meta");
       if (failed) {
         expect(modal.textContent).not.toContain(guidance);
         expect(modal.textContent).not.toContain(url);

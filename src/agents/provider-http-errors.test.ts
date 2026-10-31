@@ -11,7 +11,21 @@ import {
   readProviderJsonResponse as readJson,
   readProviderJsonObjectResponse as readJsonObject,
   readProviderTextResponse as readText,
+  readResponseTextLimited as readLimited,
+  summarizeProviderTransportError,
 } from "./provider-http-errors.js";
+
+it("logs bounded failure labels without missing fields or provider prose", () => {
+  expect(
+    summarizeProviderTransportError(
+      Object.assign(new Error("private response body"), {
+        code: "ECONNRESET",
+        cause: new Error("private upstream body"),
+      }),
+    ),
+  ).toBe("name=Error code=ECONNRESET causeName=Error");
+  expect(summarizeProviderTransportError({ name: "private prompt echo", code: {} })).toBe("");
+});
 
 const streamResponse = (
   source: UnderlyingSource<Uint8Array>,
@@ -43,6 +57,32 @@ const matcher = (
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it.each(["before", "during"])("cancels limited text reads aborted %s reading", async (when) => {
+  vi.useFakeTimers();
+  const controller = new AbortController();
+  const reason = new Error("caller stopped provider diagnostics");
+  const cancel = vi.fn();
+  if (when === "before") {
+    controller.abort(reason);
+  }
+  const observed = readLimited(stalledResponse(cancel), 128, { signal: controller.signal }).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    if (when === "during") {
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(cancel).toHaveBeenCalledOnce();
+    await expect(observed).resolves.toEqual({ error: reason });
+  } finally {
+    await vi.runAllTimersAsync();
+    await observed;
+  }
 });
 
 it("matches only active credential values, including the redaction marker itself", () => {

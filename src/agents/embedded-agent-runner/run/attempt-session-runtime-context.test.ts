@@ -42,7 +42,8 @@ it.each([3, 4] as const)(
     });
     const activeSession = {
       agent: { convertToLlm, state: { messages: [] } },
-    } as unknown as Pick<AgentSession, "agent">;
+      subscribe: () => () => {},
+    } as unknown as Pick<AgentSession, "agent" | "subscribe">;
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       appendOnlyRuntimeContext: true,

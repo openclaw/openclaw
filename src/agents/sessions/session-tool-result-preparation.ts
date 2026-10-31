@@ -1,7 +1,7 @@
+import { copyInternalToolResultState } from "../../../packages/agent-core/src/internal-hooks.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { createSessionManagerRuntimeRegistry } from "../agent-hooks/session-manager-runtime-registry.js";
 import type { AgentEvent, AgentMessage } from "../runtime/index.js";
-import { copyInternalToolResultState } from "../runtime/internal-hooks.js";
 import type { SessionManager } from "./session-manager.js";
 
 type ToolResultPreparation = {

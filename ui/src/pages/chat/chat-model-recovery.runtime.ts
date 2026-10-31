@@ -1,5 +1,5 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";

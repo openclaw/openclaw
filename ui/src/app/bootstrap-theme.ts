@@ -89,6 +89,19 @@ function livePreferencesKey(settings: UiPreferences): string {
   return JSON.stringify(preferences);
 }
 
+function appearanceKey(settings: UiPreferences): string {
+  return JSON.stringify([
+    settings.theme,
+    settings.themeMode,
+    settings.accent,
+    settings.fontUi,
+    settings.fontChat,
+    settings.textScale,
+    settings.customTheme,
+    settings.background?.visibility,
+  ]);
+}
+
 export function createApplicationTheme(
   initialSettings: UiSettings,
   gateway: ApplicationGateway,
@@ -205,6 +218,7 @@ export function createApplicationTheme(
   const refresh = (options?: { notify?: boolean }) => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
     const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
+    const appearanceChanged = appearanceKey(next) !== appearanceKey(settings);
     settings = next;
     if (!changed) {
       // Readiness can change without changing the stored preference values.
@@ -214,8 +228,14 @@ export function createApplicationTheme(
       return;
     }
     void loadCatalog();
-    publish();
-    syncSystemThemeListener();
+    if (appearanceChanged) {
+      publish();
+      syncSystemThemeListener();
+    } else {
+      // Board/navigation preferences still notify consumers without reapplying
+      // the document palette or retiring an in-flight palette load.
+      listeners.publish();
+    }
   };
   const stopPreferences = bindUiPreferences({
     gatewayUrl: () => gateway.connection.gatewayUrl,

@@ -33,7 +33,7 @@ export async function inspectUpdateDoctorChildSupport(
   worker: { workerUrl: URL; argv: string[] },
   options: CommandOptions,
   assertCurrent: () => void,
-): Promise<boolean> {
+): Promise<{ doctorConfigWrites: boolean; doctorRetirementOnly: boolean }> {
   assertCurrent();
   try {
     await fs.lstat(worker.workerUrl);
@@ -42,7 +42,7 @@ export async function inspectUpdateDoctorChildSupport(
       // Candidate canary preserves this pre-worker published-target contract.
       // Only the expected worker's absence qualifies, never a failed command.
       assertCurrent();
-      return false;
+      return { doctorConfigWrites: false, doctorRetirementOnly: false };
     }
     throw new UpdateCommandRecoveryPendingError("Target Doctor worker could not be inspected.", {
       cause,
@@ -84,19 +84,18 @@ export async function inspectUpdateDoctorChildSupport(
   if (capability !== undefined && capability !== "pid-start-v1") {
     throw new UpdateCommandRecoveryPendingError("Target Doctor authority protocol is unsupported.");
   }
+  if (
+    contract.doctorRetirementOnly !== undefined &&
+    typeof contract.doctorRetirementOnly !== "boolean"
+  ) {
+    throw new UpdateCommandRecoveryPendingError("Target Doctor retirement capability is invalid.");
+  }
   // v2026.9.3 reports its schemas but has no delegated Doctor entrypoint.
-  return capability === "pid-start-v1";
+  return {
+    doctorConfigWrites: capability === "pid-start-v1",
+    doctorRetirementOnly: contract.doctorRetirementOnly === true,
+  };
 }
-
-export type UpdateDoctorChildContext = {
-  runId: string;
-  executorFence: UpdateRecoveryFence;
-  requester?: Readonly<UpdateRequester>;
-  /** The parent mutation fence is suspended while its child owns effects. */
-  assertRequesterCurrent: () => void;
-  onStateHandoff?: () => void;
-  onProcessSettlement?: (step: UpdateStepResult) => void;
-};
 
 /** Both delegated and standalone update Doctors publish through the same result channel. */
 export async function runUpdateDoctorProcess(
@@ -185,7 +184,15 @@ export async function runUpdateDoctorProcess(
 export async function withUpdateDoctorChild<T>(
   params: {
     root: string;
-    context: UpdateDoctorChildContext;
+    context: {
+      runId: string;
+      executorFence: UpdateRecoveryFence;
+      requester?: Readonly<UpdateRequester>;
+      /** The parent mutation fence is suspended while its child owns effects. */
+      assertRequesterCurrent: () => void;
+      onStateHandoff?: () => void;
+      onProcessSettlement?: (step: UpdateStepResult) => void;
+    };
     input: Omit<UpdateDoctorInput, "executor" | "runId" | "root" | "requester">;
   },
   operation: (

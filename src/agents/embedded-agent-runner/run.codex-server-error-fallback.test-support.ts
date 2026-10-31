@@ -39,9 +39,8 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
 
   it("throws FailoverError for persistent Codex server_error after transient retries", async () => {
     // Codex server_error is a provider failure, not a normal assistant reply.
-    // The transient retry owner continues the same model first; once the failure
-    // persists past the retry budget, configured fallbacks receive it through
-    // the failover path.
+    // An explicit retry budget allows the full same-model recovery before
+    // configured fallbacks receive the persistent failure.
     const rawCodexError =
       'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
@@ -58,6 +57,7 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
     });
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
+        providerRetryMaxRetries: 8,
         assistantTexts: [],
         lastAssistant: currentAttemptAssistant,
         currentAttemptAssistant,

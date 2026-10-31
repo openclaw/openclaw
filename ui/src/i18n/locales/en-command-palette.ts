@@ -1,4 +1,6 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerChatCommandsEnglish } from "./en-chat-commands.ts";
+import { registerChatWelcomeEnglish } from "./en-chat-welcome.ts";
 import { en } from "./en.ts";
 
 // Discovery copy loads with the palette or transcript search, not the shell.
@@ -6,6 +8,7 @@ const enCommandPalette = {
   commandPalette: {
     newSessionSettings: "New session settings",
     rememberSettings: "Remember settings for {shortcut}",
+    rememberSettingsNoShortcut: "Remember these settings",
     rememberUnavailable: "Reconnect to remember settings.",
     settingsSaveFailed: "Could not save settings.",
   },
@@ -127,35 +130,8 @@ const enCommandPalette = {
     },
   },
   chat: {
-    welcome: {
-      hintBeforeShortcut: "Type a message below ·",
-      hintAfterShortcut: "for commands",
-      recentSessions: "Recent chats",
-      suggestions: {
-        whatCanYouDo: en.chat.welcome.suggestions.whatCanYouDo,
-        summarizeRecentSessions: "Summarize my recent sessions",
-        configureChannel: "Help me configure a channel",
-        checkSystemHealth: "Check system health",
-        exploreOpenClaw: "Tour OpenClaw's code and docs",
-        investigateInSandbox: "Investigate an issue in a sandbox",
-        openDraftPullRequest: "Fix a bug and open a draft PR",
-      },
-    },
-    commands: {
-      arguments: "Command arguments",
-      menu: "Slash commands",
-      optionCount: "{count} options",
-      clearDescription: "Clear chat history",
-      redirectDescription: "Abort and restart with a new message",
-      steerDescription: "Inject a message into the active run",
-      exportDescription: "Download this conversation as Markdown",
-      categories: {
-        session: "Session",
-        model: "Model",
-        agents: "Agents",
-        tools: "Tools",
-      },
-    },
+    welcome: registerChatWelcomeEnglish.catalog.chat.welcome,
+    commands: registerChatCommandsEnglish.catalog.chat.commands,
   },
 } satisfies TranslationMap;
 

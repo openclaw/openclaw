@@ -5,9 +5,8 @@ import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-s
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat boot optional requests" });
-
 suite.define(() => {
-  it("defers media, empty activity, login modules and hidden artwork until their surfaces are needed", async () => {
+  it("loads transcript images with rows while deferring optional surfaces and hidden artwork", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
       async ({ page }) => {
@@ -17,11 +16,12 @@ suite.define(() => {
           "ui/src/components/login-gate-solid.tsx",
         );
         const loginRequests = () => requested.filter((path) => loginModuleRequest.test(path));
-        const mediaModules = [
-          "chat-message-images-solid.tsx",
-          "chat-message-attachments-solid.tsx",
-          "widget-card-view.tsx",
-        ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/pages/chat/components/${file}`));
+        const imageModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/chat-message-images-solid.tsx",
+        );
+        const mediaModules = ["chat-message-attachments-solid.tsx", "widget-card-view.tsx"].map(
+          (file) => controlUiE2eBuiltModuleRequest(`ui/src/pages/chat/components/${file}`),
+        );
         const mediaRequests = () =>
           requested.filter((path) => mediaModules.some((module) => module.test(path)));
         const subagentActivityModule = controlUiE2eBuiltModuleRequest(
@@ -40,6 +40,7 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
+          deviceToken: null, // Keep the rejection terminal while the login module loads.
           deferredMethods: ["connect"],
           historyMessages: [initialMessage],
         });
@@ -55,6 +56,7 @@ suite.define(() => {
         expect(iconRequests()).toEqual([]);
         expect(loginRequests()).toEqual([]);
         expect(mediaRequests()).toEqual([]);
+        expect(requested.some((path) => imageModule.test(path))).toBe(true);
         expect(requested.filter((path) => subagentActivityModule.test(path))).toEqual([]);
 
         const imageMessage = {
@@ -65,49 +67,24 @@ suite.define(() => {
             {
               type: "image",
               url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-              alt: "Deferred transcript image",
+              alt: "Inline transcript image",
             },
           ],
         };
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep this draft while the image loads");
-        const releaseImage = Promise.withResolvers<void>();
-        await page.route(mediaModules[0]!, async (route) => {
-          await releaseImage.promise;
-          await route.continue();
+        await gateway.setHistoryMessages([initialMessage, imageMessage]);
+        await gateway.emitGatewayEvent("session.message", {
+          message: imageMessage,
+          sessionKey,
+          messageId: "deferred-image",
+          messageSeq: 2,
+          activeRunIds: [],
+          hasActiveRun: false,
         });
-        const requestedImage = page.waitForRequest(mediaModules[0]!);
-        try {
-          await gateway.setHistoryMessages([initialMessage, imageMessage]);
-          await gateway.emitGatewayEvent("session.message", {
-            message: imageMessage,
-            sessionKey,
-            messageId: "deferred-image",
-            messageSeq: 2,
-            activeRunIds: [],
-            hasActiveRun: false,
-          });
-          await requestedImage;
-          await page
-            .locator("[data-message-id]")
-            .getByText("The image loads within this message.", { exact: true })
-            .waitFor();
-          await page.evaluate(
-            () =>
-              new Promise<void>((resolve) => {
-                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-              }),
-          );
-          expect(await page.locator("[data-message-id] .lazy-view-state--loading").count()).toBe(0);
-          expect(await composer.inputValue()).toBe("Keep this draft while the image loads");
-          expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
-            true,
-          );
-        } finally {
-          releaseImage.resolve();
-        }
-        await page.locator('.chat-message-images img[alt="Deferred transcript image"]').waitFor();
-        expect(mediaRequests().length).toBeGreaterThan(0);
+        await page.locator('.chat-message-images img[alt="Inline transcript image"]').waitFor();
+        expect(await page.locator("[data-message-id] .lazy-view-state--loading").count()).toBe(0);
+        expect(mediaRequests()).toEqual([]);
         expect(await composer.inputValue()).toBe("Keep this draft while the image loads");
         expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
         await composer.fill("");

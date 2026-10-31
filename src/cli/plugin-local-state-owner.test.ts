@@ -27,6 +27,7 @@ import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginCliRegistrar } from "../plugins/plugin-registration.types.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 
 const fixture = vi.hoisted(() => ({
   external: false,
@@ -36,8 +37,6 @@ const fixture = vi.hoisted(() => ({
   search: vi.fn<MemorySearchManager["search"]>(),
   searchClose: vi.fn(async () => {}),
   status: vi.fn(),
-  bootstrap: vi.fn(),
-  recovery: vi.fn(),
   memory: vi.fn(async () => {}),
   matrix: vi.fn(async (): Promise<unknown[]> => []),
   config: vi.fn(() => ({
@@ -97,31 +96,23 @@ function registerSyntheticPlugin(api: OpenClawPluginApi) {
       }
     });
   };
-  for (const operation of ["preview", "apply", "rollback"]) {
-    registerOwnedMethod(`fixture.batch.${operation}.owner`, async (params) => ({
-      execution: await fixture.executeBatch(),
-      ownerId: params.expectedOwnerId,
-    }));
-  }
-  for (const [operation, mock] of [
-    ["status", fixture.status],
-    ["bootstrap", fixture.bootstrap],
-    ["recoveryKey", fixture.recovery],
-  ] as const) {
-    registerOwnedMethod(`fixture.verify.${operation}.owner`, async (params) => ({
-      result: await mock({ cfg: api.runtime.config.current(), accountId: params.accountId }),
+  registerOwnedMethod("fixture.batch.apply.owner", async (params) => ({
+    execution: await fixture.executeBatch(),
+    ownerId: params.expectedOwnerId,
+  }));
+  registerOwnedMethod("fixture.verify.status.owner", async (params) => ({
+    result: await fixture.status({
+      cfg: api.runtime.config.current(),
       accountId: params.accountId,
-    }));
-  }
+    }),
+    accountId: params.accountId,
+  }));
   api.registerCli(({ program }) => {
     program
       .command("memory <operation> [value]")
       .allowUnknownOption()
       .allowExcessArguments()
       .option("--apply")
-      .option("--rollback")
-      .option("--rem")
-      .option("--archive-files <path>")
       .option("--json")
       .option("--agent <id>")
       .option("--max-results <n>", "limit", Number)
@@ -131,17 +122,13 @@ function registerSyntheticPlugin(api: OpenClawPluginApi) {
           operation: string,
           value: string | undefined,
           opts: {
-            apply?: boolean;
-            rollback?: boolean;
-            rem?: boolean;
-            archiveFiles?: string;
             agent?: string;
             maxResults?: number;
             minScore?: number;
           },
         ) => {
           if (operation === "session-backfill") {
-            await runSyntheticBatches(opts);
+            await runSyntheticBatches();
           } else if (operation === "search") {
             const result = await runWithLocalStateOwner<MemoryCliSearchOutcome | undefined>({
               method: "memory.search.owner",
@@ -191,23 +178,16 @@ function registerSyntheticPlugin(api: OpenClawPluginApi) {
       .option("--include-recovery-key")
       .action(async (operation: string, _value: string | undefined, opts: { account?: string }) => {
         try {
-          const routed = ["status", "bootstrap", "device"].includes(operation);
           const result = await runWithLocalStateOwner<{ result: unknown }>({
-            method: routed
-              ? `fixture.verify.${operation === "device" ? "recoveryKey" : operation}.owner`
-              : "fixture.offline",
+            method: `fixture.verify.${operation}.owner`,
             target: "fixture account",
             params: { accountId: opts.account },
-            ...(routed ? {} : { onForeignOwner: "refuse" as const }),
             runLocal: async () => {
               fixture.config();
               return { result: await fixture.matrix() };
             },
           });
           printJson(result.result);
-          if (operation === "bootstrap" && !(result.result as { success: boolean }).success) {
-            process.exitCode = 1;
-          }
         } catch (error) {
           process.exitCode = 1;
           printJson({ error: String(error) });
@@ -220,13 +200,7 @@ function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-async function runSyntheticBatches(opts: {
-  apply?: boolean;
-  rollback?: boolean;
-  rem?: boolean;
-  archiveFiles?: string;
-}) {
-  const operation = opts.rollback ? "rollback" : opts.apply ? "apply" : "preview";
+async function runSyntheticBatches() {
   let operationOwnerId: string | undefined;
   const batches: ReturnType<typeof backfillExecution>["result"][] = [];
   for (;;) {
@@ -234,10 +208,9 @@ async function runSyntheticBatches(opts: {
       execution: ReturnType<typeof backfillExecution>;
       ownerId: string;
     } | null>({
-      method: `fixture.batch.${operation}.owner`,
+      method: "fixture.batch.apply.owner",
       target: "fixture batches",
       params: { cliResult: true, ...(operationOwnerId ? { operationOwnerId } : {}) },
-      ...(opts.rem || opts.archiveFiles ? { onForeignOwner: "refuse" as const } : {}),
       runLocal: async () => {
         if (operationOwnerId) {
           throw new Error("The selected Gateway is no longer running");
@@ -251,7 +224,7 @@ async function runSyntheticBatches(opts: {
     }
     operationOwnerId ??= reply.ownerId;
     batches.push(reply.execution.result);
-    if (!opts.apply || !reply.execution.continuation.hasMore) {
+    if (!reply.execution.continuation.hasMore) {
       break;
     }
   }
@@ -370,8 +343,6 @@ beforeEach(() => {
     searchForCli,
   });
   fixture.status.mockReset();
-  fixture.bootstrap.mockReset();
-  fixture.recovery.mockReset();
   process.exitCode = 0;
 });
 
@@ -555,21 +526,18 @@ describe("synthetic plugin commands respect the local state owner", () => {
   it("routes configured memory search and options without local database credentials", async () => {
     await occupyState();
     vi.stubEnv("MISSING_ROUTED_CLI_DATABASE_DSN", undefined);
-    fs.writeFileSync(
-      path.join(root, "openclaw.json"),
-      JSON.stringify({
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_ROUTED_CLI_DATABASE_DSN",
-            },
+    writeFixtureJsonSync(path.join(root, "openclaw.json"), {
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: {
+            source: "env",
+            provider: "default",
+            id: "MISSING_ROUTED_CLI_DATABASE_DSN",
           },
         },
-      }),
-    );
+      },
+    });
     const hits = [
       {
         path: "memory/fact.md",

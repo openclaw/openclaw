@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as processUrls from "./runtime-process-url.js";
@@ -90,7 +90,6 @@ function expectForksClosed() {
 }
 
 function expectElapsed(value: unknown) {
-  expect(value).toEqual(expect.any(Number));
   expect(Number.isFinite(value)).toBe(true);
   expect(value).toBeGreaterThanOrEqual(0);
 }
@@ -485,9 +484,7 @@ describe("SQLite integrity child", () => {
       void check.then(markSettled, markSettled);
       try {
         await ready.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(settled).toBe(false);
         expect(timing).not.toHaveProperty("workerLifetimeElapsedMs");
       } finally {

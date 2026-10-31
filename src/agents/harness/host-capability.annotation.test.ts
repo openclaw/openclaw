@@ -51,6 +51,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { convertToLlm } from "../sessions/messages.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
@@ -496,18 +497,14 @@ describe("host-owned current admission annotation", () => {
               upstreamUserText: "native prompt",
             },
           });
-          const model = {
+          const model = makeProviderModelFixture({
             api: "openai-completions",
             provider: "openai",
             id: "gpt-5.5",
             name: "GPT-5.5",
             baseUrl: "https://api.openai.com/v1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 100000,
-            maxTokens: 4096,
-          } satisfies Parameters<typeof convertMessages>[0];
+          }) satisfies Parameters<typeof convertMessages>[0];
           const modelBytes = (message: typeof originalMessage) =>
             JSON.stringify(
               convertMessages(

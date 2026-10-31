@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectFamilyEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -48,6 +49,7 @@ import {
   ensureDevicePairSetupBootstrapSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
@@ -57,6 +59,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   withStateMigrationBackupForTest,
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
 } from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -255,7 +258,7 @@ it.each([false, true])(
       expect.objectContaining({ foundVersion: supportedVersions.state - 1 }),
     ]);
     expect(olderTarget.indeterminate).toEqual(indeterminate);
-    expect(snapshotSourceFamily(statePath)).toEqual(before);
+    expectFamilyEqual(snapshotSourceFamily(statePath), before);
     if (damaged) {
       await expect(fixture.ready(undefined, "gateway-restart")).rejects.toThrow(
         /Gateway refused restart.*column definitions differ for worktrees/su,
@@ -319,7 +322,7 @@ it("holds an unregistered store without deletion history or creating shared stat
       }),
     }),
   );
-  expect(snapshotSourceFamily(agent.path)).toEqual(before);
+  expectFamilyEqual(snapshotSourceFamily(agent.path), before);
   expect(fs.existsSync(statePath)).toBe(false);
 });
 
@@ -403,14 +406,14 @@ it("admits a dangling Workshop index only for Doctor without mutating the source
     fs
       .readdirSync(sourceDir)
       .toSorted()
-      .map((name) => [name, fs.readFileSync(path.join(sourceDir, name))]);
+      .map((name) => ({ name, bytes: fs.readFileSync(path.join(sourceDir, name)) }));
   const before = snapshot();
 
   const runtime = await fixture.inspect({ scope: "state" });
   expect(runtime.indeterminate).toEqual([
     expect.objectContaining({ reason: expect.stringMatching(/openclaw doctor --fix/) }),
   ]);
-  expect(snapshot()).toEqual(before);
+  expectFilesEqual(snapshot(), before);
 
   await expect(
     fixture.inspect({
@@ -419,7 +422,7 @@ it("admits a dangling Workshop index only for Doctor without mutating the source
       supportedVersions,
     }),
   ).resolves.toEqual(compatible);
-  expect(snapshot()).toEqual(before);
+  expectFilesEqual(snapshot(), before);
 });
 
 it.each([
@@ -492,7 +495,19 @@ it("upgrades captured subagent authority state without rewriting rows and refuse
   let catalog;
   {
     using writer = openRawDatabase(pathname);
+    // Raw catalog equality needs a post-cutover reference, not fresh CREATE
+    // spelling: SQLite quotes table names after the legitimate rename cycle.
+    for (const table of [
+      ...TEMPLATE_STATE_TABLE_RENAMES.map(([, current]) => current),
+      "agent_provenance",
+    ]) {
+      if (writer.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(table)) {
+        writer.exec(`ALTER TABLE ${table} RENAME TO ${table}_fixture_cutover;
+          ALTER TABLE ${table}_fixture_cutover RENAME TO ${table};`);
+      }
+    }
     catalog = writer.prepare(catalogSql).all();
+    restorePreTemplateStateIdentifiersForTest(writer);
     addPreCutoverClientCredentialTablesForTest(writer);
     writer.exec(`PRAGMA user_version = 24;
       UPDATE schema_meta SET schema_version = 24 WHERE meta_key = 'primary';

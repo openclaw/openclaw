@@ -9,6 +9,7 @@ import {
   hasGatewayWorkMetricsListeners,
   publishGatewayWorkMetrics,
 } from "../infra/gateway-work-metrics.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -106,7 +107,7 @@ export function startGatewayWorkMetrics(params: {
       setImmediate(() => {
         scheduled = undefined;
         dirty = false;
-        pending = refresh()
+        pending = runWithMainThreadTask("gateway:work-metrics", refresh)
           .catch((error: unknown) => {
             if (!stopped) {
               publishGatewayWorkMetrics(undefined);
@@ -127,6 +128,7 @@ export function startGatewayWorkMetrics(params: {
   gatewayWorkMetricsDemand.onChanged = changed;
   changed();
   return {
+    name: "work-metrics",
     stop: async () => {
       stopped = true;
       unsubscribeSessionChanges?.();

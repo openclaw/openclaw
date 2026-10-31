@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   isDirectScriptExecution,
   resolveUiBuildEnvironment,
@@ -31,7 +32,6 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const procSafeRoot = fs.realpathSync(
@@ -60,29 +60,29 @@ function writeFiles(root: string, files: Record<string, string>): void {
   }
 }
 
+let uiFixtureSources: string[] | undefined;
 function copyUiFixture(root: string, extra: string[] = []): void {
-  for (const file of [
-    "scripts/ui.js",
-    "scripts/ui.mts",
-    "scripts/pnpm-runner.mts",
-    "scripts/run-node-package-bin.mts",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib/build-identity.mts",
-    "scripts/lib/output-root-guard.mjs",
-    "scripts/lib/record-shared.mjs",
-    "scripts/lib/prepare-control-ui-settings.mts",
-    "src/infra/process-env.ts",
-    "src/infra/windows-process-start.ts",
-    "src/shared/freebsd-process-identity.ts",
-    "src/shared/freebsd-process-identity-native.ts",
-    "src/shared/pid-alive.ts",
+  // Runtime imports plus URL launchers and cache-only inputs own this fixture.
+  // Compiler fixtures retain their separate declaration/source-signature inventory.
+  uiFixtureSources ??= [
+    ...collectRuntimeImportClosure(
+      process.cwd(),
+      [
+        "scripts/ui.js",
+        "scripts/tsx.mjs",
+        "scripts/lib/managed-memory-launcher.mts",
+        "scripts/lib/managed-windows-job-launcher.mts",
+      ],
+      { includeDynamicImports: true },
+    ),
     "ui/package.json",
-    "ui/src/build-info-normalizers.ts",
-    "packages/normalization-core/src/record-coerce.ts",
-    "packages/normalization-core/src/string-coerce.ts",
-    "packages/normalization-core/src/utf16-slice.ts",
-    ...extra,
-  ]) {
+    "packages/normalization-core/package.json",
+    ...fs
+      .readdirSync("scripts/lib")
+      .filter((file) => file.startsWith("control-ui-i18n"))
+      .map((file) => "scripts/lib/" + file),
+  ];
+  for (const file of [...uiFixtureSources, ...extra]) {
     const destination = path.join(root, file);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(file, destination);
@@ -97,7 +97,13 @@ function copyUiFixture(root: string, extra: string[] = []): void {
       'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
   });
   fs.mkdirSync(path.join(root, ".git"));
-  installDistArtifactScripts(root, [], { compiler: false });
+  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+    fs.symlinkSync(
+      path.resolve("node_modules", name),
+      path.join(root, "node_modules", name),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
@@ -403,6 +409,13 @@ process.exitCode = 0;\n`,
       "src/shared/non-packaged-plugin-dirs.ts",
     ]);
     fs.mkdirSync(path.join(root, "extensions"));
+    writeFiles(root, {
+      "extensions/qa-lab/package.json": JSON.stringify({ name: "@openclaw/qa-lab" }),
+      "extensions/qa-lab/openclaw.plugin.json": JSON.stringify({ id: "qa-lab" }),
+      "extensions/qa-lab/index.ts": "export {};\n",
+      "ui/src/cache-only.test.ts": "export const fixture = 1;\n",
+      "ui/src/consumed.test.ts": "export const fixture = 1;\n",
+    });
     const posterFonts = [
       "src/gateway/assets/session-card/Lato-Regular.ttf",
       "src/gateway/assets/session-card/InstrumentSerif-Regular.ttf",
@@ -428,15 +441,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const out = process.argv[process.argv.indexOf("--outDir") + 1];
   fs.mkdirSync(out, { recursive: true });
   for (const file of ["index.html", "sw.js", ".build-inputs.json"]) fs.writeFileSync(path.join(out, file), "[]");
+  fs.writeFileSync(path.join(out, ".build-inputs.json"), JSON.stringify(["ui/src/consumed.test.ts"]));
   console.log("fixture-bundler-ran");
 }
 `);
-    const run = (expectedExit = 0) => {
+    const run = (expectedExit = 0, privateQa = false) => {
       const result = build.run({
         BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
         OPENCLAW_BUILD_CACHE: "1",
         OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
         OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
+        OPENCLAW_BUILD_PRIVATE_QA: privateQa ? "1" : "0",
       });
       expectExit(result, expectedExit);
       return result.stdout;
@@ -453,6 +468,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "refreshed identity",
     );
     expect(fs.readFileSync(cachedHtml, "utf8")).toBe(cachedSource);
+    writeFiles(root, {
+      "dist/extensions/qa-lab/package.json": JSON.stringify({ name: "@openclaw/qa-lab" }),
+      "dist/extensions/qa-lab/openclaw.plugin.json": JSON.stringify({ id: "qa-lab" }),
+    });
+    expect(run(0, true)).toContain("reused content cache");
+    fs.appendFileSync(path.join(root, "ui/src/cache-only.test.ts"), "// changed test body\n");
+    expect(run()).toContain("reused content cache");
+    writeFiles(root, { "ui/src/new.test.tsx": "export {};\n" });
+    expect(run()).toContain("fixture-bundler-ran");
+    fs.appendFileSync(path.join(root, "ui/src/consumed.test.ts"), "// changed consumed input\n");
+    expect(run()).toContain("fixture-bundler-ran");
     for (const font of posterFonts) {
       fs.appendFileSync(path.join(root, font), "changed font bytes");
       expect(run()).toContain("fixture-bundler-ran");
@@ -467,6 +493,33 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "openclaw.plugin.json": JSON.stringify({ id: "new-board" }),
     });
     expect(run()).toContain("fixture-bundler-ran");
+    writeFiles(root, {
+      "dist/extensions/new-board/package.json": JSON.stringify({
+        name: "@openclaw/new-board",
+        version: "1.0.0",
+      }),
+      "dist/extensions/new-board/openclaw.plugin.json": JSON.stringify({
+        id: "new-board",
+        controlUi: { entry: "dist/control-ui/generation/index.js" },
+      }),
+      "dist/extensions/new-board/dist/control-ui/generation/index.js": "export {};\n",
+    });
+    expect(run()).toContain("fixture-bundler-ran");
+    fs.appendFileSync(
+      path.join(root, "dist/extensions/new-board/dist/control-ui/generation/index.js"),
+      "// changed native UI\n",
+    );
+    expect(run()).toContain("fixture-bundler-ran");
+    for (const manifest of ["invalid JSON", JSON.stringify({ id: " " })]) {
+      writeFiles(root, { "dist/extensions/qa-lab/openclaw.plugin.json": manifest });
+      const refused = run(1);
+      expect(refused).not.toContain("fixture-bundler-ran");
+      expect(refused).not.toContain("reused content cache");
+    }
+    writeFiles(root, {
+      "dist/extensions/qa-lab/openclaw.plugin.json": JSON.stringify({ id: "qa-lab" }),
+    });
+    expect(run()).toContain("reused content cache");
     const output = path.join(root, "dist/control-ui/index.html");
     const published = fs.readFileSync(output, "utf8");
     writeFiles(root, { "scripts/generate-control-ui-validators.mts": "process.exitCode = 23;\n" });
@@ -671,7 +724,7 @@ require("node:module").syncBuiltinESMExports();
       ].join("\n");
       const childOutcome = childSignal
         ? `process.kill(process.pid, '${childSignal}');`
-        : "setTimeout(() => process.exit(0), 25);";
+        : "setTimeout(() => process.exit(0), 500);";
       const handlerLines = descendant
         ? ["process.on('SIGTERM', () => process.exit(0));"]
         : ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [

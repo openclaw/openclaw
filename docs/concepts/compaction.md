@@ -18,6 +18,8 @@ OpenClaw keeps assistant tool calls paired with their matching `toolResult` entr
 
 Built-in compaction summarizes the older history in one model request, whatever the size of the session or the context window. A split turn adds one request for the turn prefix, and a failed safeguard quality audit adds one request per corrective attempt. Each request's conversation input is capped at 160,000 characters (about 40,000 tokens), or less when the summarizer's own context window is smaller. A larger history is filled in this order: the newest messages verbatim, in half of that budget; your older messages, which carry the asks, decisions and corrections, in a quarter, each trimmed to at most 2,000 characters and spread evenly across the history when they do not all fit; the oldest messages, in a tenth; and evenly spaced runs of the remaining messages, trimmed to 6,000 characters each. Each gap is marked with the number of messages left out, and the summarizer is told not to guess their content and to keep the previous summary's facts. Chinese, Japanese, and Korean (CJK) characters count by their approximate token weight. The bound applies to the summarizer input only; the transcript keeps every message.
 
+Ordinary long tool results use a 2,000-character summary-input projection, including an explicit truncation marker. It keeps the beginning and end so terminal result codes survive. Existing diagnostic-preservation rules stay in place, and short results pass through unchanged. Text in the omitted middle can still be lost; the full result remains in the transcript.
+
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
 Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
@@ -253,6 +255,12 @@ rewrite saved messages or count a failed attempt as successful compaction.
 It shows a notice even with compaction notifications disabled; resend any
 essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
+
+For direct Anthropic API-key routes, cleared turn-scoped runtime-context contents
+do not contribute to compaction pressure or the fallback window. Saved replay
+remains append-only. Event envelopes and history outside the bounded accounting
+read still count conservatively. The separate history hydration limit continues
+to count raw serialized bytes.
 
 Manual compaction also reports `transcript_bytes` pressure to the context engine
 when the configured positive threshold is reached and automatic compaction is

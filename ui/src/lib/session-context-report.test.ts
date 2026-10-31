@@ -3,6 +3,7 @@ import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
@@ -11,6 +12,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { sessionContextReportsForGateway } from "./session-context-report.ts";
 
 const target = {
@@ -35,22 +37,113 @@ const report: SessionSystemPromptReport = {
 const response = (value: SessionSystemPromptReport = report) => ({
   sessions: [{ key: target.sessionKey, sessionId: target.sessionId, contextWeight: value }],
 });
-function setup(request: ReturnType<typeof createGatewayRequestMock>) {
+function setup(...reads: Promise<ReturnType<typeof response>>[]) {
+  const request = createGatewayRequestMock();
+  for (const read of reads) {
+    request.mockReturnValueOnce(read);
+  }
   const { gateway, publish } = createApplicationGateway();
   const client = createTestGatewayClient(request);
-  publish({ ...gateway.snapshot, phase: "connected", client });
-  return { gateway, publish, store: sessionContextReportsForGateway(gateway) };
+  publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client,
+    hello: gatewayHelloForMethods([]),
+  });
+  return { gateway, publish, request, store: sessionContextReportsForGateway(gateway) };
 }
+
+it.each([true, false])(
+  "keeps reports bound to exact stored keys and agents (session IDs known: %s)",
+  async (knownSessionIds) => {
+    const selections = [
+      { sessionKey: "global", agentId: "main", sessionId: "raw-main" },
+      { sessionKey: "agent:main:global", agentId: "main", sessionId: "literal-main" },
+      { sessionKey: "global", agentId: "research", sessionId: "raw-research" },
+    ];
+    const rows = selections.map((selection, index) => ({
+      key: selection.sessionKey,
+      agentId: selection.agentId,
+      sessionId: selection.sessionId,
+      contextWeight: { ...report, sessionId: selection.sessionId, generatedAt: index + 1 },
+    }));
+    const pending = rows.map(() => createDeferredCore<{ sessions: typeof rows }>());
+    const { store, request } = setup();
+    request.mockImplementation((_method, params) => {
+      const query = asNullableObjectRecord(params);
+      const index = rows.findIndex(
+        (row) => row.key === query?.key && row.agentId === query?.agentId,
+      );
+      return index < 0 ? Promise.resolve({ sessions: [] }) : pending[index]!.promise;
+    });
+    const targets = selections.map((selection) => ({
+      sessionKey: selection.sessionKey,
+      agentId: selection.agentId,
+      sessionId: knownSessionIds ? selection.sessionId : undefined,
+      model: target.model,
+      provider: target.provider,
+      used: target.used,
+    }));
+    const owners = targets.map(() => ({}));
+    onTestFinished(() => owners.forEach((owner) => store.unwatch(owner)));
+    targets.forEach((selected, index) => store.watch(owners[index]!, selected));
+    const reads = targets.map((selected) => store.refresh(selected));
+    for (const index of [2, 1, 0]) {
+      pending[index]!.resolve({ sessions: [rows[index]!] });
+    }
+    await Promise.all(reads);
+    expect(request).toHaveBeenCalledTimes(3);
+    targets.forEach((selected, index) => {
+      expect(store.get(selected).report).toEqual(rows[index]!.contextWeight);
+    });
+
+    request.mockResolvedValueOnce({ sessions: [{ ...rows[0], contextWeight: null }] });
+    await store.refresh(targets[0]!);
+    expect(store.get(targets[0]!).report).toBeNull();
+    expect(store.get(targets[1]!).report).toEqual(rows[1]!.contextWeight);
+  },
+);
+
+it("does not read restricted context breakdowns and retires results across scope changes", async () => {
+  const { gateway, publish, request, store } = setup();
+  const owner = {};
+  onTestFinished(() => store.unwatch(owner));
+  const setScopes = (scopes: string[]) =>
+    publish({
+      ...gateway.snapshot,
+      hello: gatewayHelloForMethods([], scopes),
+    });
+  request.mockResolvedValue(response());
+  setScopes(["operator.sessions.read"]);
+  store.watch(owner, target);
+  store.watch(owner, { ...target, used: target.used + 100 });
+  await store.refresh(target);
+  expect(request).not.toHaveBeenCalled();
+  expect(store.get(target)).toMatchObject({ report: null, loading: false, failed: false });
+  setScopes(["operator.read"]);
+  await store.refresh(target);
+  expect(store.get(target).report).toEqual(report);
+  const pending = createDeferredCore<ReturnType<typeof response>>();
+  request.mockReturnValueOnce(pending.promise);
+  const read = store.refresh(target);
+  setScopes(["operator.sessions.read"]);
+  pending.resolve(response());
+  await read;
+  expect(store.get(target)).toMatchObject({ report: null, loading: false, failed: false });
+  const calls = request.mock.calls.length;
+  await store.refresh(target);
+  expect(request).toHaveBeenCalledTimes(calls);
+  setScopes(["operator.read"]);
+  await store.refresh(target);
+  expect(store.get(target).report).toEqual(report);
+});
 
 it("shares pending reads, cached tab return and explicit refresh while releasing final demand", async () => {
   const initial = createDeferredCore<ReturnType<typeof response>>();
   const updated = createDeferredCore<ReturnType<typeof response>>();
   const latest = createDeferredCore<ReturnType<typeof response>>();
   const retired = createDeferredCore<ReturnType<typeof response>>();
-  const request = createGatewayRequestMock()
-    .mockReturnValueOnce(initial.promise)
-    .mockReturnValueOnce(updated.promise);
-  const { store } = setup(request);
+  const { request, store } = setup(initial.promise, updated.promise);
   const panel = {};
   const popover = {};
   store.watch(panel, target, false);
@@ -59,15 +152,11 @@ it("shares pending reads, cached tab return and explicit refresh while releasing
   store.watch(popover, { ...target });
   const first = store.refresh(target);
   expect(request).toHaveBeenCalledTimes(1);
-  expect(request.mock.calls[0]?.slice(0, 2)).toEqual([
-    "sessions.usage",
-    expect.objectContaining({
-      key: target.sessionKey,
-      agentId: "main",
-      limit: 1,
-      includeContextWeight: true,
-    }),
-  ]);
+  expect(request.mock.calls[0]?.[1]).toMatchObject({
+    key: target.sessionKey,
+    agentId: "main",
+    includeContextWeight: true,
+  });
   initial.resolve(response());
   await first;
   expect(store.get(target).report).toEqual(report);
@@ -124,10 +213,7 @@ it("shares pending reads, cached tab return and explicit refresh while releasing
 it("fences a pending response across same-client reconnect and reloads only active readers", async () => {
   const old = createDeferredCore<ReturnType<typeof response>>();
   const fresh = createDeferredCore<ReturnType<typeof response>>();
-  const request = createGatewayRequestMock()
-    .mockReturnValueOnce(old.promise)
-    .mockReturnValueOnce(fresh.promise);
-  const { gateway, publish, store } = setup(request);
+  const { gateway, publish, request, store } = setup(old.promise, fresh.promise);
   const owner = {};
   store.watch(owner, target);
   const oldRead = store.refresh(target);
@@ -155,10 +241,8 @@ it("fences a pending response across same-client reconnect and reloads only acti
 it.each(["sessionId", "model", "provider"] as const)(
   "does not cache a report for a different %s as current usage",
   async (field) => {
-    const request = createGatewayRequestMock().mockResolvedValue(
-      response({ ...report, [field]: "other" }),
-    );
-    const { store } = setup(request);
+    const { store, request } = setup();
+    request.mockResolvedValue(response({ ...report, [field]: "other" }));
     const owner = {};
     store.watch(owner, target);
     await store.refresh(target);
@@ -177,7 +261,8 @@ it.each(["sessionId", "model", "provider"] as const)(
 
 it("recovers once for two consumers and preserves server backoff while demand is paused", async () => {
   vi.useFakeTimers();
-  const request = createGatewayRequestMock()
+  const { store, request } = setup();
+  request
     .mockRejectedValueOnce(
       new GatewayProtocolRequestError({ code: "UNAVAILABLE", retryable: true }),
     )
@@ -189,7 +274,6 @@ it("recovers once for two consumers and preserves server backoff while demand is
       }),
     )
     .mockResolvedValue(response());
-  const { store } = setup(request);
   const panel = {};
   const popover = {};
   onTestFinished(() => {

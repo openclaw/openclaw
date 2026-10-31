@@ -204,38 +204,6 @@ describe("ingress retry policy", () => {
     });
   });
 
-  it("dead-letters a restart tombstone by structured code instead of wording", () => {
-    const message = "This generation is terminal.";
-    const tombstone = codedError(message, "SESSION_RESTART_RECOVERY_TOMBSTONE");
-    const wrapped = wrapError(tombstone);
-    expect(
-      disposition(wrapped, 0, {
-        config: { maxAttempts: 8, deadLetterMinAgeMs: 24 * 60 * 60 * 1000 },
-      }),
-    ).toEqual({
-      kind: "fail",
-      reason: "restart-recovery-tombstone",
-      message: wrapped.message,
-      attempt: 1,
-    });
-    expect(disposition(tombstone, 425)).toMatchObject({
-      kind: "fail",
-      reason: "restart-recovery-tombstone",
-      attempt: 426,
-    });
-  });
-
-  it.each([undefined, "SESSION_WORK_START_INVALIDATED"])(
-    "keeps tombstone-like text retryable without its code: %s",
-    (code) => {
-      const err = Object.assign(
-        new Error("Session ended during restart recovery. Use /new or /reset."),
-        { code },
-      );
-      expect(disposition(err, 0)).toEqual({ kind: "release", attempt: 1, message: err.message });
-    },
-  );
-
   it.each(["code", "cause", "errors"])(
     "releases a transient failure when its %s getter throws",
     (field) => {
@@ -251,25 +219,6 @@ describe("ingress retry policy", () => {
       });
     },
   );
-
-  it("finds the terminal code beside an inaccessible wrapper field", () => {
-    const err = Object.assign(new Error("reply admission refused"), {
-      error: Object.assign(new Error("terminal generation"), {
-        code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
-      }),
-    });
-    Object.defineProperty(err, "cause", {
-      get() {
-        throw new Error("unavailable diagnostic field");
-      },
-    });
-    expect(disposition(err, 0)).toEqual({
-      kind: "fail",
-      reason: "restart-recovery-tombstone",
-      attempt: 1,
-      message: "reply admission refused",
-    });
-  });
 
   it("keeps wrapped session-start conflicts under both retry and age gates", () => {
     const maxAttempts = 3;

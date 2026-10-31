@@ -8,9 +8,9 @@ import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { unavailable } from "./contract.test-support.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
 import { evaluateDecisionInRegistry } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
-import type { DecisionProviderV1 } from "./types.js";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();

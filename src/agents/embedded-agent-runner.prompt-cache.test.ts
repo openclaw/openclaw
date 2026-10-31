@@ -104,6 +104,7 @@ it.for(cases)(
   "preserves %j prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
   { timeout: 120_000 },
   async ([api, provider, model, route], { signal }) => {
+    const responses = api === "openai-responses";
     await withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
       await bindSessionMcpRuntimeTestScheduler();
       const mcp = await startPromptCacheMcpServer(signal);
@@ -181,7 +182,7 @@ it.for(cases)(
             return {
               ...observer,
               onModelRequest: (runtimeModel, context) => {
-                if (api === "openai-responses" && turn <= 4) {
+                if (responses && turn <= 4) {
                   const assistants = context.messages
                     .filter((message) => message.role === "assistant")
                     .map((message) => stableStringify(message));
@@ -232,7 +233,7 @@ it.for(cases)(
               const payload: unknown = await new Request(input, init).json();
               let effectivePayload = payload;
               let effectiveInput: unknown[] | undefined;
-              if (api === "openai-responses") {
+              if (responses) {
                 assert(isRecord(payload));
                 assert(Array.isArray(payload.input));
                 const previousId =
@@ -252,14 +253,11 @@ it.for(cases)(
                 const runtimeIndex = prefix.history.findIndex((item) =>
                   item.includes(RUNTIME_CONTEXT_HEADER),
                 );
-                expect(prefix.breakpoints.length, "legacy Messages cache boundary").toBeGreaterThan(
-                  0,
-                );
+                expect(prefix.breakpoints.length).toBeGreaterThan(0);
                 expect(
                   prefix.breakpoints.some(
                     (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
                   ),
-                  "Messages breakpoints exclude transient history",
                 ).toBe(false);
               }
               expect(prefix.tools, "advertised tool").toContain('"name":"cache_probe"');
@@ -271,7 +269,7 @@ it.for(cases)(
                   text: "mid-run steering correction",
                   options: { steeringMode: "all" },
                 });
-                expect(outcome.status, "the active runner accepted steering").toBe("accepted");
+                expect(outcome.status).toBe("accepted");
               }
               if (requestsThisTurn > 4) {
                 throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);
@@ -281,7 +279,7 @@ it.for(cases)(
                 return rateLimitResponse(api);
               }
               // Replay the error in turn 6, then verify those sent bytes after reopen in turn 7.
-              const failure = api === "openai-responses" && turn === 5 && requestsThisTurn === 1;
+              const failure = responses && turn === 5 && requestsThisTurn === 1;
               const result = responseFor(
                 api,
                 model,
@@ -309,7 +307,7 @@ it.for(cases)(
             requestsThisTurn = 0;
             if (turn === 3) {
               const runtime = peekSessionMcpRuntime({ sessionKey });
-              expect(runtime, "MCP catalog was established by a real turn").toBeDefined();
+              expect(runtime).toBeDefined();
               mcp.expireSession();
               await expect(runtime!.callTool("cache_fixture", "probe", {})).rejects.toThrow(
                 "Session not found",
@@ -387,7 +385,7 @@ it.for(cases)(
             };
             bindUserTurnPromptReactionSource(recorder, source);
             const capability =
-              api === "openai-responses" && turn % 2 === 1
+              responses && turn % 2 === 1
                 ? mintMessageActionTurnCapability({
                     ...target,
                     runId,
@@ -399,14 +397,14 @@ it.for(cases)(
               const run = runEmbeddedAgent({
                 userTurnTranscriptRecorder: recorder,
                 messageActionTurnCapability: capability,
-                messageProvider: api === "openai-responses" ? "webchat" : "telegram",
+                messageProvider: responses ? "webchat" : "telegram",
                 abortSignal: signal,
                 inputProvenance: provenance,
                 internalEvents,
                 preparedRunAdmission: admission,
                 onExecutionPhase: ({ phase }) => {
                   // Responses keeps real continuation state; the other fixtures are stateless.
-                  if (phase === "model_call_started" && api !== "openai-responses") {
+                  if (phase === "model_call_started" && !responses) {
                     cleanupSessionResources(sessionId);
                   }
                 },
@@ -442,12 +440,12 @@ it.for(cases)(
                   ? { images: [{ type: "image" as const, mimeType: "image/png", data: PNG }] }
                   : {}),
               });
-              if (api === "openai-responses" && turn === 5) {
+              if (responses && turn === 5) {
                 await expect(run).rejects.toMatchObject({ reason: "format" });
                 if (providerFailure) {
                   throw providerFailure;
                 }
-                expect(requestsThisTurn, "permanent failure is not retried").toBe(1);
+                expect(requestsThisTurn).toBe(1);
                 continue;
               }
               const result = await run;
@@ -455,10 +453,7 @@ it.for(cases)(
                 throw providerFailure;
               }
               expect(result.meta.aborted, `turn ${turn} aborted`).not.toBe(true);
-              expect(
-                requestsThisTurn,
-                `turn ${turn} reached provider ${JSON.stringify(result.meta)}`,
-              ).toBeGreaterThan(0);
+              expect(requestsThisTurn, `turn ${turn} reached provider`).toBeGreaterThan(0);
               expect(
                 result.payloads?.some((payload) => payload.text?.includes("answer")),
                 `turn ${turn} completed`,
@@ -471,65 +466,43 @@ it.for(cases)(
             }
           }
           expect(requests.length).toBe(15);
-          expect(
-            requests.filter((request) => request.turn === 10),
-            "the rate-limited continuation was retried",
-          ).toHaveLength(3);
+          expect(requests.filter((request) => request.turn === 10)).toHaveLength(3);
           const historyAt = (value: number) =>
             requests.find((request) => request.turn === value)!.prefix.history.join("");
-          if (api === "openai-responses") {
+          if (responses) {
             expect(requests.filter((request) => request.turn === 5)).toHaveLength(1);
             const afterFailure = historyAt(6);
-            expect(
-              afterFailure,
-              "next turn retains the failed assistant identity without replaying unfinished text",
-            ).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
+            expect(afterFailure).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
             expect(afterFailure).not.toContain(FAILED_ASSISTANT_TEXT);
-            expect(
-              historyAt(7),
-              "the already-sent failed-turn replay stays identical in the following run",
-            ).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
+            expect(historyAt(7)).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
             const continuation = requests[1]!.payload as Record<string, unknown>;
-            expect(
-              continuation.previous_response_id,
-              "tool results continue the first response",
-            ).toBe("cache_1");
+            expect(continuation.previous_response_id).toBe("cache_1");
             const input = continuation.input as Array<Record<string, unknown>>;
             // The runner may append fresh runtime context alongside the tool results.
             expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(5);
             expect(input.filter((item) => item.type === "function_call")).toEqual([]);
           }
-          expect(
-            requests[0]!.userEnvelopes.size,
-            "raw user envelope capture reached the request observer",
-          ).toBeGreaterThan(0);
+          expect(requests[0]!.userEnvelopes.size).toBeGreaterThan(0);
           const firstPrefix = requests[0]!.prefix.history.join("");
           expect(firstPrefix, "plugin prepend hook reached provider").toContain("hook before");
           expect(firstPrefix, "plugin append hook reached provider").toContain("hook after");
           expect(firstPrefix, "image reached provider").toContain(PNG);
-          expect(historyAt(2), "model-only replacement reached provider").toContain(
-            "replacement model prompt 2",
-          );
+          expect(historyAt(2)).toContain("replacement model prompt 2");
           const toolResults = requests[1]!.prefix.history.filter((segment) =>
             segment.includes("synthetic tool result"),
           );
           expect(toolResults.length).toBe(5);
-          expect(
-            toolResults.reduce((bytes, segment) => bytes + segment.length, 0),
-            "five fresh 16k results exceed the aggregate budget; sent bytes must stay frozen",
-          ).toBeGreaterThan(65_536);
-          expect(historyAt(8), "announcement context reached provider").toContain(
-            "Synthetic child verification completed",
+          // Oversized tool results must remain frozen after they have reached the provider.
+          expect(toolResults.reduce((bytes, segment) => bytes + segment.length, 0)).toBeGreaterThan(
+            65_536,
           );
+          expect(historyAt(8)).toContain("Synthetic child verification completed");
           const recoveredMcpResult = await peekSessionMcpRuntime({ sessionKey })!.callTool(
             "cache_fixture",
             "probe",
             {},
           );
-          expect(
-            recoveredMcpResult.isError ?? false,
-            "MCP replacement accepted a real tool call",
-          ).toBe(false);
+          expect(recoveredMcpResult.isError ?? false).toBe(false);
           for (let index = 1; index < requests.length; index++) {
             const previous = requests[index - 1]!;
             const current = requests[index]!;

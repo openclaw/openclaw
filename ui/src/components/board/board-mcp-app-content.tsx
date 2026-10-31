@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
+import { createEffect, createSignal, Errored, Loading, onSettled, Show } from "solid-js";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -9,6 +9,7 @@ import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { McpAppView } from "../mcp-app-view-lazy.ts";
 import { LazyViewError } from "../solid/lazy-view-error.tsx";
 
 registerEnglishCatalog(registerBoardDocumentEnglish);
@@ -16,7 +17,6 @@ registerEnglishCatalog(registerBoardDocumentEnglish);
 registerEnglishCatalog(registerBoardEnglish);
 
 type ReadyAppView = Extract<BoardWidgetAppViewState, { status: "ready" }>;
-const McpAppView = lazy(() => import("../mcp-app-view.tsx"), { export: "McpAppView" });
 
 function McpAppLoadError(props: { error: unknown; active: boolean; reset: () => void }) {
   let connected = true;

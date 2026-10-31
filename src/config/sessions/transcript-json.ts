@@ -40,6 +40,10 @@ function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
   if (value === null || typeof value !== "object") {
     return typeof value === "bigint" || typeof value === "function";
   }
+  // Admission already checked and sealed the entire payload, including its descendants.
+  if (ownedTranscriptRoots.has(value)) {
+    return false;
+  }
   if (isProxy(value)) {
     return true;
   }
@@ -105,12 +109,12 @@ function normalizePlainJson(
     return value;
   }
   const array = Array.isArray(value);
-  const keys = Object.keys(value);
+  const keys = array ? undefined : Object.keys(value);
   const mutable = Object.isExtensible(value);
   let normalized = value;
-  const length = array ? value.length : keys.length;
+  const length = array ? value.length : keys!.length;
   for (let index = 0; index < length; index++) {
-    const member = array ? String(index) : keys[index]!;
+    const member = array ? String(index) : keys![index]!;
     const descriptor = Object.getOwnPropertyDescriptor(value, member);
     const current: unknown = descriptor?.value;
     const next = normalizePlainJson(current, admitted, copyStrings, false);

@@ -6,6 +6,9 @@
  * Optional: PGCENSUS_EXPECT_COUNT_STATEMENTS enforces the per-search count budget.
  * PGCENSUS_SOURCE_COUNT, PGCENSUS_ROUNDS, and PGCENSUS_WARMUPS scale the fixture.
  * PGCENSUS_RUNTIME_ROOT and PGCENSUS_BUILD_ROOT keep state/builds on a chosen volume.
+ * PGCENSUS_RESOURCES=1 records CPU and memory in a separate instrumented pass;
+ * use the default unprofiled pass for latency comparisons.
+ * PGCENSUS_CPU_PROFILE=1 captures warm-query CPU across threads for diagnosis only.
  * PGCENSUS_MODE=migration seeds with PGCENSUS_SEED_BUILD_ROOT, then runs Doctor
  * with PGCENSUS_BUILD_ROOT when the builds differ. The default mode is bulk.
  */
@@ -23,6 +26,13 @@ import type { MemorySearchResponse } from "../../packages/memory-host-sdk/src/ho
 import { OpenClawSchema } from "../../src/config/zod-schema.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
+import {
+  controlGatewayProfile,
+  measureGatewayCpuUsage,
+  readGatewayCpuUsage,
+  readGatewayResources,
+  type GatewayResourceSnapshot,
+} from "../lib/gateway-bench-profile.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   createGatewayBenchEnv,
@@ -43,9 +53,15 @@ assert(engine !== "postgres" || process.env.PGCENSUS_CONNECTION, "Set PGCENSUS_C
 const sourceCount = Number(process.env.PGCENSUS_SOURCE_COUNT ?? 4);
 const rounds = Number(process.env.PGCENSUS_ROUNDS ?? 10);
 const warmups = Number(process.env.PGCENSUS_WARMUPS ?? 0);
+const profileCpu = process.env.PGCENSUS_CPU_PROFILE === "1";
+const profileResources = process.env.PGCENSUS_RESOURCES === "1" || profileCpu;
 assert(Number.isSafeInteger(sourceCount) && sourceCount >= 4, "Source count must be at least 4");
 assert(Number.isSafeInteger(rounds) && rounds > 0, "Rounds must be positive");
 assert(Number.isSafeInteger(warmups) && warmups >= 0, "Warmups must be nonnegative");
+assert(
+  !profileCpu || (warmups === 0 && rounds > 1),
+  "CPU diagnosis requires cold and warm queries",
+);
 const buildRoot = path.resolve(process.env.PGCENSUS_BUILD_ROOT ?? process.cwd());
 const mode = process.env.PGCENSUS_MODE ?? "bulk";
 assert(mode === "bulk" || mode === "migration", "Mode must be bulk or migration");
@@ -66,8 +82,10 @@ const samples: {
   startNs: string;
   endNs: string;
   wallMs: number;
+  cpu?: ReturnType<typeof measureGatewayCpuUsage>;
   response: MemorySearchResponse;
 }[] = [];
+const resources: { phase: string; snapshot: GatewayResourceSnapshot }[] = [];
 let gateway: ChildProcess | undefined;
 let client: ReturnType<typeof createGatewayWsClient> | undefined;
 let challengeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -150,11 +168,17 @@ try {
   };
   const launch = (args: string[], label: string, cwd = buildRoot) => {
     const fd = fs.openSync(path.join(output, `${label}.log`), "w");
-    const child = spawn(process.execPath, ["dist/entry.js", ...args], {
+    const profiling = profileResources && label === "gateway";
+    const preloads = profiling
+      ? ["./team-shape-stress-loader.mjs", "../lib/gateway-bench-profile-preload.ts"].flatMap(
+          (file) => ["--import", new URL(file, import.meta.url).href],
+        )
+      : [];
+    const child = spawn(process.execPath, [...preloads, "dist/entry.js", ...args], {
       cwd,
       env,
       detached: true,
-      stdio: ["ignore", fd, fd],
+      stdio: profiling ? ["ignore", fd, fd, "ipc"] : ["ignore", fd, fd],
     });
     fs.closeSync(fd);
     return child;
@@ -310,26 +334,58 @@ try {
     },
   });
   assert(connected.ok, "Synthetic read-only connection was rejected");
-  for (let index = -warmups; index < rounds; index++) {
-    const [name] = corpus[(index + warmups) % corpus.length]!;
-    const startNs = process.hrtime.bigint().toString();
-    const clock = performance.now();
-    const result: GatewayReply = await client.request(
-      "memory.search",
-      { version: 1, agentId: "main", query: name, maxResults: 3, minScore: 0 },
-      180_000,
-    );
-    assert(result.ok, `Search ${index} failed`);
-    const response = result.payload as MemorySearchResponse;
-    assert.equal(response.results[0]?.path, `memory/${name}.md`);
-    if (index >= 0) {
-      samples.push({
-        startNs,
-        endNs: process.hrtime.bigint().toString(),
-        wallMs: performance.now() - clock,
-        response,
-      });
+  if (profileResources) {
+    resources.push({ phase: "ready", snapshot: await readGatewayResources(gateway) });
+  }
+  const cpuProfilePath = path.resolve(output, "warm-search.cpuprofile");
+  let cpuProfileStarted = false;
+  try {
+    for (let index = -warmups; index < rounds; index++) {
+      if (profileCpu && index === 1) {
+        await controlGatewayProfile(gateway, "cpu", "start", cpuProfilePath, {
+          includeWorkers: true,
+        });
+        cpuProfileStarted = true;
+      }
+      const [name] = corpus[(index + warmups) % corpus.length]!;
+      const cpuBefore = profileResources ? await readGatewayCpuUsage(gateway) : undefined;
+      const startNs = process.hrtime.bigint().toString();
+      const clock = performance.now();
+      const result: GatewayReply = await client.request(
+        "memory.search",
+        { version: 1, agentId: "main", query: name, maxResults: 3, minScore: 0 },
+        180_000,
+      );
+      assert(result.ok, `Search ${index} failed`);
+      const response = result.payload as MemorySearchResponse;
+      assert.equal(response.results[0]?.path, `memory/${name}.md`);
+      const endNs = process.hrtime.bigint().toString();
+      const wallMs = performance.now() - clock;
+      const cpu = cpuBefore
+        ? measureGatewayCpuUsage(cpuBefore, await readGatewayCpuUsage(gateway))
+        : undefined;
+      if (index >= 0) {
+        samples.push({
+          startNs,
+          endNs,
+          wallMs,
+          ...(cpu ? { cpu } : {}),
+          response,
+        });
+      }
     }
+  } finally {
+    if (cpuProfileStarted) {
+      await controlGatewayProfile(gateway, "cpu", "stop", cpuProfilePath, { includeWorkers: true });
+    }
+  }
+  if (profileResources) {
+    // Worker registry samples are asynchronous. Use the native worker probe for
+    // retained heap; these synchronous Gateway samples measure process RSS.
+    resources.push({
+      phase: "after-search",
+      snapshot: await readGatewayResources(gateway),
+    });
   }
 } finally {
   clearTimeout(challengeTimer);
@@ -372,6 +428,7 @@ const measured = samples.map((sample) => {
     startNs: sample.startNs,
     endNs: sample.endNs,
     wallMs: sample.wallMs,
+    cpu: sample.cpu,
     response: sample.response,
     statementCalls: statements.length,
     countStatements: statements.filter(
@@ -399,6 +456,10 @@ fs.writeFileSync(
       preparation,
       readinessMs,
       node: process.version,
+      profileResources,
+      profileCpu,
+      host: { availableParallelism: os.availableParallelism(), load: os.loadavg() },
+      resources,
       samples: measured,
     },
     null,

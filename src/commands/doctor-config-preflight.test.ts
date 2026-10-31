@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
@@ -132,6 +133,28 @@ const doctorRepairOptions = {
 
 describe("runDoctorConfigPreflight", () => {
   it.each([
+    [undefined, true],
+    ["recoverable", false],
+  ] as const)(
+    "retains unresolved migration outcomes for retirement admission (%s)",
+    async (warningDisposition, expected) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await writeOpenClawConfig(home, { plugins: { enabled: false } });
+        const retiredState = await import("./doctor-retired-state-repair.js");
+        vi.spyOn(retiredState, "repairRetiredDoctorState").mockResolvedValueOnce({
+          changes: [],
+          warnings: ["Manual state repair remains"],
+          warningDisposition,
+        });
+
+        const preflight = await runDoctorConfigPreflight(doctorRepairOptions);
+
+        expect(preflight.stateMigrationUnsettled).toBe(expected);
+      });
+    },
+  );
+
+  it.each([
     { selector: "environment", sidecarBytes: "not JSON" },
     { selector: "prefixed-include", sidecarBytes: "retired encrypted bytes" },
   ])(
@@ -152,30 +175,24 @@ describe("runDoctorConfigPreflight", () => {
         )}`;
         await fs.mkdir(path.dirname(configPath), { recursive: true });
         if (selector === "prefixed-include") {
-          await fs.writeFile(
-            path.join(path.dirname(configPath), "auth-selector.json"),
-            JSON.stringify(config),
-          );
+          await writeFixtureJson(path.join(path.dirname(configPath), "auth-selector.json"), config);
         }
         await fs.writeFile(configPath, originalConfig);
         const authStorePath = path.join(home, ".openclaw/agents/main/agent/auth-profiles.json");
         await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-        await fs.writeFile(
-          authStorePath,
-          JSON.stringify({
-            profiles: {
-              "openai-codex:default": {
-                type: "oauth",
+        await writeFixtureJson(authStorePath, {
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              oauthRef: {
+                source: "openclaw-credentials",
                 provider: "openai-codex",
-                oauthRef: {
-                  source: "openclaw-credentials",
-                  provider: "openai-codex",
-                  id: "a".repeat(32),
-                },
+                id: "a".repeat(32),
               },
             },
-          }),
-        );
+          },
+        });
         const authBytes = await fs.readFile(authStorePath);
         const sidecarDir = path.join(oauthDir, "auth-profiles");
         const sidecarPath = path.join(sidecarDir, `${"a".repeat(32)}.json`);
@@ -417,6 +434,7 @@ describe("runDoctorConfigPreflight", () => {
 
       expect(repaired.snapshot.valid).toBe(true);
       expect(repaired.snapshot.config.gateway?.bind).toBe("loopback");
+      expect(repaired.configChanged).toBe(true);
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         gateway?: { bind?: string };
       };
@@ -475,6 +493,7 @@ describe("runDoctorConfigPreflight", () => {
 
         expect(repaired.snapshot.valid).toBe(true);
         expect(repaired.snapshot.config.gateway?.port).toBe(19092);
+        expect(repaired.configChanged).toBe(true);
         expect(repaired.snapshot.config).toHaveProperty("session.reset.idleMinutes", 45);
         expect(repaired.snapshot.config).toHaveProperty(
           "channels.discord.guilds.100.channels.general.enabled",
@@ -493,6 +512,7 @@ describe("runDoctorConfigPreflight", () => {
           runDoctorConfigPreflight(configRepairOptions),
         );
         expect(converged.snapshot.valid).toBe(true);
+        expect(converged.configChanged).toBe(false);
         await expect(
           observeDoctorConfigStep("read-converged-config", () => fs.readFile(configPath, "utf-8")),
         ).resolves.toBe(migratedRaw);
@@ -564,6 +584,7 @@ describe("runDoctorConfigPreflight", () => {
 
       expect(repaired.snapshot.valid).toBe(true);
       expect(repaired.snapshot.config.gateway?.port).toBe(19091);
+      expect(repaired.configChanged).toBe(true);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
       const entries = await fs.readdir(path.dirname(configPath));
       const clobbered = entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."));
@@ -576,6 +597,7 @@ describe("runDoctorConfigPreflight", () => {
         runDoctorConfigPreflight(configRepairOptions),
       );
       expect(converged.snapshot.valid).toBe(true);
+      expect(converged.configChanged).toBe(false);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
       expect(
         (await fs.readdir(path.dirname(configPath))).filter((entry) =>

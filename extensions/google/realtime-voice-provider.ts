@@ -17,6 +17,7 @@ import {
   TurnCoverage,
 } from "@google/genai";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
@@ -943,6 +944,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.terminalError) {
       return;
     }
+    materializeErrorStack(error);
     this.terminalError = error;
     const session = this.detachSession({ clearInputAudio: false });
     try {

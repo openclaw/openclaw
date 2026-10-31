@@ -1,5 +1,8 @@
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { projectPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/payload.js";
+import {
+  createPlainTextToolCallBraceProbe,
+  projectPlainTextToolCallBlocks,
+} from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import {
   stripMinimaxToolCallXml,
@@ -11,7 +14,11 @@ import {
   traceLineHeads,
   INTERNAL_TRACE_LINE_RE,
 } from "./assistant-text-transforms.js";
-import { projectLinesOutsideCode } from "./code-regions.js";
+import {
+  findCodeRegions,
+  isInsideSettledBlockCode,
+  projectLinesOutsideCode,
+} from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { orderInternalScaffoldingStages } from "./internal-scaffolding-stages.js";
 import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
@@ -108,7 +115,7 @@ export function assistantVisibleTextFilters(
     return filters;
   }
   const filters: TextFilter[] = [
-    minimaxToolCallTextFilter,
+    minimaxToolCallTextFilter(streaming),
     modelSpecialTokensTextFilter,
     {
       transform: stripRelevantMemoriesTags,
@@ -135,10 +142,12 @@ export function assistantVisibleTextFilters(
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
-export const minimaxToolCallTextFilter: TextFilter = {
-  transform: stripMinimaxToolCallXml,
-  activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
-};
+export function minimaxToolCallTextFilter(streaming = false): TextFilter {
+  return {
+    transform: (text) => stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming }),
+    activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
+  };
+}
 
 export const legacyBracketToolCallTextFilter: TextFilter = {
   transform: stripLegacyBracketToolCallBlocks,
@@ -204,15 +213,19 @@ export const assistantTraceTextFilter: TextFilter = {
   },
 };
 
-const plainToolCallActivationTokens = ["{", "<parameter=", "<function=", "to="] as const;
-function createPlainToolCallTextProjector() {
+const plainToolCallActivationTokens = ["<parameter=", "<function=", "to="] as const;
+function createPlainToolCallTextProjector(preview = false) {
   const checkpoint: NonNullable<TextFilter["checkpoint"]> = (text, settleBefore, context) =>
     projectPlainTextToolCallBlocks(text, {
       resolveProtectedRanges: context.codeRegions,
       settleBefore,
+      preview,
+      isProtectionSettled: (offset) =>
+        offset < settleBefore || isInsideSettledBlockCode(offset, text, context.codeRegions()),
     });
   const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
   const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
+  const braceProbe = createPlainTextToolCallBraceProbe(preview);
   let active = false;
   let tail = "";
   return createConditionalTextProjector(
@@ -220,7 +233,7 @@ function createPlainToolCallTextProjector() {
     (input) => {
       if (!active) {
         const appended = tail + (input.delta ?? input.text);
-        active = activation.test(appended);
+        active = activation.test(appended) || braceProbe(input.delta ?? input.text);
         tail = !active && overlap ? appended.slice(-overlap) : "";
       }
       return active;
@@ -233,6 +246,28 @@ export const plainToolCallTextFilter: TextFilter = {
   transform: plainToolCallTransform,
   create: createPlainToolCallTextProjector,
 };
+
+/** Channel previews share the call grammar, but cannot expose its provisional tail. */
+export const plainToolCallPreviewTextFilter: TextFilter = {
+  transform: plainToolCallTransform,
+  create: () => createPlainToolCallTextProjector(true),
+};
+
+/**
+ * Settlement of a plain-text tool-call candidate at the end of visible text. Streaming may
+ * publish that tail and retract it later through a replacement, but block replies
+ * (already-delivered chat messages) cannot be retracted, so their drain waits until the
+ * candidate settles.
+ */
+export function hasUnsettledPlainTextToolCall(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  const projected = projectPlainTextToolCallBlocks(text, {
+    resolveProtectedRanges: findCodeRegions,
+  });
+  return projected.unsettled;
+}
 
 export function sanitizeAssistantVisibleTextWithProfile(
   text: string,

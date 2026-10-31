@@ -6,6 +6,7 @@ import { resolveCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAdminMemberRoleConfig } from "../gateway/operator-role.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -69,17 +70,7 @@ beforeEach(async () => {
 });
 
 async function linkedAdmins() {
-  const config: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: {
-          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-          member: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
-        },
-      },
-    },
-  };
+  const config: OpenClawConfig = createAdminMemberRoleConfig();
   await writeConfig(config);
   const options = { env };
   const ada = ensureProfileForEmail("ada@example.test", options);

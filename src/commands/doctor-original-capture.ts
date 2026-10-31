@@ -205,6 +205,7 @@ export async function preserveDoctorOriginalState(params: {
             signal,
             acquisition: { mode: "maintenance-owner" },
             fullIntegrityCheck: params.fullIntegrityCheck,
+            discardIncompleteOnFailure: { assertCurrent },
           });
       assertCaptureCurrent();
     } finally {

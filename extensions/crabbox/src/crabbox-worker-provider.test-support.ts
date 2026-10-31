@@ -3,7 +3,6 @@ import path from "node:path";
 import timers from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, vi } from "vitest";
@@ -104,17 +103,7 @@ export function createProviderTestHarness(
   return { ...fixtures, tempDirs };
 }
 
-export function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
+export { commandResult } from "../../test-support/command-result.test-support.js";
 
 export function nodeEnrollmentFixture(
   setupCode: string,

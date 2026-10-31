@@ -60,9 +60,6 @@ describe("elevenlabs config compat", () => {
 
   it("reads ELEVENLABS_API_KEY from profile when env is missing", () => {
     vi.stubEnv("ELEVENLABS_API_KEY", undefined);
-    vi.spyOn(fs, "existsSync").mockImplementation((candidate) =>
-      String(candidate).endsWith(".profile"),
-    );
     const readFileSync = vi
       .spyOn(fs, "readFileSync")
       .mockReturnValue("export ELEVENLABS_API_KEY=profile-key\n");
@@ -76,15 +73,11 @@ describe("elevenlabs config compat", () => {
 
   it("prefers ELEVENLABS_API_KEY env over profile", () => {
     vi.stubEnv("ELEVENLABS_API_KEY", "env-key");
-    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation(() => {
-      throw new Error("profile should not be read when env key exists");
-    });
     const readFileSync = vi.spyOn(fs, "readFileSync").mockReturnValue("");
 
     const value = resolveElevenLabsApiKeyWithProfileFallback();
 
     expect(value).toBe("env-key");
-    expect(existsSync).not.toHaveBeenCalled();
     expect(readFileSync).not.toHaveBeenCalled();
   });
 });

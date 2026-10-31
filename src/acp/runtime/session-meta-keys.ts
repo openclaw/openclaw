@@ -171,7 +171,7 @@ export function* selectAcpSessionRowsByKeys(
         ),
       );
     }
-    for (const key of new Set(cohort)) {
+    for (const key of retained ? cohort : []) {
       const row = retained?.get(key);
       if (row) {
         yield { ...row };

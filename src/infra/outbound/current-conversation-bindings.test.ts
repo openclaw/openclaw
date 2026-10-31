@@ -322,17 +322,36 @@ it("touches the latest committed target and complete opaque metadata", async () 
 });
 
 it("does not persist or publish a rejected synchronous generic touch", async () => {
-  await bindWorkspace("user:held");
-  const sibling = await bindWorkspace("user:held\u241fsibling");
+  const conversation = workspaceConversation("user:held");
+  // An account-policy binding now owns the conversation the stale generic ID names.
+  seedPersisted(persistedRecord(conversation, { bindingId: "default:user:held" }));
   const rows = openOpenClawStateDatabase().db.prepare(
     "SELECT * FROM current_conversation_bindings ORDER BY binding_key",
   );
   const before = rows.all();
   const publications = recordPublications();
-  touchGeneric(sibling.bindingId, 99);
+  touchGeneric(persistedRecord(conversation).bindingId, 99);
   expect(publications).toEqual([]);
   expect(rows.all()).toEqual(before);
 });
+
+it.each(["touch", "unbind"] as const)(
+  "%s decodes conversation ids containing the key separator",
+  async (operation) => {
+    const prefixed = await bindWorkspace("user:held", { targetSessionKey: "agent:main:a" });
+    const separated = await bindWorkspace("user:held\u241fb", { targetSessionKey: "agent:main:b" });
+    if (operation === "touch") {
+      touchGeneric(separated.bindingId, 99);
+      expect(readPersisted("user:held\u241fb")?.metadata?.lastActivityAt).toBe(99);
+    } else {
+      await expect(
+        unbindGeneric({ bindingId: separated.bindingId, reason: "manual" }),
+      ).resolves.toEqual([separated]);
+      expect(readPersisted("user:held\u241fb")).toBeNull();
+    }
+    expect(readPersisted("user:held")).toEqual(prefixed);
+  },
+);
 
 it.each(["rebind", "delete"] as const)(
   "never restores a stale row when another owner commits a %s during normalization",

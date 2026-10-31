@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../src/gateway/control-ui-contract.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";

@@ -6,7 +6,6 @@
  * allocation sampling is a separate pass retaining collected minor/major objects.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
@@ -20,6 +19,7 @@ import {
 } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import type { SessionEntry } from "../../src/agents/sessions/session-manager-types.js";
 import type { AnyAgentTool } from "../../src/agents/tools/common.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -110,10 +110,6 @@ async function fixture(kind: "published" | "restored" | "unpublished") {
   return { run, verify, dispose: () => lease[Symbol.dispose]() };
 }
 
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
-
 for (const kind of ["published", "restored", "unpublished"] as const) {
   const workload = await fixture(kind);
   try {
@@ -150,7 +146,10 @@ for (const kind of ["published", "restored", "unpublished"] as const) {
             iterations,
             toolCount,
             ...(allocation
-              ? { sampledBytesPerOperation: allocated(allocation.profile.head) / iterations }
+              ? {
+                  sampledBytesPerOperation:
+                    sumSampledHeapBytes(allocation.profile.head) / iterations,
+                }
               : {
                   cpuUsPerOperation: (cpu.user + cpu.system) / iterations,
                   wallUsPerOperation: (elapsedMs * 1000) / iterations,

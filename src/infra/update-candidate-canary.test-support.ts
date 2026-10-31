@@ -64,6 +64,31 @@ export async function createCanaryProcessFixture(
   };
 }
 
+/** Real child dispatch fixture; it does not claim compatibility with an installed Bun release. */
+export async function createCanaryStartupRuntimeFixture(root: string, incompatible: boolean) {
+  const runner = path.join(root, "runtime", "bun");
+  const dispatched = path.join(root, "runtime-dispatch.json");
+  await fs.mkdir(path.dirname(runner));
+  await fs.writeFile(path.join(path.dirname(runner), "package.json"), '{"type":"commonjs"}');
+  await fs.writeFile(
+    runner,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(dispatched)}, JSON.stringify(args));
+if (${JSON.stringify(incompatible)}) {
+  process.stderr.write("OpenClaw requires Bun >=1.4.4.\\n");
+  process.exit(1);
+}
+const child = spawn(${JSON.stringify(process.execPath)}, args.filter((arg) => arg !== "--no-install"), { stdio: "inherit" });
+child.once("exit", (code) => process.exit(code ?? 1));
+`,
+    { mode: 0o755 },
+  );
+  return { runner, dispatched };
+}
+
 export class FakeChild extends EventEmitter {
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
@@ -168,7 +193,6 @@ export function renderSteps(steps: UpdateStepResult[]) {
 
 export function registerCanarySnapshotCapacityTests(fixture: {
   canaryStateOptions: () => Parameters<typeof validateUpdateCandidateCanary>[0];
-  getRoot: () => string;
   mocks: { snapshot: ReturnType<typeof vi.fn>; spawn: ReturnType<typeof vi.fn> };
 }) {
   const { canaryStateOptions, mocks } = fixture;

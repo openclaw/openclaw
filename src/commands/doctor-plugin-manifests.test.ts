@@ -1,11 +1,9 @@
-// Doctor plugin manifest tests cover manifest validation, missing installs, and repair guidance.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
-  collectLegacyPluginManifestContractMigrations,
   legacyPluginManifestContractMigrationToHealthFinding,
   maybeRepairLegacyPluginManifestContracts,
 } from "./doctor-plugin-manifests.js";
@@ -60,24 +58,20 @@ describe("doctor plugin manifest legacy contract repair", () => {
     await suiteTempDirs.cleanup();
   });
 
-  it("maps legacy manifest migrations to structured health findings", async () => {
-    const { root, params } = await createManifestFixture("finding-capability", {
-      id: "openai",
-      speechProviders: ["openai"],
-    });
-
-    const [migration] = collectLegacyPluginManifestContractMigrations(params);
-
-    if (migration === undefined) {
-      throw new Error("expected legacy manifest migration");
-    }
+  it("maps legacy manifest migrations to structured health findings", () => {
+    const migration = {
+      manifestPath: "/synthetic/openclaw.plugin.json",
+      pluginId: "openai",
+      nextRaw: {},
+      changeLines: [],
+    };
     expect(legacyPluginManifestContractMigrationToHealthFinding(migration)).toStrictEqual({
       checkId: "core/doctor/legacy-plugin-manifests",
       severity: "warning",
       category: "fix-now",
       docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
       message: "Plugin manifest openai uses legacy top-level capability keys.",
-      path: path.join(root, "openclaw.plugin.json"),
+      path: migration.manifestPath,
       target: "openai",
       requirement: "contracts-capability-keys",
       fixHint:
@@ -85,53 +79,48 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
   });
 
-  it("rewrites legacy top-level capability keys into contracts", async () => {
-    const { root, params } = await createManifestFixture("rewrite-capability", {
-      id: "openai",
-      providers: ["openai"],
-      speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai"],
-      contracts: {
-        webSearchProviders: ["gemini"],
+  it.each([
+    {
+      name: "moves legacy capabilities while preserving other contracts",
+      manifest: {
+        id: "openai",
+        providers: ["openai"],
+        speechProviders: ["openai"],
+        mediaUnderstandingProviders: ["openai"],
+        contracts: { webSearchProviders: ["gemini"] },
       },
-    });
-
-    const changed = await maybeRepairLegacyPluginManifestContracts(params);
-    expect(changed).toBe(true);
-
-    const next = JSON.parse(fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8")) as {
-      speechProviders?: string[];
-      mediaUnderstandingProviders?: string[];
-      contracts?: Record<string, string[]>;
-    };
-    expect(next.speechProviders).toBeUndefined();
-    expect(next.mediaUnderstandingProviders).toBeUndefined();
-    expect(next.contracts).toEqual({
-      speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai"],
-      webSearchProviders: ["gemini"],
-    });
-  });
-
-  it("removes duplicate legacy top-level plugin tools while keeping contracts.tools", async () => {
-    const { root, params } = await createManifestFixture("dedupe-tool", {
-      id: "cortex",
-      tools: ["legacy_tool"],
-      contracts: {
-        tools: ["contract_tool"],
+      expected: {
+        id: "openai",
+        providers: ["openai"],
+        contracts: {
+          speechProviders: ["openai"],
+          mediaUnderstandingProviders: ["openai"],
+          webSearchProviders: ["gemini"],
+        },
       },
-    });
-
-    await maybeRepairLegacyPluginManifestContracts(params);
-
-    const next = JSON.parse(fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8")) as {
-      tools?: string[];
-      contracts?: Record<string, string[]>;
-    };
-    expect(next.tools).toBeUndefined();
-    expect(next.contracts).toEqual({
-      tools: ["contract_tool"],
-    });
+    },
+    {
+      name: "removes duplicate legacy tools while keeping contracts.tools",
+      manifest: { id: "cortex", tools: ["legacy_tool"], contracts: { tools: ["contract_tool"] } },
+      expected: { id: "cortex", contracts: { tools: ["contract_tool"] } },
+    },
+    {
+      name: "replaces non-object contracts with migrated capabilities",
+      manifest: {
+        id: "openai",
+        providers: ["openai"],
+        speechProviders: ["openai"],
+        contracts: "broken",
+      },
+      expected: { id: "openai", providers: ["openai"], contracts: { speechProviders: ["openai"] } },
+    },
+  ])("$name", async ({ name, manifest, expected }) => {
+    const { root, params } = await createManifestFixture(name, manifest);
+    expect(await maybeRepairLegacyPluginManifestContracts(params)).toBe(true);
+    const next: unknown = JSON.parse(
+      fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8"),
+    );
+    expect(next).toEqual({ configSchema: { type: "object" }, ...expected });
   });
 
   it("preserves undecodable manifests while migrating valid neighbors", async () => {
@@ -167,33 +156,5 @@ describe("doctor plugin manifest legacy contract repair", () => {
       configSchema: { type: "object" },
       contracts: { tools: ["valid_tool"] },
     });
-  });
-
-  it("ignores non-object contracts payloads when collecting migrations", async () => {
-    const { root, params } = await createManifestFixture("non-object-contracts", {
-      id: "openai",
-      providers: ["openai"],
-      speechProviders: ["openai"],
-      contracts: "broken",
-    });
-
-    const migrations = collectLegacyPluginManifestContractMigrations(params);
-
-    const manifestPath = path.join(root, "openclaw.plugin.json");
-    expect(migrations).toStrictEqual([
-      {
-        changeLines: [`- ${manifestPath}: moved speechProviders to contracts.speechProviders`],
-        manifestPath,
-        nextRaw: {
-          id: "openai",
-          providers: ["openai"],
-          contracts: {
-            speechProviders: ["openai"],
-          },
-          configSchema: { type: "object" },
-        },
-        pluginId: "openai",
-      },
-    ]);
   });
 });

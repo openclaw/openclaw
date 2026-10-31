@@ -5,8 +5,6 @@ export function isControlUiBrowserSupported(): boolean {
     supportsCss &&
     CSS.supports("anchor-name: --a") &&
     typeof HTMLElement !== "undefined" &&
-    typeof HTMLElement.prototype.showPopover === "function" &&
-    typeof HTMLButtonElement !== "undefined" &&
-    "commandForElement" in HTMLButtonElement.prototype
+    typeof HTMLElement.prototype.showPopover === "function"
   );
 }

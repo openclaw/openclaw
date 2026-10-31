@@ -27,6 +27,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                 ({ executeWorkspaceInventoryComputation }) =>
                   executeWorkspaceInventoryComputation(command),
               );
+            case "workspace.manifest.local":
             case "workspace.manifest.capture":
             case "workspace.manifest.base-refresh":
             case "workspace.manifest.equal":
@@ -131,6 +132,9 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
       return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };
     } catch (error) {
       return { ok: false, error: serializeGitWorkerFailure(error) };
+    } finally {
+      // V8 retains the last successful regex input, including task-owned checkout paths.
+      /(?:)/.test("");
     }
   },
   {

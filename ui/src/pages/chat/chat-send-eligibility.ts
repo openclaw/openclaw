@@ -1,5 +1,5 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   isExpiredIncognitoSession,
   isInitialChatHistoryUnavailable,

@@ -19,13 +19,14 @@ separately off by default on fresh installs and upgrades. Enable it explicitly:
 
 ```bash
 openclaw config set logging.audit.executionIdentity true
-openclaw gateway restart
 ```
 
 Identity collection requires `logging.audit.enabled` to remain enabled.
 Message records are also separately disabled by default; set
-`logging.audit.messages` to `direct` or `all` and restart the Gateway to
-record them. Existing records stay queryable until they expire (30 days).
+`logging.audit.messages` to `direct` or `all` to record them. These audit settings
+apply without restarting the Gateway. Changes affect subsequent events and do
+not backfill earlier activity. Existing records stay queryable until they expire
+(30 days).
 
 Direct local commands use the same bounded writer lifecycle as the Gateway.
 `openclaw agent exec` deletes its temporary state directory by default, so its

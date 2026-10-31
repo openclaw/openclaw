@@ -259,7 +259,11 @@ describe("managed plugin install transactions", () => {
           const transactionRequest = resolvePluginInstallTransactionRequest(params);
           const copied = await installPackageDir(
             transactionRequest
-              ? requestDeferredPackageDirInstall(copy, transactionRequest.assertOwned)
+              ? requestDeferredPackageDirInstall(
+                  copy,
+                  transactionRequest.assertOwned,
+                  transactionRequest.prepareSettlement,
+                )
               : copy,
           );
           if (!copied.ok) {
@@ -378,6 +382,8 @@ describe("managed plugin install transactions", () => {
   it.each(["rollback", "commit"] as const)(
     "reports %s failure without reversing committed state",
     async (settlement) => {
+      const targetDir = await fs.realpath(tempDirs.make("openclaw-managed-settlement-"));
+      createColdPluginFixture({ rootDir: targetDir, pluginId: "demo" });
       const conflict = new Error("config write rejected");
       const settlementError = new Error(`${settlement} failed`);
       const transaction = { commit: vi.fn(), rollback: vi.fn() };
@@ -387,7 +393,7 @@ describe("managed plugin install transactions", () => {
           invokePluginArtifactInstallMock(
             async () =>
               attachPluginInstallTransaction(
-                { ok: true, pluginId: "demo", targetDir: "/managed/demo" },
+                { ok: true, pluginId: "demo", targetDir },
                 transaction,
               ),
             params,

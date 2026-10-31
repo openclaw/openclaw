@@ -1,6 +1,7 @@
 import path from "node:path";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import {
+  formatNodeSecurityWarning,
   formatUnsupportedNodeVersionMessage,
   SUPPORTED_NODE_VERSION_RANGE,
 } from "../../../node-version.mjs";
@@ -36,6 +37,10 @@ import {
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
+import {
+  readUpdateResultPolicy,
+  sendUpdateResultTelemetry,
+} from "../../infra/update-result-telemetry.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
@@ -54,6 +59,7 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
 import {
   inspectUpdateRecoveries,
+  assertNoPendingUpdateRecovery,
   loadUpdateRecovery,
   type UpdateRecoveryFence,
 } from "../../infra/update-run-recovery.js";
@@ -87,7 +93,7 @@ import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
 import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import {
   admitMutableUpdateSignalRun,
-  retireMutableUpdateSignalRun,
+  retireMutableUpdateSignalLedgerRecording,
 } from "./update-command-mutable-signals.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { admitUpdatePreviewSignalRun } from "./update-command-preview-signals.js";
@@ -178,10 +184,9 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
+  env: NodeJS.ProcessEnv;
   installKind?: "git" | "package" | "unknown";
   serviceRoot?: string;
-  invocationCwd?: string;
-  pkgOwnership?: SystemPackageOwnershipInspection;
   expectedForeground?: true;
   initialization?: UpdateInitializationAdmission;
   assertCurrent?: () => void;
@@ -190,7 +195,8 @@ export async function admitUpdateCommandRun(params: {
     serviceRoot: params.serviceRoot,
     dryRun: params.opts.dryRun,
   });
-  const env = await resolveUpdateCommandAdmissionEnv(params);
+  // Engine selection and original-state capture already use this selected service profile.
+  const { env } = params;
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
@@ -214,6 +220,8 @@ export async function admitUpdateCommandRun(params: {
       params.opts.run?.completionOwner === "gateway-restart" ||
       undefined,
   });
+  // Read reporting policy first: nothing may yield between activation admission and creation.
+  const reportResult = params.opts.dryRun !== true && (await readUpdateResultPolicy(env));
   assertUpdatePackageActivationAdmission(params.root, {
     serviceRoot: params.serviceRoot,
     dryRun: params.opts.dryRun,
@@ -229,6 +237,7 @@ export async function admitUpdateCommandRun(params: {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
       trigger: "cli",
       preview: params.opts.dryRun === true,
+      reportResult,
       origin: { driver, admission: { owner: "installed" } },
       supersedeStaleIdentityless:
         !env[UPDATE_RUN_ID_ENV]?.trim() && env[POST_CORE_UPDATE_ENV] !== "1",
@@ -340,7 +349,7 @@ export function createUpdateRunProgress(
       // Candidate Doctor can advance SQLite beyond this process's reader. Hold
       // activation receipts until the supported runtime owns ledger writes.
       deferred = true;
-      retireMutableUpdateSignalRun(run);
+      retireMutableUpdateSignalLedgerRecording(run);
     },
     async flushLedgerWrites() {
       if (flushFailure) {
@@ -391,6 +400,34 @@ export function completeUpdateCommandRun(
   if (!run) {
     return result;
   }
+  const gatewayRestartPending =
+    run.completionOwner === "gateway-restart" &&
+    run.gatewayRestartRequired === true &&
+    result.status === "ok" &&
+    !completion.rolledBack;
+  // The live updater may hand an unverified foreground activation to the existing
+  // post-ready Gateway owner. This is pending publication, never terminal success.
+  let ownPluginCohortPending = false;
+  if (gatewayRestartPending && run.executorFence) {
+    run.deadline?.remainingMs();
+    if (run.requesterAuthority?.isCurrent() === false) {
+      throw new Error("Foreground update requester is no longer authorized.");
+    }
+    const pair = assertNoPendingUpdateRecovery({
+      env: run.env,
+      allowNativeRead: true,
+      pluginCohort: { runId: run.runId, fence: run.executorFence },
+    });
+    if (pair) {
+      if (
+        result.after?.version !== pair.reservation.to.version ||
+        (result.after?.buildId ?? null) !== pair.reservation.to.buildId
+      ) {
+        throw new Error("Foreground update result does not match its retained candidate.");
+      }
+      ownPluginCohortPending = true;
+    }
+  }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
   const recoveries = inspectUpdateRecoveries({ env: run.env });
@@ -401,7 +438,7 @@ export function completeUpdateCommandRun(
     inspected?.format === "legacy-serving"
       ? inspected.record
       : loadUpdateRecovery(run.runId, { env: run.env });
-  if (recovery) {
+  if (recovery && !ownPluginCohortPending) {
     // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
     const terminal =
       recovery.terminal &&
@@ -420,7 +457,7 @@ export function completeUpdateCommandRun(
       runId: run.runId,
     });
   }
-  if (recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
+  if (!ownPluginCohortPending && recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
     return { ...result, status: "error", reason: "update-recovery-pending", runId: run.runId };
   }
   const recordOptions = { ...run, redactPaths: result.root ? [result.root] : [] };
@@ -431,11 +468,6 @@ export function completeUpdateCommandRun(
     result.recovery?.serviceRestartSafe === true &&
     result.recovery.packageRollbackVerified === true &&
     result.recovery.service === undefined;
-  const gatewayRestartPending =
-    run.completionOwner === "gateway-restart" &&
-    run.gatewayRestartRequired === true &&
-    result.status === "ok" &&
-    !completion.rolledBack;
   if (!gatewayRestartPending && !helperRecoveryPending) {
     const finished = finishUpdateRun(
       run.runId,
@@ -454,6 +486,7 @@ export function completeUpdateCommandRun(
         downtimeMs: completion.downtimeMs,
       },
       recordOptions,
+      (payload) => void sendUpdateResultTelemetry(payload, { env: run.env }),
     );
     if (result.verification) {
       result.recovery = finished.verification.recovery ?? undefined;
@@ -505,6 +538,12 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       defaultRuntime.error(`node-runtime-preflight: ${error}`);
     }
     exitCliAfterOutput(defaultRuntime, 1);
+  }
+  const nodeSecurityWarning = process.versions.bun
+    ? null
+    : formatNodeSecurityWarning(process.versions.node);
+  if (nodeSecurityWarning) {
+    defaultRuntime.error(`SECURITY WARNING: ${nodeSecurityWarning}`);
   }
   const startedAt = Date.now();
   suppressDeprecations();
@@ -633,6 +672,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   return {
     startedAt,
     postCoreUpdateResume,
+    ...(nodeSecurityWarning ? { nodeSecurityWarning } : {}),
     postCoreUpdateChannel,
     timeoutMs,
     shouldRestart,

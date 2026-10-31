@@ -126,6 +126,8 @@ it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, 
     ];
     expect(manager.getSessionId()).not.toBe(scope.sessionId);
     expect(manager.getPersistedEntries()).toEqual(expected);
+    // The source transcript keeps counting the copied path.
+    expect(manager.getHeader()?.inheritedThrough).toEqual(["reply"]);
     expect(manager.getLabel("user")).toBe("named");
     expect(manager.getEntry("abandoned")).toBeUndefined();
     if (mode === "sqlite") {
@@ -150,6 +152,19 @@ it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, 
     expect(reopened.getHeader()?.version).toBe(version);
   },
 );
+
+it("marks only the source's active path as inherited when branching from an inactive leaf", async () => {
+  const manager = SessionManager.fromEntries([
+    { type: "session", version: 3, id: "source", cwd: "/" },
+    message("root", null, "question"),
+    message("inactive", "root", "first reply"),
+    message("active", "root", "second reply"),
+  ]);
+  expect(manager.getLeafId()).toBe("active");
+  await manager.createBranchedSession("inactive");
+  // The source counts root and active; the copied inactive reply still counts in the branch.
+  expect(manager.getHeader()?.inheritedThrough).toEqual(["root"]);
+});
 
 it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
   const { scope, userId, replyId, manager } = await branchSource("branch-source", {

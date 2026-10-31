@@ -157,7 +157,7 @@ describe("executeAgentTurn: compaction events", () => {
   });
 
   it("keeps session settlement failures out of the model failure fact", async () => {
-    const settleSessionOverride = vi
+    using _ = vi
       .spyOn(autoFallback, "clearRecoveredAutoFallbackPrimaryProbeSelection")
       .mockRejectedValueOnce(new Error("session override settlement failed"));
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -166,14 +166,10 @@ describe("executeAgentTurn: compaction events", () => {
       return { payloads: [{ text: "recovered" }], meta: {} };
     });
 
-    try {
-      const result = await executeTestTurn();
+    const result = await executeTestTurn();
 
-      expect(result).toMatchObject({ kind: "final" });
-      expect(result.postCompactionModelFailure).toBeUndefined();
-    } finally {
-      settleSessionOverride.mockRestore();
-    }
+    expect(result).toMatchObject({ kind: "final" });
+    expect(result.postCompactionModelFailure).toBeUndefined();
   });
 
   it("delivers compaction hook messages alongside notifyUser notices (#90185)", async () => {

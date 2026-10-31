@@ -163,14 +163,21 @@ it("keeps recursive handles outside replaceable subtrees and filters their event
 it("repairs failed watches within 30 seconds and resumes healthy recovery", () => {
   const directory = timedDirectory("repair");
   const watch = vi.spyOn(fs, "watch");
-  const listener = observe(directory);
+  const listener = vi.fn();
+  const observation = observeOwnedDirectory(directory, listener);
+  subscriptions.push(observation);
+  expect(observation.isWatching()).toBe(true);
   watch.mock.results[0]!.value.emit("error", new Error("lost watch"));
+  expect(observation.isWatching()).toBe(false);
   listener.mockClear();
   vi.advanceTimersByTime(30_000);
   expect(listener).toHaveBeenCalledOnce();
   expect(watch).toHaveBeenCalledTimes(2);
+  expect(observation.isWatching()).toBe(true);
   vi.advanceTimersByTime(30_000);
   expect(listener).toHaveBeenCalledTimes(2);
+  observation.close();
+  expect(observation.isWatching()).toBe(false);
 });
 
 it("creates long-lived observations outside importer and caller authority", () => {
@@ -232,6 +239,38 @@ it("keeps notification snapshots while duplicate subscriptions change during del
   expect(replacement).toHaveBeenCalledWith("replacement", "change");
 });
 
+it("keeps shared-source snapshots when delivery replaces a subscription", () => {
+  const directory = timedDirectory("source-reentrant");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
+  const events: string[] = [];
+  observe(
+    directory,
+    vi.fn((filename) => {
+      events.push(`first ${filename}`);
+      if (filename === "outer") {
+        second.close();
+        observe(
+          directory,
+          vi.fn((name) => events.push(`late ${name}`)),
+          {
+            reconcileIntervalMs: 90_000,
+          },
+        );
+        change("change", "inner");
+      }
+    }),
+  );
+  const second = observeOwnedDirectory(directory, (filename) => events.push(`second ${filename}`), {
+    reconcileIntervalMs: 60_000,
+  });
+  subscriptions.push(second);
+  const change = watch.mock.calls[0]![2];
+  change("change", "outer");
+  change("change", "next");
+  expect(events).toEqual(["first outer", "first inner", "late inner", "first next", "late next"]);
+  expect(watch).toHaveBeenCalledOnce();
+});
+
 it("shares one watcher, forwards invalidation and reconciles an atomic replacement", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
@@ -256,6 +295,13 @@ it("shares one watcher, forwards invalidation and reconciles an atomic replaceme
   expect(watch).toHaveBeenCalledTimes(1);
   listener.mockClear();
   const resolve = vi.spyOn(path, "resolve");
+  const basename = vi.spyOn(path, "basename");
+  for (let index = 0; index < 1_000; index++) {
+    watch.mock.calls[0]![2]("rename", "state.sqlite-journal");
+  }
+  expect(listener).toHaveBeenCalledTimes(1_000);
+  expect(basename).not.toHaveBeenCalled();
+  listener.mockClear();
   watch.mock.calls[0]![2]("rename", "profiles");
   expect(listener).toHaveBeenCalledWith("profiles", "rename");
   listener.mockClear();

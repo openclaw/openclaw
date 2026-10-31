@@ -211,20 +211,46 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
     writeFiles(pluginRoot, {
       "openclaw.plugin.json": authored,
       "index.ts": "export const backend = true;\n",
+      "dist/stale-runtime.js": "throw new Error('stale backend');\n",
       "build-assets.mjs": `import fs from "node:fs";
 const identity = fs.readFileSync("../../browser-identity.txt", "utf8");
+fs.appendFileSync("../../browser-builds.txt", identity + "\\n");
 const entry = "dist/control-ui/" + identity + "/index.js";
 fs.mkdirSync("dist/control-ui/" + identity, { recursive: true });
 fs.writeFileSync("dist/openclaw.plugin.json", JSON.stringify({ id: "previous-name", controlUi: { entry } }));
 fs.writeFileSync(entry, identity);
 `,
     });
+    const steps = resolveBuildAllSteps("qaRuntime", {}).filter((step) =>
+      ["plugins:assets:build", "external-plugins:local-dist"].includes(step.label),
+    );
     const build = async (identity: string) => {
       // An input outside the backend graph models a changed host browser SDK.
       fs.writeFileSync(path.join(repoRoot, "browser-identity.txt"), identity);
-      await runBundledPluginAssetHooks({ rootDir: repoRoot, phase: "build", deferIsolated: true });
       fs.rmSync(path.join(repoRoot, "dist"), { recursive: true, force: true });
-      await buildExternal(repoRoot);
+      const result = await runBuildAllSteps("qaRuntime", {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1", GIT_COMMIT: "a".repeat(40) },
+        steps,
+        cacheEnabled: false,
+        runStep: async (invocation) => {
+          if (invocation.args[2] === "scripts/bundled-plugin-assets.mts") {
+            await runBundledPluginAssetHooks({
+              ...parseBundledPluginAssetArgs(invocation.args.slice(3)),
+              rootDir: repoRoot,
+            });
+          } else {
+            await buildExternalPluginLocalDist({
+              repoRoot,
+              env: {},
+              logLevel: "silent",
+              controlUiAssetsPrepared: invocation.args.includes("--control-ui-assets-prepared"),
+            });
+          }
+          return { status: 0 };
+        },
+      });
+      expect(result.exitCode).toBe(0);
       copyMetadata(repoRoot);
     };
     expect(loadPluginManifest(pluginRoot)).toMatchObject({
@@ -232,7 +258,10 @@ fs.writeFileSync(entry, identity);
       manifest: JSON.parse(authored),
     });
     await build("first");
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\n");
+    expect(fs.existsSync(path.join(repoRoot, "dist/extensions/demo/stale-runtime.js"))).toBe(false);
     await build("second");
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\nsecond\n");
     expect(readText(pluginRoot, "openclaw.plugin.json")).toBe(authored);
     const expected = {
       ...JSON.parse(authored),
@@ -246,6 +275,18 @@ fs.writeFileSync(entry, identity);
     fs.writeFileSync(ownedAsset, "early owner output");
     await build("second");
     expect(readText(ownedAsset)).toBe("early owner output");
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\nsecond\nsecond\n");
+
+    // A standalone miss has no completed asset phase, even with browser files on disk.
+    fs.writeFileSync(path.join(repoRoot, "browser-identity.txt"), "standalone");
+    await buildExternalPluginLocalDist({
+      repoRoot,
+      env: { OPENCLAW_BUILD_CACHE: "0" },
+      logLevel: "silent",
+    });
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\nsecond\nsecond\nstandalone\n");
+    expect(readText(pluginRoot, "dist/control-ui/standalone/index.js")).toBe("standalone");
+    expect(fs.existsSync(ownedAsset)).toBe(false);
   });
 
   it.each([

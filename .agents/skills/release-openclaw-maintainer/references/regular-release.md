@@ -2,6 +2,14 @@
 
 ## Orchestrated stable release
 
+This section describes the executable stable-release controller, not the
+[cross-release manager role](release-manager.md). The release owner selects its
+approved cut and authority through the [owner lifecycle](release-owner.md).
+For a new controller state on a patch or promotion branch, pass
+`--cut-sha <selected-sha>` and `--confirm-cut-sha <selected-sha>` for that branch's
+approved cut, not moving `main`. Confirmation alone does not select the cut.
+On resume, preserve the state's recorded cut.
+
 Stable policy (Peter, 2026-09-28): the GitHub release becomes public and Latest
 as soon as core npm is verified. It never waits for ClawHub, Docker, or native
 apps. The orchestrator does this in `flip-github`; the manual direct publisher
@@ -76,8 +84,11 @@ Release SHA, Q=C, independently pinned P, and one validation parent.
 Record the cut time; aim to seal validation in approximately 20 minutes and
 publish within an hour, with actual timing recorded separately. Backports are
 merged `main` PRs cherry-picked before dispatch (pure-data model/catalog
-additions and bundled-runtime bumps qualify); after dispatch admit only a fix
-for a required-lane defect. A second cut (re-basing the candidate on newer
+additions and bundled-runtime bumps require the approved selection scope);
+after dispatch admit only a fix for a required-lane defect unless the operator
+explicitly reopens intake through the
+[owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+A second cut (re-basing the candidate on newer
 `main`) requires the approval specified in the parent skill's
 [release authority rules](../SKILL.md#shared-release-boundaries); otherwise cherry-pick
 merged `main` commits only for a confirmed release blocker and name each one in
@@ -91,15 +102,20 @@ pnpm release:push
 ```
 
 This wrapper refreshes and pins `origin/main`, requires a clean canonical
-`release/YYYY.M.PATCH` worktree, captures `HEAD`, and runs changed
-static/type checks, production dead-code analysis, and changed tests from a
-fresh detached worktree with a frozen dependency install. It pushes that
-captured SHA itself only after every gate passes and the source branch,
-worktree, and HEAD remain unchanged. Do not use a separate `git push`:
-validation and push must stay one operation. A failed gate, concurrent commit,
-or non-fast-forward remote update blocks the push and FRV dispatch. Record the
-passing SHA and comparison base in the handoff; do not substitute
-`release:prepush`, a worker's partial check, or an earlier branch state.
+`release/YYYY.M.PATCH` worktree, captures `HEAD`, verifies that it fast-forwards
+the remote release branch, and runs only a short `git diff --check` plus the
+dependency-free release-changelog layout check. It pushes that captured SHA
+only if the source branch, worktree, and HEAD remain unchanged. Do not use a
+separate `git push`: exact-SHA verification and push stay one operation. A
+failed preflight, concurrent commit, or non-fast-forward remote update blocks
+the push and FRV dispatch. Record the pushed SHA and comparison base in the
+handoff; do not substitute `release:prepush` or an earlier branch state.
+
+PR CI and Full Release Validation own formatting, lint, type checking, Knip,
+and test coverage. Do not run those broad gates locally before a release push
+or delay FRV for them. Use focused local checks only to diagnose a concrete
+remote failure, then push the repaired exact SHA and start remote validation
+immediately.
 
 Then run deterministic source preflight and validate the same exact Code SHA:
 

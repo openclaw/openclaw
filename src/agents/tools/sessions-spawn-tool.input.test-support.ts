@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
@@ -7,6 +8,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import { registerSessionsSpawnAccessProgramTests } from "./sessions-spawn-tool.access-program.test-support.js";
 import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
 
 const requireRecord = createRequireRecord("record", "expected-label");
@@ -27,6 +29,13 @@ export function registerSessionsSpawnInputTests({
     inProcessCreationMock: Mock;
   };
 }) {
+  registerSessionsSpawnAccessProgramTests({
+    createTool,
+    registerAcpBackendForTest,
+    mockGateway,
+    mocks: hoisted,
+  });
+
   it.each([false, true])(
     "keeps collector inputs within the declared spawn contract (placement=%s)",
     (workerPlacement) => {
@@ -81,19 +90,18 @@ export function registerSessionsSpawnInputTests({
       'Managed worktree parameters are unavailable with runtime="acp"',
     ],
     [
-      "hidden project without worktree",
-      { projectId: "example" },
-      "Hidden native subagents require worktree=true",
-    ],
-    [
-      "hidden worktree name without worktree",
-      { worktreeName: "review" },
-      "Hidden native subagents require worktree=true",
-    ],
-    [
-      "hidden worktree base without worktree",
-      { worktreeBaseRef: "origin/main" },
-      "Hidden native subagents require worktree=true",
+      "unsupported visible parameters",
+      {
+        runtime: "acp",
+        thinking: "high",
+        thread: true,
+        mode: "session",
+        lightContext: true,
+        attachments: [{ name: "note.txt", content: "hello" }],
+        attachAs: { mountPath: "inputs" },
+        visible: true,
+      },
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     ],
     [
       "hidden cloud placement",
@@ -177,17 +185,12 @@ export function registerSessionsSpawnInputTests({
         resumeSessionId: "prior-acp-session",
       })
       .catch((reason: unknown) => reason);
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) {
-      throw new Error("Expected visible-only parameter rejection");
-    }
+    assert(error instanceof Error, "Expected visible-only parameter rejection");
     expect(error.message).toContain("Parameters require visible=true: group, projectGitUrl");
     expect(callGateway).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     const match = /Corrected visible call: sessions_spawn\((.*)\)$/.exec(error.message);
-    if (!match?.[1]) {
-      throw new Error("Expected an exact corrected sessions_spawn call");
-    }
+    assert(match?.[1], "Expected an exact corrected sessions_spawn call");
     const corrected: unknown = JSON.parse(match[1]);
     expect(corrected).toEqual({
       ...visibleArgs,

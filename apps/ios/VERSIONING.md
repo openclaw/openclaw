@@ -179,7 +179,28 @@ when it disappears during the phone or tablet captures. The repair replaces only
 the selected Watch runtime's registered image, or installs it if absent, and logs
 runtime availability, image state, and mounted-path existence without filesystem
 paths. Local runs leave runtime installation to the operator. Boot and capture
-failures still stop the lane without retrying screenshots.
+failures still stop the lane without retrying screenshots. Before creating the
+Watch simulator, CI waits up to two minutes for pending Watch runtime cleanup:
+the selected Watch runtime must have one `Ready` registration, an actual mount,
+and an existing runtime bundle. When a mounted, ready replacement exists, CI
+retires only its unmounted `Unusable` registrations and keeps their shared asset.
+`Deleting` registrations remain owned by CoreSimulator. The lane does not boot a
+simulator on a volume it is still removing.
+
+A patchable Watch cryptex mounted through the plain disk-image fallback can be
+re-imported by CoreSimulator's periodic scan, shutting down an active Watch. CI
+stabilizes that fallback before simulator creation: clone its same-version runtime
+DMG into a temporary directory, retire the original image and MobileAsset through
+`simctl runtime delete`, then stage the clone with `simctl runtime add`. Import
+requires the old asset to be gone; the replacement must be `Ready` and `Verified`
+with an existing runtime bundle. The temporary clone is removed on success or
+failure. This also applies when the one-time missing-runtime download produces
+the same fallback. Healthy cryptex mounts and already staged disk images skip this
+repair. Local runs leave installation to the operator.
+
+Registrations already marked `Deleting` are left to CoreSimulator and excluded
+from repair candidates. More than one remaining registration still stops the
+repair before it deletes anything.
 
 If Apple removes the Watch runtime registration but cannot reclaim its MobileAsset,
 CI follows Apple's recovery instruction once: scan and mount orphaned runtimes,
@@ -266,9 +287,11 @@ commit subjects. Focused endpoint diffs support the notes; current source and
 build configuration check feature availability. Localization catalogs contribute
 structural summaries instead of raw translation diffs. A separate factual review
 can request one correction. Each stage reports progress, with at most five model
-requests per audience and a five-minute generation budget. Exhausted budgets or
-unapproved notes stop preparation before upload. Retrying a saved, valid artifact
-reuses its exact text without another model call.
+stages per audience. Each stage permits one SDK retry for a transient connection,
+timeout, or retryable API failure, including backoff within the unchanged
+five-minute generation budget. Exhausted budgets or unapproved notes stop
+preparation before upload. Retrying a saved, valid artifact reuses its exact text
+without another model call.
 
 After Apple processes the IPA, the pipeline records its source ref, writes
 What's New, selects that exact build, and reads both back. For the sole first

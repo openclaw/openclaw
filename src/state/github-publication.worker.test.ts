@@ -95,6 +95,14 @@ import { ensureProfileForEmail } from "./user-profiles.js";
 
 let context: OpenClawStateWorkerContext;
 let root: string;
+const requester = {
+  version: 1 as const,
+  actor: { kind: "system" as const },
+  scopes: ["operator.admin"],
+  grant: null,
+};
+const requesterJson =
+  '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}';
 const scopes = new Set<ReturnType<typeof createGitHubPublicationWorkerScope>>();
 const sources = new Set<Awaited<ReturnType<typeof prepareGitHubPublicationSource>>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -283,7 +291,7 @@ it("creates the lazy shared schema and replaces a missing lifecycle binding on i
       requestDigest: digestGitHubPublicationRequest({ ...request, sessionId }),
       sessionId,
       lifecycleRevision,
-      requester: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+      requester,
       now: 1000,
       worktree,
       identity: {
@@ -303,8 +311,7 @@ it("creates the lazy shared schema and replaces a missing lifecycle binding on i
     expectNoWorkerRequests(async () => {
       const expected = {
         lifecycle_revision: lifecycleRevision,
-        requester_authority_json:
-          '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}',
+        requester_authority_json: requesterJson,
       };
       expect(
         (
@@ -561,47 +568,59 @@ it("does not use one session's source authority for another session's publicatio
   expectRows(second.row, [{ last_effect: null }]);
 });
 
-it("publishes a committed receipt before a delayed ordinary worker reply", async ({ signal }) => {
-  const scope = createScope();
-  const row = seed("delayed-reply");
-  const reply = holdNextReply();
-  const { facts } = observeAuthority();
-  const key = JSON.stringify(["repository", row.request_id]);
-  const committed = createDeferredCore();
-  const published = () => {
-    expect(facts.get(key)).toMatchObject({
-      kind: "postimage",
-      value: { request_id: row.request_id, status: "publishing", execution_id: "execution" },
+it.for(["delivered", "lost"] as const)(
+  "publishes committed facts before a %s acknowledgement-only worker reply",
+  async (delivery, { signal }) => {
+    const scope = createScope();
+    const candidate = {
+      ...repositoryRow(`delayed-reply-${delivery}`),
+      body: "Synthetic publication body. ".repeat(640),
+    };
+    candidate.request_digest = repositoryGitHubPublicationDigest(candidate);
+    const row = seed(candidate);
+    const reply = holdNextReply();
+    const { facts } = observeAuthority();
+    const key = JSON.stringify(["repository", row.request_id]);
+    const committed = createDeferredCore();
+    const published = vi.fn(() => {
+      expect(facts.get(key)).toMatchObject({
+        kind: "postimage",
+        value: { request_id: row.request_id, status: "publishing", execution_id: "execution" },
+      });
+      committed.resolve();
     });
-    committed.resolve();
-  };
-  const claim = mutatePublication(
-    scope,
-    { operation: "claim", row, instanceId: "gateway", executionId: "execution" },
-    published,
-  );
-  await waitForPublicationGate(signal, claim, reply.ready, committed.promise);
-  expectRows(row, [{ request_id: row.request_id, status: "publishing" }]);
-  reply.release();
-  await expect(claim).resolves.toMatchObject({ rows: [{ status: "publishing" }] });
-  await mutatePublication(scope, {
-    operation: "complete",
-    row,
-    instanceId: "gateway",
-    executionId: "execution",
-    result: {
-      requestId: row.request_id,
-      status: "failed",
-      code: "no_changes",
-      message: "No changes to publish",
-      nextAction: "Retry publication",
-    },
-  });
-  await expect(
-    runGitHubPublicationMaintenanceAsync({ operation: "report", requestId: row.request_id }),
-  ).resolves.toBeUndefined();
-  expectRows(row, [{ reported_at_ms: expect.any(Number) }]);
-});
+    const claim = mutatePublication(
+      scope,
+      { operation: "claim", row, instanceId: "gateway", executionId: "execution" },
+      published,
+    );
+    await waitForPublicationGate(signal, claim, reply.ready, committed.promise);
+    expect((await reply.ready).value.byteLength).toBeLessThan(16);
+    expectRows(row, [{ request_id: row.request_id, status: "publishing" }]);
+    reply.release(delivery === "lost" ? new Error("Synthetic worker reply loss") : undefined);
+    await expect(claim).resolves.toMatchObject({
+      rows: [{ status: "publishing", body: row.body }],
+    });
+    expect(published).toHaveBeenCalledOnce();
+    await mutatePublication(scope, {
+      operation: "complete",
+      row,
+      instanceId: "gateway",
+      executionId: "execution",
+      result: {
+        requestId: row.request_id,
+        status: "failed",
+        code: "no_changes",
+        message: "No changes to publish",
+        nextAction: "Retry publication",
+      },
+    });
+    await expect(
+      runGitHubPublicationMaintenanceAsync({ operation: "report", requestId: row.request_id }),
+    ).resolves.toBeUndefined();
+    expectRows(row, [{ reported_at_ms: expect.any(Number) }]);
+  },
+);
 
 it("fences a late authority receipt after its owner closes", async ({ signal }) => {
   const lifecycleInput = {
@@ -748,14 +767,6 @@ describe("retained publication lifecycle authority", () => {
       requestId: randomUUID(),
     })),
   );
-  const requester = {
-    version: 1 as const,
-    actor: { kind: "system" as const },
-    scopes: ["operator.admin"],
-    grant: null,
-  };
-  const requesterJson =
-    '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}';
   const unavailable = "lifecycle authority is unavailable";
 
   function personalRow(requestId: string): PersonalGitHubPublicationRow {

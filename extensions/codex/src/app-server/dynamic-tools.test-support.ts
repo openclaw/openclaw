@@ -72,15 +72,12 @@ export function throwingResultObserver() {
 }
 
 export function mediaResult(mediaUrl: string, audioAsVoice?: boolean): AgentToolResult<unknown> {
-  return {
-    content: [{ type: "text", text: "Generated media reply." }],
-    details: {
-      media: {
-        mediaUrl,
-        ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
-      },
+  return textToolResult("Generated media reply.", {
+    media: {
+      mediaUrl,
+      ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
     },
-  };
+  });
 }
 
 export function textToolResult(text: string, details: unknown = {}): AgentToolResult<unknown> {

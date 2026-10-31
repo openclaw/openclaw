@@ -77,22 +77,15 @@ describe("resolveEnvApiKey provider auth aliases", () => {
 
   it("derives auth maps once for captured env reads while observing credential changes", () => {
     const config = freezeJsonSnapshot({ plugins: {} });
-    const aliases = vi.spyOn(providerAuthAliases, "resolveProviderAuthAliasMap");
-    try {
-      for (let index = 0; index < 50; index++) {
-        expect(
-          resolveEnvApiKey(
-            "cloud-alias",
-            { EXTERNAL_CLOUD_API_KEY: `fixture-${index}` },
-            { config },
-          ),
-        ).toEqual({ apiKey: `fixture-${index}`, source: "env: EXTERNAL_CLOUD_API_KEY" });
-      }
-      expect(resolveEnvApiKey("cloud-alias", {}, { config })).toBeNull();
-      expect(aliases).toHaveBeenCalledTimes(1);
-    } finally {
-      aliases.mockRestore();
+    using aliases = vi.spyOn(providerAuthAliases, "resolveProviderAuthAliasMap");
+
+    for (let index = 0; index < 50; index++) {
+      expect(
+        resolveEnvApiKey("cloud-alias", { EXTERNAL_CLOUD_API_KEY: `fixture-${index}` }, { config }),
+      ).toEqual({ apiKey: `fixture-${index}`, source: "env: EXTERNAL_CLOUD_API_KEY" });
     }
+    expect(resolveEnvApiKey("cloud-alias", {}, { config })).toBeNull();
+    expect(aliases).toHaveBeenCalledTimes(1);
   });
 
   it.each(["environment", "setup-provider"])(

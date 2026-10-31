@@ -148,14 +148,7 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
           preserve(store, "read");
           const originalRead = store.read.bind(store);
           store.read = function (cacheKey) {
-            const reading = originalRead.call(this, cacheKey).then(async (snapshot) => {
-              if (cacheReadGate) {
-                cacheReadPending = true;
-                await cacheReadGate;
-                cacheReadPending = false;
-              }
-              return snapshot;
-            });
+            const reading = originalRead.call(this, cacheKey);
             void reading.then(
               (snapshot) => record("cache-read", { metadata: row(snapshot?.transcriptMetadata) }),
               () => record("cache-read-error", {}),
@@ -247,9 +240,32 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
   restores.push(() => observer.disconnect());
   window.coldLoadTitleTrace = {
     holdCacheRead() {
-      cacheReadGate = new Promise<void>((resolve) => {
-        releaseCacheRead = resolve;
-      });
+      ({ promise: cacheReadGate, resolve: releaseCacheRead } = Promise.withResolvers<void>());
+      const factory = window.indexedDB;
+      const open = factory.open.bind(factory);
+      preserve(factory, "open");
+      factory.open = (name, version) => {
+        const request = open(name, version);
+        if (name === "openclaw-chat-snapshots") {
+          // Gate storage before boot prewarm or the pane can consume its snapshot.
+          request.addEventListener(
+            "success",
+            (event) => {
+              if (!cacheReadGate) {
+                return;
+              }
+              event.stopImmediatePropagation();
+              cacheReadPending = true;
+              void cacheReadGate.then(() => {
+                cacheReadPending = false;
+                request.dispatchEvent(new Event("success"));
+              });
+            },
+            { once: true },
+          );
+        }
+        return request;
+      };
     },
     releaseCacheRead() {
       releaseCacheRead?.();

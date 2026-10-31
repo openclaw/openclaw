@@ -35,3 +35,27 @@ export function makeProviderModelFixture<TApi extends Api>(
     api: overrides.api as TApi,
   };
 }
+
+export function makeProviderModelsConfigFixture<TApi extends Api>(
+  overrides: ProviderModelFixture<TApi> & { headers?: Record<string, string> },
+) {
+  return {
+    providers: {
+      [overrides.provider]: {
+        baseUrl: overrides.baseUrl,
+        models: [makeProviderModelFixture(overrides)],
+      },
+    },
+  };
+}
+
+export const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
+  id: "gpt-5.4",
+  name: "GPT-5.4",
+  reasoning: true,
+  input: ["text"] as Array<"text">,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 16_384,
+  ...overrides,
+});

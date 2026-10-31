@@ -84,7 +84,6 @@ openclaw-chat-details[mobile] {
 .chat-details {
   position: fixed;
   inset: auto;
-  box-sizing: border-box;
   margin: 0;
   padding: 16px;
   border: 1px solid var(--border);
@@ -110,9 +109,9 @@ openclaw-chat-details[mobile] {
   overflow-wrap: anywhere;
 }
 
-/* Overlay and docked Details share the same surface and entrance motion. */
+/* Overlay and docked Details share the popover surface and entrance motion. */
 .chat-details[data-desktop] {
-  --details-surface: var(--panel-strong);
+  --details-surface: var(--popover);
   inset: auto;
   border-color: var(--overlay-border, var(--border-strong));
   background: var(--details-surface);
@@ -534,7 +533,8 @@ button.chat-details__process:is(:hover, :focus-visible) {
   display: block;
   color: var(--muted);
 }
-.chat-details__more:is(:hover, :focus-visible) {
+.chat-details .chat-details__more:is(:hover, :focus-visible) {
+  background: none;
   color: var(--text);
 }
 @keyframes chat-details-pulse {
@@ -622,17 +622,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details .chat-pr__actions {
   flex: none;
   margin-inline-start: auto;
-}
-.chat-details .chat-pr__actions-trigger {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
 }
 .chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
   display: flex;

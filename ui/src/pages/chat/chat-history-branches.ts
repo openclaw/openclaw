@@ -1,6 +1,9 @@
 import type { SessionBranch } from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { scopedAgentParamsForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import {
+  scopedAgentParamsForSession,
+  visibleSessionMatches,
+} from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { chatHistoryRequests, type ChatBranchesQueryState } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";

@@ -21,6 +21,14 @@ function messageFacts(
   return canonical({ ...base, type: "message", message }, { ...base, type: "message", ...facts });
 }
 const assistant = { role: "assistant", content: [] };
+const linked = (raw: object): ProjectionCase => ({
+  raw: { ...base, ...raw },
+  expected: { kind: "link", id: base.id, parentId: base.parentId },
+});
+const withBody = (
+  entry: Extract<SessionTranscriptReportFacts, { kind: "canonical" }>["entry"],
+  body: object,
+) => canonical({ ...entry, ...body }, entry);
 
 it.each<ProjectionCase>([
   ...(
@@ -30,21 +38,14 @@ it.each<ProjectionCase>([
       { type: "custom", customType: "plugin.metadata", data: { large: "body" } },
     ] as const
   ).map((entry) => canonical({ ...base, ...entry }, { ...base, type: entry.type })),
-  canonical(
-    {
-      ...base,
-      type: "custom_message",
-      customType: "report",
-      content: "body",
-      display: true,
-      details: { privateToBody: true },
-    },
+  withBody(
     { ...base, type: "custom_message", customType: "report" },
+    { content: "body", display: true, details: { privateToBody: true } },
   ),
   ...["branch label", "", undefined].map((label) =>
-    canonical(
-      { ...base, type: "label", targetId: "parent", label },
+    withBody(
       { ...base, type: "label", targetId: "parent", ...(label !== undefined ? { label } : {}) },
+      { label },
     ),
   ),
   ...(
@@ -78,16 +79,11 @@ it.each<ProjectionCase>([
       canonical({ ...entry, message, parentId: null }, { ...entry, parentId: null }),
     ];
   }),
-  ...[
-    {
-      type: "message",
-      message: { role: "assistant", content: [{}], responseId: "must-not-suppress" },
-    },
-    { type: "future", payload: "body" },
-  ].map((raw): ProjectionCase => ({
-    raw: { ...base, ...raw },
-    expected: { kind: "link", id: base.id, parentId: base.parentId },
-  })),
+  linked({
+    type: "message",
+    message: { role: "assistant", content: [{}], responseId: "must-not-suppress" },
+  }),
+  linked({ type: "future", payload: "body" }),
   ...[
     null,
     { ...base, type: "session", version: 3 },
@@ -122,9 +118,8 @@ it.each<ProjectionCase>([
   expect(decodeSessionTranscriptReportFacts(facts)).toStrictEqual(facts);
   const serializedFacts = JSON.stringify(facts);
   const stored: unknown = JSON.parse(serializedFacts);
-  const decoded = decodeSessionTranscriptReportFacts(stored);
-  expect(decoded).toStrictEqual(stored);
-  expect(decoded).toStrictEqual(expected);
+  expect(decodeSessionTranscriptReportFacts(stored)).toStrictEqual(stored);
+  expect(stored).toStrictEqual(expected);
 });
 
 it.each([

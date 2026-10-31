@@ -105,11 +105,17 @@ async function runDoctorConfigPreflightOperation(
   );
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   let heartbeatMigrationSource: OpenClawConfig | undefined;
+  let heartbeatMigrationDeferred = false;
+  let rehearsalCronMigrationDeferred = false;
+  let cronStoreSelectionUnresolved = false;
+  let stateMigrationUnsettled = false;
+  const preflightWarnings: string[] = [];
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
   let postSessionPluginMigration: PreparedPostSessionPluginMigration | undefined;
   let postSessionPluginMigrationPlanBound = false;
   let doctorMediaPersistenceAttempted = false;
+  let inspectedSessionEntryPaths: readonly string[] = [];
   let configSnapshotRead: ConfigPreflightSnapshotRead | undefined;
   const pluginMigrations = createDoctorPluginMigrationPreparation({
     enabled: stateMigrationsRequested,
@@ -127,6 +133,9 @@ async function runDoctorConfigPreflightOperation(
     getDeferredPluginIds: () => pluginMigrations.deferred().map((pending) => pending.pluginId),
   });
   const noteDoctorStateMigrationResult = (result: MigrationMessages) => {
+    stateMigrationUnsettled ||=
+      result.outcome === "deferred" ||
+      (result.warnings.length > 0 && result.warningDisposition !== "recoverable");
     pluginMigrations.observe(result);
     noteDoctorMigrationResult(result, { prefix: "- " });
   };
@@ -186,6 +195,9 @@ async function runDoctorConfigPreflightOperation(
   ) =>
     (options.repairPrefixedConfig === true ||
       (stateMigrationsRequested && options.migrateLegacyConfig !== false)) &&
+    // A released updater may omit cron identity while injecting retired heartbeat
+    // config. Only its disposable, cron-disabled copy may project without migration.
+    (!heartbeatMigrationDeferred || rehearsalCronMigrationDeferred) &&
     canPlanAutomaticConfigRepair(configSnapshot) &&
     !skipLegacyParentConfigWrite &&
     (options.repairPrefixedConfig === true ||
@@ -217,7 +229,7 @@ async function runDoctorConfigPreflightOperation(
       ),
     );
   }
-  await migrateLegacyDoctorConfig({
+  let configChanged = await migrateLegacyDoctorConfig({
     enabled: options.migrateLegacyConfig !== false,
     measure: measurePreflightStep,
   });
@@ -230,6 +242,7 @@ async function runDoctorConfigPreflightOperation(
     planRepair: planScopedConfigRepair,
     readSnapshot: () => readConfigSnapshotForPreflight(false),
   });
+  configChanged ||= configSnapshotRead !== recovery.snapshotRead;
   configSnapshotRead = recovery.snapshotRead;
   let snapshot = configSnapshotRead.snapshot;
   const rosterMigrationSource = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
@@ -265,6 +278,42 @@ async function runDoctorConfigPreflightOperation(
       await measurePreflightStep("retired-state-repair", () => repairRetiredDoctorState()),
     );
   }
+  if (
+    stateDirMigrations &&
+    (options.doctorOnlyStateMigrations || options.automaticHeartbeatRepair)
+  ) {
+    const source = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+    const { readCronStoreSelectionForDoctor, maybeRepairCronStoreSelection } =
+      await import("./doctor/cron/default-store-selection.js");
+    const ready = options.cronStoreSelection
+      ? await maybeRepairCronStoreSelection({
+          cfg: source,
+          options: options.cronStoreSelection.options,
+          prompter: options.cronStoreSelection.prompter ?? {},
+        })
+      : (await readCronStoreSelectionForDoctor(source)).status === "ready";
+    if (!ready) {
+      cronStoreSelectionUnresolved = true;
+      const { tryProjectRetiredHeartbeatConfig } = await import("./doctor-heartbeat-legacy.js");
+      const projected = tryProjectRetiredHeartbeatConfig(source);
+      if (projected && !isDeepStrictEqual(projected, source)) {
+        heartbeatMigrationDeferred = true;
+        automaticConfigRepair = null;
+        const { canDeferRehearsalCronMigration } =
+          await import("../config/io.cron-owner-refusal.js");
+        rehearsalCronMigrationDeferred = await canDeferRehearsalCronMigration(
+          source,
+          snapshot.path,
+          process.env,
+        );
+        const warning = rehearsalCronMigrationDeferred
+          ? "Update rehearsal: cron and heartbeat data migration is deferred because the source cron partition is unknown. Only the disposable config is projected for validation; original state and config are unchanged."
+          : "Run openclaw doctor --fix interactively to select the cron partition and migrate heartbeat settings. The original config was retained.";
+        preflightWarnings.push(warning);
+        note(warning, "Doctor warning");
+      }
+    }
+  }
   if (options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true) {
     // Plugin and legacy-state repairs can inspect sessions during config preflight.
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
@@ -276,6 +325,9 @@ async function runDoctorConfigPreflightOperation(
         env: process.env,
         deferSchemaRepair: repair,
         integrityCheck: options.integrityCheck,
+        onInspectedTargets: (targets) => {
+          inspectedSessionEntryPaths = targets.map((target) => target.canonicalPath);
+        },
       }),
     );
     if (!repair && entryState.found > 0) {
@@ -287,7 +339,6 @@ async function runDoctorConfigPreflightOperation(
     }
   }
   let postConvergenceStateConfig: OpenClawConfig | undefined;
-  const preflightWarnings: string[] = [];
   if (stateDirMigrations) {
     const convergence = await runDoctorPluginConvergence({
       cfg: automaticConfigRepair?.config ?? baseConfig,
@@ -295,6 +346,7 @@ async function runDoctorConfigPreflightOperation(
       retainedPluginIds: pluginMigrations.retainedPluginIds(),
       measure: options.measure,
     });
+    configChanged ||= convergence.changed === true;
     setActiveDegradedPlugins(convergence.quarantinedPlugins);
     await pluginMigrations.converged(
       convergence.deferredPlugins ?? [],
@@ -370,6 +422,7 @@ async function runDoctorConfigPreflightOperation(
               doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
               invocationPurpose: options.invocationPurpose,
               integrityCheck: options.integrityCheck,
+              inspectedSessionEntryPaths,
               ...(options.agentDatabaseMigrationDiscovery
                 ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
                 : {}),
@@ -435,6 +488,7 @@ async function runDoctorConfigPreflightOperation(
   }
   // Import retired locators before removing them from the authored config.
   if (await pluginMigrations.complete()) {
+    configChanged = true;
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
@@ -453,7 +507,7 @@ async function runDoctorConfigPreflightOperation(
     );
   }
   const automaticHeartbeatRepair = options.automaticHeartbeatRepair;
-  if (automaticHeartbeatRepair) {
+  if (automaticHeartbeatRepair && !cronStoreSelectionUnresolved) {
     const { commitAutomaticHeartbeatRepair } =
       await import("./doctor-automatic-heartbeat-repair.js");
     const changes = await measurePreflightStep("automatic-heartbeat-config-repair", () =>
@@ -462,12 +516,14 @@ async function runDoctorConfigPreflightOperation(
       ),
     );
     noteDoctorMigrationResult({ changes, warnings: [] });
+    configChanged ||= changes.length > 0;
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
   }
   if (automaticConfigRepair && !skipLegacyParentConfigWrite) {
+    configChanged = true;
     modelBillingRouteMigrationSource ??=
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
     const repair = automaticConfigRepair;
@@ -476,7 +532,7 @@ async function runDoctorConfigPreflightOperation(
         commitAutomaticConfigRepair(
           repair,
           snapshot,
-          options.doctorOnlyStateMigrations === true
+          options.doctorOnlyStateMigrations === true && !cronStoreSelectionUnresolved
             ? async (currentSnapshot) => {
                 // Roster promotion must see canonical jobs, including implicit monitors
                 // written by a published Gateway without authored heartbeat settings.
@@ -506,12 +562,16 @@ async function runDoctorConfigPreflightOperation(
   return {
     snapshot,
     baseConfig,
+    configChanged,
+    stateMigrationUnsettled,
     ...(preflightWarnings.length > 0 ? { warnings: preflightWarnings } : {}),
     rosterMigrationSource,
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),
     ...(modelBillingRouteMigrationSource ? { modelBillingRouteMigrationSource } : {}),
     ...(heartbeatMigrationSource ? { heartbeatMigrationSource } : {}),
+    ...(heartbeatMigrationDeferred ? { heartbeatMigrationDeferred: true } : {}),
+    ...(cronStoreSelectionUnresolved ? { cronStoreSelectionUnresolved: true } : {}),
     ...(configSnapshotRead.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: configSnapshotRead.pluginMetadataSnapshot }
       : {}),

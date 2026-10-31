@@ -304,14 +304,35 @@ describe("ManagedWorktreeService", () => {
     expect(reused.ownerId).toBe("agent:main:dashboard:one");
   });
 
-  it("refuses an unavailable remote default instead of silently using local HEAD", async () => {
-    await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
-    await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(() => undefined);
-    await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
-      "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
-    );
-    expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
-  });
+  it.each(["unavailable", "empty", "helper", "push-only"])(
+    "refuses an %s remote default instead of silently using local HEAD",
+    async (destination) => {
+      if (destination === "helper" || destination === "push-only") {
+        await git(repo, "config", "--unset-all", "remote.origin.url");
+        await git(
+          repo,
+          "config",
+          destination === "helper" ? "remote.origin.vcs" : "remote.origin.pushurl",
+          "unavailable-worktree-fixture",
+        );
+      } else {
+        await git(
+          repo,
+          "remote",
+          "set-url",
+          "origin",
+          destination === "empty" ? "" : path.join(root, "missing.git"),
+        );
+      }
+      await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(
+        () => undefined,
+      );
+      await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
+        "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
+      );
+      expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
+    },
+  );
 
   it.each(["aborted", "closed"] as const)(
     "handles stale remote checkout with %s admission",

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildReplyUsageState,
@@ -23,11 +24,10 @@ describe("reply usage state handoff", () => {
             fixture: {
               baseUrl: "https://fixture.invalid",
               models: [
-                {
+                makeConfiguredModel({
                   id: "priced",
                   name: "Priced",
                   reasoning: false,
-                  input: ["text"],
                   cost: {
                     input: 1,
                     output: 0,
@@ -36,7 +36,7 @@ describe("reply usage state handoff", () => {
                   },
                   contextWindow: 1,
                   maxTokens: 1,
-                },
+                }),
               ],
             },
           },

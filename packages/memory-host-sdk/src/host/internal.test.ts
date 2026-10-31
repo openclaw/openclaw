@@ -581,23 +581,14 @@ describe("memory host SDK package internals", () => {
     await expect(buildMultimodalChunkForIndexing(entry)).resolves.toBeNull();
   });
 
-  it("chunks mixed text and preserves surrogate pairs", () => {
+  it("chunks mixed text", () => {
     const mixed = Array.from(
       { length: 30 },
       (_, index) => `Line ${index}: 这是中英文混合的测试内容 with English`,
     ).join("\n");
     const mixedChunks = chunkMarkdown(mixed, { tokens: 50, overlap: 0 });
     expect(mixedChunks.length).toBeGreaterThan(1);
-    expect(mixedChunks.map((chunk) => chunk.text).join("\n")).toContain("Line 29");
-
-    const surrogateChar = "\u{20000}";
-    const surrogateChunks = chunkMarkdown(surrogateChar.repeat(120), {
-      tokens: 31,
-      overlap: 0,
-    });
-    for (const chunk of surrogateChunks) {
-      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
-    }
+    expect(mixedChunks.map((chunk) => chunk.text).join("\n")).toBe(mixed);
   });
 
   it("preserves a surrogate pair at the coarse split boundary", () => {

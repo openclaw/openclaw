@@ -1,43 +1,17 @@
-import type {
-  OpenClawStateDatabaseOptions,
-  OpenClawStateSchemaReadAdmission,
-} from "../state/openclaw-state-db-contract.js";
 import { ensureStatePostgresFragment, isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
-import {
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
 import {
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
-import type { OpenClawStateReadOnlyDatabase } from "../state/openclaw-state-read.types.js";
-import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { formatErrorMessage } from "./errors.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { isPostgresSqlConnection } from "./sql-connection.js";
 import { assertSqliteIntegrity, SqliteRepairableForeignKeyError } from "./sqlite-integrity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
+import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { updateRunLedgerSchema } from "./update-run-write.js";
-
-/** PostgreSQL reads admitted rows; SQLite retains private snapshots and legacy catalog admission. */
-export function withUpdateRunRead<T>(
-  operation: (database: OpenClawStateReadOnlyDatabase) => T,
-  options: OpenClawStateDatabaseOptions & { allowNativeRead?: true },
-  schemaAdmission?: OpenClawStateSchemaReadAdmission,
-): T | undefined {
-  if (isStatePostgres()) {
-    return withEngineStoreAdmission(() =>
-      withExistingOpenClawStateDatabaseCurrentReadOnly(operation, options),
-    );
-  }
-  const read = options.allowNativeRead
-    ? withExistingOpenClawStateDatabaseCurrentReadOnly
-    : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
-  return read(operation, options, schemaAdmission);
-}
 
 export class UpdateRunAdmissionBusyError extends Error {
   readonly reason = "update-ledger-busy";

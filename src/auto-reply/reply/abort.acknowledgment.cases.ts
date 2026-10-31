@@ -444,7 +444,6 @@ export function registerAbortAcknowledgmentCases({
     const tracking = createGatewayTerminalTracking({
       getScopedRpcSource: (id) =>
         id === runId && isRpcSourceRegistered(entry) ? entry : undefined,
-      restartRecoveryCandidates: new Map(),
     });
     const onAbandoned = vi.fn(async () => {
       notificationEntered.resolve();

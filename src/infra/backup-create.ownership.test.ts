@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
@@ -21,6 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import {
   backupCase,
   isolateBackupScratch,

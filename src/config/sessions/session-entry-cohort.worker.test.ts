@@ -540,7 +540,6 @@ it("prepares the admitted run target with its entry and refuses source loss afte
       sessionKey,
       sessionId: operation.sessionId,
       admission: undefined,
-      recoveryOwnerLease: undefined,
       databaseClaim: admission.databaseClaim,
     });
     const reader = getReplyOperationSessionReader(operation);

@@ -18,10 +18,6 @@ async function fixture(lane: "ordinary" | "followup" = "ordinary") {
   ];
   await f.account(lane, fallback);
   const activeNotice = f.read()!.fallbackNotice!;
-  expect(activeNotice).toMatchObject({
-    selectedModel: `${primary.provider}/${primary.model}`,
-    activeModel: "fallback-fixture/available",
-  });
   f.context.execution.resolved = { provider: primary.provider, model: primary.model };
   f.context.execution.fallback.attempts = [];
   const notices = async (sessionId = f.sessionId) =>
@@ -44,6 +40,9 @@ it.each(["ordinary", "followup"] as const)(
     const f = await fixture(lane);
     expect(await f.notices()).toEqual([]);
     await f.account(lane, primary);
+    expect(f.context.execution.result.meta.modelFallbackTranscriptToModel).toBe(
+      `${primary.provider}/${primary.model}`,
+    );
     expect(await f.notices()).toEqual([
       {
         kind: "model-fallback",
@@ -133,10 +132,9 @@ it.each(["session", "lifecycle", "writer", "cancellation"] as const)(
   async (replacement) => {
     const f = await fixture();
     const append = transcript.appendAssistantMessageToSessionTranscript;
-    let replaced = false;
-    vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockImplementationOnce(
-      async (params) => {
-        replaced = true;
+    const appendSpy = vi
+      .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
+      .mockImplementationOnce(async (params) => {
         if (replacement === "cancellation") {
           f.context.replyOperation.abortByUser();
         } else {
@@ -149,15 +147,14 @@ it.each(["session", "lifecycle", "writer", "cancellation"] as const)(
           );
         }
         return append(params);
-      },
-    );
+      });
     const accounting = f.account("ordinary", primary);
     if (replacement === "cancellation") {
       await accounting;
     } else {
       await expect(accounting).rejects.toThrow();
     }
-    expect(replaced).toBe(true);
+    expect(appendSpy).toHaveBeenCalledOnce();
     expect(await f.notices()).toEqual([]);
     expect(await f.notices("replacement-session")).toEqual([]);
     expect(f.read()?.fallbackNotice).toEqual(f.activeNotice);
