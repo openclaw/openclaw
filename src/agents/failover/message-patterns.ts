@@ -247,6 +247,7 @@ const ERROR_PATTERNS = {
     // Already rendered billing copy re-enters classification; "usage limits" in it must not read as rate_limit.
     /\breturned a billing error\b/i,
     /\b(?:got|returned|received)\s+(?:a\s+)?402\b(?!\s+records\b)/i,
+    /\breturned a billing error\b/i,
     "payment required",
     "insufficient credits",
     /used\s+all\s+available\s+credits/i,
