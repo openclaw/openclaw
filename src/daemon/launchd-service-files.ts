@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { ignoreMissingPath } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import {
@@ -70,8 +70,7 @@ export async function removeBootedOutLaunchAgentPlist(
     await fs.rename(plistPath, trashPath);
     return { trashed: true };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EPERM" && code !== "EACCES") {
+    if (!hasErrnoCode(error, "EPERM") && !hasErrnoCode(error, "EACCES")) {
       throw error;
     }
   }
