@@ -42,6 +42,7 @@ it("carries published task facts through HTTP, SQLite and prepared role selectio
   manifest.modelCatalog.providers = {
     [PROVIDER_ID]: { ...route, models: [{ id: "sqlite-model" }] },
   };
+  manifest.modelCatalog.discovery = { [PROVIDER_ID]: "static" };
   writeJsonFile(manifestFile, manifest);
   const inference = {
     chat: false,
@@ -80,7 +81,7 @@ it("carries published task facts through HTTP, SQLite and prepared role selectio
     args: ["--pricing", "--out", "v1.json", "--out-v3", "v3.json"],
     fetchImpl: async (url) => {
       if (url !== "https://models.opencode.ai/api.json") {
-        throw new Error(`unexpected publisher source: ${String(url)}`);
+        throw new Error("unexpected publisher source");
       }
       return Response.json({
         upstream: {
@@ -109,7 +110,25 @@ it("carries published task facts through HTTP, SQLite and prepared role selectio
             },
           },
         },
-        models: { catalogRefresh: { url: `${baseUrl}/v3.json` } },
+        models: {
+          catalogRefresh: { url: `${baseUrl}/v3.json` },
+          providers: {
+            [PROVIDER_ID]: {
+              ...route,
+              models: [
+                {
+                  id: "dual",
+                  name: "Dual",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 1024,
+                },
+              ],
+            },
+          },
+        },
       };
       await withEnvAsync(fixture.env, async () => {
         setRemoteModelCatalogOverlaySourcesForTest({ bundledGeneratedAt: () => 1 });
