@@ -52,12 +52,12 @@ type Forest = {
   children: Map<number, number[]>;
 };
 
-async function readForest(): Promise<Forest | undefined> {
+async function readForest(isExpired: () => boolean): Promise<Forest | undefined> {
   const memory = new Map<number, number>();
   const children = new Map<number, number[]>();
   try {
     for (const entry of await readdir("/proc")) {
-      if (!watches.size) {
+      if (!watches.size || isExpired()) {
         return undefined;
       }
       const pid = Number(entry);
@@ -154,6 +154,7 @@ async function readTreeMemory(
 }
 
 type Watch = {
+  // Pending reads have no new deadline until that watch settles.
   due: number;
   sample: (forest?: Forest) => Promise<void>;
 };
@@ -161,6 +162,7 @@ const watches = new Set<Watch>();
 let timer: NodeJS.Timeout | undefined;
 let sampling = false;
 let shared = false;
+let census: Promise<Forest | undefined> | undefined;
 
 function schedule() {
   clearTimeout(timer);
@@ -171,6 +173,9 @@ function schedule() {
     return;
   }
   const due = Math.min(...Array.from(watches, (watch) => watch.due));
+  if (!Number.isFinite(due)) {
+    return;
+  }
   timer = runInDetachedAsyncContext(() =>
     setTimeout(() => void sample(), Math.max(0, Math.ceil(due - performance.now()))),
   );
@@ -184,8 +189,35 @@ async function sample() {
   // Align near-due watches early, never extend their one/five-second deadline.
   const due = Array.from(watches).filter((watch) => watch.due <= performance.now() + 999);
   try {
-    const forest = shared ? await readForest() : undefined;
-    await Promise.allSettled(due.map((watch) => watch.sample(forest)));
+    let forest: Forest | undefined;
+    if (shared && !census) {
+      let expired = false;
+      let deadline: NodeJS.Timeout | undefined;
+      // A stalled unrelated procfs read must not hold other commands' enforcement.
+      census = readForest(() => expired).finally(() => {
+        census = undefined;
+      });
+      try {
+        forest = await Promise.race([
+          census,
+          new Promise<undefined>((resolve) => {
+            deadline = setTimeout(() => {
+              expired = true;
+              resolve(undefined);
+            }, 250);
+            deadline.unref();
+          }),
+        ]);
+      } finally {
+        clearTimeout(deadline);
+      }
+    }
+    for (const watch of due) {
+      watch.due = Infinity;
+      void watch.sample(forest).catch(() => {});
+    }
+    // Settle ready forest sums together; pending individual walks remain independent.
+    await Promise.resolve();
   } finally {
     sampling = false;
     schedule();
@@ -241,6 +273,7 @@ export function watchChildMemory(params: {
         }
       } finally {
         watch.due = performance.now() + intervalMs;
+        schedule();
       }
     }),
   };

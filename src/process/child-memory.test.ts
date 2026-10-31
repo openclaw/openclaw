@@ -254,27 +254,41 @@ it("charges a shared descendant's RSS and swap to both watched ancestors with on
   );
 });
 
-it("honors cancellation during a census without suppressing other commands' limits", async () => {
-  const blocked = createDeferred<string>();
-  procfs.readFile.mockImplementation(async (file) =>
-    file === "/proc/100/status" ? blocked.promise : "PPid:\t1\nVmRSS:\t256 kB\n",
-  );
-  const pids = [100, 200, 300, 400, 500, 600, 700, 800];
-  procfs.readdir.mockResolvedValue(pids.map(String));
-  const cancelled = watch();
-  const active = pids.slice(1).map((pid) => watch(pid));
-  await vi.advanceTimersByTimeAsync(1000);
-  cancelled.stop();
-  blocked.resolve("PPid:\t1\nVmRSS:\t256 kB\n");
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(cancelled.onLimit).not.toHaveBeenCalled();
-  expect(cancelled.onDiagnostic).not.toHaveBeenCalled();
-  for (const { onLimit, onDiagnostic } of active) {
-    expect(onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
-    expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Command killed"));
-  }
-  expect(procfs.readdir).toHaveBeenCalledExactlyOnceWith("/proc");
-});
+it.each([2, 8])(
+  "keeps peer limits independent of a pending read with %i watches",
+  async (count) => {
+    const blocked = createDeferred<string>();
+    let peerRss = 64;
+    procfs.readFile.mockImplementation(async (file) =>
+      file === "/proc/100/status"
+        ? blocked.promise
+        : `PPid:\t1\nVmRSS:\t${file === "/proc/200/status" ? peerRss : 64} kB\n`,
+    );
+    const pids = [100, 200, 300, 400, 500, 600, 700, 800].slice(0, count);
+    procfs.readdir.mockImplementation(async (dir) => (dir === "/proc" ? pids.map(String) : []));
+    const cancelled = watch();
+    const peer = watch(200);
+    pids.slice(2).forEach((pid) => watch(pid));
+    try {
+      await vi.advanceTimersByTimeAsync(1500);
+      peerRss = 256;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(peer.onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
+      expect(peer.onDiagnostic).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Command killed"),
+      );
+      expect(procfs.readdir.mock.calls.filter(([dir]) => dir === "/proc")).toHaveLength(
+        count === 8 ? 1 : 0,
+      );
+    } finally {
+      cancelled.stop();
+      blocked.resolve("PPid:\t1\nVmRSS:\t256 kB\n");
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(cancelled.onLimit).not.toHaveBeenCalled();
+    expect(cancelled.onDiagnostic).not.toHaveBeenCalled();
+  },
+);
 
 it("falls back to owned trees when an unrelated process cannot be read", async () => {
   const pids = [100, 200, 300, 400, 500, 600, 700, 800];
